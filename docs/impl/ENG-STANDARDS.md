@@ -44,10 +44,14 @@ Packages form layers. A package MAY import from its own layer and any layer belo
 
 Additional contracts:
 
-- `herness.core.types` imports nothing from `herness` except `herness.core.errors` and `herness.core.ids`. Shared types are owned per spec 00 §6 and defined only there.
-- Only `herness.core.egress` constructs an HTTP client that can reach a non-loopback host. All other modules obtain transports from it (spec 10 §3.5).
-- Only `herness.store.ops` writes to `data/ops.sqlite`. Only the build pipeline job writes to a warehouse file.
+- `herness.core.types` is a package with one submodule per owning spec (`decisions` 03, `harness` 05, `swarm` 06, `memory` 07, `jobs` 08, `reports` 09), re-exported from `herness.core.types`. It holds data types only (pydantic models, enums, `TypedDict`s). It imports nothing from `herness` except `herness.core.errors` and `herness.core.ids`. Behavioral classes named in spec 00 §6 (`HarnessHooks`, `GatedClient`, `Tracer`, `RunBudget`, `ModelChain`, `loop_signal_policy`, `JobContext`) live in their owner's package.
+- **Settings exception.** `herness.core.config` MAY import the `settings.py` module of any package to assemble the root config model. A `settings.py` module MUST import only the standard library, pydantic, `herness.core.types` and `herness.core.errors`. `import-linter` encodes this as a named exception.
+- **Ports for persistence below L1.** Code in `herness.core` (L0) that needs the ops store (`jobs`, breaker state, metric recording) declares a `typing.Protocol` port in `herness.core`. The implementation lives in `herness.store.ops.<area>` (L1). The composition root binds the port at start-up. `herness.core` never imports `herness.store`.
+- **Passed-in clients.** L3 code that needs a model client (enrichment deciders) receives an `LLMClient`-shaped callable as a parameter from the composition root. L3 never imports `herness.harness`.
+- **Network egress.** Only `herness.core.egress` constructs `httpx` clients and transports, for both non-loopback hosts and loopback model servers (`egress.loopback_http_client`). Vendor SDKs that cannot take an `httpx` transport (Snowflake, `pymongo`, `msal`) MAY construct their own clients, but only for hosts listed explicitly in the source's `hosts` allowlist in `sources.yaml`. The process-wide socket guard (spec 10) enforces the same allowlist.
+- `herness.store.ops` is a package with one submodule per owning spec. Connections, transactions and migrations belong to spec 02. It is re-exported so callers import `herness.store.ops.<function>`. Only `herness.store.ops` writes to `data/ops.sqlite`. Only the build pipeline job writes to a warehouse file.
 - `app/` MUST NOT write to any store except through `herness.store.ops` functions and service functions in L4/L5.
+- `herness.admin` (spec 10: privacy, backup, retention, deploy) is an L5 package.
 
 Circular imports inside a layer are forbidden. `import-linter` runs an "independence" contract on the sibling packages of each layer, with exceptions listed in `pyproject.toml` and in the implementation spec that needs them.
 
@@ -400,4 +404,8 @@ These are stricter than the design specs today. The consistency sweep updates th
 | E2 | 11 §10.5 | Hosted CI changes from optional to required for release builds (SLSA Build L2), and gains SBOM, provenance and dependency audit steps |
 | E3 | 00 §9 | Dev dependencies add `import-linter`, `pip-audit`, `cyclonedx-bom`, `detect-secrets`; `osv-scanner` as a CI binary |
 | E4 | 10 §3.7 | `herness deploy install` verifies artifact attestation and SBOM before install |
-| E5 | 08 | `metric_sample` table for component metrics (ENG §4), if spec 08 does not already define an equivalent |
+| E5 | 02, 08 | `metric_sample` table for component metrics (ENG §4): table in impl 02 (ops migration), writer in impl 08 |
+| E6 | 00 §6, §3 | `herness/core/types.py` and `herness/store/ops.py` become packages; behavioral classes move to their owners (ENG §2.1) |
+| E7 | 10 §3.1, §3.5 | Settings import exception, persistence ports, explicit source `hosts` allowlist, loopback client factory (ENG §2.1) |
+
+All cross-spec rulings made during the consistency pass are recorded in `docs/impl/DECISIONS.md`.
