@@ -3,8 +3,8 @@
 Status: Draft v1 · 2026-09-24
 Design spec: [`docs/specs/01-connectors.md`](../specs/01-connectors.md) (Draft v2), with shared contracts from [`00-overview-and-contracts.md`](../specs/00-overview-and-contracts.md)
 Phase: 1 (settings, runner, watermarks, backfill, reconciliation, deletion filter, files connector); 6 (HTTP layer, auth, ServiceNow, Jira, monitoring adapters, MongoDB, Snowflake, Dataverse)
-Depends on implementation specs: 00 (core ids, errors, time, logging), 02 (`LakeWriter`, `OpsStore`, ops migrations, `herness.model.settings`, staging SQL renderer), 08 (`herness.core.resilience`, `herness.core.jobs`, `metric_sample`), 09 (CLI wiring of `herness sync`), 10 (config loader, registry, secrets, socket guard), 11 (fixtures, synthetic data, fakes)
-Standards: [`ENG-STANDARDS.md`](ENG-STANDARDS.md) (cited as `ENG §n`)
+Depends on implementation specs: 00 (core ids, errors, time, logging), 02 (`LakeWriter`, ops core API `connection()`/`run_write()`/`read_one()`/`read_all()`/`dump_json()`/`load_json()`, ops migration 001, staging SQL renderer), 08 (`herness.core.resilience`, `herness.core.jobs`, `record_metric_samples`), 09 (CLI wiring of `herness sync`), 10 (config loader and `sources.yaml` root assembly, registry, secrets, egress client factories, socket guard), 11 (fixtures, synthetic data, fakes)
+Standards: [`ENG-STANDARDS.md`](ENG-STANDARDS.md) (cited as `ENG §n`). Consistency rulings: [`DECISIONS.md`](DECISIONS.md) (cited as `R-nn`); this revision applies R-03, R-06, R-08–R-12, R-39, R-40, R-42, R-46, R-59, R-62 and R-63.
 
 Cross-spec references to units of other implementation specs are written `X:<NN>/<qualified symbol or artifact>` until the consistency pass resolves them to task IDs.
 
@@ -12,7 +12,7 @@ Cross-spec references to units of other implementation specs are written `X:<NN>
 
 ## 1. Scope and traceability
 
-This spec builds everything under `herness/connectors/` plus the ops-store functions for the three ingestion tables this component owns (`watermark`, `sync_slice`, `file_ingest`) and the read function over `deletion_request`. It covers the section models for `config/sources.yaml: sources`, the shared protocols and lake-row helpers, the sync runner (incremental, backfill, reconciliation, deletion filtering, schema-drift handling, orphan temp cleanup), the `sync` and `reconcile` job handlers, the behavior of `herness sync`, the HTTP and auth layer used by live sources, and one connector per source: Files (Phase 1), ServiceNow, Jira, monitoring (Prometheus/Mimir, Datadog, Splunk, Dynatrace), MongoDB, Snowflake and Dataverse (Phase 6). It does not build the lake writer, retry and breaker mechanics, the job queue, secret storage, the deletion procedure, or staging SQL; it consumes them.
+This spec builds everything under `herness/connectors/` plus the ops-store area `herness/store/ops/ingest.py` (R-08): every function over the three ingestion tables this component owns (`watermark`, `sync_slice`, `file_ingest`), the deletion-set read over `deletion_request`, and every other ingest-area function another spec references (R-09). It also owns the Jira raw column-name contract that the connector writes to the lake (R-59, §4.5). It covers the section models for `config/sources.yaml: sources`, the shared protocols and lake-row helpers, the sync runner (incremental, backfill, reconciliation, deletion filtering, schema-drift handling, orphan temp cleanup), the `sync` and `reconcile` job handlers, the behavior of `herness sync`, the HTTP and auth layer used by live sources, and one connector per source: Files (Phase 1), ServiceNow, Jira, monitoring (Prometheus/Mimir, Datadog, Splunk, Dynatrace), MongoDB, Snowflake and Dataverse (Phase 6). It does not build the lake writer, retry and breaker mechanics, the job queue, secret storage, the deletion procedure, or staging SQL; it consumes them.
 
 ### 1.1 Traceability matrix
 
@@ -25,14 +25,14 @@ This spec builds everything under `herness/connectors/` plus the ops-store funct
 | 01 §3.3 | Monitoring connector with entities `event`, `metric_daily`; `MonitoringAdapter` protocol; `source_tool` column | 3.18 | U01-18, U01-78–U01-85 | T01-06, T01-19, T01-20, T01-21 | UT01-79–UT01-83, UT01-92 |
 | 01 §4.1 | Lake row rules: `_source_key`, `_record_id`, `_source_updated_at` parsing, `_payload`, flattening, tombstones | 3.4 | U01-19–U01-26 | T01-03 | UT01-14–UT01-19, PT01-01, PT01-04, PT01-05 |
 | 01 §4.2 ServiceNow | Entities, fields, `sys_id`, `sys_updated_on` | 3.16 | U01-07, U01-66–U01-70 | T01-02, T01-16 | UT01-67–UT01-71 |
-| 01 §4.2 Jira | `issue` row with complete `changelog`, `issuelinks`, `remotelinks` | 3.17 | U01-08, U01-71–U01-77 | T01-02, T01-17, T01-18 | UT01-72–UT01-78 |
+| 01 §4.2 Jira | `issue` row with complete `changelog`, `issuelinks`, `remotelinks`; raw column-name contract owned here (R-59) | 3.17, 4.5 | U01-08, U01-71–U01-77, U01-93 | T01-02, T01-17, T01-18 | UT01-72–UT01-78, UT01-96, IT01-11 |
 | 01 §4.2 Monitoring | `event` and `metric_daily` columns and source keys | 3.18 | U01-80, U01-81 | T01-19 | UT01-79 |
 | 01 §4.2 MongoDB, Snowflake, Dataverse, Files | Config-defined entities (`key_field`, `updated_field`, fields); `--check-mapping` | 3.13, 3.19–3.21, 3.11 | U01-10–U01-13, U01-46–U01-49, U01-56, U01-86–U01-91 | T01-02, T01-09, T01-12, T01-22–T01-24 | UT01-58, UT01-84–UT01-91, IT01-07 |
-| 01 §5.1 | Incremental sync steps 1–5, overlap, settle | 5 (F01-01) | U01-38–U01-40 | T01-06 | UT01-29–UT01-36, IT01-02, IT01-03 |
+| 01 §5.1 | Incremental sync steps 1–5, overlap, settle; open breaker ends the job `done` with `skipped_open_circuit` (R-39) | 5 (F01-01) | U01-38–U01-40, U01-51 | T01-06, T01-11 | UT01-29–UT01-36, UT01-54, IT01-02, IT01-03 |
 | 01 §5.2 | Orphan temp cleanup > 1 h; schema drift → new writer; `schema_drift` log | 3.6, 5 (F01-01) | U01-34, U01-35, U01-40 | T01-05, T01-06 | UT01-26, UT01-27, UT01-34, IT01-04, FT01-07 |
-| 01 §5.3 | Watermark storage, invariant, monitoring per tool, files use `file_ingest` | 3.5, 4 | U01-27, U01-28, U01-39 | T01-04, T01-06 | UT01-20, UT01-31, UT01-36, UT01-92 |
+| 01 §5.3 | Watermark storage, invariant, monitoring per tool (R-62), files use `file_ingest`; watermark listing for the build (R-09) | 3.5, 4 | U01-27, U01-28, U01-39, U01-92 | T01-04, T01-06 | UT01-20, UT01-31, UT01-36, UT01-92, UT01-95 |
 | 01 §5.4 | Tombstones from source deletes; weekly key reconciliation; safety valve | 3.9, 5 (F01-03) | U01-44, U01-45, U01-69 | T01-08, T01-16 | UT01-40–UT01-44, UT01-70, IT01-05, ST01-13 |
-| 01 §5.5 | Parallel date slices, `sync_slice` states, restart, final watermark, `backfill.start` | 3.8, 5 (F01-02) | U01-30, U01-31, U01-41, U01-43 | T01-04, T01-07 | UT01-22, UT01-23, UT01-37–UT01-39, UT01-93, FT01-03 |
+| 01 §5.5 | Parallel date slices, `sync_slice` states, restart, final watermark, `backfill.start`; `--full` = backfill from `backfill.start` to now (R-63) | 3.8, 5 (F01-02) | U01-30, U01-31, U01-41, U01-43, U01-54 | T01-04, T01-07, T01-11 | UT01-22, UT01-23, UT01-37–UT01-39, UT01-57, UT01-93, FT01-03 |
 | 01 §5.6 | Deletion set loaded before each run and at each checkpoint; `pc.is_in` filter; never logged by value | 3.6, 5 | U01-29, U01-33, U01-40 | T01-04, T01-05, T01-06 | UT01-21, UT01-25, UT01-31, UT01-42, PT01-06, IT01-09, ST01-11, BT01-02 |
 | 01 §5.7 | ServiceNow Table API, query, paging, offset drift, windows, rate limits, auth | 3.14–3.16 | U01-58–U01-70 | T01-14, T01-15, T01-16 | UT01-60–UT01-71, IT01-10 |
 | 01 §5.8 | Jira Cloud and DC search, JQL, changelog, remote links, discovery, rate limits, auth | 3.17 | U01-71–U01-77 | T01-17, T01-18 | UT01-72–UT01-78 |
@@ -45,9 +45,9 @@ This spec builds everything under `herness/connectors/` plus the ops-store funct
 | 01 §5.9 Dataverse | OData query, `Prefer` headers, `@odata.nextLink`, FormattedValue, MSAL token cache, 429 | 3.21 | U01-65, U01-90, U01-91 | T01-15, T01-24 | UT01-89–UT01-91 |
 | 01 §5.10 | Files inbox, DuckDB readers, SHA-256 fingerprint, key and updated fields, delta and snapshot modes, never move or delete | 3.11, 3.12, 5 (F01-04) | U01-46–U01-50 | T01-09, T01-10 | UT01-45–UT01-53, IT01-01, FT01-02 |
 | 01 §6 | Error mapping; page-level retry; breaker keys; crash safety; entity isolation | 6 | U01-51, U01-59, U01-60, U01-61 | T01-11, T01-14 | UT01-54, UT01-55, UT01-60, UT01-61, FT01-04–FT01-06 |
-| 01 §7 | `sources.yaml: sources` shape, common keys, `secret:` refs, unknown keys, guard validations | 9, 3.1, 3.2 | U01-01–U01-15 | T01-01, T01-02 | UT01-01–UT01-13, ST01-07 |
+| 01 §7 | `sources.yaml: sources` shape, common keys, `secret:` refs, unknown keys, guard validations, `hosts` allowlist for SDK sources (R-06) | 9, 3.1, 3.2 | U01-01–U01-15 | T01-01, T01-02 | UT01-01–UT01-13, UT01-97, ST01-07 |
 | 01 §8 | Throughput per source, incremental < 5 min, RSS < 1.5 GB, deletion filter < 5 % | 10 | U01-33, U01-40 | T01-25 | BT01-01–BT01-06 |
-| 01 §9 | Dedicated read-only identities, secrets never exposed, TLS always verified, folder ACLs, deletion honored | 7 | U01-05, U01-15, U01-58, U01-63–U01-65 | T01-01, T01-14, T01-15 | ST01-01–ST01-16 |
+| 01 §9 | Dedicated read-only identities, secrets never exposed, TLS always verified, folder ACLs, deletion honored, clients only from `herness.core.egress` or listed SDK hosts (R-06) | 7 | U01-05, U01-15, U01-58, U01-63–U01-65, U01-86 | T01-01, T01-14, T01-15, T01-22 | ST01-01–ST01-17 |
 | 01 §10 | Acceptance tests table | 11 | all | all | every test in §11 |
 | 01 §11 | Open questions Q1–Q11 | 13 | — | T01-16, T01-17, T01-24 (blocked items) | — |
 | 01 §12 | Spec and package dependencies | 14 | — | — | — |
@@ -63,11 +63,11 @@ Default layer imports per ENG §2.1: L2 may import L0 (`herness.core.*`) and L1 
 | Path | Purpose | Public symbols | Layer | Extra imports | Line budget |
 |------|---------|----------------|-------|---------------|-------------|
 | `herness/connectors/__init__.py` | Package marker. No logic, no imports of submodules | — | L2 | — | 10 |
-| `herness/connectors/settings_base.py` | Common pydantic section models and closed-set constants | `AuthSettings`, `ReconcileSettings`, `BackfillSettings`, `EntitySettings`, `SourceSettings`, `AUTH_METHODS`, `CONCURRENCY_DEFAULTS`, `CONCURRENCY_CAPS`, `DAILY_METRIC_NAMES`, `SECRET_REF_PATTERN`, `SERVICENOW_ENTITIES` | L2 | none beyond pydantic and stdlib (ENG: settings modules import nothing heavy) | 260 |
-| `herness/connectors/settings.py` | Per-source section models, the `sources.yaml` root model, host allowlist | `ServiceNowSettings`, `ServiceNowEntity`, `JiraSettings`, `JiraEntity`, `MonitoringSettings`, `MonitoringAdapterSettings`, `MetricQuery`, `validate_spl`, `MongoSettings`, `MongoEntity`, `SnowflakeSettings`, `SnowflakeEntity`, `DataverseSettings`, `DataverseEntity`, `FilesSettings`, `FilesEntity`, `SourcesSection`, `SourcesConfig`, `allowed_hosts`, re-export `SourceSettings` | L2 | `herness.model.settings` (import-linter independence exception: `dq` and `build` section models owned by 02) | 390 |
+| `herness/connectors/settings_base.py` | Common pydantic section models and closed-set constants | `AuthSettings`, `ReconcileSettings`, `BackfillSettings`, `EntitySettings`, `SourceSettings`, `AUTH_METHODS`, `CONCURRENCY_DEFAULTS`, `CONCURRENCY_CAPS`, `DAILY_METRIC_NAMES`, `SECRET_REF_PATTERN`, `SERVICENOW_ENTITIES` | L2 | none: settings import rule (R-03, ENG §2.1): standard library, pydantic, `herness.core.types`, `herness.core.errors` only | 260 |
+| `herness/connectors/settings.py` | Per-source section models, the `sources` section and its versioned wrapper, host allowlist | `ServiceNowSettings`, `ServiceNowEntity`, `JiraSettings`, `JiraEntity`, `MonitoringSettings`, `MonitoringAdapterSettings`, `MetricQuery`, `validate_spl`, `MongoSettings`, `MongoEntity`, `SnowflakeSettings`, `SnowflakeEntity`, `DataverseSettings`, `DataverseEntity`, `FilesSettings`, `FilesEntity`, `SourcesSection`, `SourcesConfig`, `allowed_hosts`, re-export `SourceSettings` | L2 | none beyond `herness.connectors.settings_base`: settings import rule (R-03); `dq` and `build` are added by X:10 when it assembles the file model (§13 D-16) | 390 |
 | `herness/connectors/base.py` | Shared protocols, metadata constants, `record_id`, `split_range`, re-export of `http_client` | `Connector`, `SupportsKeyListing`, `SupportsToolStreams`, `METADATA_FIELDS`, `METADATA_SCHEMA`, `KEY_SCHEMA`, `DEFAULT_BATCH_ROWS`, `DEFAULT_CHECKPOINT_ROWS`, `UNORDERED_SOURCES`, `record_id`, `split_range`, `http_client` | L2 | `pyarrow` | 170 |
 | `herness/connectors/rows.py` | Pure helpers that turn source records into lake batches | `to_snake`, `flatten_record`, `parse_source_timestamp`, `parse_arrow_timestamps`, `RowBatcher`, `tombstone_batch` | L2 | `pyarrow` | 320 |
-| `herness/store/ops_ingest.py` | Ops-store functions for `watermark`, `sync_slice`, `file_ingest`, and the deletion-set read; re-exported by `herness.store.ops` | `Watermark`, `SliceRow`, `FileIngestRow`, `get_watermark`, `set_watermark`, `deleted_record_ids`, `ensure_slices`, `mark_slice_running`, `mark_slice_done`, `mark_slice_failed`, `get_file_ingest`, `record_file_ingest` | L1 | — | 260 |
+| `herness/store/ops/ingest.py` | Ingest area of the ops store (R-08): functions for `watermark`, `sync_slice`, `file_ingest`, and the deletion-set read; re-exported by `herness/store/ops/__init__.py` in the spec 01 `__all__` block | `Watermark`, `SliceRow`, `FileIngestRow`, `get_watermark`, `set_watermark`, `list_watermarks`, `deleted_record_ids`, `ensure_slices`, `mark_slice_running`, `mark_slice_done`, `mark_slice_failed`, `get_file_ingest`, `record_file_ingest` | L1 | — | 260 |
 | `herness/connectors/deletion.py` | In-memory deletion set and batch filter | `DeletionFilter` | L2 | `pyarrow` | 90 |
 | `herness/connectors/lakefiles.py` | Orphan temp cleanup and per-writer schema tracking | `cleanup_orphan_temp_files`, `SchemaTracker`, `SchemaDrift` | L2 | `pyarrow` | 160 |
 | `herness/connectors/runner.py` | `SyncRunner` and `SyncResult`; incremental flow and the shared write loop | `SyncRunner`, `SyncResult` | L2 | `pyarrow` | 390 |
@@ -79,11 +79,11 @@ Default layer imports per ENG §2.1: L2 may import L0 (`herness.core.*`) and L1 
 | `herness/connectors/factory.py` | Builds a configured connector from the registry | `build_connector` | L2 | — | 90 |
 | `herness/connectors/mapping_check.py` | `herness sync --check-mapping` | `check_mapping`, `MappingIssue`, `STAGING_FILES` | L2 | `sqlglot`, `herness.model.build` (import-linter exception: X:02 SQL renderer only) | 260 |
 | `herness/connectors/health.py` | Per-source health for `herness doctor` | `source_health_report`, `SourceHealth` | L2 | — | 130 |
-| `herness/connectors/http.py` | Host-restricted HTTP client, page fetch with retry, HTTP error mapping | `http_client`, `SourceHttp`, `JsonPage`, `CursorGuard`, `map_http_error`, `parse_retry_after`, `ForeignHostError`, `SourceNotFound`, `MAX_RESPONSE_BYTES`, `MAX_LINE_BYTES`, `MAX_PAGES_PER_STREAM` | L2 | `httpx` | 320 |
+| `herness/connectors/http.py` | Obtains the source HTTP client from `herness.core.egress` (R-06), page fetch with retry, HTTP error mapping | `http_client`, `SourceHttp`, `JsonPage`, `CursorGuard`, `map_http_error`, `parse_retry_after`, `ForeignHostError`, `SourceNotFound`, `MAX_RESPONSE_BYTES`, `MAX_LINE_BYTES`, `MAX_PAGES_PER_STREAM` | L2 | `httpx` (types, `httpx.Auth`, exceptions; never constructs a client or transport) | 320 |
 | `herness/connectors/auth.py` | Auth builders per method; OAuth and MSAL token caches | `build_auth`, `OAuthTokenAuth`, `MsalTokenProvider`, `StaticHeaderAuth` | L2 | `httpx`, `msal` | 280 |
 | `herness/connectors/servicenow.py` | ServiceNow Table API connector | `ServiceNowConnector`, `build_sn_query`, `merge_by_time` | L2 | `httpx` (types only) | 390 |
-| `herness/connectors/jira.py` | Jira Cloud and DC connector: search, keys, field discovery | `JiraConnector`, `build_jql`, `FieldCandidate`, `JIRA_FIELDS`, `JIRA_ISSUE_COLUMNS` | L2 | — | 360 |
-| `herness/connectors/jira_changelog.py` | Complete changelog and remote links per search page | `fetch_changelogs`, `fetch_remote_links`, `ChangelogState` | L2 | — | 260 |
+| `herness/connectors/jira.py` | Jira Cloud and DC connector: search, keys, field discovery, raw column contract (R-59) | `JiraConnector`, `build_jql`, `flatten_issue`, `FieldCandidate`, `JIRA_FIELDS`, `JIRA_ISSUE_COLUMNS` | L2 | — | 390 |
+| `herness/connectors/jira_changelog.py` | Complete changelog and remote links per search page; history and link projection | `fetch_changelogs`, `fetch_remote_links`, `ChangelogState`, `project_history`, `project_remote_link` | L2 | — | 270 |
 | `herness/connectors/monitoring/__init__.py` | Package marker | — | L2 | — | 10 |
 | `herness/connectors/monitoring/base.py` | `MonitoringAdapter` protocol, `MonitoringConnector`, row builders, day helpers | `MonitoringAdapter`, `MonitoringConnector`, `EventRow`, `MetricRow`, `event_batch`, `metric_batch`, `EVENT_COLUMNS`, `METRIC_COLUMNS`, `floor_day`, `complete_days` | L2 | `pyarrow` | 320 |
 | `herness/connectors/monitoring/prometheus.py` | Prometheus and Mimir adapter | `PrometheusAdapter` | L2 | — | 210 |
@@ -96,7 +96,7 @@ Default layer imports per ENG §2.1: L2 may import L0 (`herness.core.*`) and L1 
 
 Registration: each connector class is decorated with `X:10/herness.core.registry.register("connector", <name>)`, each adapter with `register("monitoring_adapter", <tool>)`. The static `_BUILTINS` table of X:10 lists `"herness.connectors.<module>:<Class>"` for each. Lazy import means `import herness.connectors` never imports `pymongo`, `snowflake.connector`, `msal` or `duckdb`.
 
-Import-linter exceptions this spec needs (listed in `pyproject.toml`): `herness.connectors.settings -> herness.model.settings`; `herness.connectors.mapping_check -> herness.model.build`. Egress-lint exception (spec 10 §3.5 already allows `herness/connectors/`): only `herness/connectors/http.py` constructs `httpx.Client`.
+Import-linter exceptions this spec needs (listed in `pyproject.toml`): `herness.connectors.mapping_check -> herness.model.build` (independence contract between the L2 siblings). The former exception `herness.connectors.settings -> herness.model.settings` is removed (R-03). `herness.connectors.settings` and `herness.connectors.settings_base` are both listed in the settings import contract of ENG §2.1 (§13 O-15). No egress-lint exception: no module under `herness/connectors/` constructs an `httpx` client or transport (R-06, ENG §2.1). HTTP sources obtain their client from `herness.core.egress` (U01-58). Vendor SDKs (`pymongo`, `snowflake.connector`, `msal`) build their own network clients only for hosts listed in `sources.<name>.hosts` (U01-05, U01-15).
 
 ---
 
@@ -108,7 +108,8 @@ Conventions for every unit below:
 - Clock: every I/O unit that needs the time takes `clock: Callable[[], datetime]` defaulting to X:00/herness.core.time.now_utc. Pure units take `now: datetime`.
 - Timestamps written to the ops store use X:00/herness.core.time.format_fixed (fixed-width `YYYY-MM-DDTHH:MM:SS.ffffffZ`, spec 00 §8) and are read with X:00/herness.core.time.parse_fixed.
 - Logging uses X:00/herness.core.logging.get_logger with `component="connectors"`; event names are listed in §8.
-- "Emits metric" means one call to the X:08 `metric_sample` writer (X:08/metric_sample writer; see §13 O-6).
+- "Emits metric" means one call to X:08/herness.store.ops.record_metric_samples (R-12), the only writer of `metric_sample`.
+- Ops-store access uses only the impl 02 core API (R-10): X:02/herness.store.ops.core.connection, run_write, read_one, read_all, dump_json, load_json. No unit of this spec takes or builds a store object; the per-thread connection comes from `connection()`.
 - "Error class (ids)" in an Errors cell means: the taxonomy class raised, and the identifiers its message carries. Messages never carry secret values, record text or personal data.
 
 ### 3.1 Common settings (`herness/connectors/settings_base.py`)
@@ -225,6 +226,7 @@ Method `resolve_start(now: datetime) -> datetime`: returns `start` at 00:00:00 U
 | `timeout_s` | `float` | `60.0` | `1 ≤ x ≤ 600` |
 | `verify` | `pathlib.Path \| None` | `None` | `None` = system trust store, verification on. A path must name an existing file. A boolean is rejected with `ValueError("TLS verification cannot be disabled; set verify to a CA bundle path")` |
 | `entities` | `Mapping[str, EntitySettings]` | subclass | Subclass narrows the model type and the allowed names |
+| `hosts` | `tuple[str, ...]` | `()` | Key `sources.<name>.hosts` (R-06). Each entry is lower-cased, then must match `^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$` (the X:10 C04 host rule) and must not be an IP literal; no port, no duplicates, at most 50 entries. Required non-empty for SDK sources (`mongodb`, `snowflake`, `dataverse`; checked by the subclasses, U01-10–U01-12); optional for the other sources, where the entries only widen the socket-guard allowlist (U01-15) and never the host the HTTP client reaches (U01-58) |
 
 Methods:
 
@@ -244,13 +246,13 @@ Methods:
 | Preconditions | Parsed YAML mapping for one source. |
 | Postconditions | All constraints hold; TLS verification can never be off. |
 | Invariants | Frozen; holds no secret values. |
-| Algorithm | 1. Field validators per the table. 2. Model validator: `checkpoint_rows ≥ batch_rows`. 3. Model validator: when `auth` is set, `auth.method` must be in `AUTH_METHODS[self.auth_key()]`; the value `oauth_3lo` gets the message `"auth.method oauth_3lo is not supported in v1"` (see §13 O-8). |
+| Algorithm | 1. Field validators per the table. 2. Model validator: `checkpoint_rows ≥ batch_rows`. 3. Model validator: when `auth` is set, `auth.method` must be in `AUTH_METHODS[self.auth_key()]`; the value `oauth_3lo` gets the message `"auth.method oauth_3lo is not supported in v1"` (see §13 O-8). 4. Field validator on `hosts`: lower-case each entry, then apply the host rule; a violation raises `ValueError("hosts entry is not a host name")` naming the index, never a derived value. |
 | Side effects | `verify` validator calls `Path.is_file()` once. |
 | Errors | Constraint → `ConfigError` via loader with the key path; `entity()` → `ConfigError(source, entity)`. |
 | Concurrency | Immutable. |
 | Complexity and limits | O(entities). |
-| Security notes | TH01-01 (TLS cannot be disabled), TH01-02 (base URL shape). |
-| Tests | UT01-02, UT01-03, UT01-04, UT01-05, ST01-01 |
+| Security notes | TH01-01 (TLS cannot be disabled), TH01-02 (base URL shape), TH01-18 (`hosts` allowlist for SDK sources). |
+| Tests | UT01-02, UT01-03, UT01-04, UT01-05, UT01-97, ST01-01 |
 
 #### U01-06 herness.connectors.settings_base constants
 
@@ -281,6 +283,8 @@ Methods:
 ### 3.2 Per-source settings (`herness/connectors/settings.py`)
 
 Each source model subclasses `SourceSettings` (U01-05) and adds or narrows the listed fields. Unlisted common fields keep their U01-05 defaults.
+
+`hosts` rule per source (R-06): `MongoSettings`, `SnowflakeSettings` and `DataverseSettings` require it as stated in U01-10–U01-12. `ServiceNowSettings`, `JiraSettings`, `MonitoringSettings` and `FilesSettings` accept it but do not need it: their HTTP client reaches only the `base_url` host whatever `hosts` holds (U01-58). Nothing is derived from `base_url`, `account` or the secret URI for SDK sources; a validator only checks that a required host is present.
 
 #### U01-07 herness.connectors.settings.ServiceNowSettings, ServiceNowEntity
 
@@ -375,7 +379,7 @@ Each source model subclasses `SourceSettings` (U01-05) and adds or narrows the l
 
 #### U01-10 herness.connectors.settings.MongoSettings, MongoEntity
 
-`MongoSettings`: `SOURCE = "mongodb"`; `base_url` must be `None`; `auth` required with method `connection_string` (the secret holds the full MongoDB URI); `database: str` (`^[A-Za-z0-9_-]{1,64}$`); `max_time_ms: int = 60000` (`1000–600000`); `page_size` default `1000`, bounds `1–10000`; `entities: Mapping[str, MongoEntity]` non-empty, keys `^[a-z][a-z0-9_]{0,63}$`.
+`MongoSettings`: `SOURCE = "mongodb"`; `base_url` must be `None`; `hosts` required non-empty: every host the URI names, and for a `mongodb+srv://` URI the SRV name and every SRV target (R-06; checked against the URI at connect time, U01-86); `auth` required with method `connection_string` (the secret holds the full MongoDB URI); `database: str` (`^[A-Za-z0-9_-]{1,64}$`); `max_time_ms: int = 60000` (`1000–600000`); `page_size` default `1000`, bounds `1–10000`; `entities: Mapping[str, MongoEntity]` non-empty, keys `^[a-z][a-z0-9_]{0,63}$`.
 
 | `MongoEntity` field | Type | Default | Constraint |
 |-------|------|---------|------------|
@@ -397,12 +401,12 @@ Each source model subclasses `SourceSettings` (U01-05) and adds or narrows the l
 | Errors | Constraint → `ConfigError` via loader. |
 | Concurrency | Immutable. |
 | Complexity and limits | O(size of `filter`). |
-| Security notes | TH01-07. |
-| Tests | UT01-07, ST01-07 |
+| Security notes | TH01-07, TH01-18. |
+| Tests | UT01-07, UT01-97, ST01-07 |
 
 #### U01-11 herness.connectors.settings.SnowflakeSettings, SnowflakeEntity
 
-`SnowflakeSettings`: `SOURCE = "snowflake"`; `base_url` must be `None`; `account: str` (`^[A-Za-z0-9_.-]{1,255}$`); `auth` required with method `key_pair`; `warehouse`, `role: str` (identifier pattern `^[A-Za-z_][A-Za-z0-9_$]{0,254}$`); `statement_timeout_s: int = 900` (`1–86400`); `max_scan_gb: float = 50` (`0 < x ≤ 10000`); `page_size` unused (default `10000`); `entities: Mapping[str, SnowflakeEntity]` non-empty, keys `^[a-z][a-z0-9_]{0,63}$`.
+`SnowflakeSettings`: `SOURCE = "snowflake"`; `base_url` must be `None`; `hosts` required and must contain `f"{account.lower()}.snowflakecomputing.com"` (else `ValueError("hosts must list the Snowflake account host")`); OCSP responder hosts such as `ocsp.snowflakecomputing.com` are listed by the operator when OCSP checks must succeed (§7.7); `account: str` (`^[A-Za-z0-9_.-]{1,255}$`); `auth` required with method `key_pair`; `warehouse`, `role: str` (identifier pattern `^[A-Za-z_][A-Za-z0-9_$]{0,254}$`); `statement_timeout_s: int = 900` (`1–86400`); `max_scan_gb: float = 50` (`0 < x ≤ 10000`); `page_size` unused (default `10000`); `entities: Mapping[str, SnowflakeEntity]` non-empty, keys `^[a-z][a-z0-9_]{0,63}$`.
 
 | `SnowflakeEntity` field | Type | Default | Constraint |
 |-------|------|---------|------------|
@@ -424,12 +428,12 @@ Each source model subclasses `SourceSettings` (U01-05) and adds or narrows the l
 | Errors | Constraint → `ConfigError` via loader. |
 | Concurrency | Immutable. |
 | Complexity and limits | O(columns). |
-| Security notes | TH01-07, TH01-17. |
-| Tests | UT01-10, ST01-07 |
+| Security notes | TH01-07, TH01-17, TH01-18. |
+| Tests | UT01-10, UT01-97, ST01-07 |
 
 #### U01-12 herness.connectors.settings.DataverseSettings, DataverseEntity
 
-`DataverseSettings`: `SOURCE = "dataverse"`; `base_url` and `auth` required; method `msal_client_credentials` with `tenant_id`; `page_size` default `5000`, bounds `1–5000`; `entities: Mapping[str, DataverseEntity]` non-empty, keys `^[a-z][a-z0-9_]{0,63}$`.
+`DataverseSettings`: `SOURCE = "dataverse"`; `base_url` and `auth` required; method `msal_client_credentials` with `tenant_id`; `hosts` required and must contain `login.microsoftonline.com`, the MSAL authority host (else `ValueError("hosts must list login.microsoftonline.com")`); the `base_url` host is reached through the egress-built client and is not listed; `page_size` default `5000`, bounds `1–5000`; `entities: Mapping[str, DataverseEntity]` non-empty, keys `^[a-z][a-z0-9_]{0,63}$`.
 
 | `DataverseEntity` field | Type | Default | Constraint |
 |-------|------|---------|------------|
@@ -450,8 +454,8 @@ Each source model subclasses `SourceSettings` (U01-05) and adds or narrows the l
 | Errors | Constraint → `ConfigError` via loader. |
 | Concurrency | Immutable. |
 | Complexity and limits | O(select). |
-| Security notes | TH01-07. |
-| Tests | UT01-02, UT01-13 |
+| Security notes | TH01-07, TH01-18. |
+| Tests | UT01-02, UT01-13, UT01-97 |
 
 #### U01-13 herness.connectors.settings.FilesSettings, FilesEntity
 
@@ -496,15 +500,15 @@ Each source model subclasses `SourceSettings` (U01-05) and adds or narrows the l
 |-------|------|---------|
 | `version` | `Literal[1]` | required |
 | `sources` | `SourcesSection` | `SourcesSection()` |
-| `dq` | X:02/herness.model.settings.DqSettings | X:02 default |
-| `build` | X:02/herness.model.settings.BuildSettings | X:02 default |
+
+`SourcesConfig` does not declare `dq` or `build`. Under R-03 a settings module imports only the standard library, pydantic, `herness.core.types` and `herness.core.errors`, so it cannot import X:02/herness.model.settings. X:10/herness.core.config, which may import every settings module, assembles the model of `config/sources.yaml` as a subclass of `SourcesConfig` that adds `dq` (X:02 `DqSettings`) and `build` (X:02 `BuildSettings`); `cfg.sources` is that subclass, so the methods below apply unchanged (§13 D-16, O-11).
 
 Methods on `SourcesConfig`: `enabled_sources() -> list[tuple[str, SourceSettings]]` returns enabled sections in the fixed order `servicenow, jira, monitoring, mongodb, snowflake, dataverse, files`; `source(name: str) -> SourceSettings` returns the section (enabled or not) or raises `ConfigError(f"source {name} is not configured")`.
 
 | Item | Content |
 |------|---------|
 | Kind | class (config model) ×2 |
-| Purpose | Root model of `config/sources.yaml` (`cfg.sources` in X:10/herness.core.config.HernessConfig). |
+| Purpose | Versioned connectors part of `config/sources.yaml`; base class of the file model X:10 assembles (`cfg.sources` in X:10/herness.core.config.HernessConfig). |
 | Preconditions | — |
 | Postconditions | Unknown source names or keys fail validation. |
 | Invariants | Frozen. |
@@ -527,17 +531,17 @@ Returns `frozenset[str]`.
 | Item | Content |
 |------|---------|
 | Kind | function (pure) |
-| Purpose | Hostnames connectors may reach, for the socket guard (X:10/herness.core.egress.install_socket_guard) and for `http_client` (U01-58). |
+| Purpose | Hostnames connectors may reach, for the socket guard (X:10/herness.core.egress.install_socket_guard). |
 | Preconditions | Validated config. |
 | Postconditions | Lower-cased hostnames without ports. |
 | Invariants | — |
-| Algorithm | 1. For each enabled source with `base_url`, add its host. 2. Monitoring: add the host of each enabled adapter. 3. Snowflake enabled: add `<account>.snowflakecomputing.com` (lower-cased) and `ocsp.snowflakecomputing.com`. 4. Dataverse enabled: add `login.microsoftonline.com`. 5. MongoDB hosts live inside the secret URI and are not added (§13 O-4). 6. Return the set. |
+| Algorithm | 1. For each enabled source with `base_url`, add its host (these are the hosts the egress-built HTTP clients of U01-58 reach). 2. Monitoring: add the `base_url` host of each enabled adapter. 3. For each enabled source, add every entry of its `hosts` list (R-06: SDK sources `mongodb`, `snowflake`, `dataverse`). 4. Nothing else is derived: no host is computed from `account`, the secret URI or `tenant_id`. 5. Return the set. The socket guard allowlist is this set united with the egress allowlist and loopback (R-06; X:10 computes the union). |
 | Side effects | None. |
 | Errors | None. |
 | Concurrency | Pure. |
 | Complexity and limits | O(sources). |
-| Security notes | TH01-02, TH01-15. |
-| Tests | UT01-13 |
+| Security notes | TH01-02, TH01-15, TH01-18. |
+| Tests | UT01-13, UT01-97 |
 
 ### 3.3 Protocols and constants (`herness/connectors/base.py`)
 
@@ -826,9 +830,9 @@ Returns `pa.RecordBatch` with exactly `METADATA_SCHEMA`.
 | Security notes | — |
 | Tests | UT01-19 |
 
-### 3.5 Ops-store functions (`herness/store/ops_ingest.py`, re-exported by `herness.store.ops`)
+### 3.5 Ops-store functions (`herness/store/ops/ingest.py`, re-exported by `herness.store.ops`)
 
-Every function takes `ops: OpsStore` (X:02/herness.store.ops.OpsStore) as its first parameter and runs its statements inside one `ops.transaction()` (X:02; `BEGIN IMMEDIATE`, `StoreBusy` retried by the X:08 `sqlite_write` policy inside X:02). Datetimes are stored with `format_fixed` and read with `parse_fixed`. JSON columns hold compact JSON arrays of POSIX path strings relative to `paths.data`.
+This module is the ingest area of the ops store (R-08); this spec owns every function in it (R-09). Rules of impl 02 §2.3 apply: reads go through X:02/herness.store.ops.core.read_one and read_all on the calling thread's `connection()`; every write is one callback passed to X:02/herness.store.ops.core.run_write with an `op` name (one `BEGIN IMMEDIATE` transaction; `StoreBusy` retried by the X:08 `sqlite_write` policy inside `run_write`); JSON columns are written with X:02 `dump_json` and read with `load_json`. No function takes a store object (R-10). SQL texts are module constants. Datetimes are stored with `format_fixed` and read with `parse_fixed`. JSON columns hold compact JSON arrays of POSIX path strings relative to `paths.data`. The tables exist from impl 02 migration 001 (§4.1); this spec adds no migration (R-11 range 010–019 unused).
 
 #### U01-27 herness.store.ops.Watermark, get_watermark
 
@@ -836,7 +840,6 @@ Every function takes `ops: OpsStore` (X:02/herness.store.ops.OpsStore) as its fi
 
 | Parameter | Type | Default | Kind | Constraint |
 |-----------|------|---------|------|------------|
-| `ops` | `OpsStore` | — | positional | open store |
 | `source` | `str` | — | positional | connector name or `monitoring:<tool>` |
 | `entity` | `str` | — | positional | — |
 
@@ -849,10 +852,10 @@ Returns `Watermark | None`.
 | Preconditions | Ops store migrated. |
 | Postconditions | `value` is aware UTC. |
 | Invariants | — |
-| Algorithm | `SELECT source, entity, field, value, updated_at FROM watermark WHERE source = ? AND entity = ?`; no row → `None`; else parse both timestamps. |
+| Algorithm | `read_one("SELECT source, entity, field, value, updated_at FROM watermark WHERE source = ? AND entity = ?", (source, entity))`; no row → `None`; else parse both timestamps with `parse_fixed`. |
 | Side effects | One read. |
-| Errors | Stored value not in fixed-width format → `SchemaViolation("corrupt watermark", source, entity)`. |
-| Concurrency | Safe from any thread (per-thread connection inside `OpsStore`, §13 O-2). |
+| Errors | Stored value not in fixed-width format → `SchemaViolation("corrupt watermark", source, entity)`; `StoreBusy` from `read_one` (no retry here; the job layer decides). |
+| Concurrency | Safe from any thread: X:02 `connection()` is per thread (R-10). |
 | Complexity and limits | O(1) (primary key). |
 | Security notes | — |
 | Tests | UT01-20 |
@@ -861,7 +864,6 @@ Returns `Watermark | None`.
 
 | Parameter | Type | Default | Kind | Constraint |
 |-----------|------|---------|------|------------|
-| `ops` | `OpsStore` | — | positional | — |
 | `source` | `str` | — | positional | — |
 | `entity` | `str` | — | positional | — |
 | `field` | `str` | — | positional | watermark field name |
@@ -877,9 +879,9 @@ Returns `bool` (true when the stored value changed).
 | Preconditions | Aware datetimes; naive → `SchemaViolation`. |
 | Postconditions | Stored `value` = max(previous, `value`). |
 | Invariants | `watermark.value` never decreases for a `(source, entity)`. |
-| Algorithm | `INSERT INTO watermark(source, entity, field, value, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(source, entity) DO UPDATE SET field = excluded.field, value = excluded.value, updated_at = excluded.updated_at WHERE excluded.value > watermark.value`; return `changes() == 1`. Fixed-width text makes the text comparison a time comparison (spec 00 §8). |
+| Algorithm | `run_write(fn, op="set_watermark")` where `fn(conn)` executes `INSERT INTO watermark(source, entity, field, value, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(source, entity) DO UPDATE SET field = excluded.field, value = excluded.value, updated_at = excluded.updated_at WHERE excluded.value > watermark.value` and returns `cursor.rowcount == 1`. Fixed-width text makes the text comparison a time comparison (spec 00 §8). |
 | Side effects | One write. Idempotency key: `(source, entity)`; re-applying the same value is a no-op. |
-| Errors | `StoreBusy` after the X:08 policy is exhausted (from X:02). |
+| Errors | `StoreBusy` after the X:08 `sqlite_write` policy is exhausted (from `run_write`). |
 | Concurrency | Safe from any thread; SQLite serialises writers. |
 | Complexity and limits | O(1). |
 | Security notes | — |
@@ -889,7 +891,6 @@ Returns `bool` (true when the stored value changed).
 
 | Parameter | Type | Default | Kind | Constraint |
 |-----------|------|---------|------|------------|
-| `ops` | `OpsStore` | — | positional | — |
 | `source` | `str` | — | positional | connector name (never `monitoring:<tool>`) |
 | `entity` | `str` | — | positional | — |
 
@@ -898,13 +899,13 @@ Returns `list[str]`, sorted, unique.
 | Item | Content |
 |------|---------|
 | Kind | function |
-| Purpose | The deletion set for one entity: `record_id`s with a `deletion_request` in `running` or `done` (design 01 §5.6). |
+| Purpose | The deletion set for one entity: `record_id`s with a `deletion_request` in `running` or `done` (design 01 §5.6). Read-only over the table impl 10 writes; it lives in the ingest area because the runner (U01-33) and the X:02 build reference it as an ingest function (§13 O-10). |
 | Preconditions | — |
 | Postconditions | Every returned id starts with `f"{source}:{entity}:"`. `pending` and `failed` requests are not returned. |
 | Invariants | — |
-| Algorithm | `SELECT DISTINCT record_id FROM deletion_request WHERE status IN ('running', 'done') AND substr(record_id, 1, ?) = ? ORDER BY record_id` with parameters `(len(prefix), prefix)`, `prefix = f"{source}:{entity}:"`. `substr` avoids `LIKE` wildcard escaping. |
+| Algorithm | `read_all("SELECT DISTINCT record_id FROM deletion_request WHERE status IN ('running', 'done') AND substr(record_id, 1, ?) = ? ORDER BY record_id", (len(prefix), prefix), max_rows=1_000_000)` with `prefix = f"{source}:{entity}:"`. `substr` avoids `LIKE` wildcard escaping. |
 | Side effects | One read. |
-| Errors | `StoreBusy` (from X:02). |
+| Errors | `StoreBusy` from `read_all`; more than 1,000,000 ids → `SchemaViolation` from `read_all`. |
 | Concurrency | Safe from any thread. |
 | Complexity and limits | O(requests); 100k ids ≈ 4 MB. |
 | Security notes | TH01-11. The ids are never logged. |
@@ -916,7 +917,6 @@ Returns `list[str]`, sorted, unique.
 
 | Parameter | Type | Default | Kind | Constraint |
 |-----------|------|---------|------|------------|
-| `ops` | `OpsStore` | — | positional | — |
 | `source` | `str` | — | positional | stream key |
 | `entity` | `str` | — | positional | — |
 | `slices` | `Sequence[tuple[datetime, datetime]]` | — | positional | output of `split_range` |
@@ -931,9 +931,9 @@ Returns `list[SliceRow]` for exactly the given slice starts, ordered by `slice_s
 | Preconditions | `slices` non-empty and contiguous. |
 | Postconditions | One row per slice start. A row whose stored `slice_end` differs from the plan is reset to `pending` (`rows = 0`, `files = '[]'`), except a `done` row whose stored `slice_end` ≥ the planned end, which stays `done`. |
 | Invariants | PK `(source, entity, slice_start)`. |
-| Algorithm | In one transaction, for each slice: `INSERT INTO sync_slice(source, entity, slice_start, slice_end, status, rows, files, attempts, last_error, updated_at) VALUES (?, ?, ?, ?, 'pending', 0, '[]', 0, NULL, ?) ON CONFLICT(source, entity, slice_start) DO UPDATE SET slice_end = excluded.slice_end, status = 'pending', rows = 0, files = '[]', updated_at = excluded.updated_at WHERE sync_slice.slice_end <> excluded.slice_end AND NOT (sync_slice.status = 'done' AND sync_slice.slice_end > excluded.slice_end)`. Then select the rows with `slice_start IN (...)` (chunks of 500 parameters). |
+| Algorithm | 1. `run_write(fn, op="ensure_slices")`: `fn(conn)` executes, for each slice, `INSERT INTO sync_slice(source, entity, slice_start, slice_end, status, rows, files, attempts, last_error, updated_at) VALUES (?, ?, ?, ?, 'pending', 0, '[]', 0, NULL, ?) ON CONFLICT(source, entity, slice_start) DO UPDATE SET slice_end = excluded.slice_end, status = 'pending', rows = 0, files = '[]', updated_at = excluded.updated_at WHERE sync_slice.slice_end <> excluded.slice_end AND NOT (sync_slice.status = 'done' AND sync_slice.slice_end > excluded.slice_end)`. 2. After the commit, select the rows with `read_all` on `slice_start IN (...)` (chunks of 500 parameters); `files` decoded with `load_json`. |
 | Side effects | Writes. Idempotency key `(source, entity, slice_start)`. |
-| Errors | `StoreBusy` (from X:02). |
+| Errors | `StoreBusy` (from `run_write` or `read_all`). |
 | Concurrency | Safe from any thread. |
 | Complexity and limits | O(slices). |
 | Security notes | — |
@@ -943,9 +943,9 @@ Returns `list[SliceRow]` for exactly the given slice starts, ordered by `slice_s
 
 | Function | Extra parameters | Statement |
 |----------|------------------|-----------|
-| `mark_slice_running(ops, source, entity, slice_start, *, now)` | — | `UPDATE sync_slice SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE source = ? AND entity = ? AND slice_start = ?` |
-| `mark_slice_done(ops, source, entity, slice_start, *, rows: int, files: Sequence[str], now)` | `rows ≥ 0`; POSIX relative paths | `... SET status = 'done', rows = ?, files = ?, last_error = NULL, updated_at = ? WHERE ...` |
-| `mark_slice_failed(ops, source, entity, slice_start, *, error: str, now)` | error text | `... SET status = 'failed', last_error = ?, updated_at = ? WHERE ...`; `error` truncated to 500 chars |
+| `mark_slice_running(source, entity, slice_start, *, now)` | — | `UPDATE sync_slice SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE source = ? AND entity = ? AND slice_start = ?` |
+| `mark_slice_done(source, entity, slice_start, *, rows: int, files: Sequence[str], now)` | `rows ≥ 0`; POSIX relative paths, encoded with `dump_json` | `... SET status = 'done', rows = ?, files = ?, last_error = NULL, updated_at = ? WHERE ...` |
+| `mark_slice_failed(source, entity, slice_start, *, error: str, now)` | error text | `... SET status = 'failed', last_error = ?, updated_at = ? WHERE ...`; `error` truncated to 500 chars |
 
 All return `None`.
 
@@ -956,9 +956,9 @@ All return `None`.
 | Preconditions | The row exists (created by `ensure_slices`). |
 | Postconditions | As in the statements. |
 | Invariants | `attempts` increases only in `mark_slice_running`. |
-| Algorithm | One statement each; `changes() == 0` → error. |
+| Algorithm | One `run_write` call each (`op` = the function name) executing one statement; `cursor.rowcount == 0` → error raised inside the callback, so the transaction rolls back. |
 | Side effects | One write each. |
-| Errors | Row missing → `SchemaViolation("slice not found", source, entity)`; `StoreBusy` (from X:02). |
+| Errors | Row missing → `SchemaViolation("slice not found", source, entity)`; `StoreBusy` (from `run_write`). |
 | Concurrency | Safe from any thread. |
 | Complexity and limits | O(1). |
 | Security notes | `error` holds the error class name and its message only; taxonomy messages never contain record text (ENG §3.4). |
@@ -970,8 +970,8 @@ All return `None`.
 
 | Function | Returns | Statement |
 |----------|---------|-----------|
-| `get_file_ingest(ops, fingerprint: str)` | `FileIngestRow \| None` | `SELECT ... FROM file_ingest WHERE fingerprint = ?` |
-| `record_file_ingest(ops, row: FileIngestRow)` | `bool` (inserted) | `INSERT OR IGNORE INTO file_ingest(fingerprint, source, entity, path, size_bytes, mtime, rows, files, ingested_at) VALUES (...)` |
+| `get_file_ingest(fingerprint: str)` | `FileIngestRow \| None` | `read_one` of `SELECT fingerprint, source, entity, path, size_bytes, mtime, rows, files, ingested_at FROM file_ingest WHERE fingerprint = ?` |
+| `record_file_ingest(row: FileIngestRow)` | `bool` (inserted) | `run_write(fn, op="record_file_ingest")`; `fn` executes `INSERT OR IGNORE INTO file_ingest(fingerprint, source, entity, path, size_bytes, mtime, rows, files, ingested_at) VALUES (...)` |
 
 | Item | Content |
 |------|---------|
@@ -980,23 +980,42 @@ All return `None`.
 | Preconditions | `fingerprint` matches `^[0-9a-f]{64}$`, else `SchemaViolation`. |
 | Postconditions | At most one row per fingerprint. |
 | Invariants | PK `fingerprint`. |
-| Algorithm | As in the table. |
+| Algorithm | As in the table; `files` encoded with `dump_json` and decoded with `load_json`; `record_file_ingest` returns `cursor.rowcount == 1`. |
 | Side effects | Read; write. Idempotency key `fingerprint`. |
-| Errors | `StoreBusy` (from X:02). |
+| Errors | `StoreBusy` (from `read_one` or `run_write`). |
 | Concurrency | Safe from any thread. |
 | Complexity and limits | O(1). |
 | Security notes | TH01-12 (ingest record). |
 | Tests | UT01-24 |
 
+#### U01-92 herness.store.ops.list_watermarks
+
+No parameters. Returns `list[Watermark]` (U01-27) ordered by `(source, entity)`.
+
+| Item | Content |
+|------|---------|
+| Kind | function |
+| Purpose | All stored watermarks, for the build's `meta.build.source_watermarks` (X:02 build job) and for health (U01-57). Added because impl 02 references it as an ingest-area function (R-09). |
+| Preconditions | Ops store migrated. |
+| Postconditions | One entry per `watermark` row; `value` and `updated_at` aware UTC. Monitoring rows appear per tool as `monitoring:<tool>` (R-62). |
+| Invariants | — |
+| Algorithm | `read_all("SELECT source, entity, field, value, updated_at FROM watermark ORDER BY source, entity", (), max_rows=10_000)`; each row parsed as in U01-27. |
+| Side effects | One read. |
+| Errors | A stored value not in fixed-width format → `SchemaViolation("corrupt watermark", source, entity)`; more than 10,000 rows → `SchemaViolation` from `read_all`; `StoreBusy` from `read_all`. |
+| Concurrency | Safe from any thread (per-thread `connection()`, R-10). |
+| Complexity and limits | O(streams × entities); at most 10,000 rows. |
+| Security notes | — |
+| Tests | UT01-95 |
+
 ### 3.6 Deletion filter and lake-file helpers
 
 #### U01-33 herness.connectors.deletion.DeletionFilter
 
-Constructor `DeletionFilter(ops: OpsStore, source: str, entity: str)`.
+Constructor `DeletionFilter(source: str, entity: str)` (no store parameter, R-10).
 
 | Method | Returns | Behavior |
 |--------|---------|----------|
-| `reload() -> int` | set size | Loads `deleted_record_ids(ops, source, entity)` into a `pa.StringArray` and swaps it in |
+| `reload() -> int` | set size | Loads `deleted_record_ids(source, entity)` into a `pa.StringArray` and swaps it in |
 | `apply(batch: pa.RecordBatch) -> tuple[pa.RecordBatch, int]` | filtered batch, rows dropped | Empty set → `(batch, 0)`; else `batch.filter(pc.invert(pc.is_in(batch["_record_id"], value_set=ids)))` |
 | `size` | `int` property | Current set size |
 
@@ -1103,7 +1122,6 @@ Constructor:
 |-----------|------|---------|------|------------|
 | `connector` | `Connector` | — | positional | `connector.name == cfg.SOURCE` |
 | `cfg` | `SourceSettings` | — | positional | validated |
-| `ops` | `OpsStore` | — | positional | open |
 | `clock` | `Callable[[], datetime]` | `now_utc` | keyword-only | — |
 | `writer_factory` | `Callable[[str, str], LakeWriter]` | `lambda s, e: LakeWriter(s, e)` | keyword-only | X:02/herness.store.lake.LakeWriter defaults |
 | `connector_factory` | `Callable[[], Connector] \| None` | `None` | keyword-only | Builds a fresh instance of the same connector for backfill slice threads; `None` → slices run sequentially on `connector` |
@@ -1115,7 +1133,7 @@ Public attributes after a run: `skipped_open: tuple[str, ...]` (stream keys skip
 
 | Item | Content |
 |------|---------|
-| Kind | class (design contract 01 §3.2; the keyword-only parameters are additive, §13 D-5) |
+| Kind | class (design contract 01 §3.2; the keyword-only parameters are additive, §13 D-5; the design's `ops` parameter is removed because ops access goes through the X:02 core API, R-10, §13 D-15) |
 | Purpose | Runs incremental, backfill and reconcile flows for one source. |
 | Preconditions | `connector.name == cfg.SOURCE`, else `ConfigError`. |
 | Postconditions | — |
@@ -1168,7 +1186,7 @@ Returns `SyncResult`.
 | Preconditions | — |
 | Postconditions | Watermark ≥ previous value. |
 | Invariants | U01-37. |
-| Algorithm | 1. X:08/herness.core.resilience.guard(key) (raises `CircuitOpen`; no source call happens). 2. `wm = get_watermark(ops, key, entity)`. 3. `wm is None` → return `run_backfill` logic for this stream (U01-43) with `start = cfg.backfill_for(entity).resolve_start(now)` and `end = now`, where `now = clock()`. 4. `now = clock()`; `since = wm.value − cfg.overlap_for(entity)`; `until = now − timedelta(seconds=cfg.settle_seconds)`. 5. `since ≥ until` → return a zero `SyncResult` with the watermark unchanged. 6. Log `connectors.sync.started`. 7. `deletion = DeletionFilter(ops, connector.name, entity)`; `deletion.reload()`. 8. `out = _write_stream(entity, fetch(entity, since, until), key=key, deletion=deletion, ordered=connector.name not in UNORDERED_SOURCES, field=connector.watermark_field(entity), cap=until, advance_watermark=True)`. 9. Read the watermark again for `watermark_after`; log `connectors.sync.completed`; emit metrics (§8); return the result. |
+| Algorithm | 1. X:08/herness.core.resilience.guard(key) (raises `CircuitOpen`; no source call happens). 2. `wm = get_watermark(key, entity)`. 3. `wm is None` → return `run_backfill` logic for this stream (U01-43) with `start = cfg.backfill_for(entity).resolve_start(now)` and `end = now`, where `now = clock()`. 4. `now = clock()`; `since = wm.value − cfg.overlap_for(entity)`; `until = now − timedelta(seconds=cfg.settle_seconds)`. 5. `since ≥ until` → return a zero `SyncResult` with the watermark unchanged. 6. Log `connectors.sync.started`. 7. `deletion = DeletionFilter(connector.name, entity)`; `deletion.reload()`. 8. `out = _write_stream(entity, fetch(entity, since, until), key=key, deletion=deletion, ordered=connector.name not in UNORDERED_SOURCES, field=connector.watermark_field(entity), cap=until, advance_watermark=True)`. 9. Read the watermark again for `watermark_after`; log `connectors.sync.completed`; emit metrics (§8); return the result. |
 | Side effects | As U01-38. |
 | Errors | As U01-38. |
 | Concurrency | Single thread. |
@@ -1198,7 +1216,7 @@ Returns private frozen dataclass `StreamOutcome(rows: int, tombstones: int, skip
 | Preconditions | `deletion` loaded. |
 | Postconditions | All written rows are committed; for ordered streams the watermark equals `min(max committed _source_updated_at, cap)` of the last checkpoint that committed rows; for unordered streams it equals `min(max over all commits, cap)` and is set once at the end. |
 | Invariants | Watermark written only after `commit()` returned (design 01 §2). |
-| Algorithm | 1. `writer = writer_factory(connector.name, entity)`; `tracker = SchemaTracker()`; `cp_rows = 0`; `cp_start = clock()`. 2. For each `batch`: a. skip empty batches; b. `batch, dropped = deletion.apply(batch)`; `skipped_deleted += dropped`; skip if now empty; c. `drift = tracker.observe(batch.schema)`; if `drift` is not `None`: log `connectors.schema_drift.detected` with `added`, `removed`, `changed`, emit the drift metric, and if `cp_rows > 0` run `checkpoint()`; d. `writer.write(batch)`; `cp_rows += n`; `rows += n`; `tombstones += pc.sum(batch["_deleted"])`; e. if `cp_rows ≥ cfg.checkpoint_rows` or `clock() − cp_start ≥ LAKE_MAX_OPEN_S` (600 s, the X:02 `LakeWriter` default `max_open_s`) run `checkpoint()`. 3. `checkpoint()`: `fs = writer.commit()`; add `fs.files`; update `max_committed`; call X:08/herness.core.resilience.fault_point("connector.before_watermark", source=key); if `advance_watermark and ordered and fs.max_source_updated_at is not None`: `set_watermark(ops, key, entity, field, min(fs.max_source_updated_at, cap), now=clock())`; `deletion.reload()`; call `progress(f"{key}/{entity} rows={rows}")` when set; log `connectors.sync.checkpoint_committed`; open a new writer; reset `cp_rows`, `cp_start`. 4. End of stream: `fs = writer.commit()` (also when empty) and apply the same watermark rule as step 3 without opening a new writer. Then, if `advance_watermark and not ordered and max_committed is not None`: `set_watermark(..., min(max_committed, cap), ...)`. 5. Any exception (including `KeyboardInterrupt`) in steps 2–4: call `writer.abort()`; if `abort()` itself raises, log `connectors.lake.abort_failed` (ERROR) and re-raise the original exception; else re-raise. |
+| Algorithm | 1. `writer = writer_factory(connector.name, entity)`; `tracker = SchemaTracker()`; `cp_rows = 0`; `cp_start = clock()`. 2. For each `batch`: a. skip empty batches; b. `batch, dropped = deletion.apply(batch)`; `skipped_deleted += dropped`; skip if now empty; c. `drift = tracker.observe(batch.schema)`; if `drift` is not `None`: log `connectors.schema_drift.detected` with `added`, `removed`, `changed`, emit the drift metric, and if `cp_rows > 0` run `checkpoint()`; d. `writer.write(batch)`; `cp_rows += n`; `rows += n`; `tombstones += pc.sum(batch["_deleted"])`; e. if `cp_rows ≥ cfg.checkpoint_rows` or `clock() − cp_start ≥ LAKE_MAX_OPEN_S` (600 s, the X:02 `LakeWriter` default `max_open_s`) run `checkpoint()`. 3. `checkpoint()`: `fs = writer.commit()`; add `fs.files`; update `max_committed`; call X:08/herness.core.resilience.fault_point("connector.before_watermark", source=key); if `advance_watermark and ordered and fs.max_source_updated_at is not None`: `set_watermark(key, entity, field, min(fs.max_source_updated_at, cap), now=clock())`; `deletion.reload()`; call `progress(f"{key}/{entity} rows={rows}")` when set; log `connectors.sync.checkpoint_committed`; open a new writer; reset `cp_rows`, `cp_start`. 4. End of stream: `fs = writer.commit()` (also when empty) and apply the same watermark rule as step 3 without opening a new writer. Then, if `advance_watermark and not ordered and max_committed is not None`: `set_watermark(..., min(max_committed, cap), ...)`. 5. Any exception (including `KeyboardInterrupt`) in steps 2–4: call `writer.abort()`; if `abort()` itself raises, log `connectors.lake.abort_failed` (ERROR) and re-raise the original exception; else re-raise. |
 | Side effects | Lake files through `LakeWriter`; `watermark`; logs; metrics; `fault_point`. |
 | Errors | Propagates connector errors, `LakeWriter` errors (X:02), `StoreBusy`. |
 | Concurrency | One call per thread; backfill slices each call it with their own writer. |
@@ -1277,10 +1295,10 @@ Returns `SyncResult`.
 | Preconditions | — |
 | Postconditions | When every planned slice is `done`, the watermark is set to `min(end, max committed _source_updated_at of this call)`, or to `end` when this call committed no rows. Otherwise the watermark is unchanged. |
 | Invariants | A `done` slice is never rerun; `running` and `failed` slices rerun from their start. |
-| Algorithm | 1. `bf = cfg.backfill_for(entity)`; `slices = split_range(start, end, timedelta(days=bf.slice_days))`. 2. `plan = ensure_slices(ops, key, entity, slices, now=clock())`; `todo = [r for r in plan if r.status != "done"]`. 3. `workers = min(max_workers, len(todo))` when `runner.connector_factory` is set, else `1`. 4. Run `todo` in a `ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"backfill-{key}")`. Each slice task: a. if `runner.should_stop` returns true → return "skipped" (slice stays as it is); b. `mark_slice_running`; c. `guard(key)`; d. `conn = runner.connector_factory()` or the shared connector; e. `deletion = DeletionFilter(ops, connector.name, entity)`; `deletion.reload()`; f. `out = runner._write_stream(entity, fetch_of(conn)(entity, s0, s1), key=key, deletion=deletion, ordered=connector.name not in UNORDERED_SOURCES, field=connector.watermark_field(entity), cap=s1, advance_watermark=False)`; g. `mark_slice_done(rows=out.rows, files=<out.files as POSIX paths relative to data_root>)`; log `connectors.backfill.slice_completed`. On any exception: `mark_slice_failed(error=f"{type(exc).__name__}: {exc}")`; log `connectors.backfill.slice_failed`; re-raise. 5. Wait for all tasks. 6. If any task raised: raise the first `FatalError` if any, else the first other exception. 7. If any task was skipped: set `runner.stopped = True`; return the result with the watermark unchanged. 8. Set the watermark per the postcondition with `set_watermark`; log `connectors.sync.completed` (mode `backfill`); return the sums. |
+| Algorithm | 1. `bf = cfg.backfill_for(entity)`; `slices = split_range(start, end, timedelta(days=bf.slice_days))`. 2. `plan = ensure_slices(key, entity, slices, now=clock())`; `todo = [r for r in plan if r.status != "done"]`. 3. `workers = min(max_workers, len(todo))` when `runner.connector_factory` is set, else `1`. 4. Run `todo` in a `ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"backfill-{key}")`. Each slice task: a. if `runner.should_stop` returns true → return "skipped" (slice stays as it is); b. `mark_slice_running`; c. `guard(key)`; d. `conn = runner.connector_factory()` or the shared connector; e. `deletion = DeletionFilter(connector.name, entity)`; `deletion.reload()`; f. `out = runner._write_stream(entity, fetch_of(conn)(entity, s0, s1), key=key, deletion=deletion, ordered=connector.name not in UNORDERED_SOURCES, field=connector.watermark_field(entity), cap=s1, advance_watermark=False)`; g. `mark_slice_done(rows=out.rows, files=<out.files as POSIX paths relative to data_root>)`; log `connectors.backfill.slice_completed`. On any exception: `mark_slice_failed(error=f"{type(exc).__name__}: {exc}")`; log `connectors.backfill.slice_failed`; re-raise. 5. Wait for all tasks. 6. If any task raised: raise the first `FatalError` if any, else the first other exception. 7. If any task was skipped: set `runner.stopped = True`; return the result with the watermark unchanged. 8. Set the watermark per the postcondition with `set_watermark`; log `connectors.sync.completed` (mode `backfill`); return the sums. |
 | Side effects | `sync_slice`, lake files, `watermark`, logs, metrics. |
 | Errors | Any slice error, re-raised after all slices finish. |
-| Concurrency | Up to `workers` threads; each has its own connector (when a factory is given), `LakeWriter` and `DeletionFilter`; ops functions are thread-safe (§13 O-2). |
+| Concurrency | Up to `workers` threads; each has its own connector (when a factory is given), `LakeWriter` and `DeletionFilter`; ops functions are thread-safe through the per-thread X:02 `connection()` (R-10). |
 | Complexity and limits | Memory ≤ `workers` × (one page + one batch + writer buffer). |
 | Security notes | TH01-11. |
 | Tests | UT01-37, UT01-38, UT01-39, UT01-93, FT01-03 |
@@ -1305,7 +1323,7 @@ Returns `SyncResult` (mode `reconcile`).
 | Preconditions | — |
 | Postconditions | Every live lake key missing from the source (and not under a deletion request) has a tombstone, unless the valve tripped. |
 | Invariants | Watermark unchanged; never writes a tombstone for a `record_id` in the deletion set. |
-| Algorithm | 1. `guard(connector.name)` (files: skipped). 2. `deletion = DeletionFilter(ops, connector.name, entity)`; `reload()`. 3. `scratch = data_root / "tmp" / "reconcile"` (created); `key_path = scratch / f"{connector.name}-{entity}-{new_ulid()}.parquet"` (X:00/herness.core.ids.new_ulid). 4. Write the key stream to `key_path` with `pyarrow.parquet.ParquetWriter(KEY_SCHEMA, compression="zstd")`; each batch is cast to `KEY_SCHEMA` (a null key or other type → `SchemaViolation`); count `source_keys`. 5. `missing, live = find_missing_keys(data_root / "raw" / connector.name / entity, key_path, deleted=deletion ids, temp_dir=scratch)`. 6. If `live > 0` and `len(missing) × 100 > cfg.reconcile.max_delete_pct × live`: log `connectors.reconcile.aborted` (ERROR: `live_keys`, `missing_keys`, `max_delete_pct`), emit `herness_connectors_reconcile_aborted_total`, raise `SchemaViolation("reconcile safety valve", source, entity)`. 7. Otherwise write `missing` in chunks of `cfg.batch_rows` with `tombstone_batch(..., deleted_at=deleted_at or clock(), fetched_at=clock())`, each passed through `deletion.apply`, into one `LakeWriter`; `commit()`; `abort()` on error. 8. `finally`: delete `key_path` (`missing_ok=True`). 9. Log `connectors.reconcile.completed`; return `SyncResult(rows=n, tombstones=n, ...)` with `watermark_before = watermark_after =` the current watermark text. |
+| Algorithm | 1. `guard(connector.name)` (files: skipped). 2. `deletion = DeletionFilter(connector.name, entity)`; `reload()`. 3. `scratch = data_root / "tmp" / "reconcile"` (created); `key_path = scratch / f"{connector.name}-{entity}-{new_ulid()}.parquet"` (X:00/herness.core.ids.new_ulid). 4. Write the key stream to `key_path` with `pyarrow.parquet.ParquetWriter(KEY_SCHEMA, compression="zstd")`; each batch is cast to `KEY_SCHEMA` (a null key or other type → `SchemaViolation`); count `source_keys`. 5. `missing, live = find_missing_keys(data_root / "raw" / connector.name / entity, key_path, deleted=deletion ids, temp_dir=scratch)`. 6. If `live > 0` and `len(missing) × 100 > cfg.reconcile.max_delete_pct × live`: log `connectors.reconcile.aborted` (ERROR: `live_keys`, `missing_keys`, `max_delete_pct`), emit `herness_connectors_reconcile_aborted_total`, raise `SchemaViolation("reconcile safety valve", source, entity)`. 7. Otherwise write `missing` in chunks of `cfg.batch_rows` with `tombstone_batch(..., deleted_at=deleted_at or clock(), fetched_at=clock())`, each passed through `deletion.apply`, into one `LakeWriter`; `commit()`; `abort()` on error. 8. `finally`: delete `key_path` (`missing_ok=True`). 9. Log `connectors.reconcile.completed`; return `SyncResult(rows=n, tombstones=n, ...)` with `watermark_before = watermark_after =` the current watermark text. |
 | Side effects | Scratch file, lake files, logs, metrics. |
 | Errors | `CircuitOpen`; §6 connector errors; `SchemaViolation` (valve, bad key batch); DuckDB errors → `SchemaViolation("reconcile query failed")` from `find_missing_keys`. |
 | Concurrency | Single thread. |
@@ -1454,7 +1472,7 @@ Returns `SyncResult` (mode `incremental`, watermarks `None`).
 | Preconditions | — |
 | Postconditions | Each new fingerprint is written to the lake and then recorded in `file_ingest`; known fingerprints are skipped. |
 | Invariants | `record_file_ingest` runs only after the file's writer committed. |
-| Algorithm | 1. `deletion = DeletionFilter(ops, "files", entity)`; `reload()`. 2. For each `f` in `connector.candidates(entity)`: a. `fp = fingerprint_file(f)`; `InboxFileChanged` → log `connectors.files.rejected` (reason `changed`) and continue. b. `get_file_ingest(ops, fp)` not `None` → log `connectors.files.skipped_known` (INFO: `entity`, `fingerprint` first 12 hex) and continue. c. Wrap `connector.read_file(entity, f)` in a generator that, in snapshot mode, appends each batch's `_source_key` column to a list. d. `out = runner._write_stream(entity, wrapped, key="files", deletion=deletion, ordered=False, field=connector.watermark_field(entity), cap=f.mtime, advance_watermark=False)`; `InboxFileChanged` from the stream → the writer is already aborted; log `connectors.files.rejected` (reason `changed`) and continue. e. `fault_point("connector.before_watermark", source="files")`. f. `record_file_ingest(ops, FileIngestRow(fp, "files", entity, f.rel_path, f.size_bytes, f.mtime, out.rows, files, clock()))`; log `connectors.files.ingested`; emit `herness_connectors_files_ingested_total`. g. Snapshot mode: `reconcile_entity(runner, entity, keys=<batches of pc.unique(concat(keys))>, deleted_at=f.mtime)`; add its tombstones to the totals. 3. Return the sums. |
+| Algorithm | 1. `deletion = DeletionFilter("files", entity)`; `reload()`. 2. For each `f` in `connector.candidates(entity)`: a. `fp = fingerprint_file(f)`; `InboxFileChanged` → log `connectors.files.rejected` (reason `changed`) and continue. b. `get_file_ingest(fp)` not `None` → log `connectors.files.skipped_known` (INFO: `entity`, `fingerprint` first 12 hex) and continue. c. Wrap `connector.read_file(entity, f)` in a generator that, in snapshot mode, appends each batch's `_source_key` column to a list. d. `out = runner._write_stream(entity, wrapped, key="files", deletion=deletion, ordered=False, field=connector.watermark_field(entity), cap=f.mtime, advance_watermark=False)`; `InboxFileChanged` from the stream → the writer is already aborted; log `connectors.files.rejected` (reason `changed`) and continue. e. `fault_point("connector.before_watermark", source="files")`. f. `record_file_ingest(FileIngestRow(fp, "files", entity, f.rel_path, f.size_bytes, f.mtime, out.rows, files, clock()))`; log `connectors.files.ingested`; emit `herness_connectors_files_ingested_total`. g. Snapshot mode: `reconcile_entity(runner, entity, keys=<batches of pc.unique(concat(keys))>, deleted_at=f.mtime)`; add its tombstones to the totals. 3. Return the sums. |
 | Side effects | Lake files, `file_ingest`, logs, metrics. |
 | Errors | `SchemaViolation` from reading (the file is not recorded, so the next run retries it); the reconcile valve `SchemaViolation` (the file is already recorded; the operator reviews and runs `herness sync files --entity E --reconcile`); `StoreBusy`. |
 | Concurrency | Single thread (`max_concurrency` 1). |
@@ -1468,20 +1486,20 @@ Returns `SyncResult` (mode `incremental`, watermarks `None`).
 
 | Parameter | Type | Default | Kind | Constraint |
 |-----------|------|---------|------|------------|
-| `ctx` | X:08/herness.core.jobs.JobContext | — | positional | job kind `sync` |
+| `ctx` | X:08/herness.core.jobs.JobContext | — | positional | job kind `sync`; payload read from `ctx.job.payload` (R-42) |
 
-Returns X:08/herness.core.jobs.JobOutcome.
+Returns X:08/herness.core.types.JobOutcome.
 
 Payload model `SyncPayload` (private, config-model conventions): `source: str | None = None`; `entities: list[str] | None = None` (requires `source`); `mode: Literal["incremental", "backfill"] = "incremental"`; `start: datetime.date | None = None`; `end: datetime.date | None = None` (both only with `backfill`).
 
 | Item | Content |
 |------|---------|
-| Kind | function (job handler; spec 08 §5.1) |
-| Purpose | Runs `sync` jobs from the scheduler and the CLI. |
+| Kind | function (job handler; spec 08 §5.1; one argument `ctx`, R-42) |
+| Purpose | Runs `sync` jobs from the scheduler and the CLI. A source whose breaker is open does not fail the job: the job ends `done` with outcome `skipped_open_circuit` and the next scheduled run retries (R-39). |
 | Preconditions | Handler registered (U01-53). |
 | Postconditions | Every requested entity was attempted once unless the job yielded. |
 | Invariants | One failing entity does not stop the others (design 01 §6); an open breaker skips the rest of that source's entities. |
-| Algorithm | 1. `p = SyncPayload.model_validate(ctx.payload)`; failure → `ConfigError("invalid sync payload")`. 2. `cfg = X:10/herness.core.config.get_config()`; `ops =` the process `OpsStore` (X:02/herness.store.ops.open_ops_store). 3. `names = [p.source]` or, when `None`, the names from `cfg.sources.enabled_sources()`. A named source that is disabled → `ConfigError`. 4. For each name: `conn = build_connector(name, cfg)`; `runner = SyncRunner(conn, settings, ops, connector_factory=lambda: build_connector(name, cfg), progress=ctx.heartbeat, should_stop=ctx.should_yield)`; `entities = p.entities or conn.entities` (unknown → `ConfigError`). 5. For each entity: if `ctx.should_yield()` → return `JobOutcome(status="yield", result=<partial result>)`. Call `run_incremental(entity)`, or `run_backfill(entity, start, end)` with `start` = `p.start` at 00:00 UTC or `backfill_for(entity).resolve_start(now)` and `end` = `p.end` at 00:00 UTC or `now`. Append `result.to_dict()`; add `runner.skipped_open` to the skipped list; if `runner.stopped` → return `yield`. `CircuitOpen` → add `exc.key`, log `connectors.sync.skipped_open_circuit`, skip the rest of this source. Other `HernessError` → record `(name, entity, exc)`, log `connectors.sync.failed`, continue. 6. `result = {"results": [...], "partial": bool(failed or skipped), "skipped_open_circuit": sorted(skipped), "failed": [{"source", "entity", "error_class"}]}`. 7. If any failure was recorded: raise the first `FatalError`, else the first failure (spec 08 then fails or reschedules the job; the per-entity outcome is in the logs). 8. Else return `JobOutcome(status="done", result=result)`. |
+| Algorithm | 1. `p = SyncPayload.model_validate(ctx.job.payload)` (R-42); failure → `ConfigError("invalid sync payload")`. 2. `cfg = X:10/herness.core.config.get_config()`. 3. `names = [p.source]` or, when `None`, the names from `cfg.sources.enabled_sources()`. A named source that is disabled → `ConfigError`. 4. For each name: `conn = build_connector(name, cfg)`; `runner = SyncRunner(conn, settings, connector_factory=lambda: build_connector(name, cfg), progress=ctx.heartbeat, should_stop=ctx.should_yield)`; `entities = p.entities or conn.entities` (unknown → `ConfigError`). 5. For each entity: if `ctx.should_yield()` → return `JobOutcome(status="yield", result=<partial result>)`. Call `run_incremental(entity)`, or `run_backfill(entity, start, end)` with `start` = `p.start` at 00:00 UTC or `backfill_for(entity).resolve_start(now)` and `end` = `p.end` at 00:00 UTC or `now`. Append `result.to_dict()`; add `runner.skipped_open` to the skipped list; if `runner.stopped` → return `yield`. `CircuitOpen` → add `exc.key`, log `connectors.sync.skipped_open_circuit`, skip the rest of this source. Other `HernessError` → record `(name, entity, exc)`, log `connectors.sync.failed`, continue. 6. `result = {"results": [...], "partial": bool(failed or skipped), "skipped_open_circuit": sorted(skipped), "failed": [{"source", "entity", "error_class"}]}`. 7. If any failure was recorded: raise the first `FatalError`, else the first failure (spec 08 then fails or reschedules the job; the per-entity outcome is in the logs). 8. Else return `JobOutcome(status="done", result=result)`. |
 | Side effects | Everything the runner does. |
 | Errors | `ConfigError` (payload, config); the first recorded entity error. |
 | Concurrency | Runs in the job thread; backfill spawns slice threads. |
@@ -1617,7 +1635,6 @@ Returns `list[MappingIssue]` sorted by `(entity, column)`; empty = pass.
 | Parameter | Type | Default | Kind | Constraint |
 |-----------|------|---------|------|------------|
 | `cfg` | `SourcesConfig` | — | positional | — |
-| `ops` | `OpsStore` | — | positional | — |
 | `now` | `datetime` | — | keyword-only | aware |
 
 Returns `list[SourceHealth]`, one per stream key of each enabled source.
@@ -1629,8 +1646,8 @@ Returns `list[SourceHealth]`, one per stream key of each enabled source.
 | Preconditions | — |
 | Postconditions | — |
 | Invariants | — |
-| Algorithm | For each stream key: 1. X:08/herness.core.resilience.breaker(key).state(): `open` → `down`, reason `breaker open`; `half_open` → `degraded`, reason `breaker probing`. 2. Else, for sources other than `files`: any entity without a watermark → `degraded`, `no watermark for <entity>`; any watermark older than `STALE_AFTER` (24 h; monitoring 48 h) → `degraded`, `watermark stale for <entity>: <hours> h`. 3. Else `ok`, reason `""`. |
-| Side effects | Reads `source_health` (via X:08) and `watermark`. |
+| Algorithm | Load `list_watermarks()` (U01-92) once. For each stream key: 1. X:08/herness.core.resilience.breaker(key).state(): `open` → `down`, reason `breaker open`; `half_open` → `degraded`, reason `breaker probing`. 2. Else, for sources other than `files`: any entity without a watermark → `degraded`, `no watermark for <entity>`; any watermark older than `STALE_AFTER` (24 h; monitoring 48 h) → `degraded`, `watermark stale for <entity>: <hours> h`. 3. Else `ok`, reason `""`. |
+| Side effects | Reads `source_health` (via X:08) and `watermark` (via U01-92). |
 | Errors | `StoreBusy`. |
 | Concurrency | Any thread. |
 | Complexity and limits | O(streams × entities). |
@@ -1648,20 +1665,19 @@ Module constants: `MAX_RESPONSE_BYTES = 67_108_864` (64 MiB per page); `MAX_LINE
 | `settings` | `SourceSettings \| MonitoringAdapterSettings` | — | positional | has `base_url` |
 | `source` | `str` | — | keyword-only | stream key, for messages |
 | `max_concurrency` | `int` | — | keyword-only | connection pool size |
-| `proxy` | `str \| None` | `None` | keyword-only | X:10 `cfg.security.network.http_proxy` |
 
-Returns `httpx.Client`.
+Returns `httpx.Client` built by `herness.core.egress` (R-06).
 
 | Item | Content |
 |------|---------|
 | Kind | function |
-| Purpose | The only HTTP client constructor for source connectors (spec 10 §3.5): only the host of the source's `base_url` is reachable. |
+| Purpose | The one place connectors obtain an HTTP client. It builds nothing itself: under R-06 and ENG §2.1 only `herness.core.egress` constructs `httpx` clients and transports, so this function selects the egress factory and passes the source's settings. Only the host of the source's `base_url` is reachable. |
 | Preconditions | `base_url` set. |
-| Postconditions | TLS verification on (`settings.httpx_verify()`); redirects not followed; environment proxies and `.netrc` ignored. |
-| Invariants | Every request passes the host guard. |
-| Algorithm | 1. `allowed = {urlsplit(base_url).hostname.lower()}`. 2. `transport = _HostGuardTransport(httpx.HTTPTransport(verify=settings.httpx_verify(), retries=0, proxy=proxy), allowed)`; `handle_request` raises `ForeignHostError` when the request host is not in `allowed`, or the scheme is not `https` (except `http` to a loopback host). 3. Return `httpx.Client(base_url=base_url, transport=transport, timeout=httpx.Timeout(settings.timeout_s, connect=policy("source_http_page").connect_timeout_s), follow_redirects=False, trust_env=False, headers={"User-Agent": "herness/<package version>", "Accept": "application/json"}, limits=httpx.Limits(max_connections=2 × max_concurrency, max_keepalive_connections=max_concurrency))`. |
+| Postconditions | The client reaches only the `base_url` host; TLS verification on for every non-loopback host (`settings.httpx_verify()`); redirects not followed; environment proxies and `.netrc` ignored; timeouts set. |
+| Invariants | Every request passes the egress-built host check. |
+| Algorithm | 1. `host = urlsplit(base_url).hostname.lower()`. 2. `host` in {`127.0.0.1`, `localhost`, `::1`} → return X:10/herness.core.egress.loopback_http_client(base_url, timeout_s=settings.timeout_s) (R-06 signature). 3. Otherwise return X:10/herness.core.egress.source_http_client(base_url, verify=settings.httpx_verify(), timeout_s=settings.timeout_s, connect_timeout_s=X:08/herness.core.resilience.policy("source_http_page").connect_timeout_s, max_connections=2 × max_concurrency). The contract this spec requires of that factory (§13 O-9): the transport refuses any host other than the `base_url` host and any scheme other than `https` with `EgressBlocked`; `follow_redirects=False`; `trust_env=False`; proxy from X:10 `security.network.http_proxy`; TLS 1.2 or later with verification per `verify`; `retries=0`; keep-alive pool of `max_concurrency` connections. Default headers (`User-Agent`, `Accept`) are added per request by U01-59, so both factories behave alike. |
 | Side effects | None until used. |
-| Errors | `ForeignHostError` at request time. |
+| Errors | `EgressBlocked` (X:10) at request time for a foreign host or scheme. |
 | Concurrency | `httpx.Client` is thread-safe; each connector instance owns one. |
 | Complexity and limits | — |
 | Security notes | TH01-01, TH01-02, TH01-15. |
@@ -1689,7 +1705,7 @@ Constructor `SourceHttp(client: httpx.Client, *, breaker_key: str, auth: httpx.A
 | Preconditions | — |
 | Postconditions | A returned page has status 2xx or a status in `allow_status`. |
 | Invariants | Retries wrap exactly one page; cursors stay in the caller's generator, so a retry resumes at the failed page. |
-| Algorithm | `get_json`/`post_json`: 1. Return `X:08/herness.core.resilience.retry_page(lambda: self._once(...), source=breaker_key)`. 2. `_once`: `fault_point("http.page", source=breaker_key)`; `with client.stream(method, url, params=..., headers=..., json=..., auth=auth) as resp`: if `resp.status_code` not in `allow_status`, `err = map_http_error(resp, now=clock())` and raise it when not `None`; read `resp.iter_bytes()` accumulating ≤ `MAX_RESPONSE_BYTES` (exceeded → `SchemaViolation("response too large")`); decode with `json.loads` (failure → `SchemaViolation("malformed JSON")`). 3. `httpx.HTTPError` → raise `classify(exc, family="source")` (X:08). 4. Log `connectors.http.page_fetched` (DEBUG: `source`, `status`, `bytes`, `elapsed_ms`); emit `herness_connectors_pages_total`. `post_form_lines`: the request is issued inside `retry_page` until the first line is read; later stream errors raise `SourceUnavailable` without retry (the export restarts on the next job attempt); each line ≤ `MAX_LINE_BYTES` (else `SchemaViolation`); invalid JSON line → `SchemaViolation`. |
+| Algorithm | `get_json`/`post_json`: 1. Return `X:08/herness.core.resilience.retry_page(lambda: self._once(...), source=breaker_key)`. 2. `_once`: `fault_point("http.page", source=breaker_key)`; request headers = `{"User-Agent": "herness/<package version>", "Accept": "application/json"}` updated with `headers`; `with client.stream(method, url, params=..., headers=..., json=..., auth=auth) as resp`: if `resp.status_code` not in `allow_status`, `err = map_http_error(resp, now=clock())` and raise it when not `None`; read `resp.iter_bytes()` accumulating ≤ `MAX_RESPONSE_BYTES` (exceeded → `SchemaViolation("response too large")`); decode with `json.loads` (failure → `SchemaViolation("malformed JSON")`). 3. `httpx.HTTPError` → raise `classify(exc, family="source")` (X:08). 4. Log `connectors.http.page_fetched` (DEBUG: `source`, `status`, `bytes`, `elapsed_ms`); emit `herness_connectors_pages_total`. `post_form_lines`: the request is issued inside `retry_page` until the first line is read; later stream errors raise `SourceUnavailable` without retry (the export restarts on the next job attempt); each line ≤ `MAX_LINE_BYTES` (else `SchemaViolation`); invalid JSON line → `SchemaViolation`. |
 | Side effects | Network; logs; metrics; retries emit spec 08 `retry` events. |
 | Errors | `map_http_error` results; `SchemaViolation` (size, JSON, cursor); `ForeignHostError`; `classify` results. |
 | Concurrency | Thread-safe when the underlying client and auth are (they are). |
@@ -1761,7 +1777,7 @@ Returns `float | None` (seconds, ≥ 0).
 
 | Class | Base | Attributes | Raised when |
 |-------|------|------------|-------------|
-| `ForeignHostError` | `SchemaViolation` | `host: str` | A request or a response-supplied next URL targets a host outside the source's `base_url` |
+| `ForeignHostError` | `SchemaViolation` | `host: str` | A response-supplied next URL (`Link`, `@odata.nextLink`) targets a host outside the source's `base_url` (`check_next_url`). A request to a foreign host is refused earlier by the egress-built transport with `EgressBlocked` (U01-58) |
 | `SourceNotFound` | `SchemaViolation` | `path: str` | HTTP 404 (callers that expect it, such as the Jira bulk changelog, catch it) |
 
 | Item | Content |
@@ -1850,7 +1866,7 @@ Constructor `MsalTokenProvider(*, tenant_id: str, client_id: str, credential: Se
 |------|---------|
 | Kind | class (`httpx.Auth`) |
 | Purpose | Dataverse token via `msal.ConfidentialClientApplication(...).acquire_token_for_client(scopes=[scope])`, cached until 5 minutes before expiry (design 01 §5.9). |
-| Preconditions | `login.microsoftonline.com` reachable through the socket guard (U01-15). |
+| Preconditions | `login.microsoftonline.com` is listed in `sources.dataverse.hosts` (U01-12), so the socket guard allows MSAL's own HTTP session (R-06). |
 | Postconditions | As U01-64. |
 | Invariants | As U01-64. |
 | Algorithm | 1. Build the MSAL app once with `authority=f"https://login.microsoftonline.com/{tenant_id}"` and `client_credential` = the secret string, or `{"private_key": pem, "thumbprint": thumbprint}`. 2. `auth_flow`: under the lock, refresh when missing or within the margin; the MSAL result without `access_token` → `AuthError(f"msal error {result.get('error')}")` (the error code only; never `error_description`); `expires_at = clock() + result["expires_in"]`. 3. Header `Authorization: Bearer <token>`; retry once on 401 as U01-64. MSAL transport errors (`requests.RequestException`) → `SourceUnavailable`. |
@@ -1858,7 +1874,7 @@ Constructor `MsalTokenProvider(*, tenant_id: str, client_id: str, credential: Se
 | Errors | `AuthError`, `SourceUnavailable`. |
 | Concurrency | Thread-safe (lock). |
 | Complexity and limits | — |
-| Security notes | TH01-16, TH01-03. |
+| Security notes | TH01-16, TH01-03, TH01-18. |
 | Tests | UT01-90, ST01-15 |
 
 ### 3.14 ServiceNow (`herness/connectors/servicenow.py`)
@@ -2044,7 +2060,7 @@ Signature per U01-16.
 | Preconditions | `entity == "issue"`. |
 | Postconditions | Every row carries complete `changelog` and `remotelinks` (NULL when `fetch_remote_links` is off). Ascending by `(updated, id)`. |
 | Invariants | — |
-| Algorithm | 1. `jql = build_jql(since=since, until=until, scope=settings.jql_scope)`; `fields = list(JIRA_FIELDS) + custom_field_ids`. 2. Cloud: loop `POST /rest/api/3/search/jql` with `{"jql", "fields", "maxResults": page_size}` plus `"nextPageToken"` after the first page; body must hold a list `issues`; `last = isLast is True`, or `isLast` absent and no `nextPageToken`; `not last` without a token → `SchemaViolation("missing nextPageToken")`; a page smaller than `maxResults` with `isLast: false` continues; `CursorGuard.step(token)`. 3. DC: loop `POST /rest/api/2/search` with `{"jql", "fields", "startAt", "maxResults": page_size, "expand": ["changelog"]}`; `startAt += len(issues)`; stop when `issues` is empty or `startAt ≥ total`. 4. Per page: `changelogs = fetch_changelogs(http, flavor=..., issues=issues, state=self._cl_state)`; `links = fetch_remote_links(http, version=v, issue_ids=ids)` when enabled. 5. Per issue: `id` must be a string of digits (else `SchemaViolation("bad issue id")`); `ts = parse_source_timestamp(fields["updated"], field="updated")`; `payload = json.dumps(issue)`; columns: `id`, `key`, then `flatten_record(issue["fields"], fields=fields)`, then `changelog = json.dumps(changelogs[id])`, `remotelinks = json.dumps(links[id])` or `None`; `batcher.add(...)`. 6. Yield full batches and the final flush. |
+| Algorithm | 1. `jql = build_jql(since=since, until=until, scope=settings.jql_scope)`; `fields = list(JIRA_FIELDS) + custom_field_ids`. 2. Cloud: loop `POST /rest/api/3/search/jql` with `{"jql", "fields", "maxResults": page_size}` plus `"nextPageToken"` after the first page; body must hold a list `issues`; `last = isLast is True`, or `isLast` absent and no `nextPageToken`; `not last` without a token → `SchemaViolation("missing nextPageToken")`; a page smaller than `maxResults` with `isLast: false` continues; `CursorGuard.step(token)`. 3. DC: loop `POST /rest/api/2/search` with `{"jql", "fields", "startAt", "maxResults": page_size, "expand": ["changelog"]}`; `startAt += len(issues)`; stop when `issues` is empty or `startAt ≥ total`. 4. Per page: `changelogs = fetch_changelogs(http, flavor=..., issues=issues, state=self._cl_state)`; `links = fetch_remote_links(http, version=v, issue_ids=ids)` when enabled. 5. Per issue: `cols = flatten_issue(issue, changelog=changelogs[id], remotelinks=links[id] if enabled else None, custom_field_ids=custom_field_ids)` (U01-93: the raw column contract of §4.5, R-59; it validates `id`); `ts = parse_source_timestamp(issue["fields"]["updated"], field="updated")`; `payload = json.dumps(issue, ensure_ascii=False, separators=(",", ":"))`; `batcher.add(id, ts, payload, cols)` with `batcher` built with `columns = JIRA_ISSUE_COLUMNS + custom_field_ids`. 6. Yield full batches and the final flush. |
 | Side effects | Network reads: 1 search call per page, ≥ 1 changelog call per page (Cloud), 1 remote-link call per issue when enabled. |
 | Errors | §6; `SchemaViolation` for shapes. |
 | Concurrency | One instance per thread. |
@@ -2108,7 +2124,7 @@ Returns `dict[str, list[dict[str, object]]]` (issue id → histories ascending b
 | Kind | function, dataclass |
 | Purpose | Complete changelog per issue (design 01 §5.8). |
 | Preconditions | — |
-| Postconditions | Every issue id has an entry (possibly empty). Each history is projected to `{"id", "created", "items": [{"field", "from", "fromString", "to", "toString"}]}`; `author` is dropped (data minimisation). |
+| Postconditions | Every issue id has an entry (possibly empty). Each history is projected by `project_history` (U01-94); `author` is dropped (data minimisation). |
 | Invariants | — |
 | Algorithm | Cloud: 1. If `state.bulk_available`: loop `POST /rest/api/3/changelog/bulkfetch` with `{"issueIdsOrKeys": ids, "maxResults": 1000}` plus `"nextPageToken"` after the first call; append each `issueChangeLogs[].changeHistories` to its `issueId`; stop when `nextPageToken` is absent. `SourceNotFound` → `state.bulk_available = False`, log `connectors.jira.bulk_changelog_unavailable` (WARNING) once, go to step 2 for this page. 2. Otherwise per issue: loop `GET /rest/api/3/issue/{id}/changelog?startAt=<n>&maxResults=100` until `isLast` is true, or `startAt + len(values) ≥ total`, or `values` is empty. DC: histories from the search `changelog.histories`; when `changelog.total > len(histories)`, `GET /rest/api/2/issue/{id}?expand=changelog&fields=id` and use its `changelog.histories`. |
 | Side effects | Network reads. |
@@ -2133,7 +2149,7 @@ Returns `dict[str, list[dict[str, object]]]`.
 | Kind | function |
 | Purpose | Remote links per issue, one call each (design 01 §4.2, §5.8). |
 | Preconditions | `fetch_remote_links` is true. |
-| Postconditions | Each link projected to `{"id", "object": {"url", "title"}}`. |
+| Postconditions | Each link projected by `project_remote_link` (U01-94). |
 | Invariants | — |
 | Algorithm | For each id: `GET /rest/api/{version}/issue/{id}/remotelink`; the body must be a list (else `SchemaViolation`); project. |
 | Side effects | Network reads. |
@@ -2142,6 +2158,51 @@ Returns `dict[str, list[dict[str, object]]]`.
 | Complexity and limits | 1 call per issue (≈ 20 issues/s, design 01 §8). |
 | Security notes | URLs are stored as data and never fetched. |
 | Tests | UT01-76 |
+
+#### U01-93 herness.connectors.jira.flatten_issue
+
+| Parameter | Type | Default | Kind | Constraint |
+|-----------|------|---------|------|------------|
+| `issue` | `Mapping[str, object]` | — | positional | One issue object as the search API returns it (`id`, `key`, `fields`) |
+| `changelog` | `Sequence[Mapping[str, object]]` | — | keyword-only | Complete histories of the issue (raw or already projected) |
+| `remotelinks` | `Sequence[Mapping[str, object]] \| None` | — | keyword-only | `None` when `fetch_remote_links` is off |
+| `custom_field_ids` | `Sequence[str]` | `()` | keyword-only | Each `^customfield_\d{1,10}$` |
+
+Returns `dict[str, str | None]` whose keys are exactly `JIRA_ISSUE_COLUMNS` followed by `custom_field_ids`, in that order.
+
+| Item | Content |
+|------|---------|
+| Kind | function (pure) |
+| Purpose | The single implementation of the Jira raw column-name contract (R-59, §4.5): the connector writes its output to the lake, impl 02 staging (`120_stg_jira.sql`) reads it, and the impl 11 generator calls this function so synthetic rows match real ones. |
+| Preconditions | As in the table. |
+| Postconditions | `id` and `key` are strings; every other value is `str` or `None`; `changelog` is a compact JSON array ascending by `(created, id)` with no `author` members; `remotelinks` is a compact JSON array or `None`. |
+| Invariants | Column names never depend on the data: a field absent from `fields` gives a `None` value, not a missing key. |
+| Algorithm | 1. `id` must be a non-empty string of digits, else `SchemaViolation("bad issue id")`; `key` must match `^[A-Z][A-Z0-9_]{0,31}-\d{1,10}$`, else `SchemaViolation("bad issue key", id)`. 2. `fields` must be a mapping, else `SchemaViolation("issue fields missing", id)`. 3. A custom field id not matching its pattern → `ConfigError(f"bad custom field id {cid}")`. 4. `out = {"id": id, "key": key}`, then `out.update(flatten_record(fields, fields=list(JIRA_FIELDS) + list(custom_field_ids)))` (U01-23: objects and arrays become compact JSON text, numbers become text, timestamps stay the source strings). 5. `out["changelog"]` = compact JSON (`ensure_ascii=False`, `separators=(",", ":")`) of `[project_history(h) for h in changelog]` sorted by `(created, id)`. 6. `out["remotelinks"]` = `None` when `remotelinks` is `None`, else compact JSON of `[project_remote_link(r) for r in remotelinks]` in input order. 7. Return `out`. |
+| Side effects | None. |
+| Errors | `SchemaViolation` (id, key, fields); `ConfigError` (custom field id); `flatten_record` collision `SchemaViolation`. |
+| Concurrency | Pure. |
+| Complexity and limits | O(size of issue + changelog). |
+| Security notes | TH01-05; personal-data minimisation (changelog `author` dropped). |
+| Tests | UT01-96, IT01-11 |
+
+#### U01-94 herness.connectors.jira_changelog.project_history, project_remote_link
+
+`project_history(history: Mapping[str, object]) -> dict[str, object]`; `project_remote_link(link: Mapping[str, object]) -> dict[str, object]`.
+
+| Item | Content |
+|------|---------|
+| Kind | function ×2 (pure) |
+| Purpose | The projections stored in the `changelog` and `remotelinks` columns (design 01 §4.2, §5.8), shared by U01-76, U01-77 and U01-93. |
+| Preconditions | `history` holds `id` (string) and `created` (string); `link` holds `id` (number or string) and an `object` mapping. |
+| Postconditions | `project_history` returns `{"id", "created", "items": [{"field", "from", "fromString", "to", "toString"}]}` (missing members become `None`; `items` absent → `[]`); `project_remote_link` returns `{"id", "object": {"url", "title"}}` with `id` as a string. Both are idempotent: projecting a projected value returns an equal value. |
+| Invariants | No other member (such as `author`, `application`, `relationship`) survives. |
+| Algorithm | Build the output dictionaries member by member from the input; `items` elements that are not mappings are skipped. |
+| Side effects | None. |
+| Errors | Missing `id` or `created` in a history, or missing `id` or `object` in a link → `SchemaViolation("bad changelog history")` or `SchemaViolation("bad remote link")`. |
+| Concurrency | Pure. |
+| Complexity and limits | O(size of input). |
+| Security notes | TH01-05; personal-data minimisation. |
+| Tests | UT01-74, UT01-96 |
 
 ### 3.16 Monitoring (`herness/connectors/monitoring/`)
 
@@ -2353,7 +2414,7 @@ Constructor `MongoConnector(settings: MongoSettings, *, clock=now_utc, client_fa
 |------|---------|
 | Kind | class |
 | Purpose | MongoDB connector (design 01 §5.9). |
-| Preconditions | The URI secret starts with `mongodb://` or `mongodb+srv://`; for non-`+srv` URIs whose hosts are not all loopback it sets `tls=true` (or `ssl=true`); it never sets `tlsInsecure`, `tlsAllowInvalidCertificates` or `tlsAllowInvalidHostnames` to true. Violations → `ConfigError("MongoDB URI must enable verified TLS")` (the URI is never in the message). |
+| Preconditions | The URI secret starts with `mongodb://` or `mongodb+srv://`; for non-`+srv` URIs whose hosts are not all loopback it sets `tls=true` (or `ssl=true`); it never sets `tlsInsecure`, `tlsAllowInvalidCertificates` or `tlsAllowInvalidHostnames` to true. Violations → `ConfigError("MongoDB URI must enable verified TLS")` (the URI is never in the message). Every host the URI names (for `+srv`, the SRV name) is in `settings.hosts` (R-06), checked before `client_factory` is called; a missing host → `ConfigError("MongoDB URI names a host not listed in sources.mongodb.hosts")` (the host is not in the message, because it comes from a secret). SRV targets are enforced by the socket guard, which allows only the listed hosts. |
 | Postconditions | — |
 | Invariants | `key_field` values are unique in the collection (config responsibility). |
 | Algorithm | Lazy client on first use; `_map_mongo_error(exc)`: `AutoReconnect`, `NetworkTimeout`, `ServerSelectionTimeoutError`, `ConnectionFailure`, `ExecutionTimeout` → `SourceUnavailable`; `OperationFailure` with code 13 or 18 → `AuthError`; other `OperationFailure` → `SchemaViolation("mongodb operation failed", code)`; `ConfigurationError`, `InvalidURI` → `ConfigError`; other `PyMongoError` → `SourceUnavailable`. |
@@ -2361,8 +2422,8 @@ Constructor `MongoConnector(settings: MongoSettings, *, clock=now_utc, client_fa
 | Errors | As mapped. |
 | Concurrency | `MongoClient` is thread-safe; one connector per thread. |
 | Complexity and limits | — |
-| Security notes | TH01-01, TH01-03 (URI resolved at use, never logged). |
-| Tests | UT01-85, UT01-94 |
+| Security notes | TH01-01, TH01-03 (URI resolved at use, never logged), TH01-18 (URI hosts must be listed in `hosts`). |
+| Tests | UT01-85, UT01-94, ST01-17 |
 
 #### U01-87 herness.connectors.mongodb.MongoConnector.sync, list_keys
 
@@ -2405,7 +2466,7 @@ Constructor `SnowflakeConnector(settings: SnowflakeSettings, *, clock=now_utc, c
 | Errors | As mapped. |
 | Concurrency | One connection per connector instance; one instance per thread. |
 | Complexity and limits | — |
-| Security notes | TH01-17, TH01-03, TH01-07. |
+| Security notes | TH01-17, TH01-03, TH01-07, TH01-18 (the account host must be listed in `hosts`, U01-11; the connector opens its own network session, R-06). |
 | Tests | UT01-86, UT01-87, UT01-88, ST01-16, UT01-94 |
 
 #### U01-89 herness.connectors.snowflake.SnowflakeConnector.sync, list_keys
@@ -2475,7 +2536,7 @@ Constructor `DataverseConnector(settings: DataverseSettings, *, http: SourceHttp
 
 ### 4.1 Ops-store tables owned by this component (spec 02 §5.1)
 
-The tables are created by the X:02 ops-store migrations (`herness/store/migrations/NNN_*.sql`, X:02/initial ops schema). This section states the column types and constraints this component relies on; T01-04 adds a migration only if X:02's schema lacks one of them (§13 O-1).
+The tables are created by impl 02 migration 001 (X:02/herness/store/migrations/001_ingestion_health.sql), which R-11 makes the creator of every table named in the design specs. This section states the column types and constraints this component relies on; migration 001 has all of them, so this spec adds no migration and its range 010–019 (R-11) stays unused (§13 O-1). Writes go only through the ingest area `herness/store/ops/ingest.py` (R-08).
 
 **`watermark`**
 
@@ -2522,7 +2583,7 @@ PK (`source`, `entity`, `slice_start`). Writes: `ensure_slices` (one transaction
 
 Write: `record_file_ingest` (`INSERT OR IGNORE`), idempotency key `fingerprint`, written only after the lake commit.
 
-**Read only:** `deletion_request` (owner 10: `record_id`, `status`), `source_health` (owner 08, through X:08 `breaker`).
+**Read only:** `deletion_request` (owner 10: `record_id`, `status`; read by U01-29, §13 O-10), `source_health` (owner 08, through X:08 `breaker`).
 
 Retention: rows are kept indefinitely (small: one row per stream, slice and inbox file). Spec 10 purge does not touch them.
 
@@ -2531,7 +2592,7 @@ Retention: rows are kept indefinitely (small: one row per stream, slice and inbo
 | Path | Written by | Lifetime | Notes |
 |------|-----------|----------|-------|
 | `data/raw/<source>/<entity>/dt=YYYY-MM-DD/part-<ulid>.parquet` | X:02 `LakeWriter` on behalf of the runner | Retention per spec 10 (`raw_lake_months`) | Append-only; one schema per file |
-| `data/raw/<source>/.../.<name>.parquet.tmp-<ulid>` | `LakeWriter` | Until commit/abort; orphans deleted after 1 h (U01-34) | Never read by the build |
+| `data/raw/<source>/.../.<name>.parquet.tmp-<ulid>` | `LakeWriter` | Until commit/abort; orphans deleted after 1 h (U01-34) | Never read by the build; not committed lake files, so their removal does not breach the append-only rule of R-57 |
 | `data/tmp/reconcile/<source>-<entity>-<ulid>.parquet` | U01-44 | Deleted in `finally` of the run | Key list for the anti-join; DuckDB spill files in the same folder |
 | `data/inbox/<entity>/*` | people and systems | Never moved or deleted by this component | Read only |
 
@@ -2549,6 +2610,26 @@ Retention: rows are kept indefinitely (small: one row per stream, slice and inbo
 
 The lake commit and the ops write are separate stores and are never atomic together. Ordering makes a crash safe: lake `commit()` → `fault_point("connector.before_watermark")` → `set_watermark` / `mark_slice_done` / `record_file_ingest`. A crash between them re-fetches data whose duplicates collapse in staging dedupe (spec 02 §4.2).
 
+### 4.5 Jira raw column-name contract (R-59)
+
+This spec owns the column names and encodings of lake entity `jira/issue`. The connector writes them (U01-73 through U01-93), impl 02 staging `120_stg_jira.sql` reads them, and the impl 11 generator writes them by calling `flatten_issue` (U01-93). A change to this table is a contract change: it needs the same change in X:02 staging and a new fixture from X:11 before merge.
+
+| Column | Arrow type | Null | Source | Encoding |
+|--------|-----------|------|--------|----------|
+| 8 metadata columns | `METADATA_SCHEMA` (U01-19) | per U01-19 | — | `_source = "jira"`, `_entity = "issue"`, `_source_key` = `id`, `_record_id = "jira:issue:<id>"`, `_source_updated_at` = parsed `fields.updated` (U01-24), `_payload` = the whole issue as compact JSON |
+| `id` | string | no | `issue.id` | digits as text |
+| `key` | string | no | `issue.key` | as returned (`PROJ-123`) |
+| `issuetype`, `parent`, `project`, `status` | string | yes | `fields.<name>` | compact JSON text of the object |
+| `components`, `labels`, `issuelinks` | string | yes | `fields.<name>` | compact JSON text of the array |
+| `created`, `resolutiondate`, `updated` | string | yes (`updated` no) | `fields.<name>` | the source timestamp string unchanged (for example `2024-05-01T10:00:00.000+0000`); staging parses it |
+| `summary` | string | yes | `fields.summary` | text |
+| `description` | string | yes | `fields.description` | Cloud: compact JSON text of the Atlassian document; Data Center: wiki text |
+| `customfield_<n>` (one per configured id, `mappings.custom_fields.jira.*`) | string | yes | `fields.customfield_<n>` | U01-23 text rules: number as text, object or array as compact JSON |
+| `changelog` | string | no | complete histories (U01-76) | compact JSON array of `project_history` values (U01-94), ascending by `(created, id)`; `[]` when none |
+| `remotelinks` | string | yes | remote links (U01-77) | compact JSON array of `project_remote_link` values (U01-94); NULL when `fetch_remote_links` is false |
+
+Column order in each batch: metadata columns, then `JIRA_ISSUE_COLUMNS` (U01-71: `id`, `key`, the twelve `JIRA_FIELDS` in their tuple order, `changelog`, `remotelinks`), then custom fields in `mappings.custom_fields.jira` order (`story_points`, `team`, `estimate_cost_usd`, `epic_link`). Readers select columns by name; the order is fixed only so that files are comparable. Tombstone rows carry the metadata columns with every contract column NULL.
+
 ---
 
 ## 5. Control flows
@@ -2559,7 +2640,7 @@ The lake commit and the ops write are separate stores and are never atomic toget
 |---|------|------|---------------|------------|
 | 1 | Validate payload, build connector and runner | U01-51, U01-55, U01-37 | — | `ConfigError` → job `failed` |
 | 2 | Delete orphan temp files > 1 h | U01-34 | lake temp files | per-file OS error logged, flow continues |
-| 3 | `guard(key)` | X:08 `guard` | — | `CircuitOpen` → source skipped, job `done` with `skipped_open_circuit` |
+| 3 | `guard(key)` | X:08 `guard` | — | `CircuitOpen` → source skipped, job `done` with outcome `skipped_open_circuit`; the next scheduled run retries (R-39) |
 | 4 | Read watermark; none → F01-02 with `start = backfill.start`, `end = now` | U01-27 | — | `StoreBusy` → job retry |
 | 5 | `since = wm − overlap`, `until = now − settle`; `since ≥ until` → zero result | U01-39 | — | — |
 | 6 | Load deletion set | U01-33 | memory | `StoreBusy` → job retry |
@@ -2572,7 +2653,7 @@ The lake commit and the ops write are separate stores and are never atomic toget
 
 Monitoring: steps 3–12 run once per tool with key `monitoring:<tool>`; a tool failure does not stop the other tools (U01-38 step 3).
 
-### F01-02 Backfill (`herness sync SOURCE --backfill --from D --to D`, `--full`, or first sync)
+### F01-02 Backfill (`herness sync SOURCE --backfill --from D --to D`, `--full` = from `backfill.start` to now (R-63), or first sync)
 
 | # | Step | Unit | State changed | On failure |
 |---|------|------|---------------|------------|
@@ -2617,7 +2698,7 @@ Monitoring: steps 3–12 run once per tool with key `monitoring:<tool>`; a tool 
 
 | # | Step | Unit | State changed | On failure |
 |---|------|------|---------------|------------|
-| 1 | `herness sync SOURCE --check-mapping` → `check_mapping`; issues printed; X:09 exits 1 when any | U01-56 | — | `ConfigError` on render or parse |
+| 1 | `herness sync SOURCE --check-mapping` → `check_mapping`; issues printed; X:09 exits 3 when any issue is found (R-46: validation found problems) | U01-56 | — | `ConfigError` on render or parse → exit 1 (R-46) |
 | 2 | `herness sync jira --discover-fields` → `discover_fields`; candidates printed | U01-75 | — | §6 errors |
 
 ---
@@ -2628,7 +2709,9 @@ Monitoring: steps 3–12 run once per tool with key `monitoring:<tool>`; a tool 
 |-------------------|--------------|--------------|------------------|---------------------|-----------|
 | Connect error, timeout, HTTP 408/5xx/529, Mongo network errors, Snowflake network error | `SourceUnavailable` | `retry_page` (X:08) per page; then job layer | Page retried per `source_http_page`; job rescheduled with backoff; breaker counts failures | Job shows retry / `failed` after `max_attempts` | `connectors.sync.failed` + X:08 `retry` |
 | HTTP 429, Snowflake queue timeout (`57014`) | `RateLimited(retry_after)` | `retry_page`; job layer | Wait ≥ `retry_after` (capped 300 s); above cap → job rescheduled at `now + retry_after`; breaker not charged | Delayed sync | X:08 `retry` |
-| Breaker open | `CircuitOpen` | `handle_sync` / U01-38 | No retry; stream skipped | Job `done`, `result.skipped_open_circuit` | `connectors.sync.skipped_open_circuit` |
+| Breaker open | `CircuitOpen` | `handle_sync` / U01-38 | No retry; stream skipped; the next scheduled run retries (R-39) | Job `done` with outcome `skipped_open_circuit` | `connectors.sync.skipped_open_circuit` |
+| Request to a host other than `base_url`, or a non-`https` scheme to a non-loopback host; an SDK connecting to a host not in `sources.<name>.hosts` | `EgressBlocked` (raised by X:10 egress-built transport or socket guard) | job layer | None; watermark unchanged | Entity failed | `connectors.sync.failed` |
+| MongoDB URI names a host missing from `sources.mongodb.hosts` | `ConfigError` | job layer | None | Entity failed; operator adds the host | `connectors.sync.failed` |
 | HTTP 401/403, MSAL error, bad key pair, Mongo code 13/18, Snowflake `28000` | `AuthError` | job layer (X:08 forces the breaker open) | None | Job `failed`; doctor shows breaker open | `connectors.sync.failed` |
 | Missing key or watermark field, unparseable timestamp, bad response shape, repeated cursor, response > 64 MiB, redirect, foreign next-URL host | `SchemaViolation` (`ForeignHostError`) | job layer | None; watermark unchanged | Entity failed; other entities continue | `connectors.sync.failed` |
 | Reconcile safety valve | `SchemaViolation` | job layer | None | Reconcile job `failed`; nothing written | `connectors.reconcile.aborted` |
@@ -2647,7 +2730,7 @@ Rules: no `except Exception` in this component except the per-entity loop in `ha
 
 ### 7.1 (a) Trust boundaries
 
-TB1 (source systems → connectors), TB2 (inbox drops → files connector), TB10 (operator → `sources.yaml`, CLI arguments, secrets). TB6 is not crossed: source connectors are not egress (spec 10 §3.5), but their hosts must be allowed by the socket guard (U01-15).
+TB1 (source systems → connectors), TB2 (inbox drops → files connector), TB10 (operator → `sources.yaml`, CLI arguments, secrets). TB6 is not crossed: source connectors are not off-network model egress (spec 10 §3.5). Their HTTP clients are still built by `herness.core.egress` (R-06), and every host they or a vendor SDK reach must be in the socket guard allowlist (U01-15: `base_url` hosts plus `sources.<name>.hosts`).
 
 ### 7.2 (b) STRIDE threat table
 
@@ -2667,7 +2750,8 @@ TB1 (source systems → connectors), TB2 (inbox drops → files connector), TB10
 | TH01-12 | TB2, TB1 | R | No record of what was ingested from where | L | M | `file_ingest` rows (fingerprint, path, rows, files); `SyncResult` in job results; INFO logs with counts | ASVS v5.0.0-V16 | ST01-12 |
 | TH01-13 | TB1 | T/D | Partial or empty key listing (outage, permission change) tombstones most of an entity | M | H | Safety valve `max_delete_pct`; key listing raises instead of ending early | ASVS v5.0.0-V2.3 | ST01-13 |
 | TH01-14 | TB1 | E | Over-privileged source identity would let a bug write to a source | L | H | Read-only grants (design 01 §9); connectors issue only GET, search POST and export POST; no write endpoints are coded | ASVS v5.0.0-V8 | ST01-14 |
-| TH01-15 | TB1 | I | Connector code opens clients outside the host-guarded constructor | L | M | Lint test: `httpx.Client(` only in `http.py`; `verify=False` nowhere; socket guard allowlist from U01-15 | ASVS v5.0.0-V15 | ST01-14 |
+| TH01-15 | TB1 | I | Connector code opens clients outside the egress-built constructor | L | M | Lint test: no `httpx.Client(`, `httpx.AsyncClient(`, `httpx.HTTPTransport(` or `httpx.AsyncHTTPTransport(` under `herness/connectors/` (R-06, ENG §2.1); `verify=False` nowhere; socket guard allowlist from U01-15 | ASVS v5.0.0-V15 | ST01-14 |
+| TH01-18 | TB1, TB10 | I/T | A vendor SDK (`pymongo`, `snowflake.connector`, `msal`) connects to a host an attacker placed in the secret URI or that DNS resolves unexpectedly, sending credentials or reading from a rogue server | L | H | `sources.<name>.hosts` allowlist required for SDK sources (R-06); URI hosts checked against it before connecting (U01-86); Snowflake and MSAL hosts must be listed (U01-11, U01-12); nothing derived from `base_url`, `account` or the URI; socket guard enforces the list | ASVS v5.0.0-V13 | ST01-17 |
 | TH01-16 | TB1 | S | Expired or leaked OAuth token reused; token logged | L | M | Expiry tracked; refresh 300 s early; one retry on 401; token never logged | ASVS v5.0.0-V9, ASVS v5.0.0-V10 | ST01-15 |
 | TH01-17 | TB1, TB10 | D | Snowflake query scans far more than expected and burns credits | M | M | `EXPLAIN USING JSON` scan guard; statement timeout; resource monitor required by `check()` | ASVS v5.0.0-V2.3 | ST01-16 |
 
@@ -2684,6 +2768,7 @@ TB1 (source systems → connectors), TB2 (inbox drops → files connector), TB10
 | ASVS v5.0.0-V9 | Self-contained tokens | Expiry validated; never logged | ST01-15 |
 | ASVS v5.0.0-V10 | OAuth client | Client-credentials flows; token endpoint on the source host | UT01-65 |
 | ASVS v5.0.0-V12.3 | Service-to-service TLS | Verification always on | ST01-01 |
+| ASVS v5.0.0-V13 | Configuration | Explicit `hosts` allowlist for SDK sources; secure defaults | ST01-17 |
 | ASVS v5.0.0-V13.3 | Secret management | `secret:` refs; resolved at use | ST01-03 |
 | ASVS v5.0.0-V14 | Data protection | Deletion filter; changelog `author` dropped | ST01-11 |
 | ASVS v5.0.0-V15 | Secure coding and architecture | Single client constructor; layering; no unsafe deserialisation | ST01-14 |
@@ -2725,7 +2810,8 @@ A new job re-resolves secrets (worker builds connectors per job), so rotation ta
 |------|--------|-------|
 | Source grants cannot be verified programmatically (TH01-14) | Sources expose no portable "my permissions" API; grants are checked at install by the admin (design 01 §9) | Deployment admin (spec 10 §9.3) |
 | A record restored in the source with an older update time stays tombstoned (Q5) | Needs a spec 02 decision; default: no bump | Product owner, Phase 6 (V-7) |
-| MongoDB `+srv` hosts are resolved by DNS and must be added to `security.network.extra_allowed_hosts` manually | URI lives in a secret; SRV targets change | Deployment admin |
+| MongoDB `+srv` targets are resolved by DNS and must be listed in `sources.mongodb.hosts` by hand (R-06); a target added by the provider fails with `EgressBlocked` until the list is updated | URI lives in a secret; nothing is derived from it | Deployment admin |
+| Snowflake OCSP responder hosts not listed in `sources.snowflake.hosts` make OCSP checks fail open (`ocsp_fail_open=True`) | Listing every CA responder is brittle; TLS verification still applies | Deployment admin |
 | Rows committed between a request moving to `running` and the next checkpoint reach the lake | Removed by spec 10's second pass (Q11) | Spec 10 |
 
 ---
@@ -2762,7 +2848,7 @@ A new job re-resolves secrets (worker builds connectors per job), so rotation ta
 
 No event carries record text, record ids of deleted records, secret values, URLs with query strings, or file contents.
 
-### 8.2 Metrics (`metric_sample`, X:08)
+### 8.2 Metrics (`metric_sample`, written with X:08/herness.store.ops.record_metric_samples, R-12)
 
 | Name | Kind | Labels | Meaning |
 |------|------|--------|---------|
@@ -2812,6 +2898,7 @@ All keys are in `config/sources.yaml` under `sources` (read at process start; a 
 | `sources.<s>.backfill.slice_days` | int | 30 (SN `incident` 7) | 1–366 | yes | internal |
 | `sources.<s>.timeout_s` | float | 60 | 1–600 | yes | internal |
 | `sources.<s>.verify` | path | `null` | existing file; bool rejected | yes | internal |
+| `sources.<s>.hosts` | list of host names | `[]` | U01-05 host rule; required for `mongodb` (URI hosts), `snowflake` (must include `<account>.snowflakecomputing.com`), `dataverse` (must include `login.microsoftonline.com`); optional for other sources (R-06) | yes (socket guard is installed at process start) | internal |
 | `sources.<s>.entities.<e>.*` | per source | — | U01-04, U01-07–U01-13 | yes | internal |
 | `sources.servicenow.entities.<e>.window_hours` | int | 24 | 1–168 | yes | internal |
 | `sources.servicenow.entities.<e>.classes` | list | — | `cmdb_ci` only | yes | internal |
@@ -2826,7 +2913,7 @@ All keys are in `config/sources.yaml` under `sources` (read at process start; a 
 | `sources.files.inbox` | path | `data/inbox` | not a symlink | yes | internal |
 | `sources.files.entities.<e>.pattern`, `.sheet`, `.key_field`, `.updated_field`, `.mode` | — | mode `delta` | U01-13 | yes | internal |
 
-Also read: `mappings.custom_fields.jira.*` (X:02) by `build_connector`; `security.network.http_proxy` (X:10) by `http_client`; `paths.data` (X:10); `resilience.retry.source_http_page` (X:08) through `retry_page`.
+Also read: `mappings.custom_fields.jira.*` (X:02) by `build_connector`; `security.network.http_proxy` (X:10) by the X:10 egress client factory that `http_client` calls; `paths.data` (X:10); `resilience.retry.source_http_page` (X:08) through `retry_page`.
 
 ---
 
@@ -2847,7 +2934,7 @@ Limits enforced by code: `batch_rows` (10,000), `checkpoint_rows` (500,000), pag
 
 ## 11. Test specification
 
-Locations: `tests/unit/connectors/`, `tests/integration/connectors/`, `tests/fault/connectors/`, `tests/bench/connectors/`. Fixtures: respx cassettes in `tests/fixtures/connectors/<source>/` (X:11, scrubbed), `tests/fixtures/lake_small/` (X:11), `mongomock`, a fake Snowflake cursor returning Arrow batches (`tests/support/fake_snowflake.py`, written in T01-23), a fake `LakeWriter` recording writes/commits/aborts (`tests/support/fake_lake.py`, written in T01-06), a temp ops store migrated with X:02 `migrate()`, `freezegun` for time. Each test name or docstring carries its ID (ENG §6).
+Locations: `tests/unit/connectors/`, `tests/integration/connectors/`, `tests/fault/connectors/`, `tests/bench/connectors/`. Fixtures: respx cassettes in `tests/fixtures/connectors/<source>/` (X:11, scrubbed), `tests/fixtures/lake_small/` (X:11), `mongomock`, a fake Snowflake cursor returning Arrow batches (`tests/support/fake_snowflake.py`, written in T01-23), a fake `LakeWriter` recording writes/commits/aborts (`tests/support/fake_lake.py`, written in T01-06), a temp ops store migrated with X:02 `migrate()` and bound per test through the X:11 `ops_store` fixture (X:02 `reset_connections`), `freezegun` for time. Each test name or docstring carries its ID (ENG §6).
 
 ### 11.1 Unit tests
 
@@ -2865,7 +2952,7 @@ Locations: `tests/unit/connectors/`, `tests/integration/connectors/`, `tests/fau
 | UT01-10 | U01-11 | `table` with two parts; column `a;b`; filter with `drop` and `--` | validate | rejected | unit |
 | UT01-11 | U01-09, U01-06 | `metric_queries[].name: foo` | validate | rejected | unit |
 | UT01-12 | U01-13 | pattern `../*.csv`, `a/b.csv`, `*.exe`; `sheet` on csv | validate | rejected | unit |
-| UT01-13 | U01-15, U01-12 | Config with SN, monitoring (2 adapters), Snowflake, Dataverse | `allowed_hosts` | exact expected host set | unit |
+| UT01-13 | U01-15, U01-12 | Config with SN, monitoring (2 adapters), Snowflake and Dataverse with `hosts` lists | `allowed_hosts` | exact set: SN and adapter `base_url` hosts, Dataverse `base_url` host, and the `hosts` entries; no host derived from `account` or `tenant_id` | unit |
 | UT01-14 | U01-20 | valid and invalid inputs | `record_id` | format; `SchemaViolation` without the key value | unit |
 | UT01-15 | U01-22 | table of names (`sys_id`, `_id`, `HTTPStatus`, `1x`, `CC_ID`, `a.b-c`, `___`) | `to_snake` | expected outputs; `___` → error | unit |
 | UT01-16 | U01-23 | record with scalars, bool, float, dict, list, `{value, display_value}`, colliding keys | `flatten_record` | expected strings; collision → error | unit |
@@ -2915,7 +3002,7 @@ Locations: `tests/unit/connectors/`, `tests/integration/connectors/`, `tests/fau
 | UT01-60 | U01-60 | responses 200, 302, 400, 401, 403, 404, 408, 429, 500, 529, 418 | map | table of U01-60 | unit |
 | UT01-61 | U01-61 | `Retry-After: 7`, HTTP date +30 s, invalid + `X-RateLimit-Reset` epoch s / epoch ms / delta, nothing | parse | 7, 30, correct deltas, `None` | unit |
 | UT01-62 | U01-59 | respx page of 65 MiB; invalid JSON; 503 twice then 200 | fetch | size error; JSON error; third attempt returns (only that page retried) | unit |
-| UT01-63 | U01-58, U01-62 | request to other host; 302 to other host | client | `ForeignHostError`; redirect not followed | unit |
+| UT01-63 | U01-58, U01-62 | fake X:10 factories recording their arguments; base URLs `https://sn.example`, `http://127.0.0.1:9090`; request to other host; 302 to other host; `check_next_url` to other host | client | `source_http_client` called with the `base_url`, `verify`, timeouts and pool size; loopback URL → `loopback_http_client`; other host → `EgressBlocked`; redirect not followed; next URL → `ForeignHostError` | unit |
 | UT01-64 | U01-63 | each method with fake secrets backend | `build_auth` | headers per shapes table; missing member → `ConfigError` | unit |
 | UT01-65 | U01-64 | respx token endpoint `expires_in` 600; frozen time | requests at t, t+299, t+301; a 401 | 1 fetch until t+300; refresh after; 401 → one refetch and retry | unit |
 | UT01-66 | U01-08, U01-63 | `auth.method: oauth_3lo` | validate | `ConfigError` "not supported in v1" | unit |
@@ -2947,6 +3034,9 @@ Locations: `tests/unit/connectors/`, `tests/integration/connectors/`, `tests/fau
 | UT01-92 | U01-38, U01-79 | two tools; datadog raises `SourceUnavailable` | `run_incremental` | prometheus rows committed and `monitoring:prometheus` advanced; datadog watermark unchanged; error re-raised | unit |
 | UT01-93 | U01-41, U01-43 | monitoring backfill | run | slices keyed `monitoring:<tool>` | unit |
 | UT01-94 | U01-16, U01-17, U01-55 | every registered connector built from a synth config | `isinstance` checks, `build_connector` | satisfies `Connector`; key listing where specified; no network during construction (respx asserts no calls) | unit |
+| UT01-95 | U01-92 | temp ops store with watermarks for `servicenow/incident`, `monitoring:datadog/event`, `monitoring:prometheus/metric_daily`; one corrupt value in a second store | `list_watermarks` | three `Watermark` rows ordered by `(source, entity)`, aware UTC values, per-tool monitoring keys; corrupt value → `SchemaViolation` | unit |
+| UT01-96 | U01-93, U01-94 | Cloud issue with every `JIRA_FIELDS` member, two custom fields, `description` as an ADF object, histories with `author` given out of order, remote links with extra members; the same issue without `resolutiondate`; `id` `"12a"`; custom id `cf_1` | `flatten_issue` | keys exactly `JIRA_ISSUE_COLUMNS` + custom ids in order; absent field → `None`; objects compact JSON; `changelog` sorted and without `author`; projections idempotent; `remotelinks=None` → `None`; bad id → `SchemaViolation`; bad custom id → `ConfigError` | unit |
+| UT01-97 | U01-05, U01-07–U01-15 | `hosts` with an IP literal, a port, a duplicate, upper case; `hosts: [sso.example.com]` on servicenow; mongodb without `hosts`; snowflake `hosts` without the account host; dataverse `hosts` without `login.microsoftonline.com` | validate; `allowed_hosts` | IP, port and duplicate rejected; upper case lower-cased; servicenow accepted and `sso.example.com` is in `allowed_hosts` while `http_client` still targets only the `base_url` host; the three SDK cases rejected with their messages; a valid config's `hosts` entries appear in `allowed_hosts` | unit |
 
 ### 11.2 Property tests
 
@@ -2973,8 +3063,11 @@ Locations: `tests/unit/connectors/`, `tests/integration/connectors/`, `tests/fau
 | IT01-08 | F01-01 | X:08 `run_inline` with registered handlers | enqueue `sync` for files | job `done`; result contains `SyncResult` dict | integration |
 | IT01-09 | F01-05 | Ops store with requests `running`, `done`, `pending` for three fetched ids | sync | only the `pending` one is written; `skipped_deleted` = 2 | integration |
 | IT01-10 | F01-01 | ServiceNow cassette where a record changes `sys_updated_on` during paging | run 1, run 2 | record missing after run 1, present after run 2 | integration |
+| IT01-11 | §4.5 (R-59) | Jira Cloud cassette (X:11) synced through `JiraConnector` with a real `LakeWriter`; `mappings.custom_fields.jira` set for the synth profile | sync, then X:02 staging `120_stg_jira.sql` | every §4.5 column present with its encoding; `stg.jira_issue`, `stg.jira_transition` and `stg.jira_link` have the expected rows; X:02 `stg.cast_stats` reports no failed casts for the contract columns | integration |
 
 ### 11.4 Fault tests (`HERNESS_ENV=test`, `HERNESS_FAULTS` plans, spec 08 §5.13)
+
+Fault points are those of the X:08 registry only; this spec uses `connector.before_watermark` and `http.page` (R-40). Plans are JSON files and are honoured only when `HERNESS_ENV=test` (R-40). The Plan column abbreviates the JSON fields `point`, `action` and the action's parameters.
 
 | ID | Plan | Assertions | Marker |
 |----|------|------------|--------|
@@ -3003,9 +3096,10 @@ Locations: `tests/unit/connectors/`, `tests/integration/connectors/`, `tests/fau
 | ST01-11 | TH01-11 | Deleted `record_id` in a batch | The id's bytes do not appear in any written lake file | unit |
 | ST01-12 | TH01-12 | Ingest two files | `file_ingest` rows with fingerprint, path, rows, files; INFO logs carry counts | unit |
 | ST01-13 | TH01-13 | Source key listing returns zero keys | Valve trips; nothing written | unit |
-| ST01-14 | TH01-14, TH01-15 | Static scan of `herness/connectors/` | `httpx.Client(` only in `http.py`; no `verify=False`; no HTTP methods other than GET/POST; no `requests.` import | unit |
+| ST01-14 | TH01-14, TH01-15 | Static scan of `herness/connectors/` | No `httpx.Client(`, `httpx.AsyncClient(`, `httpx.HTTPTransport(` or `httpx.AsyncHTTPTransport(` anywhere (R-06); no `verify=False`; no HTTP methods other than GET/POST; no `requests.` import | unit |
 | ST01-15 | TH01-16 | Token expired by the frozen clock; capture DEBUG logs | New token fetched before use; token string absent from logs and `repr` | unit |
 | ST01-16 | TH01-17 | EXPLAIN reporting 10× `max_scan_gb` | Main SELECT never executed (fake cursor call log) | unit |
+| ST01-17 | TH01-18 | MongoDB URI secret naming `rogue.example` while `sources.mongodb.hosts` lists only `db1.example`; `hosts` omitted for snowflake; dataverse `hosts` without `login.microsoftonline.com` | URI case: `ConfigError` before `client_factory` is called (factory call log empty), message lacks the host; config cases rejected at validation | unit |
 
 ### 11.6 Benchmarks
 
@@ -3029,7 +3123,7 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 | Files | `herness/connectors/__init__.py`, `herness/connectors/settings_base.py` |
 | Tests | UT01-01, UT01-03, UT01-04, UT01-05, ST01-01 (config part) |
 | Threats | TH01-01, TH01-03 |
-| Acceptance checks | `pytest -m unit -k "UT01-01 or UT01-03 or UT01-04 or UT01-05 or ST01-01"` passes; importing `herness.connectors.settings_base` imports no module outside stdlib, pydantic and `herness.core` (asserted by a test with `sys.modules`) |
+| Acceptance checks | `pytest -m unit -k "UT01-01 or UT01-03 or UT01-04 or UT01-05 or ST01-01"` passes; importing `herness.connectors.settings_base` imports no module outside the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03; asserted by a test with `sys.modules`) |
 | Blocked by | none |
 | Size | M |
 
@@ -3037,13 +3131,13 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 
 | Field | Content |
 |-------|---------|
-| Goal | `settings.py` models every source section, `validate_spl` and `allowed_hosts`, and X:10 loads `config/sources.yaml` through `SourcesConfig`. |
-| Depends on | T01-01; X:02/herness.model.settings.DqSettings, BuildSettings |
+| Goal | `settings.py` models every source section (including the `hosts` rules of R-06), `validate_spl` and `allowed_hosts`, and X:10 assembles the `config/sources.yaml` model from `SourcesConfig` plus the X:02 `dq` and `build` sections (R-03). |
+| Depends on | T01-01; X:10/herness.core.config.load_config (assembly of the file model, consumer) |
 | Units | U01-07–U01-15 |
-| Files | `herness/connectors/settings.py`, `pyproject.toml` (import-linter exception `herness.connectors.settings -> herness.model.settings`; not production code) |
-| Tests | UT01-02, UT01-06–UT01-13, UT01-66, ST01-07 |
-| Threats | TH01-07, TH01-08, TH01-15 |
-| Acceptance checks | `pytest -k "UT01-02 or UT01-06 or UT01-07 or UT01-08 or UT01-09 or UT01-10 or UT01-11 or UT01-12 or UT01-13 or UT01-66 or ST01-07"` passes; the design 01 §7 example YAML (with the `[...]` lists filled) validates; `herness config validate --profile synth --offline` accepts the synth `files` section |
+| Files | `herness/connectors/settings.py`, `pyproject.toml` (settings import contract lists `herness.connectors.settings` and `herness.connectors.settings_base`; not production code) |
+| Tests | UT01-02, UT01-06–UT01-13, UT01-66, UT01-97, ST01-07 |
+| Threats | TH01-07, TH01-08, TH01-15, TH01-18 |
+| Acceptance checks | `pytest -k "UT01-02 or UT01-06 or UT01-07 or UT01-08 or UT01-09 or UT01-10 or UT01-11 or UT01-12 or UT01-13 or UT01-66 or UT01-97 or ST01-07"` passes; importing `herness.connectors.settings` loads no module outside the standard library, pydantic, `herness.core.types`, `herness.core.errors` and `herness.connectors.settings_base` (asserted with `sys.modules`); `lint-imports` passes with no `herness.connectors.settings -> herness.model.settings` exception; the design 01 §7 example YAML (with the `[...]` lists filled) validates; `herness config validate --profile synth --offline` accepts the synth `files` section |
 | Blocked by | none |
 | Size | M |
 
@@ -3057,7 +3151,7 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 | Files | `herness/connectors/base.py`, `herness/connectors/rows.py` |
 | Tests | UT01-14–UT01-19, UT01-28, PT01-01, PT01-03, PT01-04, PT01-05 |
 | Threats | TH01-05 |
-| Acceptance checks | `pytest -k "UT01-14 or UT01-15 or UT01-16 or UT01-17 or UT01-18 or UT01-19 or UT01-28 or PT01-0"` passes; a batch from `RowBatcher` is accepted by a real `LakeWriter.write` |
+| Acceptance checks | `pytest -k "UT01-14 or UT01-15 or UT01-16 or UT01-17 or UT01-18 or UT01-19 or UT01-28 or PT01-01 or PT01-03 or PT01-04 or PT01-05"` passes; a batch from `RowBatcher` is accepted by a real `LakeWriter.write` |
 | Blocked by | none |
 | Size | M |
 
@@ -3065,14 +3159,14 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 
 | Field | Content |
 |-------|---------|
-| Goal | `herness.store.ops` exposes the watermark, slice, file-ingest and deletion-set functions. |
-| Depends on | X:02/herness.store.ops.OpsStore, X:02 ops migrations (tables of §4.1), X:00/herness.core.time.format_fixed |
-| Units | U01-27–U01-32 |
-| Files | `herness/store/ops_ingest.py`, `herness/store/ops.py` (re-export lines only) |
-| Tests | UT01-20–UT01-24 |
+| Goal | The ingest area `herness/store/ops/ingest.py` (R-08) exposes the watermark, slice, file-ingest, watermark-listing and deletion-set functions through `herness.store.ops`. |
+| Depends on | X:02/herness.store.ops.core.connection, run_write, read_one, read_all, dump_json, load_json (R-10); X:02/herness/store/migrations/001_ingestion_health.sql; X:02/herness.store.ops package `__init__.py`; X:00/herness.core.time.format_fixed |
+| Units | U01-27–U01-32, U01-92 |
+| Files | `herness/store/ops/ingest.py`, `herness/store/ops/__init__.py` (spec 01 `__all__` block only) |
+| Tests | UT01-20–UT01-24, UT01-95 |
 | Threats | TH01-11, TH01-12 |
-| Acceptance checks | `pytest -k "UT01-20 or UT01-21 or UT01-22 or UT01-23 or UT01-24"` passes on a migrated temp store; `lint-imports` shows `herness.store` imports nothing from `herness.connectors` |
-| Blocked by | O-1 (columns present in X:02 migration) |
+| Acceptance checks | `pytest -k "UT01-20 or UT01-21 or UT01-22 or UT01-23 or UT01-24 or UT01-95"` passes on a migrated temp store; X:02 UT02-68 (no duplicate names across `__all__` blocks) passes; `lint-imports` shows `herness.store` imports nothing from `herness.connectors`; no file `herness/store/ops_ingest.py` exists |
+| Blocked by | none |
 | Size | M |
 
 #### T01-05 Deletion filter and lake-file helpers
@@ -3094,12 +3188,12 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 | Field | Content |
 |-------|---------|
 | Goal | `SyncRunner.run_incremental` implements F01-01 for ordered, unordered and tool-stream connectors. |
-| Depends on | T01-05; X:08/herness.core.resilience.guard, fault_point; X:02 LakeWriter; X:08/metric_sample writer |
+| Depends on | T01-05; X:08/herness.core.resilience.guard, fault_point; X:02 LakeWriter; X:08/herness.store.ops.record_metric_samples |
 | Units | U01-36, U01-37, U01-38, U01-39, U01-40 |
 | Files | `herness/connectors/runner.py`, `tests/support/fake_lake.py` (test support) |
 | Tests | UT01-29, UT01-30, UT01-31, UT01-32, UT01-33, UT01-34, UT01-35, UT01-36, UT01-92 (with fake tool-stream connector) |
 | Threats | TH01-05, TH01-11 |
-| Acceptance checks | `pytest -k "UT01-29 or UT01-3 or UT01-92"` passes; UT01-31 asserts commit → watermark call order; log events of §8.1 for sync asserted |
+| Acceptance checks | `pytest -k "UT01-29 or UT01-30 or UT01-31 or UT01-32 or UT01-33 or UT01-34 or UT01-35 or UT01-36 or UT01-92"` passes; UT01-31 asserts commit → watermark call order; log events of §8.1 for sync asserted |
 | Blocked by | none |
 | Size | M |
 
@@ -3114,7 +3208,7 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 | Tests | UT01-37, UT01-38, UT01-39, UT01-93 |
 | Threats | TH01-11 |
 | Acceptance checks | `pytest -k "UT01-37 or UT01-38 or UT01-39 or UT01-93"` passes; no test sleeps (fake clock and synchronisation events) |
-| Blocked by | O-2 (thread-safe `OpsStore`) |
+| Blocked by | none |
 | Size | M |
 
 #### T01-08 Reconciliation
@@ -3164,7 +3258,7 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 | Field | Content |
 |-------|---------|
 | Goal | `sync` and `reconcile` jobs run through X:08; `herness sync` options map to jobs. |
-| Depends on | T01-07, T01-08, T01-10; X:08/herness.core.jobs.register_handler, JobContext, JobOutcome; X:10/herness.core.registry.get; X:02/herness.store.ops.open_ops_store; X:09/herness.cli sync command (consumer) |
+| Depends on | T01-07, T01-08, T01-10; X:08/herness.core.jobs.register_handler, JobContext; X:08/herness.core.types.JobOutcome; X:10/herness.core.registry.get; X:09/herness.cli sync command (consumer) |
 | Units | U01-51, U01-52, U01-53, U01-54, U01-55 |
 | Files | `herness/connectors/jobs.py`, `herness/connectors/factory.py` |
 | Tests | UT01-54–UT01-57, UT01-94, IT01-01, IT01-08, IT01-09 |
@@ -3207,14 +3301,14 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 
 | Field | Content |
 |-------|---------|
-| Goal | Host-guarded client, page fetch with retry, error mapping, `Retry-After` parsing. |
-| Depends on | T01-13; X:08/herness.core.resilience.retry_page, classify, policy, fault_point |
+| Goal | Source HTTP client obtained from `herness.core.egress` (R-06), page fetch with retry, error mapping, `Retry-After` parsing. |
+| Depends on | T01-13; X:08/herness.core.resilience.retry_page, classify, policy, fault_point; X:10/herness.core.egress.source_http_client, loopback_http_client |
 | Units | U01-58, U01-59, U01-60, U01-61, U01-62 |
 | Files | `herness/connectors/http.py`, `herness/connectors/base.py` (re-export of `http_client`) |
 | Tests | UT01-60–UT01-63, PT01-02, ST01-01, ST01-02, ST01-04, ST01-05, ST01-06 |
 | Threats | TH01-01, TH01-02, TH01-04, TH01-05, TH01-06, TH01-15 |
-| Acceptance checks | `pytest -k "UT01-60 or UT01-61 or UT01-62 or UT01-63 or PT01-02 or ST01-01 or ST01-02 or ST01-04 or ST01-05 or ST01-06"` passes; spec 10 egress lint passes |
-| Blocked by | none |
+| Acceptance checks | `pytest -k "UT01-60 or UT01-61 or UT01-62 or UT01-63 or PT01-02 or ST01-01 or ST01-02 or ST01-04 or ST01-05 or ST01-06"` passes; spec 10 egress lint passes with no exception for `herness/connectors/` |
+| Blocked by | O-9 (`source_http_client` in impl 10) |
 | Size | M |
 
 #### T01-15 Auth
@@ -3249,13 +3343,13 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 
 | Field | Content |
 |-------|---------|
-| Goal | Jira Cloud and DC search, key listing and field discovery. |
+| Goal | Jira Cloud and DC search, key listing, field discovery and the raw column contract (R-59). |
 | Depends on | T01-15; X:11 Jira cassettes |
-| Units | U01-71, U01-72, U01-73, U01-74, U01-75 |
-| Files | `herness/connectors/jira.py` |
-| Tests | UT01-72, UT01-73, UT01-77, UT01-78 |
+| Units | U01-71, U01-72, U01-73, U01-74, U01-75, U01-93, U01-94 |
+| Files | `herness/connectors/jira.py`, `herness/connectors/jira_changelog.py` (`project_history`, `project_remote_link` only) |
+| Tests | UT01-72, UT01-73, UT01-77, UT01-78, UT01-96 |
 | Threats | TH01-04, TH01-05 |
-| Acceptance checks | `pytest -k "UT01-72 or UT01-73 or UT01-77 or UT01-78"` passes (changelog calls stubbed until T01-18) |
+| Acceptance checks | `pytest -k "UT01-72 or UT01-73 or UT01-77 or UT01-78 or UT01-96"` passes (changelog calls stubbed until T01-18); X:11 generator imports `herness.connectors.jira.flatten_issue` without importing `httpx` clients (import test) |
 | Blocked by | V-2 (custom field ids per instance; config only) |
 | Size | M |
 
@@ -3267,9 +3361,9 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 | Depends on | T01-17 |
 | Units | U01-76, U01-77 |
 | Files | `herness/connectors/jira_changelog.py`, `herness/connectors/jira.py` |
-| Tests | UT01-74, UT01-75, UT01-76 |
+| Tests | UT01-74, UT01-75, UT01-76, IT01-11 |
 | Threats | TH01-05 |
-| Acceptance checks | `pytest -k "UT01-74 or UT01-75 or UT01-76"` passes |
+| Acceptance checks | `pytest -k "UT01-74 or UT01-75 or UT01-76"` and `pytest -m integration -k IT01-11` pass (§4.5 contract read by X:02 `120_stg_jira.sql`) |
 | Blocked by | V-2 (bulk changelog availability; fallback path covers absence) |
 | Size | M |
 
@@ -3323,9 +3417,9 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 | Depends on | T01-13; X:08 retry_page; X:10 secrets |
 | Units | U01-86, U01-87 |
 | Files | `herness/connectors/mongodb.py` |
-| Tests | UT01-84, UT01-85 |
-| Threats | TH01-01, TH01-03, TH01-07 |
-| Acceptance checks | `pytest -k "UT01-84 or UT01-85"` passes with `mongomock` |
+| Tests | UT01-84, UT01-85, ST01-17 |
+| Threats | TH01-01, TH01-03, TH01-07, TH01-18 |
+| Acceptance checks | `pytest -k "UT01-84 or UT01-85 or ST01-17"` passes with `mongomock` |
 | Blocked by | none |
 | Size | M |
 
@@ -3367,7 +3461,7 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 | Files | none (tests in `tests/fault/connectors/`, `tests/bench/connectors/`) |
 | Tests | FT01-01, FT01-03, FT01-04, FT01-05, FT01-06, BT01-01, BT01-02, BT01-03, BT01-05, BT01-06 |
 | Threats | TH01-06, TH01-16 |
-| Acceptance checks | `pytest -m fault -k FT01-0` passes; `pytest -m slow -k "BT01-01 or BT01-02 or BT01-03 or BT01-05"` meets §10 thresholds; BT01-06 recorded in `data/bench/` at the Phase 6 gate |
+| Acceptance checks | `pytest -m fault -k "FT01-01 or FT01-03 or FT01-04 or FT01-05 or FT01-06"` passes; `pytest -m slow -k "BT01-01 or BT01-02 or BT01-03 or BT01-05"` meets §10 thresholds; BT01-06 recorded in `data/bench/` at the Phase 6 gate |
 | Blocked by | V-1, V-2 for BT01-06 only |
 | Size | S |
 
@@ -3375,36 +3469,51 @@ Ordered by phase, then dependency. "Lines" are production lines. Every card's ac
 
 ## 13. Design deltas and open items
 
-### 13.1 Design deltas (changes needed in design specs; none changes a contract signature)
+Cross-spec rulings of the consistency pass are recorded in [`DECISIONS.md`](DECISIONS.md). Each earlier delta and open item below carries its status: "Resolved by R-nn" (the ruling settles it and this spec now follows the ruling), "Accepted (R-nn)" (the ruling adopts this spec's position or makes this spec's change the contract; the design-spec edit is pending per DECISIONS §9), or "Still open" (no ruling covers it; the default stated here applies).
 
-| # | Design spec | Current text | Needed change | This spec implements |
-|---|-------------|--------------|---------------|----------------------|
-| D-1 | 01 §5.3 | "Monitoring has one watermark per entity for all adapters … advances only when every enabled adapter finished" | Replace with per-tool watermarks `monitoring:<tool>` (01 §6, 02 §5.1, Q10 resolved) | Per-tool (U01-18, U01-38) |
-| D-2 | 01 §5.1 step 1, §10 "Open breaker" | Open breaker → job rescheduled at `retry_at` | Align with spec 08 §5.1/§5.3: `sync`/`reconcile` job ends `done` with `result.skipped_open_circuit`; the next cron retries | Spec 08 behavior (U01-51) |
-| D-3 | 10 §5.4 socket guard; ENG §2.1 | Guard allows only `base_url` hosts; ENG says only `herness.core.egress` builds HTTP clients | Guard must also allow `allowed_hosts()` (Snowflake account and OCSP host, `login.microsoftonline.com`); ENG §2.1 must note the spec 10 §3.5 carve-out for `herness.connectors.http.http_client` | U01-15, U01-58 |
-| D-4 | 01 §5.2, §5.4 | Log names `schema_drift`, `reconcile_aborted` | Use ENG §3.6 names `connectors.schema_drift.detected`, `connectors.reconcile.aborted` | §8.1 |
-| D-5 | 01 §3.2 | `SyncRunner(connector, cfg, ops)` | Add keyword-only `clock`, `writer_factory`, `connector_factory`, `data_root`, `progress`, `should_stop`, and attributes `skipped_open`, `stopped` (additive) | U01-37 |
-| D-6 | 09 §5.6 `sync` row vs 01 §3.2 | 09 lists `--full`; 01 does not define it | Define `--full` as backfill from `backfill.start` to now | U01-54 |
-| D-7 | 11 §5.5 X5 | Fault point `sync.before_watermark` | Use the spec 08 §5.13 name `connector.before_watermark` | U01-40, U01-50, FT01-02 |
-| D-8 | 01 §5.5 | Final watermark `min(end, max committed)` | State that a backfill committing no rows sets the watermark to `end` | U01-43 |
-| D-9 | 01 §4.1, §5.10 | Tombstone time = deletion time, else detection time | For files snapshots, the snapshot file's mtime is the deletion time | U01-50 |
-| D-10 | 01 §5.8 | Jira Cloud auth may be OAuth 2.0 (3LO) | v1 supports `api_token` (Cloud) and `pat` (DC) only; 3LO needs a refresh-token flow and `api.atlassian.com` host | U01-05, U01-08 |
-| D-11 | 02 §5.1 / 02 §5 | Ops functions live in `herness.store.ops` | This spec's functions live in `herness/store/ops_ingest.py`, re-exported by `herness.store.ops`; `deleted_record_ids` is specified here | U01-27–U01-32 |
-| D-12 | 01 §7 | `metric_queries[].name` "must be a configured `core.metric_daily.metric_name`" | Spec 04 publishes the list of daily metric names; until then `DAILY_METRIC_NAMES` (O-5) | U01-06 |
-| D-13 | 01 §5.9 Snowflake | Identifiers unquoted in the example SQL | Identifiers are upper-cased and double-quoted; case-sensitive lower-case Snowflake identifiers are not supported | U01-88 |
+### 13.1 Design deltas (changes needed in design specs; none changes a contract signature except D-15)
+
+| # | Design spec | Current text | Needed change | This spec implements | Status |
+|---|-------------|--------------|---------------|----------------------|--------|
+| D-1 | 01 §5.3 | "Monitoring has one watermark per entity for all adapters … advances only when every enabled adapter finished" | Replace with per-tool watermarks `monitoring:<tool>` (01 §6, 02 §5.1, Q10 resolved) | Per-tool (U01-18, U01-38) | Resolved by R-62 |
+| D-2 | 01 §5.1 step 1, §10 "Open breaker" | Open breaker → job rescheduled at `retry_at` | `sync`/`reconcile` job ends `done` with outcome `skipped_open_circuit`; the next scheduled run retries | U01-51, F01-01 step 3 | Resolved by R-39 |
+| D-3 | 10 §5.4 socket guard; ENG §2.1 | Guard allows only `base_url` hosts; connectors built their own host-guarded `httpx` client under a spec 10 §3.5 carve-out | No carve-out: HTTP sources get their client from `herness.core.egress`; SDK sources list their hosts in `sources.<name>.hosts`; the guard allowlist is those lists, the `base_url` hosts, the egress allowlist and loopback | U01-05, U01-10–U01-12, U01-15, U01-58, U01-86 | Resolved by R-06 (see O-9 for the missing factory) |
+| D-4 | 01 §5.2, §5.4 | Log names `schema_drift`, `reconcile_aborted` | Use ENG §3.6 names `connectors.schema_drift.detected`, `connectors.reconcile.aborted` | §8.1 | Still open |
+| D-5 | 01 §3.2 | `SyncRunner(connector, cfg, ops)` | Add keyword-only `clock`, `writer_factory`, `connector_factory`, `data_root`, `progress`, `should_stop`, and attributes `skipped_open`, `stopped` (additive) | U01-37 | Still open (the removal of `ops` is D-15) |
+| D-6 | 09 §5.6 `sync` row vs 01 §3.2 | 09 lists `--full`; 01 does not define it | `--full` is a backfill from `backfill.start` to now | U01-54 | Resolved by R-63 |
+| D-7 | 11 §5.5 X5 | Fault point `sync.before_watermark` | Use the impl 08 registry name `connector.before_watermark` | U01-40, U01-50, FT01-02 | Resolved by R-40 |
+| D-8 | 01 §5.5 | Final watermark `min(end, max committed)` | State that a backfill committing no rows sets the watermark to `end` | U01-43 | Still open |
+| D-9 | 01 §4.1, §5.10 | Tombstone time = deletion time, else detection time | For files snapshots, the snapshot file's mtime is the deletion time | U01-50 | Still open |
+| D-10 | 01 §5.8 | Jira Cloud auth may be OAuth 2.0 (3LO) | v1 supports `api_token` (Cloud) and `pat` (DC) only; 3LO needs a refresh-token flow and `api.atlassian.com` host | U01-05, U01-08 | Still open |
+| D-11 | 02 §5.1 / 02 §5 | Ops functions live in `herness.store.ops` | This spec's functions live in `herness/store/ops/ingest.py` (not `herness/store/ops_ingest.py`), re-exported by `herness.store.ops`; `deleted_record_ids` and `list_watermarks` are specified here | U01-27–U01-32, U01-92 | Resolved by R-08, R-09 |
+| D-12 | 01 §7 | `metric_queries[].name` "must be a configured `core.metric_daily.metric_name`" | Spec 04 publishes the list of daily metric names; until then `DAILY_METRIC_NAMES` (O-5) | U01-06 | Still open |
+| D-13 | 01 §5.9 Snowflake | Identifiers unquoted in the example SQL | Identifiers are upper-cased and double-quoted; case-sensitive lower-case Snowflake identifiers are not supported | U01-88 | Still open |
+| D-14 | 01 §7, 10 §3.5 | No `hosts` key; Snowflake, MSAL and MongoDB hosts derived or listed in `security.network.extra_allowed_hosts` | New per-source key `sources.<name>.hosts` (list of host names), required for SDK sources; nothing derived from `base_url`, `account` or the URI | U01-05, U01-10–U01-12, U01-15 | Accepted (R-06) |
+| D-15 | 01 §3.2 | `SyncRunner(connector, cfg, ops)`; `DeletionFilter` and health take a store object | No store parameter anywhere: ops access uses the impl 02 core API (`connection()`, `run_write()`, `read_one()`, `read_all()`) | U01-27–U01-33, U01-37, U01-57, U01-92 | Accepted (R-10) |
+| D-16 | 01 §7, 00 §3 | `sources.yaml` root model embeds `dq` and `build` in the connectors settings module | `herness.connectors.settings` imports no `herness.model` module; `SourcesConfig` holds `version` and `sources`, and X:10/herness.core.config assembles the file model by adding `dq` and `build` | U01-14 | Accepted (R-03) |
+| D-17 | 01 §4.2 Jira, 02 §4.1.2, 11 generator | The Jira raw column contract is described in three specs | Impl 01 owns the contract (§4.5) and its single implementation `flatten_issue`; impl 02 staging reads it; the impl 11 generator calls `flatten_issue` | §4.5, U01-93, U01-94 | Accepted (R-59) |
 
 ### 13.2 Open items (with current defaults)
 
-| # | Item | Default in this spec | Affects |
-|---|------|----------------------|---------|
-| O-1 | X:02 ops migration contains `watermark`, `sync_slice`, `file_ingest` with the §4.1 types | Assumed; T01-04 adds a forward migration if a column is missing | T01-04 |
-| O-2 | X:02 `OpsStore` is safe to call from several threads (one SQLite connection per thread inside) and offers `transaction()`; process accessor `open_ops_store()` | Assumed | T01-04, T01-07, T01-11 |
-| O-3 | DuckDB `excel` extension is installed at deploy (autoinstall is off) | X:10 deploy installs it; T01-09 test skips XLSX with a clear message if absent in dev | T01-09 |
-| O-4 | MongoDB hosts for the socket guard | Operator lists them in `security.network.extra_allowed_hosts` | T01-22 |
-| O-5 | Daily metric names | `availability_pct`, `error_rate`, `request_count`, `alert_firing_minutes` | T01-02 |
-| O-6 | `metric_sample` table and writer (ENG E5) owned by X:08 | Metrics are emitted through X:08's writer; if absent, only log events are asserted | T01-06 |
-| O-7 | Q5: restored record with older update time stays tombstoned | No bump of `_source_updated_at` | — |
-| O-8 | Jira OAuth 3LO | Rejected (D-10) | T01-02 |
+| # | Item | Default in this spec | Affects | Status |
+|---|------|----------------------|---------|--------|
+| O-1 | Impl 02 ops migration contains `watermark`, `sync_slice`, `file_ingest` with the §4.1 types | Migration 001 of impl 02 has every column; this spec adds no migration in 010–019 | T01-04 | Resolved by R-11 |
+| O-2 | Ops store safe to call from several threads | X:02 `connection()` is one SQLite connection per thread; no store object or `open_ops_store()` accessor | T01-04, T01-07, T01-11 | Resolved by R-10 |
+| O-3 | DuckDB `excel` extension is installed at deploy (autoinstall is off) | X:10 deploy installs it; T01-09 test skips XLSX with a clear message if absent in dev | T01-09 | Still open |
+| O-4 | MongoDB hosts for the socket guard | Operator lists them in `sources.mongodb.hosts`; the connector checks the URI against the list (U01-86) | T01-02, T01-22 | Resolved by R-06 |
+| O-5 | Daily metric names | `availability_pct`, `error_rate`, `request_count`, `alert_firing_minutes` | T01-02 | Still open |
+| O-6 | `metric_sample` table and writer | Table from impl 02 migration 006; writer X:08/herness.store.ops.record_metric_samples | T01-06 | Resolved by R-12 |
+| O-7 | Q5: restored record with older update time stays tombstoned | No bump of `_source_updated_at` | — | Still open |
+| O-8 | Jira OAuth 3LO | Rejected (D-10) | T01-02 | Still open |
+| O-9 | R-06 makes `herness.core.egress` the only builder of `httpx` clients, but impl 10 defines only `EgressGuard.http_client` (model egress, purpose and payload class) and `loopback_http_client`. Connectors need a factory for non-loopback source hosts: `X:10/herness.core.egress.source_http_client(base_url, *, verify, timeout_s, connect_timeout_s, max_connections)` with the contract of U01-58 step 3 | U01-58 calls that name; T01-14 is blocked until impl 10 adds it | T01-14, and through it T01-15–T01-24 | Still open (new; owner impl 10) |
+| O-10 | `deleted_record_ids` reads `deletion_request`, whose area under R-08 is `privacy.py` (impl 10) | Kept in the ingest area as a read-only function because impl 02 references it as `X:01/herness.store.ops.deleted_record_ids` and the runner is its main caller; impl 10 writes the table | T01-04 | Still open (new; confirm placement) |
+| O-11 | Impl 02 (`SourcesConfig` "declares `dq` and `build`") and impl 10 (file model assembly) must follow D-16 | This spec's `SourcesConfig` has no `dq` or `build` | T01-02 | Still open (new; impl 02 and impl 10 text) |
+| O-12 | Impl 11 references `X:01/herness.connectors.servicenow.flatten_record`, which does not exist | The ServiceNow flattening is `herness.connectors.rows.flatten_record` (U01-23) with `display_pairs=True` and the entity's fetch fields; the Jira one is `herness.connectors.jira.flatten_issue` (U01-93) | T01-03, T01-17 | Still open (new; impl 11 symbol name) |
+| O-13 | Impl 08 U08-17 defines its own `parse_retry_after` with a different `X-RateLimit-Reset` rule (no epoch-millisecond branch) | This spec keeps U01-61 for HTTP pages; the two must converge on one implementation | T01-14 | Still open (new) |
+| O-14 | Impl 09 calls the payload builder `sync_payload(...)` and uses idem key `sync:{source or 'all'}` for every sync, while U01-54 is `build_sync_payload` and gives backfill and reconcile their own keys | U01-54 as specified; impl 09 should call `build_sync_payload` and use its `idem_key` | T01-11 | Still open (new) |
+| O-15 | R-03 lists what a settings module may import but not a settings module split over two files | `herness.connectors.settings_base` follows the same import rule and is listed with `herness.connectors.settings` in the settings import contract | T01-01, T01-02 | Accepted (R-03) |
+
+Rulings checked that need no change here: R-01, R-02 (`JobContext` in `herness.core.jobs`, `JobOutcome` in `herness.core.types`; only the symbol names in X: references changed), R-04, R-05, R-07, R-13–R-38, R-41, R-43–R-45, R-47–R-58, R-60 (`busines_criticality` is a configured field of ServiceNow entity `cmdb_ci_service`, spelling kept), R-61, R-64–R-66. R-42 (handler reads `ctx.job.payload`), R-46 (exit codes in F01-06) and R-57 (orphan temp files are not committed lake files) are applied in U01-51, §5 and §4.2.
 
 Inherited design open questions (01 §11):
 
@@ -3462,8 +3571,8 @@ None. A suppression needed later is added to this table with its rule and reason
 | Spec | Units / artifacts (`X:` references) |
 |------|--------------------------------------|
 | 00 | `X:00/herness.core.errors` (taxonomy), `X:00/herness.core.ids.new_ulid`, `X:00/herness.core.time.now_utc`, `format_fixed`, `parse_fixed`, `X:00/herness.core.logging.get_logger` |
-| 02 | `X:02/herness.store.lake.LakeWriter`, `LakeFileSet`; `X:02/herness.store.ops.OpsStore`, `open_ops_store`, `transaction`, ops migrations; `X:02/herness.model.settings.DqSettings`, `BuildSettings`; `X:02/herness.model.build.render_sql`; staging SQL files `110`–`170`; `X:02` mappings model `custom_fields.jira` |
-| 08 | `X:08/herness.core.resilience.guard`, `retry_page`, `classify`, `policy`, `breaker`, `fault_point`; `X:08/herness.core.jobs.register_handler`, `JobContext`, `JobOutcome`, `run_inline`; `X:08/metric_sample writer` |
+| 02 | `X:02/herness.store.lake.LakeWriter`, `LakeFileSet`; `X:02/herness.store.ops.core.connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`, `reset_connections` (R-10), `X:02/herness.store.ops` package `__init__.py`, migration 001 (tables of §4.1); consumer of this spec's `list_watermarks` and `deleted_record_ids` (build job) and of the §4.5 Jira contract (`120_stg_jira.sql`); `X:02/herness.model.build.render_sql`; staging SQL files `110`–`170`; `X:02` mappings model `custom_fields.jira` |
+| 08 | `X:08/herness.core.resilience.guard`, `retry_page`, `classify`, `policy`, `breaker`, `fault_point`; `X:08/herness.core.jobs.register_handler`, `JobContext`, `run_inline`; `X:08/herness.core.types.JobOutcome`; `X:08/herness.store.ops.record_metric_samples` (R-12); fault points `connector.before_watermark`, `http.page` (R-40) |
 | 09 | `X:09/herness.cli` `sync` and `doctor --sources` commands (consumers of U01-54, U01-56, U01-57, U01-75) |
-| 10 | `X:10/herness.core.config.load_config`, `get_config`, `HernessConfig`; `X:10/herness.core.registry.register`, `get`; `X:10/herness.core.secrets.resolve`, `resolve_json`; `X:10/herness.core.egress.install_socket_guard` (consumer of U01-15); deploy step installing the DuckDB `excel` extension |
-| 11 | `X:11/tests/fixtures/connectors/<source>/` cassettes; `X:11/tests/fixtures/lake_small`; `X:11/tools/synth_data.py api-pages`; synth profile `files` entry |
+| 10 | `X:10/herness.core.config.load_config` (assembles the `sources.yaml` model from `SourcesConfig`, D-16), `get_config`, `HernessConfig`; `X:10/herness.core.registry.register`, `get`; `X:10/herness.core.secrets.resolve`, `resolve_json`; `X:10/herness.core.egress.source_http_client` (O-9), `loopback_http_client` (R-06); `X:10/herness.core.egress.install_socket_guard` (consumer of U01-15); deploy step installing the DuckDB `excel` extension |
+| 11 | `X:11/tests/fixtures/connectors/<source>/` cassettes; `X:11/tests/fixtures/lake_small`; `X:11/tools/synth_data.py api-pages`; synth profile `files` entry; `ops_store` test fixture; consumer of `herness.connectors.rows.flatten_record` and `herness.connectors.jira.flatten_issue` (R-59) |

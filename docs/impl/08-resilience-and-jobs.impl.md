@@ -1,90 +1,92 @@
 # 08 — Resilience and Jobs: Implementation Specification
 
-Status: Draft v1 · 2026-09-24 · Design spec: [`docs/specs/08-resilience-and-jobs.md`](../specs/08-resilience-and-jobs.md) (Draft v2) · Phase: 3 · Standards: [`ENG-STANDARDS.md`](ENG-STANDARDS.md)
-Depends on implementation specs: 02 (ops store connection, migrations, `metric_sample` table), 05 (`Tracer`, `LLMRequest`, `LLMResponse`, `LoopState`, `LLMRegistry`), 10 (config loader, secrets, redaction, egress, registry), 00 artifacts (`herness.core.errors`, `herness.core.ids`, `herness.core.time`, `herness.core.logging`, `herness.core.types`). Consumers: 01, 03, 04, 05, 06, 07, 09, 10, 11.
+Status: Draft v2 (consistency pass: rulings of [`DECISIONS.md`](DECISIONS.md) applied) · 2026-09-24 · Design spec: [`docs/specs/08-resilience-and-jobs.md`](../specs/08-resilience-and-jobs.md) (Draft v2) · Phase: 3 · Standards: [`ENG-STANDARDS.md`](ENG-STANDARDS.md)
+Depends on implementation specs: 02 (ops store `connection()`, `run_write()`, migrations 001–006 including `metric_sample`), 05 (`LLMRequest`, `LLMResponse`, `LoopState`, `LoopSignal`, `LLMRegistry`; `Tracer` used structurally), 10 (config loader, `SECTION_VALIDATORS`, secrets, redaction, `herness.core.egress.loopback_http_client`, registry, `herness.admin` retention), 00 artifacts (`herness.core.errors`, `herness.core.ids` including `canonical_json`, `herness.core.time`, `herness.core.logging`, the `herness.core.types` package skeleton). Consumers: 01, 02, 03, 04, 05, 06, 07, 09, 10, 11.
 
-Conventions used below: `cfg` is `herness.core.config.get_config()`. `R` is `cfg.resilience.resilience` (the `resilience` key of `config/resilience.yaml`) and `S` is `cfg.resilience.schedule`. "ts" means the spec 00 §8 fixed-width UTC text `YYYY-MM-DDTHH:MM:SS.ffffffZ`. "Canonical JSON" means `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)` encoded as UTF-8. Cross-spec dependencies on units whose task IDs are not yet known are written `X:<NN>/<symbol or artifact>`.
+Conventions used below: `cfg` is `herness.core.config.get_config()`. `R` is `cfg.resilience.resilience` (the `resilience` key of `config/resilience.yaml`) and `S` is `cfg.resilience.schedule`. "ts" means the spec 00 §8 fixed-width UTC text `YYYY-MM-DDTHH:MM:SS.ffffffZ`. "Canonical JSON" means the output of `herness.core.ids.canonical_json` (R-14) encoded as UTF-8. Cross-spec dependencies on units whose task IDs are not yet known are written `X:<NN>/<symbol or artifact>`. A ruling of `DECISIONS.md` is cited as `R-nn`.
 
 ## 1. Scope and traceability
 
-This spec turns design 08 into build instructions for `herness/core/resilience/` (retry policies, timeouts, error classification, circuit breakers, probes, model and decider fallback chains, structured-output repair, loop-signal policy, fault injection, `resilience_event` and component metric recording) and `herness/core/jobs/` (job queue, leases, handlers, outcomes, supervisor and child processes, GPU arbitration and service control, schedule windows, cron scheduler and chains, planned rekey, chat-hours policy, task lease and checkpoint helpers, inline runs, status snapshot and health). It also specifies the SQL adapters in `herness/store/` that realise the 08-owned ops tables (`job`, `worker`, `source_health`, `resilience_event`, task mechanics) and the metric recording API over the `metric_sample` table (ENG §4, delta E5; the table DDL belongs to impl 02). What each job does (handlers), loop-signal detection, budgets, trace file format and CLI rendering are out of scope (design 08 §1).
+This spec turns design 08 into build instructions for `herness/core/resilience/` (retry policies, timeouts, error classification, circuit breakers, probes, model and decider fallback chains, structured-output repair, loop-signal policy, fault injection, `resilience_event` and component metric recording) and `herness/core/jobs/` (job queue, leases, handlers, outcomes, supervisor and child processes, GPU arbitration and service control, schedule windows, cron scheduler and chains, planned rekey, chat-hours policy, task lease and checkpoint helpers, inline runs, status snapshot and health). It also specifies the 08-owned ops store areas `herness/store/ops/{jobs,tasks,worker,resilience,metrics}.py` (R-08), which realise the 08-owned ops tables (`job`, `worker`, `source_health`, `resilience_event`, task mechanics), and the single `metric_sample` writer `herness.store.ops.metrics.record_metric_samples` (ENG §4, delta E5, R-12; the table DDL is impl 02 migration 006). Under R-09 this spec specifies every function of those five areas that any other implementation spec references. It owns the `herness.core.types.jobs` submodule (R-01) and the behavioral classes `ModelChain`, `loop_signal_policy` (in `herness.core.resilience`) and `JobContext` (in `herness.core.jobs`) (R-02). What each job does (handlers), loop-signal detection, budgets, trace file format and CLI rendering are out of scope (design 08 §1).
 
 ### 1.1 Traceability matrix
 
 | Design § | Requirement (short) | Impl § | Units | Tasks | Tests |
 |----------|---------------------|--------|-------|-------|-------|
-| 1 | Two modules, scope and exclusions | 1, 2, 13 (D08-01, D08-02) | all | T08-01, T08-03 | UT08-103 |
+| 1 | Two modules, scope and exclusions | 1, 2, 13 (D08-01, D08-02) | all | T08-01, T08-03, T08-26 | UT08-103 |
 | 2.1 | Classify by taxonomy, one policy per call type, no message matching | 3.4, 6 | U08-11–U08-17 | T08-04 | UT08-06, UT08-07, UT08-10, UT08-11 |
 | 2.2 | Breakers in `source_health` | 3.6, 4.1.3 | U08-23–U08-27, U08-94 | T08-05, T08-06 | UT08-12–UT08-19, IT08-01, UT08-104 |
 | 2.3 | Execute per-role fallback chains with repair | 3.9 | U08-35–U08-38 | T08-09 | UT08-33–UT08-42 |
 | 2.4 | Leased jobs survive kills, reboots, swaps | 3.10, 3.16, 5 (F08-04, F08-05, F08-10) | U08-46–U08-50, U08-87, U08-88 | T08-12, T08-15, T08-21 | IT08-04–IT08-09, FT08-07 |
-| 2.5 | One GPU class, windows, in-job switch API | 3.12, 3.15, 3.16 | U08-66–U08-70, U08-78–U08-86 | T08-13, T08-17, T08-18, T08-20 | UT08-75–UT08-78, UT08-87–UT08-99, FT08-12 |
+| 2.5 | One GPU class, windows, in-job switch API | 3.12, 3.15, 3.16 | U08-43, U08-66–U08-70, U08-78–U08-86, U08-102 | T08-12, T08-13, T08-17, T08-18, T08-20 | UT08-75–UT08-78, UT08-87–UT08-99, UT08-107, UT08-108, FT08-12 |
 | 2.6 | Chat mode decision | 3.14 | U08-75–U08-77 | T08-19 | UT08-84–UT08-86 |
 | 2.7 | Visibility in logs, traces, `resilience_event`, status | 3.5, 8 | U08-18–U08-22, U08-91 | T08-05, T08-22 | UT08-25, UT08-29–UT08-32, UT08-100 |
-| 2.8 | Fault hooks for spec 11 | 3.8 | U08-33, U08-34 | T08-08 | UT08-46–UT08-50, FT08-01–FT08-12 |
+| 2.8 | Fault hooks for spec 11 (JSON plans, `HERNESS_ENV=test` only, R-40) | 3.8 | U08-33, U08-34 | T08-08 | UT08-46–UT08-50, UT08-105, FT08-01–FT08-12 |
 | 3.1 | `policy`, `retrying`, `retry_call`, `aretry_call`, `retry_page`, `guard`, `call_with_timeout`, `classify`, `CircuitBreaker`, `breaker` | 3.4, 3.6, 3.7 | U08-11–U08-32 | T08-04–T08-07 | UT08-06–UT08-28 |
 | 3.2 | `ModelChain`, `complete_validated`, `DeciderChain`, `loop_signal_policy` | 3.9 | U08-35–U08-40 | T08-09, T08-10 | UT08-33–UT08-45 |
-| 3.3 | `fault_point` | 3.8 | U08-34 | T08-08 | UT08-46, UT08-49 |
-| 3.4 | Jobs API, `JobSpec`, `JobOutcome`, `ServiceControl`, `JobContext` | 3.1, 3.10, 3.16 | U08-01–U08-04, U08-41–U08-56, U08-84–U08-86 | T08-01, T08-12, T08-20 | UT08-01, UT08-02, UT08-51–UT08-65, UT08-97–UT08-99 |
-| 3.5 | `GpuStateReader`, `gpu_state`, supervisor performs swaps | 3.15 | U08-08, U08-81, U08-83 | T08-18 | UT08-91–UT08-94 |
+| 3.3 | `fault_point` | 3.8 | U08-34 | T08-08 | UT08-46, UT08-49, UT08-105 |
+| 3.4 | Jobs API, `JobSpec`, `JobOutcome`, `ServiceControl`, `JobContext` (R-01, R-02, R-41, R-42) | 3.1, 3.10, 3.16 | U08-01–U08-04, U08-41–U08-56, U08-84–U08-86 | T08-01, T08-03, T08-12, T08-20 | UT08-01, UT08-02, UT08-51–UT08-65, UT08-97–UT08-99, UT08-106 |
+| 3.5 | `GpuStateReader`, `gpu_state`, supervisor performs swaps, requested class | 3.15 | U08-08, U08-81, U08-83, U08-102 | T08-18 | UT08-91–UT08-94, UT08-108 |
 | 3.6 | `chat_policy`, `chat_model_profile`, `chat_next_live_at` | 3.14 | U08-75–U08-77 | T08-19 | UT08-84–UT08-86 |
-| 3.7 | Task lease/resume helpers; only 08 writes these columns | 3.11, 4.1.5 | U08-57–U08-63, U08-97 | T08-16 | UT08-66–UT08-71 |
+| 3.7 | Task lease/resume helpers; only 08 writes these columns | 3.11, 4.1.5 | U08-57–U08-63, U08-97 | T08-16 | UT08-66–UT08-71, UT08-109 |
 | 3.8 | CLI behavior (`worker`, `resume`, `jobs`, `status`) | 3.16, 3.17 | U08-89–U08-93 | T08-21, T08-22 | IT08-11, IT08-12, UT08-100, UT08-102 |
 | 4.1 | `job` columns, idem keys, result, attempts, last_error, lease owner | 4.1.1 | U08-42–U08-50, U08-95 | T08-11, T08-12, T08-15 | UT08-51–UT08-62 |
 | 4.2 | `worker`, `source_health`, `resilience_event` | 4.1.2–4.1.4 | U08-18, U08-94, U08-96 | T08-05, T08-11 | UT08-29, UT08-65 |
-| 4.3 | Task checkpoint envelope, 4 MB cap, scratchpad kept | 4.2 | U08-59, U08-60 | T08-16 | UT08-68 |
+| 4.3 | Task checkpoint envelope `{schema_version, loop, state, scratchpad}`, key-scoped save, 4 MiB cap (R-21) | 4.2 | U08-59, U08-60 | T08-16 | UT08-68, UT08-109 |
 | 4.4 | Trace events `retry`, `fallback`, `repair`, `guard_stop` | 3.5, 8.3 | U08-18, U08-28, U08-35, U08-38, U08-40 | T08-05, T08-07, T08-09, T08-10 | UT08-25, UT08-33, UT08-42, UT08-45 |
-| 5.1 | Job kinds, handler ownership, start classes, `exclusive_kinds`, error wrapping | 3.10 | U08-43, U08-48, U08-55, U08-56 | T08-12 | UT08-57, UT08-64 |
-| 5.2 | Retry policies, full jitter, Retry-After, error class rules, classify mapping, timeouts, tenacity factory | 3.4, 3.7, 3.10, 6 | U08-11–U08-17, U08-28–U08-32, U08-49 | T08-04, T08-07, T08-15 | UT08-06–UT08-11, UT08-20–UT08-28, UT08-58, PT08-01–PT08-03 |
+| 5.1 | Job kinds, handler ownership, start classes (GPU-slot kinds, R-43), `exclusive_kinds`, error wrapping | 3.10 | U08-43, U08-48, U08-55, U08-56 | T08-12 | UT08-57, UT08-64, UT08-107 |
+| 5.2 | Retry policies, full jitter, Retry-After, error class rules, classify mapping, timeouts, tenacity factory | 3.4, 3.7, 3.10, 6 | U08-11–U08-17, U08-28–U08-32, U08-49 | T08-04, T08-07, T08-15 | UT08-06–UT08-11, UT08-20–UT08-28, UT08-58, UT08-112, PT08-01–PT08-03 |
 | 5.3 | Breaker state machine, cooldown, probe claim, probes, service restart, sync effect | 3.6, 3.15 | U08-23–U08-27, U08-81 | T08-06, T08-18 | UT08-12–UT08-19, UT08-96, UT08-104, IT08-01, FT08-05 |
 | 5.4 | Candidates filter, per-candidate retry/repair/fallback, repair protocol | 3.9 | U08-35–U08-38 | T08-09 | UT08-33–UT08-42, FT08-02 |
 | 5.5 | Decider fallback order, skipped entries deferred | 3.9 | U08-39 | T08-10 | UT08-43, UT08-44 |
 | 5.6 | Loop guards division of labor, checkpoint interval | 3.9, 3.11 | U08-40, U08-60 | T08-10, T08-16 | UT08-45, UT08-68 |
-| 5.7 | Enqueue, sched no-refire, claim SQL, heartbeat, reaper, completion guards, cancel, `run_inline` | 3.10, 3.16, 4.1.1 | U08-46–U08-53, U08-90, U08-95 | T08-11, T08-12, T08-15, T08-22 | UT08-52–UT08-62, IT08-02, IT08-12 |
-| 5.8 | GPU classes, warm-up, compose commands, swap algorithm, service control, detection, deploy up/down | 3.15 | U08-78–U08-83 | T08-17, T08-18 | UT08-87–UT08-96, FT08-09, FT08-12 |
+| 5.7 | Enqueue (per-kind default priority, R-41), sched no-refire, claim SQL, heartbeat, reaper, completion guards, cancel, `run_inline` (R-45) | 3.10, 3.16, 4.1.1 | U08-46–U08-53, U08-90, U08-95 | T08-11, T08-12, T08-15, T08-22 | UT08-52–UT08-62, UT08-106, IT08-02, IT08-12 |
+| 5.8 | GPU classes, warm-up, compose commands, swap algorithm, service control, detection, deploy up/down and `gpu load/unload` requests | 3.15 | U08-78–U08-83, U08-102 | T08-17, T08-18 | UT08-87–UT08-96, UT08-108, FT08-09, FT08-12 |
 | 5.9 | Worker process model, pipe, tick, stall, shutdown, crash recovery, GPU lock | 3.16 | U08-82, U08-84, U08-87–U08-89 | T08-17, T08-20, T08-21 | UT08-95, UT08-97, IT08-04–IT08-11 |
-| 5.10 | Windows, arbiter, preemption, chat-window priority, `chat_policy` | 3.12, 3.14 | U08-66–U08-70, U08-75–U08-77 | T08-13, T08-19, T08-21 | UT08-75–UT08-78, UT08-84–UT08-86, IT08-13, FT08-10 |
+| 5.10 | Windows, arbiter, preemption, chat-window priority, `chat_policy` (R-35, R-38) | 3.12, 3.14 | U08-66–U08-70, U08-75–U08-77 | T08-13, T08-19, T08-21 | UT08-75–UT08-78, UT08-84–UT08-86, IT08-13, FT08-10 |
 | 5.11 | Cron, catch-up, chains, defaults, planned rekey | 3.12, 3.13 | U08-64, U08-65, U08-71–U08-74 | T08-02, T08-14 | UT08-72–UT08-74, UT08-79–UT08-83, IT08-03, PT08-04 |
 | 5.12 | Task resume, idempotency rule, `herness resume` | 3.11, 3.17 | U08-57–U08-63, U08-93 | T08-16, T08-22 | UT08-66–UT08-71, UT08-102, FT08-06 |
-| 5.13 | Fault plan, actions, selectors, named points | 3.8 | U08-33, U08-34 | T08-08 | UT08-46–UT08-50 |
+| 5.13 | Fault plan (JSON only, test environment only, R-40), actions, selectors, named points | 3.8 | U08-33, U08-34 | T08-08 | UT08-46–UT08-50, UT08-105 |
 | 5.14 | Log events, derived metrics, `status_snapshot` | 3.5, 3.17, 8 | U08-18–U08-22, U08-91 | T08-05, T08-22 | UT08-100 |
 | 6 | Supervisor store outage, clock jumps, WSL down, child crash, broken schedule | 5, 6 | U08-72, U08-81, U08-87 | T08-14, T08-18, T08-21 | UT08-83, UT08-92, IT08-07, IT08-10 |
-| 7 | `config/resilience.yaml` keys and validation | 9 | U08-06, U08-07, U08-67 | T08-01, T08-02 | UT08-03–UT08-05 |
+| 7 | `config/resilience.yaml` keys and validation (settings imports per R-03) | 9 | U08-06, U08-07, U08-67, U08-99 | T08-26, T08-02 | UT08-03–UT08-05 |
 | 8 | Performance targets | 10 | U08-28, U08-46, U08-48, U08-75, U08-87 | T08-25 | BT08-01–BT08-11 |
 | 9 | Security (argument lists, redaction, payload refs, egress, Retry-After cap, inert faults, ACLs) | 7 | U08-16, U08-18, U08-34, U08-37, U08-45, U08-78 | T08-04, T08-05, T08-08, T08-09, T08-12, T08-17 | ST08-01–ST08-15 |
 | 10 | Unit tests and fault suite F1–F12, Phase 3 acceptance | 11 | all | T08-24 | FT08-01–FT08-12 |
 | 11 | Open questions (Q1–Q6, Q8 resolved; Q7 open) | 13.2 | U08-79 | T08-17 | UT08-89 |
 | 12 | Dependencies | 14 | — | — | — |
-| 13 | Resolved contract changes | 4, 13.1 | U08-01–U08-05 | T08-01 | UT08-01, UT08-02 |
-| ENG §4 / E5 | Component metrics recording into `metric_sample` | 3.5, 8.2 | U08-19–U08-22 | T08-05 | UT08-31, UT08-32 |
+| 13 | Resolved contract changes | 4, 13.1 | U08-01–U08-05 | T08-01, T08-03 | UT08-01, UT08-02 |
+| ENG §4 / E5 | Component metrics recording into `metric_sample`; single writer `record_metric_samples` (R-12) | 3.5, 3.18, 8.2 | U08-19–U08-22, U08-100, U08-101, U08-103 | T08-01, T08-05 | UT08-31, UT08-32, UT08-110, UT08-111 |
 
 ## 2. Module map
 
-Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.py`. Their content exceeds the 400-line module limit (ENG §2.4), so each becomes a package with the same import path (delta D08-01). Each package `__init__.py` re-exports the public API through a PEP 562 module `__getattr__` that imports the owning submodule on first access, so importing `herness.core.jobs.settings` from the config loader does not import the supervisor. The SQL lives in L1 adapters under `herness/store/` because L0 may not import L1 (ENG §2.1, delta D08-02); core code reaches it through the backend ports of U08-08 and U08-41, bound at the composition root (U08-10, U08-98).
+Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.py`. Their content exceeds the 400-line module limit (ENG §2.4), so each becomes a package with the same import path (delta D08-01). Each package `__init__.py` re-exports the public API through a PEP 562 module `__getattr__` that imports the owning submodule on first access, so importing `herness.core.resilience.settings` from the config loader does not import the supervisor. The only settings module of this spec is `herness/core/resilience/settings.py`; it imports only the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03). The shared data types are in the `herness.core.types.jobs` submodule (R-01); `JobContext` and `ServiceControl` are protocols in `herness.core.jobs.ports` and `ModelChain` and `loop_signal_policy` are in `herness.core.resilience` (R-02). The SQL lives in the L1 ops areas `herness/store/ops/{resilience,metrics,jobs,worker,tasks}.py` (R-08) because L0 may not import L1 (ENG §2.1, R-04); core code reaches it through the backend ports of U08-08 and U08-41, bound at the composition root (U08-10, U08-98). Every store write goes through impl 02 `run_write()` (R-10), which already applies the `sqlite_write` retry policy (U08-28) and the `sqlite.write` fault point.
 
 | Path | Purpose | Public symbols | Layer | Extra imports | Line budget |
 |------|---------|----------------|-------|---------------|-------------|
-| `herness/core/types.py` (08 section) | 08-owned shared types | `GpuClass`, `JobKind`, `ServiceName`, `ChatMode`, `BreakerState`, `PolicyName`, `JobSpec`, `JobOutcome`, `JobContext`, `ServiceControl` | L0 | none | +110 |
-| `herness/core/errors.py` (08 section) | 08 taxonomy subclass | `JobStateError` | L0 | none | +12 |
+| `herness/core/types/jobs.py` | 08-owned shared data types (R-01) | `GpuClass`, `JobKind`, `ServiceName`, `ChatMode`, `BreakerState`, `PolicyName`, `JobSpec`, `JobOutcome`, `MetricSample` | L0 | `herness.core.types.harness` only (impl 00 §3.5) | 150 |
+| `herness/core/types/__init__.py` (08 import line) | Re-export of the 08 names (impl 00 U00-44) | the names above | L0 | none | +2 |
+| `herness/core/types/_ownership.py` (08 entries) | `TYPE_OWNERS` entries for the 08 helper types (impl 00 U00-45) | none new | L0 | none | +6 |
+| `herness/core/errors.py` (08 section) | 08 taxonomy subclass (R-19) | `JobStateError` | L0 | none | +12 |
 | `herness/core/resilience/__init__.py` | Lazy re-export of the resilience API | all public names of §3.3–§3.8 | L0 | none | 70 |
-| `herness/core/resilience/settings.py` | `resilience` key section model | `ResilienceSection` and sub-models | L0 | `pydantic` | 260 |
-| `herness/core/resilience/ports.py` | Protocols the resilience code depends on | `ResilienceBackend`, `HealthRow`, `EventRow`, `MetricRow`, `ChainRegistry`, `ClientInfo`, `GpuStateReader`, `AsyncCompleter`, `DeciderLike` | L0 | none | 170 |
+| `herness/core/resilience/settings.py` | Every model of `config/resilience.yaml` (R-03) | `ResilienceSection` and sub-models, `ScheduleSection`, `WindowSpec`, `ScheduledJob`, `ChainStep`, `ResilienceConfig` | L0 | `pydantic` | 390 |
+| `herness/core/resilience/ports.py` | Protocols the resilience code depends on | `ResilienceBackend`, `HealthRow`, `EventRow`, `ChainRegistry`, `ClientInfo`, `GpuStateReader`, `AsyncCompleter`, `DeciderLike`, `TracerLike` | L0 | none | 190 |
 | `herness/core/resilience/_state.py` | The single process-state holder | `ProcessState`, `process_state`, `reset_process_state`, `bind_ops_backend`, `bind_chain_registry` | L0 | none | 140 |
 | `herness/core/resilience/policies.py` | Policies and backoff math | `RetryPolicy`, `POLICY_FAMILY`, `GPU_HEALTH_POLICY`, `policy`, `policy_for_client`, `full_jitter_delay`, `FullJitterRetryAfter`, `job_backoff_delay` | L0 | `tenacity` | 220 |
 | `herness/core/resilience/classify.py` | Foreign exception → taxonomy | `classify`, `parse_retry_after` | L0 | `httpx` | 230 |
 | `herness/core/resilience/events.py` | `resilience_event` rows, logs, trace fan-out | `record_event`, `EVENT_KINDS` | L0 | `structlog` | 200 |
-| `herness/core/resilience/metrics.py` | Component metric recording | `record_counter`, `record_histogram`, `timed`, `flush_metrics` | L0 | none | 220 |
+| `herness/core/resilience/metrics.py` | Component metric recording | `record_counter`, `record_histogram`, `record_gauge`, `timed`, `flush_metrics` | L0 | none | 260 |
 | `herness/core/resilience/breaker.py` | Breaker state machine, registry, probes | `breaker_transition`, `probe_due`, `CircuitBreaker`, `breaker`, `guard`, `register_probe`, `run_due_probes` | L0 | none | 380 |
 | `herness/core/resilience/retry.py` | Retry execution | `retry_call`, `aretry_call`, `retrying`, `retry_page`, `call_with_timeout` | L0 | `tenacity` | 340 |
-| `herness/core/resilience/faults.py` | Fault plans and `fault_point` | `FaultRule`, `load_fault_plan`, `fault_point`, `NAMED_POINTS` | L0 | `pyyaml` | 340 |
+| `herness/core/resilience/faults.py` | Fault plans and `fault_point` | `FaultRule`, `load_fault_plan`, `fault_point`, `NAMED_POINTS` | L0 | none | 340 |
 | `herness/core/resilience/chain.py` | Repair and model fallback | `complete_validated`, `build_repair_request`, `ModelChain` | L0 | `jsonschema`, `pydantic` | 390 |
 | `herness/core/resilience/deciders.py` | Decider fallback | `DeciderChain` | L0 | none | 170 |
 | `herness/core/resilience/loop_policy.py` | Loop-signal policy | `loop_signal_policy` | L0 | none | 90 |
 | `herness/core/jobs/__init__.py` | Lazy re-export of the jobs API | all public names of §3.9–§3.15 | L0 | none | 90 |
-| `herness/core/jobs/settings.py` | `schedule` key section model, root `ResilienceConfig`, window validation | `ScheduleSection`, `WindowSpec`, `ScheduledJob`, `ChainStep`, `ResilienceConfig`, `validate_windows` | L0 | `pydantic` | 300 |
+| `herness/core/jobs/validate.py` | Window coverage and cron checks; the `resilience` section validator of impl 10 `SECTION_VALIDATORS` (R-03) | `validate_windows`, `validate_resilience_config` | L0 | none | 180 |
 | `herness/core/jobs/cron.py` | Cron parser and DST resolution | `CronExpr`, `resolve_local` | L0 | none | 290 |
-| `herness/core/jobs/ports.py` | Jobs backend protocol and row models | `JobsBackend`, `JobRow`, `WorkerRow`, `NewJob`, `bind_jobs_backend` | L0 | `pydantic` | 230 |
-| `herness/core/jobs/queue.py` | Enqueue, claim, cancel, retry, reads | `DEFAULT_PRIORITY`, `MANUAL_PRIORITY`, `default_idem_key`, `validate_payload`, `submit`, `enqueue`, `claim`, `cancel`, `retry`, `get`, `list_jobs`, `worker_alive` | L0 | none | 390 |
+| `herness/core/jobs/ports.py` | Jobs backend protocol, row models and the handler-facing protocols (R-02) | `JobsBackend`, `JobRow`, `WorkerRow`, `NewJob`, `bind_jobs_backend`, `JobContext`, `ServiceControl` | L0 | `pydantic` | 300 |
+| `herness/core/jobs/queue.py` | Enqueue, claim, cancel, retry, reads | `DEFAULT_PRIORITY`, `MANUAL_PRIORITY`, `GPU_SLOT_KINDS`, `default_idem_key`, `validate_payload`, `submit`, `enqueue`, `claim`, `cancel`, `retry`, `get`, `list_jobs`, `worker_alive` | L0 | none | 390 |
 | `herness/core/jobs/handlers.py` | Handler registry and wrapper | `register_handler`, `resolve_handler`, `run_handler` | L0 | none | 120 |
 | `herness/core/jobs/outcomes.py` | Failure policy and completion | `decide_failure`, `FailureAction`, `finish_job` | L0 | none | 260 |
 | `herness/core/jobs/windows.py` | Window evaluation and preemption math | `ActiveWindow`, `window_at`, `next_window_allowing`, `preempt_deadline` | L0 | none | 290 |
@@ -92,19 +94,21 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/jobs/scheduler.py` | Scheduler tick, chains, rekey | `ScheduleEntry`, `collect_schedules`, `run_scheduler`, `advance_chain`, `schedule_rekey` | L0 | none | 390 |
 | `herness/core/jobs/chat_policy.py` | Chat mode | `chat_policy`, `chat_model_profile`, `chat_next_live_at` | L0 | none | 170 |
 | `herness/core/jobs/tasks.py` | Task lease/resume helpers | `RecoverySummary`, `recover_run_tasks`, `claim_task`, `build_checkpoint_envelope`, `save_checkpoint`, `complete_task`, `fail_task`, `release_task` | L0 | none | 260 |
-| `herness/core/jobs/gpu_services.py` | Compose commands, loopback health and warm-up, VRAM | `ComposeRunner`, `LoopbackHttp`, `vram_used_mb`, `wait_vram_free` | L0 | `httpx` (loopback only, D08-06) | 360 |
+| `herness/core/jobs/gpu_services.py` | Compose commands, loopback health and warm-up, VRAM | `ComposeRunner`, `LoopbackHttp`, `vram_used_mb`, `wait_vram_free` | L0 | none (loopback clients come from `herness.core.egress.loopback_http_client`, R-06) | 360 |
 | `herness/core/jobs/gpu_lock.py` | Host GPU owner lock | `GpuLock` | L0 | none (`msvcrt`/`fcntl` stdlib) | 90 |
-| `herness/core/jobs/gpu.py` | Swap and service control, state reader | `GpuController`, `WorkerGpuState`, `gpu_state` | L0 | none | 390 |
+| `herness/core/jobs/gpu.py` | Swap and service control, state reader, external class requests | `GpuController`, `WorkerGpuState`, `gpu_state`, `request_gpu_class` | L0 | none | 400 |
 | `herness/core/jobs/pipe.py` | Supervisor↔child JSON messages | `PipeMessage`, `encode_message`, `decode_message`, `MAX_PIPE_MSG_BYTES` | L0 | `pydantic` | 150 |
 | `herness/core/jobs/context.py` | `JobContext` implementations | `ChildJobContext`, `ChildServiceControl`, `InlineJobContext`, `InlineServiceControl` | L0 | none | 360 |
 | `herness/core/jobs/supervisor.py` | Worker supervisor | `WorkerOptions`, `Supervisor`, `run_worker` | L0 | `psutil` | 400 |
 | `herness/core/jobs/child.py` | Child process entry | `child_main` | L0 | none | 150 |
 | `herness/core/jobs/inline.py` | CLI inline run | `run_inline` | L0 | none | 200 |
 | `herness/core/jobs/status.py` | Status, health, resume enqueue | `StatusSnapshot`, `status_snapshot`, `ComponentHealth`, `health`, `ResumeResult`, `enqueue_resume` | L0 | none | 330 |
-| `herness/store/ops_resilience.py` | SQL for `source_health`, `resilience_event`, `metric_sample`; backend binding | `SqliteResilienceBackend`, `bind_core_backends` | L1 | none | 340 |
-| `herness/store/ops_jobs.py` | SQL for `job` | `SqliteJobsBackend` (job methods) | L1 | none | 400 |
-| `herness/store/ops_worker.py` | SQL for `worker`, `run` reads | `WorkerSqlMixin` | L1 | none | 200 |
-| `herness/store/ops_tasks.py` | SQL for task mechanics | `TaskSqlMixin` | L1 | none | 300 |
+| `herness/store/ops/resilience.py` | SQL for `source_health`, `resilience_event`; backend binding (R-08) | `SqliteResilienceBackend`, `purge_events`, `bind_core_backends` | L1 | none | 320 |
+| `herness/store/ops/metrics.py` | The single `metric_sample` writer and its purge (R-12) | `record_metric_samples`, `purge_metric_samples` | L1 | none | 120 |
+| `herness/store/ops/jobs.py` | SQL for `job` (R-08) | `SqliteJobsBackend` (job methods) | L1 | none | 400 |
+| `herness/store/ops/worker.py` | SQL for `worker`, `run` reads (R-08) | `WorkerSqlMixin` | L1 | none | 200 |
+| `herness/store/ops/tasks.py` | SQL for task mechanics (R-08) | `TaskSqlMixin` | L1 | none | 300 |
+| `herness/store/ops/__init__.py` (08 block) | Re-export of the 08 module-level functions (ENG §2.1) | `record_metric_samples`, `purge_metric_samples`, `purge_events`, `bind_core_backends` | L1 | none | +8 |
 
 Approved suppressions (ENG §2.4, §3.4). Each carries a `# noqa` with the reason text given here.
 
@@ -119,11 +123,11 @@ Approved suppressions (ENG §2.4, §3.4). Each carries a `# noqa` with the reaso
 
 ## 3. Unit specs
 
-Each block follows ENG §12.3. The parameter table and return type come first, then the field table, then "Algorithm" and "Errors". Every unit that writes an ops row wraps the backend call in `retry_call("sqlite_write", ...)` (U08-28) unless it says otherwise; that rule is not repeated in each block.
+Each block follows ENG §12.3. The parameter table and return type come first, then the field table, then "Algorithm" and "Errors". Every ops write of this spec runs inside impl 02 `run_write(fn, op=...)` (R-10), which applies the `sqlite_write` policy (U08-28) and the `sqlite.write` fault point; core units therefore never wrap a backend call in another `retry_call("sqlite_write", ...)`. That rule is not repeated in each block.
 
 ### 3.1 Shared types and errors
 
-#### U08-01 `herness.core.types` — 08 literal aliases
+#### U08-01 `herness.core.types.jobs` — 08 literal aliases
 
 | Name | Definition |
 |------|------------|
@@ -137,20 +141,20 @@ Each block follows ENG §12.3. The parameter table and return type come first, t
 | Field | Content |
 |-------|---------|
 | Kind | constant (type aliases) |
-| Purpose | Closed sets shared by 08 and its consumers (design 08 §3.1, §3.4, §3.6). |
+| Purpose | Closed sets shared by 08 and its consumers (design 08 §3.1, §3.4, §3.6). Defined in `herness/core/types/jobs.py` and re-exported from `herness.core.types` (R-01); `ChatMode` is listed in `TYPE_OWNERS` by impl 00 and the other five aliases are appended to `TYPE_OWNERS` under owner `08` by T08-01. |
 | Postconditions | Values match design 08 exactly; `typing.get_args` of each alias is used for runtime membership checks. |
 | Concurrency | Immutable. |
 | Security notes | Closed sets are the allowlists for config, pipe messages and compose arguments (TH08-01). |
 | Tests | UT08-01 |
 
-#### U08-02 `herness.core.types.JobSpec`
+#### U08-02 `herness.core.types.jobs.JobSpec`
 
 | Field name | Type | Default | Constraints |
 |------------|------|---------|-------------|
 | `kind` | `JobKind` | required | member of `JobKind` |
 | `payload` | `dict[str, JsonValue]` | required | validated by U08-45 at submit |
 | `gpu_class` | `GpuClass` | required | |
-| `priority` | `int` | `50` | 0 ≤ value ≤ 100 |
+| `priority` | `int \| None` | `None` | `None` or 0 ≤ value ≤ 100; `None` = `DEFAULT_PRIORITY[kind]` (U08-43, R-41) |
 | `max_attempts` | `int \| None` | `None` | `None` or 1 ≤ value ≤ 20; `None` = `R.jobs.max_attempts[kind]` |
 | `scheduled_for` | `datetime \| None` | `None` | timezone-aware; `None` = now at submit |
 | `idem_key` | `str \| None` | `None` | ≤ 200 chars, regex `^[A-Za-z0-9_:.\-/]+$`; `None` = U08-44 |
@@ -165,7 +169,7 @@ Each block follows ENG §12.3. The parameter table and return type come first, t
 | Security notes | Naive `scheduled_for` rejected (ENG §3.2). |
 | Tests | UT08-01 |
 
-#### U08-03 `herness.core.types.JobOutcome`
+#### U08-03 `herness.core.types.jobs.JobOutcome`
 
 | Field name | Type | Default | Constraints |
 |------------|------|---------|-------------|
@@ -181,14 +185,14 @@ Each block follows ENG §12.3. The parameter table and return type come first, t
 | Security notes | TH08-10 (size cap). |
 | Tests | UT08-02 |
 
-#### U08-04 `herness.core.types.JobContext` and `herness.core.types.ServiceControl`
+#### U08-04 `herness.core.jobs.JobContext` and `herness.core.jobs.ServiceControl`
 
 | Member | Signature | Meaning |
 |--------|-----------|---------|
-| `JobContext.job_id` | `str` | |
-| `JobContext.kind` | `JobKind` | |
-| `JobContext.attempt` | `int` | `job.attempts` after this claim |
-| `JobContext.payload` | `Mapping[str, JsonValue]` | read-only view |
+| `JobContext.job` | `JobRow` (U08-42) | the claimed row; handlers read their payload from `ctx.job.payload` (R-42); the row is frozen and the payload is a read-only mapping |
+| `JobContext.job_id` | `str` | shortcut for `job.job_id` |
+| `JobContext.kind` | `JobKind` | shortcut for `job.kind` |
+| `JobContext.attempt` | `int` | shortcut for `job.attempts` after this claim |
 | `JobContext.services` | `ServiceControl` | |
 | `JobContext.should_yield()` | `-> bool` | true once a `stop` was received |
 | `JobContext.stop_reason` | property `-> Literal["cancel", "preempt", "shutdown"] \| None` | |
@@ -201,8 +205,8 @@ Each block follows ENG §12.3. The parameter table and return type come first, t
 | Field | Content |
 |-------|---------|
 | Kind | protocol (two `typing.Protocol` classes) |
-| Purpose | The handler-facing contract owned by 08 (spec 00 §6). Concrete classes are U08-85 and U08-86. |
-| Postconditions | Handlers type their parameter as `JobContext`; both concrete classes satisfy it structurally (checked by mypy). |
+| Purpose | The handler-facing contract owned by 08 (spec 00 §6). It is behavioral, so it lives in `herness/core/jobs/ports.py` and is re-exported from `herness.core.jobs`, not from `herness.core.types` (R-02; impl 00 `DECLARED_ELSEWHERE`). Concrete classes are U08-85 and U08-86. |
+| Postconditions | Every handler has the signature `(ctx: JobContext) -> JobOutcome` and takes no other argument (R-42); both concrete classes satisfy the protocol structurally (checked by mypy). |
 | Concurrency | Implementations are used from the handler thread only; `should_yield` is also safe from other threads of the handler. |
 | Tests | UT08-98, UT08-99 |
 
@@ -210,11 +214,32 @@ Each block follows ENG §12.3. The parameter table and return type come first, t
 
 | Field | Content |
 |-------|---------|
-| Kind | class (`FatalError` subclass) |
+| Kind | class (`FatalError` subclass; spec-local taxonomy subclass declared by its owner, R-19) |
 | Purpose | A job or task is not in the state the operation needs: unknown `job_id`, `retry` of a non-failed job, checkpoint or completion of a task that is not `running`, inline run of a job that cannot be claimed. |
 | Signature | `JobStateError(message: str, *, job_id: str \| None = None, task_id: str \| None = None, run_id: str \| None = None)`; attributes of the same names. |
 | Postconditions | Message names the operation and the identifiers; never payload or text. |
 | Tests | UT08-61, UT08-69 |
+
+#### U08-101 `herness.core.types.jobs.MetricSample`
+
+| Field name | Type | Default | Constraints |
+|------------|------|---------|-------------|
+| `ts` | `datetime` | required | timezone-aware |
+| `name` | `str` | required | regex `^herness_[a-z][a-z0-9]*(_[a-z0-9]+)+$` (the table's `GLOB 'herness_*'` check, narrowed) |
+| `kind` | `Literal["counter", "gauge", "histogram"]` | required | the `metric_sample.kind` CHECK set of impl 02 migration 006 |
+| `value` | `float` | required | finite; ≥ 0 for `counter` and `histogram` |
+| `labels` | `dict[str, str]` | `{}` | ≤ 6 keys; key regex `^[a-z][a-z0-9_]{0,31}$`; value regex `^[A-Za-z0-9_.:\-]{1,64}$`; canonical JSON ≤ 1 024 bytes |
+| `component` | `str` | required | regex `^[a-z][a-z0-9_]{0,31}$` |
+
+| Field | Content |
+|-------|---------|
+| Kind | class (pydantic v2 model, `extra="forbid"`, `strict=True`, `frozen=True`) |
+| Purpose | One `metric_sample` row as every spec hands it to the single writer `herness.store.ops.metrics.record_metric_samples` (U08-100, R-12); the L0 recorder (U08-22) builds the same type. |
+| Preconditions | Construction validates the constraints; violations raise pydantic `ValidationError`. |
+| Postconditions | Instance is immutable; its fields map one to one onto the impl 02 §4.3.6 columns. |
+| Concurrency | Immutable. |
+| Security notes | TH08-02: the label regex admits identifiers only, never free text. |
+| Tests | UT08-31, UT08-110 |
 
 ### 3.2 Configuration models
 
@@ -225,15 +250,15 @@ Pydantic v2 models, all `extra="forbid"`, `strict=True`, `frozen=True`. Field de
 | Model | Fields (type, default, validation) |
 |-------|------------------------------------|
 | `PolicySettings` | `attempts: int` (≥ 1, ≤ 100); `base_s: float` (> 0); `cap_s: float` (≥ `base_s`); `max_elapsed_s: float` (> 0); `timeout_s: float \| None = None` (> 0); `connect_timeout_s: float \| None = None` (> 0); `retry_after_cap_s: float = 0` (≥ 0) |
-| `RetrySettings` | `policies: dict[str, PolicySettings]` (keys must be exactly the `PolicyName` members minus `gpu_health`; missing or extra key → error); `job_backoff: JobBackoffSettings` (`base_s: float = 60`, `cap_s: float = 3600`) |
+| `RetrySettings` | `policies: dict[str, PolicySettings]` (keys must be exactly the `PolicyName` members minus `gpu_health`; missing or extra key → error); `job_backoff: JobBackoffSettings` (`base_s: float = 60`, `cap_s: float = 3600`); `retry_after_max_s: float = 86400` (> 0; the clamp of U08-17, additive key, delta D08-27) |
 | `BreakerSettings` | `failure_threshold: int` (≥ 1); `cooldown_s: float` (> 0); `cooldown_max_s: float` (≥ `cooldown_s`) |
 | `BreakersSection` | `source`, `model`, `decider`: `BreakerSettings`; `restart_max_per_hour: int = 1` (≥ 0) |
 | `FallbackSettings` | `max_repairs: int = 2` (0–5); `decider_chain: dict[str, list[str]]` (keys are profile names; values non-empty, unique names matching `^[a-z][a-z0-9_]{0,31}$`) |
 | `LoopSettings` | `checkpoint_min_interval_s: float = 5` (≥ 0); `stop_on_signal_no: int = 2` (≥ 1) |
 | `TaskSettings` | `max_task_attempts: int = 3` (≥ 1) |
 | `JobsSettings` | `lease_s: int = 300`; `heartbeat_s: int = 30`; `reaper_interval_s: int = 30`; `tick_s: float = 2`; `cancel_grace_s: int = 60`; `shutdown_grace_s: int = 120`; `stall_timeout_s: int = 1800`; `stall_timeout_large_s: int = 7200`; `cpu_slots: int = 2` (0–16); `exclusive_kinds: list[JobKind]`; `max_attempts: dict[JobKind, int]` (every `JobKind` present, each 1–20). Cross-check: `heartbeat_s * 3 < lease_s` |
-| `HealthCheck` | `path: str` (starts with `/`); `bearer_secret: str \| None = None` (secret name, spec 10 `SECRET_NAME`) |
-| `ServiceSettings` | `url: str` (scheme `http`, host `127.0.0.1`, `localhost` or `::1`, explicit port); `health: HealthCheck`; `start_timeout_s: int` (> 0); `start_on_entry: bool = True` |
+| `HealthCheck` | `path: str` (starts with `/`); `bearer_secret: str \| None = None` (secret reference, regex `^secret:[A-Z][A-Z0-9_]{0,63}$`, checked in this module because a settings module may not import `herness.core.secrets`, R-03; the OpenJev default is `secret:OPENJEV_API_KEY`, R-53) |
+| `ServiceSettings` | `url: str` (scheme `http`, host `127.0.0.1`, `localhost` or `::1`, explicit port; defaults `http://127.0.0.1:8000` for `vllm-reasoning`, `http://127.0.0.1:8100` for `openjev`, `http://127.0.0.1:8200` for `llamacpp-large`, R-51); `health: HealthCheck`; `start_timeout_s: int` (> 0); `start_on_entry: bool = True` |
 | `GpuClassSettings` | `services: dict[ServiceName, ServiceSettings]` |
 | `GpuSettings` | `compose_cmd: list[str]` (non-empty, each item without NUL); `compose_file: str`; `vram_check_cmd: list[str]`; `vram_free_threshold_mb: int = 2000`; `stop_timeout_s: int = 120`; `warmup_timeout_s: int = 120`; `classes: dict[Literal["reasoning","decider","large"], GpuClassSettings]` (all three present; a service name appears in exactly one class) |
 | `ResilienceSection` | `retry`, `breakers`, `fallback`, `loop`, `tasks`, `jobs`, `gpu` |
@@ -242,37 +267,39 @@ Pydantic v2 models, all `extra="forbid"`, `strict=True`, `frozen=True`. Field de
 |-------|---------|
 | Kind | class (pydantic section models) |
 | Purpose | Typed `resilience` key of `config/resilience.yaml` (design 08 §7). Loaded by spec 10 as part of `ResilienceConfig` (U08-07). |
-| Preconditions | Only pydantic and stdlib imports (spec 10 §3.1 settings rule). |
+| Preconditions | The module imports only the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03). |
 | Postconditions | A valid instance satisfies every constraint above; defaults reproduce design 08 §7. |
 | Errors | Validation failure → pydantic `ValidationError`; spec 10 loader reports it as `ConfigError` with the key path. |
 | Concurrency | Immutable. |
 | Security notes | URL loopback check and service-name allowlist feed TH08-01 and TH08-12. |
 | Tests | UT08-03 |
 
-#### U08-07 `herness.core.jobs.settings.ScheduleSection` and `ResilienceConfig`
+#### U08-07 `herness.core.resilience.settings.ScheduleSection` and `ResilienceConfig`
+
+These models live in `herness/core/resilience/settings.py` next to U08-06 (moved from the former `herness/core/jobs/settings.py`), so that no settings module imports another herness module outside `herness.core.types` and `herness.core.errors` (R-03). Every cron field below is checked here only for shape: five whitespace-separated fields, each matching `^[0-9A-Za-z*/,\-]+$`. The full parse, the week coverage of windows and the source schedules are checked by U08-99.
 
 | Model | Fields (type, default, validation) |
 |-------|------------------------------------|
 | `WindowSpec` | `name: str` (`^[a-z][a-z0-9_]{0,31}$`); `start: str`, `end: str` (`^([01]\d\|2[0-3]):[0-5]\d$`, `start != end`); `days: list[Literal["MON","TUE","WED","THU","FRI","SAT","SUN"]] \| None = None` (None = every day; the day is the day the window starts); `classes: list[Literal["reasoning","decider","large"]]` (non-empty, unique, preference order); `preload: Literal["reasoning","decider","large"] \| None = None` (must be in `classes`); `hard_start: bool = False`; `overrun_max_min: int = 0` (0–240) |
 | `ChatSchedule` | `off_hours: Literal["small_model","defer","cloud"] = "small_model"`; `in_hours_unavailable`: same type, default `"small_model"` |
-| `RekeySchedule` | `cron: str = "0 19 * * SAT"` (parses with U08-64); `min_notice_h: int = 12` (0–168) |
+| `RekeySchedule` | `cron: str = "0 19 * * SAT"` (cron shape; full parse by U08-99); `min_notice_h: int = 12` (0–168) |
 | `ChainStep` | `kind: JobKind`; `gpu_class: GpuClass`; `payload: dict[str, JsonValue] = {}`; `skip_on: list[weekday] = []`; `enabled: bool = True`; `priority: int \| None = None` (0–100; None = `DEFAULT_PRIORITY[kind]`) |
-| `ScheduledJob` | `name` (`^[a-z][a-z0-9_]{0,31}$`, unique, not starting with `sync.` or `reconcile.` and not `maintenance`); `cron: str` (parses); `catch_up_max: str` (`^\d+(m\|h\|d)$`, parsed to `timedelta` ≤ 7 d); `job: ChainStep`; `then: list[ChainStep] = []` (≤ 10) |
+| `ScheduledJob` | `name` (`^[a-z][a-z0-9_]{0,31}$`, unique, not starting with `sync.` or `reconcile.` and not `maintenance`); `cron: str` (cron shape; full parse by U08-99); `catch_up_max: str` (`^\d+(m\|h\|d)$`, parsed to `timedelta` ≤ 7 d); `job: ChainStep`; `then: list[ChainStep] = []` (≤ 10) |
 | `MaintenanceSchedule` | `catch_up_max: str = "12h"` |
 | `ScheduleSection` | `windows: list[WindowSpec]`; `preempt_grace_min: int = 15`; `batch_in_chat_min_priority: int = 70`; `chat: ChatSchedule`; `rekey: RekeySchedule`; `jobs: list[ScheduledJob]`; `maintenance: MaintenanceSchedule` |
-| `ResilienceConfig` | `resilience: ResilienceSection`; `schedule: ScheduleSection`. Model validator: every class in every window is a key of `resilience.gpu.classes`; `validate_windows(schedule.windows)` returns no issue |
+| `ResilienceConfig` | `resilience: ResilienceSection`; `schedule: ScheduleSection`. Model validator: every class and every `preload` in every window is a key of `resilience.gpu.classes`; every `ChainStep.gpu_class` other than `none` is such a key. Week coverage is not checked here (U08-67 through U08-99) |
 
 | Field | Content |
 |-------|---------|
 | Kind | class (pydantic section models) |
 | Purpose | Typed `schedule` key and the root model spec 10 mounts at `cfg.resilience` (design 08 §7, spec 10 §3.1). |
-| Preconditions | Imports only pydantic, stdlib, `herness.core.types`, `herness.core.jobs.cron`. |
-| Postconditions | Defaults reproduce design 08 §7 `schedule`; a window set that fails U08-67 is rejected. |
-| Errors | `ValidationError` naming the path, e.g. `schedule.jobs[0].cron`. |
+| Preconditions | The module imports only the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03). |
+| Postconditions | Defaults reproduce design 08 §7 `schedule`, except that the `nightly` entry's `job.gpu_class` is `none`: the build pipeline starts without a GPU class and its enrichment stages take `decider` through `ctx.gpu_scope("decider")` (R-43). A window set that fails U08-67 is reported by U08-99, not by this model. |
+| Errors | `ValidationError` naming the path, for example `schedule.jobs[0].cron`. |
 | Concurrency | Immutable. |
-| Tests | UT08-04, UT08-05 |
+| Tests | UT08-05 |
 
-#### U08-67 `herness.core.jobs.settings.validate_windows`
+#### U08-67 `herness.core.jobs.validate.validate_windows`
 
 | Param | Type | Default | Kind | Constraints |
 |-------|------|---------|------|-------------|
@@ -294,6 +321,31 @@ Algorithm:
 3. Each minute with zero entries → issue `"minute <DAY HH:MM> not covered"`; with more than one → `"minute <DAY HH:MM> covered by <a>, <b>"`. Consecutive minutes with the same issue are merged into one message `"<DAY HH:MM>–<DAY HH:MM> ..."`.
 4. Duplicate names → issue; count of windows named `chat` ≠ 1 → issue.
 
+#### U08-99 `herness.core.jobs.validate.validate_resilience_config`
+
+| Param | Type | Default | Kind | Constraints |
+|-------|------|---------|------|-------------|
+| `cfg` | `HernessConfig` (X:10/herness.core.config.HernessConfig) | — | positional | fully loaded |
+
+Returns `list[ConfigIssue]` (X:10/herness.core.config.ConfigIssue); empty = valid.
+
+| Field | Content |
+|-------|---------|
+| Kind | function |
+| Purpose | The checks that a settings module may not run because they need `herness.core.jobs.cron` (R-03): week coverage of the windows and a full parse of every cron that 08 schedules. Registered by impl 10 as `SECTION_VALIDATORS["resilience"] = "herness.core.jobs.validate:validate_resilience_config"` and also called by the worker at start (U08-87 step 1). |
+| Preconditions | None beyond a loaded config. |
+| Postconditions | Returns one `error` issue per problem, each with the key path and a message; never raises for a config problem. |
+| Side effects | None. |
+| Concurrency | Pure given `cfg`. |
+| Complexity and limits | U08-67 bound plus one `CronExpr.parse` and one `next_after` per cron; < 100 ms for 50 schedules. |
+| Tests | UT08-04, UT08-05 |
+
+Algorithm:
+1. For each message of `validate_windows(S.windows)` (U08-67) add an issue with path `schedule.windows`.
+2. For each cron text with its path — `schedule.jobs[i].cron`, `schedule.rekey.cron`, and for every enabled source `sources.<name>.schedule` and `sources.<name>.reconcile.schedule` when set — call `CronExpr.parse` (U08-64) and then `next_after(now_utc(), tz)`; a `ConfigError` from either becomes an issue with that path and the error message.
+3. `cfg.backup.nightly_at` must match `^([01]\d|2[0-3]):[0-5]\d$` (it feeds the `maintenance` schedule, U08-71); otherwise an issue with path `backup.nightly_at`.
+4. Return the issues in the order found.
+
 ### 3.3 Ports, process state and binding
 
 #### U08-08 `herness.core.resilience.ports`
@@ -302,8 +354,8 @@ Algorithm:
 |------|------|---------|
 | `HealthRow` | frozen dataclass | `source: str`, `state: BreakerState`, `failures: int`, `trips: int`, `opened_at: datetime \| None`, `last_error: str \| None`, `updated_at: datetime` |
 | `EventRow` | frozen dataclass | `event_id`, `ts`, `kind`, `component`, `target: str \| None`, `run_id`, `job_id`, `task_id: str \| None`, `detail: dict[str, JsonScalar \| list[JsonScalar]]` |
-| `MetricRow` | frozen dataclass | `ts`, `name`, `kind: Literal["counter","histogram"]`, `value: float`, `labels: str` (canonical JSON), `component`, `host`, `pid: int` |
-| `ResilienceBackend` | protocol | `health_get(key) -> HealthRow \| None`; `health_list(states: Sequence[BreakerState]) -> list[HealthRow]`; `health_apply(key, fn: Callable[[HealthRow \| None], HealthRow \| None], now) -> tuple[HealthRow \| None, HealthRow \| None]` (read-modify-write in one `BEGIN IMMEDIATE`; returns (before, after); `fn` returning `None` means no write); `health_claim_probe(key, now, probe_due, stale_before) -> bool`; `health_reset(keys: Sequence[str], now) -> list[str]`; `insert_event(row: EventRow) -> None`; `count_events(kind, *, target=None, since) -> int`; `event_counts(since, kinds) -> dict[str, int]`; `latest_event(kind) -> EventRow \| None`; `insert_metric_samples(rows: Sequence[MetricRow]) -> int`; `purge_events(before) -> int`; `purge_metric_samples(before) -> int` |
+| `TracerLike` | protocol | read-only `run_id: str \| None`, `task_id: str \| None` (R-66); `emit(type: str, **fields: object) -> None`. Impl 05 `herness.harness.tracing.Tracer` satisfies it structurally; L0 code never imports it (ENG §2.1) |
+| `ResilienceBackend` | protocol | `health_get(key) -> HealthRow \| None`; `health_list(states: Sequence[BreakerState]) -> list[HealthRow]`; `health_apply(key, fn: Callable[[HealthRow \| None], HealthRow \| None], now) -> tuple[HealthRow \| None, HealthRow \| None]` (read-modify-write in one `BEGIN IMMEDIATE`; returns (before, after); `fn` returning `None` means no write); `health_claim_probe(key, now, probe_due, stale_before) -> bool`; `health_reset(keys: Sequence[str], now) -> list[str]`; `insert_event(row: EventRow) -> None`; `count_events(kind, *, target=None, since) -> int`; `event_counts(since, kinds) -> dict[str, int]`; `latest_event(kind) -> EventRow \| None`; `insert_metric_samples(rows: Sequence[MetricSample]) -> int` (implemented by U08-100); `purge_events(before) -> int`; `purge_metric_samples(before) -> int` |
 | `ClientInfo` | protocol | attributes `off_network: bool`, `gpu_class: str \| None`, `timeout_s: float`, `model: str`, `base_url: str \| None`, `api_key: str \| None` |
 | `ChainRegistry` | protocol | `chain_for(model_role: str, depth: str) -> list[str]`; `config(name: str) -> ClientInfo` (spec 05 `LLMRegistry` satisfies it structurally) |
 | `GpuStateReader` | protocol | `loaded_class() -> GpuClass \| Literal["swapping"]`; `service_healthy(name: ServiceName) -> bool` (design 08 §3.5) |
@@ -358,9 +410,9 @@ Returns `None`.
 | Field | Content |
 |-------|---------|
 | Kind | function (two) |
-| Purpose | Composition-root wiring of the ports (ENG §2.2). Called by `herness.store.ops_resilience.bind_core_backends()` (U08-98) and by the CLI and app entry points for the chain registry (X:09/herness.cli entry, X:09/app/common). |
+| Purpose | Composition-root wiring of the ports (ENG §2.2). Called by `herness.store.ops.resilience.bind_core_backends()` (U08-98) and by the CLI and app entry points for the chain registry (X:09/herness.cli entry, X:09/app/common). |
 | Postconditions | `process_state().ops` / `.chains` set; rebinding replaces the previous value and logs `resilience.backend.bound` at DEBUG. `bind_ops_backend` also registers `atexit` flushing of metrics (U08-22) once. |
-| Errors | Any 08 function that needs an unbound port raises `ConfigError("resilience backend not bound; call herness.store.ops_resilience.bind_core_backends()")`. |
+| Errors | Any 08 function that needs an unbound port raises `ConfigError("resilience backend not bound; call herness.store.ops.resilience.bind_core_backends()")`. |
 | Tests | UT08-29 (unbound case) |
 
 #### U08-41 `herness.core.jobs.ports.JobsBackend`, `NewJob`, `WorkerRow`, `bind_jobs_backend`
@@ -541,19 +593,21 @@ Algorithm (first matching rule wins; "unavailable" means `SourceUnavailable` for
 
 #### U08-17 `herness.core.resilience.classify.parse_retry_after`
 
-| Param | Type | Kind |
-|-------|------|------|
-| `headers` | `Mapping[str, str]` (case-insensitive lookup) | positional |
-| `now` | `datetime` | positional, aware UTC |
+| Param | Type | Default | Kind | Constraints |
+|-------|------|---------|------|-------------|
+| `headers` | `Mapping[str, str]` | — | positional | case-insensitive lookup |
+| `now` | `datetime` | — | positional or keyword | aware; injected, never read from the clock here |
+| `max_s` | `float \| None` | `None` | keyword-only | > 0; `None` = `R.retry.retry_after_max_s` (default 86 400 s) |
 
-Returns `float | None` seconds.
+Returns `float | None` seconds, in `[0, max_s]`.
 
 | Field | Content |
 |-------|---------|
-| Kind | function (pure) |
-| Algorithm | 1. `Retry-After` present: if it matches `^\d{1,9}(\.\d+)?$` return `float(value)`; else parse with `email.utils.parsedate_to_datetime`; a valid aware date returns `max(0.0, (date - now).total_seconds())`. 2. Else `X-RateLimit-Reset` present and numeric: value > 1 000 000 000 is epoch seconds → `max(0.0, value - now.timestamp())`; otherwise seconds → `float(value)`. 3. Otherwise or on any parse failure return `None`. |
-| Postconditions | Result is `None` or ≥ 0; never raises. |
-| Tests | PT08-03 |
+| Kind | function (pure when `max_s` is given; otherwise reads one config value) |
+| Purpose | The single Retry-After parser of the codebase (owner 08). Impl 01 replaces its own `herness.connectors.http.parse_retry_after` (U01-61) with this function; every HTTP adapter uses it. |
+| Algorithm | 1. `Retry-After` present (value stripped): RFC 9110 delay-seconds form, regex `^\d{1,10}$` → `d = float(value)`. Otherwise the RFC 9110 HTTP-date form: `email.utils.parsedate_to_datetime(value)`; a result without a timezone is invalid; a valid date gives `d = (date − now).total_seconds()`. Any other text, or a parse error, makes the header invalid and the function goes to step 2. 2. `Retry-After` absent or invalid, and `X-RateLimit-Reset` present with a value matching `^\d{1,16}(\.\d+)?$`: `v ≥ 10^12` → epoch milliseconds, `d = v / 1000 − now.timestamp()`; `v ≥ 10^9` → epoch seconds, `d = v − now.timestamp()`; else `d = v` seconds. 3. No valid header → return `None`. 4. Return `min(max(d, 0.0), max_s)` (a date in the past gives 0). |
+| Postconditions | Result is `None` or within `[0, max_s]`; never raises. The per-policy `retry_after_cap_s` rule of U08-28 applies afterwards: a value above the policy cap re-raises so the job layer reschedules at `now + retry_after`, which is therefore never more than `max_s` away. |
+| Tests | PT08-03, UT08-112 |
 
 ### 3.5 Events and metrics
 
@@ -566,7 +620,7 @@ Returns `float | None` seconds.
 | `target` | `str \| None` | `None` | keyword-only | ≤ 200 chars: breaker key, policy name, job kind, service or schedule name |
 | `run_id`, `job_id`, `task_id` | `str \| None` | `None` | keyword-only | ID formats of spec 00 §5 |
 | `detail` | `Mapping[str, object]` | `{}` | keyword-only | keys filtered by `DETAIL_FIELDS[kind]` |
-| `tracer` | `Tracer \| None` | `None` | keyword-only | spec 05 `Tracer` (X:05/herness.core.types.Tracer) |
+| `tracer` | `TracerLike \| None` | `None` | keyword-only | port of U08-08; impl 05 `Tracer` (X:05/herness.harness.tracing.Tracer) satisfies it structurally |
 
 Returns `None`.
 
@@ -604,7 +658,7 @@ Returns `None`.
 Algorithm:
 1. Unknown `kind` → raise `ConfigError`.
 2. Filter `detail` to `DETAIL_FIELDS[kind]`; convert `datetime` values to ts text; reject nested dicts (dropped with DEBUG log); redact and cut strings.
-3. Insert the row through `process_state().ops.insert_event` inside a `try`. On `HernessError` (including `StoreBusy`) log WARNING `resilience.event.dropped` with `kind` and `error_type` and continue; the event write is never retried and never raises, so an event failure cannot fail the operation being recorded.
+3. Insert the row through `process_state().ops.insert_event` inside a `try`. The backend insert runs in `run_write(op="resilience_event")`, whose `sqlite_write` policy is the only retry. On `HernessError` (including `StoreBusy` after that policy) log WARNING `resilience.event.dropped` with `kind` and `error_type` and continue; `record_event` never raises for a store failure, so an event failure cannot fail the operation being recorded.
 4. Log the line at the table's level with fields `kind`, `target`, IDs and the filtered detail.
 5. If `tracer` is given and the kind has a trace type, call `tracer.emit(trace_type, **filtered_detail)`.
 
@@ -622,7 +676,7 @@ Returns `None`.
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Record a counter increment for the ops `metric_sample` table (ENG §4, delta E5). |
+| Purpose | Record a counter increment for the ops `metric_sample` table (ENG §4, delta E5). L0 callers use this buffered API; callers at L1 and above may also call U08-100 directly with `MetricSample` values (R-12). |
 | Postconditions | The value is added to the in-memory aggregate for `(name, canonical labels, component)`. |
 | Side effects | May trigger `flush_metrics()` (U08-22) when the last flush is ≥ 10 s old (`METRIC_FLUSH_INTERVAL_S = 10`). |
 | Concurrency | Buffer guarded by `ProcessState.lock`. |
@@ -645,6 +699,31 @@ Same parameters as U08-19 except `value` is required (finite, ≥ 0). Each call 
 
 Returns a context manager. On exit (normal or exception) it records `time.perf_counter()` elapsed seconds with U08-20. Kind: function. Tests: UT08-32.
 
+#### U08-103 `herness.core.resilience.metrics.record_gauge`
+
+| Param | Type | Default | Kind | Constraints |
+|-------|------|---------|------|-------------|
+| `name` | `str` | — | positional | regex of U08-19; last segment in `{bytes, ratio, count, mb, seconds}` (a point-in-time value, never `total`) |
+| `value` | `float` | — | positional | finite (may be negative) |
+| `component` | `str` | — | keyword-only | equals the second segment of `name` |
+| `labels` | `Mapping[str, str] \| None` | `None` | keyword-only | rules of U08-19 |
+
+Returns `None`.
+
+| Field | Content |
+|-------|---------|
+| Kind | function |
+| Purpose | Record a gauge (a point-in-time value such as queue depth or GPU memory in use) for `metric_sample` with `kind = "gauge"` (answer to impl 03 request RQ-04). Callers at L1 and above that already hold values may instead pass `MetricSample(kind="gauge", ...)` directly to U08-100. |
+| Postconditions | The buffer holds the latest value per `(name, canonical labels, component)`; a later call for the same key replaces the earlier value (last write wins). |
+| Side effects | May trigger `flush_metrics()` (U08-22) on the same 10 s rule as U08-19. At flush, one `gauge` row per key with the latest value and the time of that last call as `ts`. |
+| Concurrency | Buffer guarded by `ProcessState.lock`. |
+| Complexity and limits | O(labels); at most 1 000 gauge keys per buffer (`METRIC_GAUGE_KEYS_MAX = 1000`); a new key beyond that is dropped and counted in `dropped` like U08-20. |
+| Security notes | TH08-02 (label regex). |
+| Errors | Invalid name, labels or a non-finite value → `ConfigError` naming the metric. |
+| Tests | UT08-111 |
+
+The job layer records two gauges of its own with this function: `herness_jobs_queue_depth_count{gpu_class}` (queued, due jobs per class, U08-87 step 7a) and `herness_jobs_gpu_vram_used_mb` (U08-80 reading after each swap, U08-81 step 7).
+
 #### U08-22 `herness.core.resilience.metrics.flush_metrics`
 
 Returns `int` (rows written).
@@ -653,8 +732,8 @@ Returns `int` (rows written).
 |-------|---------|
 | Kind | function |
 | Purpose | Move the buffer into `metric_sample` rows. |
-| Algorithm | 1. Under the lock, swap the buffer for an empty one. 2. Build rows: one `counter` row per aggregate key with the summed value, one `histogram` row per observation; `ts` = now, `host` = lower-cased `socket.gethostname()`, `pid` = `os.getpid()`. 3. Call `ops.insert_metric_samples(rows)` in chunks of 500 rows. 4. On `HernessError` log WARNING `resilience.metrics.flush_failed` with the row count; the rows are discarded (metrics are best effort). 5. Return the number written. |
-| Side effects | `metric_sample` inserts (table from X:02/metric_sample, columns required in §4.1.6). |
+| Algorithm | 1. Under the lock, swap the buffer for an empty one. 2. Build `MetricSample` values (U08-101): one `counter` sample per aggregate key with the summed value, one `gauge` sample per gauge key with its latest value and that value's time (U08-103), one `histogram` sample per observation; `ts` = now except for gauges. 3. Call `ops.insert_metric_samples(samples)`, which calls `herness.store.ops.metrics.record_metric_samples` (U08-100, 500 rows per transaction). 4. On `HernessError` log WARNING `resilience.metrics.flush_failed` with the row count; the rows are discarded (metrics are best effort). 5. Return the number written. |
+| Side effects | `metric_sample` inserts through the single writer U08-100 (R-12; table from impl 02 migration 006, X:02/metric_sample, columns in §4.1.6). |
 | Concurrency | Safe from any thread; the supervisor calls it every reaper interval; `atexit` calls it once. |
 | Tests | UT08-32 |
 
@@ -828,7 +907,7 @@ Returns `T`.
 
 #### U08-33 `herness.core.resilience.faults.FaultRule`, `load_fault_plan`, `NAMED_POINTS`
 
-`NAMED_POINTS` = the 18 points of design 08 §5.13: `http.page`, `connector.before_watermark`, `llm.call`, `llm.output`, `sql.query`, `decider.batch`, `embed.batch`, `enrich.after_batch_write`, `build.mid_sql`, `pipeline.before_promote`, `swarm.after_task_claim`, `swarm.after_finding_write`, `verifier.mid_batch`, `sqlite.write`, `job.after_claim`, `job.before_complete`, `gpu.after_stop`, `gpu.after_start`.
+This unit is the only registry of fault point names (R-40). Impl 11 uses `job.before_complete` for its X1 case and `connector.before_watermark` for X5; any further point another spec needs is added here first. `NAMED_POINTS` = the 18 points of design 08 §5.13: `http.page`, `connector.before_watermark`, `llm.call`, `llm.output`, `sql.query`, `decider.batch`, `embed.batch`, `enrich.after_batch_write`, `build.mid_sql`, `pipeline.before_promote`, `swarm.after_task_claim`, `swarm.after_finding_write`, `verifier.mid_batch`, `sqlite.write`, `job.after_claim`, `job.before_complete`, `gpu.after_stop`, `gpu.after_start`.
 
 | `FaultRule` field | Type | Validation |
 |-------------------|------|------------|
@@ -844,9 +923,9 @@ Returns `T`.
 |-------|---------|
 | Kind | class (pydantic, `extra="forbid"`, `strict=True`) plus function |
 | Purpose | Validated fault plan (design 08 §5.13). |
-| Algorithm | `load_fault_plan(path: Path) -> FaultPlan`: 1. Resolve the path; it must be a regular file (not a symlink) with suffix `.yaml`, `.yml` or `.json` and size ≤ 65 536 bytes. 2. Parse with `yaml.safe_load` or `json.loads`. 3. The document must be a list of ≤ 100 mappings; validate each as `FaultRule`. 4. Return `FaultPlan(rules, counters=[0]*n, rngs=[random.Random(seed) or None])`. |
+| Algorithm | `load_fault_plan(path: Path) -> FaultPlan`: 1. Resolve the path; it must be a regular file (not a symlink) with suffix `.json` and size ≤ 65 536 bytes; fault plans are JSON only (R-40). 2. Parse with `json.loads`. 3. The document must be a list of ≤ 100 mappings; validate each as `FaultRule`. 4. Return `FaultPlan(rules, counters=[0]*n, rngs=[random.Random(seed) or None])`. |
 | Errors | Any violation → `ConfigError("invalid fault plan: <path name>: <reason>")`. |
-| Security notes | TH08-06: bounded file, safe parser, closed action set. |
+| Security notes | TH08-06: bounded file, JSON parser only (no object construction), closed action set. |
 | Tests | UT08-47 |
 
 #### U08-34 `herness.core.resilience.fault_point`
@@ -863,15 +942,15 @@ Returns `None` (or raises the injected error).
 | Kind | function |
 | Purpose | In-process fault hook (design 08 §3.3, §5.13). |
 | Preconditions | None. |
-| Postconditions | Without `HERNESS_FAULTS` the call reads one attribute and returns; no file access. |
-| Side effects | First call with the variable set loads the plan (U08-33), sets `process_state().faults_enabled = True` and logs WARNING `resilience.faults.enabled` (fields `plan` = file name only, `rules` = count). |
+| Postconditions | Without `HERNESS_FAULTS`, or with `HERNESS_FAULTS` set while `HERNESS_ENV` is not `test`, the call reads one attribute and returns; no file access (R-40). |
+| Side effects | First call with `HERNESS_FAULTS` set and `HERNESS_ENV=test` loads the plan (U08-33), sets `process_state().faults_enabled = True` and logs WARNING `resilience.faults.enabled` (fields `plan` = file name only, `rules` = count). First call with `HERNESS_FAULTS` set in any other environment ignores the plan file and logs WARNING `resilience.faults.ignored` once per process (field `env` = the `HERNESS_ENV` value or `unset`). |
 | Concurrency | Rule counters under `ProcessState.lock`. |
 | Complexity and limits | O(rules) per call when enabled. |
 | Security notes | TH08-06. |
-| Tests | UT08-46, UT08-48, UT08-49, UT08-50, ST08-06 |
+| Tests | UT08-46, UT08-48, UT08-49, UT08-50, UT08-105, ST08-06 |
 
 Algorithm:
-1. If `process_state().fault_plan` is not loaded: read `os.environ.get("HERNESS_FAULTS")`; empty → store `None`; else load it (step side effects).
+1. If `process_state().fault_plan` is not loaded: read `os.environ.get("HERNESS_FAULTS")`; empty → store `None`. Set but `os.environ.get("HERNESS_ENV") != "test"` → store `None` and log `resilience.faults.ignored` (R-40). Otherwise load it (side effects above).
 2. Plan `None` → return.
 3. For each rule in order with `rule.point == name` and every non-`None` label filter equal to `labels.get(filter)`: increment its counter `c`; fire when (`nth` set and `c == nth`) or (`count` set and `c ≤ count`) or (`p` set and `rng.random() < p`) or (none of the three set). The first rule that fires wins; others are not evaluated.
 4. Action of the firing rule (the "family" of a point is its prefix: `http.` → `SourceUnavailable`; `sqlite.` → `StoreBusy`; everything else → `ModelUnavailable`):
@@ -885,7 +964,7 @@ Algorithm:
 | `malformed_json` | raise `OutputValidationError("fault: malformed_json")` (U08-35 treats it as an invalid reply) |
 | `delay:<s>` | `process_state().sleep(s)` then return |
 | `kill` | log CRITICAL `resilience.faults.kill`, then `os.kill(os.getpid(), signal.SIGKILL)` where available, else `os.kill(os.getpid(), signal.SIGTERM)` (Windows `TerminateProcess`) |
-| `kill_service:<svc>` | call `process_state().kill_service_hook(svc)` (compose `kill`, U08-81); no hook bound → log WARNING `resilience.faults.no_service_hook` and return |
+| `kill_service:<svc>` | if `HERNESS_STUB_SERVICES` is set, it must be a JSON object mapping service names to loopback base URLs; when it names `svc`, `POST <url>/__control/kill` through `herness.core.egress.loopback_http_client(url, timeout_s=5)` (R-06; impl 11 DD11-04; a non-loopback URL → `ConfigError`); else call `process_state().kill_service_hook(svc)` (compose `kill`, U08-81); neither available → log WARNING `resilience.faults.no_service_hook` and return. Faults run only under `HERNESS_ENV=test`, so this lookup never runs in production |
 
 ### 3.9 Repair, model chains, decider chains, loop policy
 
@@ -896,7 +975,7 @@ Algorithm:
 | `client` | `AsyncCompleter` | — | positional | |
 | `req` | `LLMRequest` | — | positional | `req.response_schema` not `None` |
 | `max_repairs` | `int` | `2` | keyword-only | 0–5 |
-| `tracer` | `Tracer \| None` | `None` | keyword-only | |
+| `tracer` | `TracerLike \| None` | `None` | keyword-only | |
 | `model` | `type[BaseModel] \| None` | `None` | keyword-only | additive (D08-12): when set, validation uses this pydantic model instead of `jsonschema` |
 
 Returns `LLMResponse` (the first valid response).
@@ -953,7 +1032,7 @@ Returns `LLMRequest`.
 | Field | Content |
 |-------|---------|
 | Kind | class |
-| Purpose | Execute `chain_for(model_role, depth)` (design 08 §3.2, §5.4). Constructor does no I/O. |
+| Purpose | Execute `chain_for(model_role, depth)` (design 08 §3.2, §5.4). Constructor does no I/O. Lives in `herness.core.resilience` (R-02); it refers only to types in `herness.core.types` and to the ports of U08-08, and it receives model clients only through the `client_for` callable of U08-38, so it never imports `herness.harness`. |
 | Invariants | `model_role`, `registry`, `depth`, `gpu` never change after construction. |
 | Algorithm (`candidates`) | 1. `chain = registry.chain_for(model_role, depth)`; `egress = cfg.security.egress.enabled`; `loaded = gpu.loaded_class()`. 2. Keep each key in order unless: (a) `registry.config(key).off_network` and not `egress`; (b) `b = breaker("model:" + key)` has state `open` and `now < b.retry_at()` (an open breaker whose probe is due stays in the list so the retry guard can claim the probe); (c) `(run_id, key)` in `process_state().auth_dropped` for the current `run_id` (set by `acomplete`; `candidates()` called directly uses no run filter); (d) `config(key).gpu_class` is not `None` and differs from `loaded` (so `"swapping"` removes every GPU client). 3. Return the kept keys. |
 | Security notes | TH08-07: rule (a) keeps fallback inside the network boundary when the profile forbids egress (D5); LLM02. |
@@ -966,7 +1045,7 @@ Returns `LLMRequest`.
 | `req` | `LLMRequest` | — | positional |
 | `schema` | `type[BaseModel] \| None` | `None` | keyword-only |
 | `client_for` | `Callable[[str], AsyncCompleter]` | — | keyword-only |
-| `tracer` | `Tracer \| None` | `None` | keyword-only |
+| `tracer` | `TracerLike \| None` | `None` | keyword-only |
 
 Returns `tuple[LLMResponse, BaseModel | None]`.
 
@@ -1015,7 +1094,7 @@ Algorithm:
 |-------|------|---------|------|
 | `state` | `LoopState` | — | positional |
 | `signal` | `LoopSignal` | — | positional |
-| `tracer` | `Tracer \| None` | `None` | keyword-only |
+| `tracer` | `TracerLike \| None` | `None` | keyword-only |
 
 Returns `Literal["nudge", "stop"]`.
 
@@ -1023,7 +1102,7 @@ Returns `Literal["nudge", "stop"]`.
 |-------|---------|
 | Kind | function |
 | Purpose | First loop signal of a task → nudge; second → stop with `guard_stop` (design 08 §3.2, §5.6). |
-| Algorithm | 1. `ordinal = state.nudges + 1` (delta D08-04: until spec 05 adds a dedicated `loop_signals` counter, earlier nudges of any cause count, so a task that already got a `max_tokens` continuation nudge stops on its first loop signal). 2. `ordinal < R.loop.stop_on_signal_no` → return `"nudge"`. 3. Else `record_event("guard_stop", component="resilience", run_id=tracer.run_id if tracer else None, task_id=tracer.task_id if tracer else None, detail={cause: signal.cause, step: state.step}, tracer=tracer)` (D08-05 for the tracer attributes) and return `"stop"`. |
+| Algorithm | 1. `ordinal = state.loop_signals`: the loop-signal counter of `LoopState`, separate from `nudges`, which spec 05 increments before it calls the policy (R-66, D08-04 accepted), so a `max_tokens` continuation nudge never counts as a loop signal. 2. `ordinal < R.loop.stop_on_signal_no` → return `"nudge"`. 3. Else `record_event("guard_stop", component="resilience", run_id=tracer.run_id if tracer else None, task_id=tracer.task_id if tracer else None, detail={cause: signal.cause, step: state.step}, tracer=tracer)` (the tracer exposes `run_id` and `task_id`, R-66, D08-05 accepted) and increment `herness_resilience_guard_stops_total{cause}`; return `"stop"`. |
 | Side effects | One `resilience_event` row on stop. |
 | Security notes | TH08-14 (LLM10: runaway loops end on the second signal). |
 | Tests | UT08-45 |
@@ -1032,7 +1111,9 @@ Returns `Literal["nudge", "stop"]`.
 
 #### U08-43 `herness.core.jobs.DEFAULT_PRIORITY`, `MANUAL_PRIORITY`
 
-`DEFAULT_PRIORITY` = `{"chat": 75, "sync": 60, "build_pipeline": 60, "review": 40, "reconcile": 40, "outcome_measure": 30, "memory_maintenance": 30, "maintenance": 30, "eval": 20, "distill": 40}`; `MANUAL_PRIORITY = 80` (design 08 §4.1). `distill` is not listed in design 08 §4.1; it uses 40 (open item O08-06). Used by the scheduler, `schedule_rekey` (fixed 70), `enqueue_resume` (80) and CLI callers (80). Kind: constant. Tests: UT08-79.
+`DEFAULT_PRIORITY` = `{"chat": 75, "sync": 60, "build_pipeline": 60, "review": 40, "reconcile": 40, "outcome_measure": 30, "memory_maintenance": 30, "maintenance": 30, "eval": 20, "distill": 40}`; `MANUAL_PRIORITY = 80` (design 08 §4.1). `distill` is not listed in design 08 §4.1; it uses 40 (open item O08-06). `DEFAULT_PRIORITY[kind]` is the value of every `priority=None` (`JobSpec`, `enqueue`, R-41); it is used by the scheduler, and `schedule_rekey` (fixed 70), `enqueue_resume` (80) and CLI callers (80) pass explicit values.
+
+`GPU_SLOT_KINDS = frozenset({"build_pipeline"})` (R-43, delta D08-20): kinds whose jobs start with `gpu_class = "none"` but switch classes in-job through `ctx.gpu_scope` or `ctx.require_gpu_class`. A `none`-class job of such a kind is claimable only by the GPU slot (and by inline runs); every other `none`-class job only by CPU slots (U08-48). Kind: constant. Tests: UT08-79, UT08-106, UT08-107.
 
 #### U08-44 `herness.core.jobs.default_idem_key`
 
@@ -1081,14 +1162,14 @@ Returns `tuple[str, bool]` = `(job_id, created)`.
 
 Algorithm:
 1. `payload_bytes = validate_payload(spec.payload)`.
-2. `now = now_utc()`; `idem = spec.idem_key or default_idem_key(spec.kind, spec.payload)`; `max_attempts = spec.max_attempts or R.jobs.max_attempts[spec.kind]`; `scheduled_for = spec.scheduled_for or now`.
+2. `now = now_utc()`; `idem = spec.idem_key or default_idem_key(spec.kind, spec.payload)`; `priority = DEFAULT_PRIORITY[spec.kind] if spec.priority is None else spec.priority` (R-41); `max_attempts = spec.max_attempts or R.jobs.max_attempts[spec.kind]`; `scheduled_for = spec.scheduled_for or now`.
 3. `NewJob(job_id="job_" + new_ulid(), kind, gpu_class, status="queued", priority, payload=payload_bytes, idem_key=idem, attempts=0, max_attempts, scheduled_for, created_at=now)`.
-4. `retry_call("sqlite_write", jobs_backend.insert_job, new_job, sched_check=sched_check)` (U08-95).
+4. `jobs_backend.insert_job(new_job, sched_check=sched_check)` (U08-95; its `run_write` applies the `sqlite_write` policy).
 5. Log and meter; return.
 
 #### U08-47 `herness.core.jobs.enqueue`
 
-Parameters exactly as design 08 §3.4: `kind: JobKind`, `payload: dict`, `gpu_class: GpuClass`, `priority: int = 50`, `scheduled_for: datetime | None = None`, keyword-only `max_attempts: int | None = None`, `idem_key: str | None = None`. Returns `str` (job_id, the existing one when deduped). Algorithm: build `JobSpec` (pydantic `ValidationError` → `SchemaViolation` naming the field) and return `submit(spec)[0]`. Kind: function. Tests: UT08-52.
+Parameters as design 08 §3.4 with the R-41 default: `kind: JobKind`, `payload: dict`, `gpu_class: GpuClass`, `priority: int | None = None` (`None` = `DEFAULT_PRIORITY[kind]`, U08-43), `scheduled_for: datetime | None = None`, keyword-only `max_attempts: int | None = None`, `idem_key: str | None = None`. Returns `str` (job_id, the existing one when deduped). Algorithm: build `JobSpec` (pydantic `ValidationError` → `SchemaViolation` naming the field) and return `submit(spec)[0]`. CLI commands that start work call this by default and warn when `worker_alive()` is false (R-45, impl 09). Kind: function. Tests: UT08-52, UT08-106.
 
 #### U08-48 `herness.core.jobs.claim`
 
@@ -1103,13 +1184,13 @@ Returns `JobRow | None`.
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Atomic claim (design 08 §5.7 "Atomic claim"). The supervisor uses the private `_claim(..., min_priority, priority_exempt_kinds)` form for the chat-window rule; the public form passes `None` and `()`. |
+| Purpose | Atomic claim (design 08 §5.7 "Atomic claim"). The supervisor uses the private `_claim(..., min_priority, priority_exempt_kinds)` form for the chat-window rule; the public form passes `None` and `()`. The slot is read from the owner suffix and restricts `none`-class jobs (R-43): suffix `gpu` → a `none`-class job is claimable only when its kind is in `GPU_SLOT_KINDS`; suffix `cpuN` → only when its kind is not in `GPU_SLOT_KINDS`; suffix `cli` → no kind restriction. Jobs of any other class are claimable when their class is in `allowed_classes`. |
 | Postconditions | The returned row has `status = 'running'`, `lease_owner = owner`, `lease_expires_at = now + R.jobs.lease_s`, `attempts` incremented, `started_at` kept from the first start. |
 | Side effects | `fault_point("job.after_claim", kind=row.kind)` after a successful claim; log `jobs.job.claimed`; histogram `herness_jobs_queue_wait_seconds{kind}` = `now − scheduled_for`. |
 | Concurrency | `BEGIN IMMEDIATE`; no double claim across threads and processes (IT08-02). |
 | Complexity and limits | p95 < 20 ms with 10 000 queued jobs using index `job(status, gpu_class, scheduled_for, priority)` (BT08-03). |
 | Errors | Invalid owner or classes → `ConfigError`. |
-| Tests | UT08-56, UT08-57, IT08-02, IT08-13, BT08-03 |
+| Tests | UT08-56, UT08-57, UT08-107, IT08-02, IT08-13, BT08-03 |
 
 #### U08-49 `herness.core.jobs.outcomes.decide_failure`
 
@@ -1126,7 +1207,7 @@ Returns `FailureAction` = frozen dataclass `(action: Literal["requeue","failed",
 |-------|---------|
 | Kind | function (pure given config) |
 | Purpose | The "Job" column of the design 08 §5.2 error table. |
-| Algorithm | 1. `CircuitOpen`: kind `sync` or `reconcile` → `done` with `result = {"partial": True, "skipped_open_circuit": [err.key]}`; other kinds → if `row.attempts < row.max_attempts` `requeue` at `err.retry_at` (at least `now`), else `failed`. 2. `RateLimited` with `retry_after` not `None`: `attempts < max_attempts` → `requeue` at `now + retry_after`; else `failed`. 3. Other `RetryableError` (`SourceUnavailable`, `ModelUnavailable`, `StoreBusy`, `RateLimited` without `retry_after`): `attempts < max_attempts` → `requeue` at `now + job_backoff_delay(row.attempts, rng=rng)`; else `failed`. 4. Everything else (all `RecoverableError`, all `FatalError` including `BudgetExceeded` that escaped its handler) → `failed`. |
+| Algorithm | 1. `CircuitOpen`: kind `sync` or `reconcile` → `done` with `result = {"partial": True, "outcome": "skipped_open_circuit", "skipped_open_circuit": [err.key]}`; the next scheduled run retries (R-39); other kinds → if `row.attempts < row.max_attempts` `requeue` at `err.retry_at` (at least `now`), else `failed`. 2. `RateLimited` with `retry_after` not `None`: `attempts < max_attempts` → `requeue` at `now + retry_after`; else `failed`. 3. Other `RetryableError` (`SourceUnavailable`, `ModelUnavailable`, `StoreBusy`, `RateLimited` without `retry_after`): `attempts < max_attempts` → `requeue` at `now + job_backoff_delay(row.attempts, rng=rng)`; else `failed`. 4. Everything else (all `RecoverableError`, all `FatalError` including `BudgetExceeded` that escaped its handler) → `failed`. |
 | Tests | UT08-58 |
 
 #### U08-50 `herness.core.jobs.outcomes.finish_job`
@@ -1176,7 +1257,7 @@ Kind: function. Tests: UT08-63.
 
 #### U08-54 `herness.core.jobs.worker_alive`
 
-`worker_alive() -> bool`: `True` when a `worker` row has `status` in (`starting`, `running`, `draining`) and `heartbeat_at > now − 3 × R.jobs.heartbeat_s` (design 08 §3.4). Kind: function. Tests: UT08-65.
+`worker_alive() -> bool`: `True` when a `worker` row has `status` in (`starting`, `running`, `draining`) and `heartbeat_at > now − 3 × R.jobs.heartbeat_s` (design 08 §3.4). This is the only worker-liveness test; every spec uses it and the 60 s check of design 09 is dropped (R-44). Kind: function. Tests: UT08-65.
 
 #### U08-55 `herness.core.jobs.register_handler`, `resolve_handler`
 
@@ -1185,7 +1266,7 @@ Kind: function. Tests: UT08-63.
 | `register_handler` | `kind: JobKind`, `handler: Callable[[JobContext], JobOutcome]` | `None` |
 | `resolve_handler` | `kind: JobKind` | the handler |
 
-Registration stores into `process_state().handlers`. Registering a different callable for a kind that already has one → `ConfigError("handler already registered for <kind>")`; the same object again is a no-op. `resolve_handler` of an unregistered kind → `ConfigError("no handler for <kind>")`. Handlers are registered by the worker bootstrap in every process that runs jobs (X:09/herness.cli.worker_bootstrap, which imports X:01, X:02, X:06, X:07, X:10, X:11 handler modules). Kind: function. Tests: UT08-64.
+Every handler takes the single argument `ctx: JobContext` and reads its payload from `ctx.job.payload` (R-42). Registration stores into `process_state().handlers`. Registering a different callable for a kind that already has one → `ConfigError("handler already registered for <kind>")`; the same object again is a no-op. `resolve_handler` of an unregistered kind → `ConfigError("no handler for <kind>")`. Handlers are registered by the worker bootstrap in every process that runs jobs (X:09/herness.cli.worker_bootstrap, which imports X:01, X:02, X:06, X:07, X:10, X:11 handler modules). Kind: function. Tests: UT08-64.
 
 #### U08-56 `herness.core.jobs.run_handler`
 
@@ -1218,7 +1299,7 @@ Returns `RecoverySummary` (frozen dataclass: `running_reset`, `failed_reset`, `d
 |-------|---------|
 | Kind | function |
 | Purpose | Reset a run's interrupted and retryable tasks before spec 06 drives it (design 08 §5.12). |
-| Algorithm | One `BEGIN IMMEDIATE` running the three design 08 §5.12 statements (the third only with `retry_dead`, setting `attempts = 0`), each setting `updated_at = now`; the row counts fill the summary. `done` tasks are never touched; `attempts` is not changed except by `retry_dead`. Log INFO `jobs.tasks.recovered` with the counts. |
+| Algorithm | One `run_write(op="task_recover")` running the three design 08 §5.12 statements (the third only with `retry_dead`, setting `attempts = 0`), each setting `updated_at = now`; the row counts fill the summary. `done` tasks are never touched; `attempts` is not changed except by `retry_dead`. Log INFO `jobs.tasks.recovered` with the counts. |
 | Errors | Invalid arguments → `ConfigError`. |
 | Tests | UT08-66 |
 
@@ -1228,38 +1309,42 @@ Returns `RecoverySummary` (frozen dataclass: `running_reset`, `failed_reset`, `d
 
 #### U08-59 `herness.core.jobs.build_checkpoint_envelope`
 
+The checkpoint envelope is owned by 08 (R-21): `task.checkpoint` is a JSON object `{schema_version, loop, state, scratchpad}` with `schema_version = 1` (`CHECKPOINT_SCHEMA_VERSION`). `loop` holds the `LoopCheckpoint` fields (owner impl 05), `state` holds the swarm phase and pending findings (owner impl 06) and `scratchpad` holds working memory (owner impl 07). Each of `loop`, `state` and `scratchpad` is absent until its owner first saves it. 08 never interprets the content of the three keys.
+
 | Param | Type | Kind |
 |-------|------|------|
-| `checkpoint` | `Mapping[str, object]` | positional |
-| `existing` | `Mapping[str, object] \| None` | positional (current `task.checkpoint`) |
-| `now` | `datetime` | positional |
+| `key` | `Literal["loop", "state", "scratchpad"]` | positional |
+| `value` | `Mapping[str, object]` | positional (a JSON object) |
+| `existing` | `Mapping[str, object] \| None` | positional (current `task.checkpoint`; `None` when the column is NULL) |
 
 Returns `tuple[bytes, bool]` = (canonical JSON, `loop_dropped`).
 
 | Field | Content |
 |-------|---------|
 | Kind | function (pure) |
-| Algorithm | 1. `env = dict(checkpoint)`; `env.setdefault("v", 1)`; `env["v"] != 1` → `SchemaViolation("checkpoint version")`. 2. If `"scratchpad"` not in `env` and `existing` has `"scratchpad"`, copy it (design 08 §4.3). 3. `env["saved_at"] = ts(now)`. 4. Serialize. If > 4 194 304 bytes (`CHECKPOINT_MAX_BYTES`), remove `"loop"` and serialize again with `loop_dropped = True`. 5. Still > cap → `SchemaViolation("checkpoint exceeds 4 MiB without loop")`. |
-| Tests | UT08-68 |
+| Algorithm | 1. `env = dict(existing)` when `existing` is not `None`, else `{"schema_version": 1}`. 2. `env.get("schema_version") != 1`, or a top-level key outside `schema_version`, `loop`, `state`, `scratchpad` → `SchemaViolation("checkpoint envelope invalid")`. 3. `env[key] = dict(value)`; the other two keys keep their stored values unchanged (R-21). 4. Serialize. If > 4 194 304 bytes (`CHECKPOINT_MAX_BYTES`) and `"loop"` is in `env`, remove `"loop"` and serialize again with `loop_dropped = True` (the loop then resumes from its task spec). 5. Still > cap → `SchemaViolation("checkpoint exceeds 4 MiB without loop")`. |
+| Tests | UT08-68, UT08-109 |
 
 #### U08-60 `herness.core.jobs.save_checkpoint`
 
-| Param | Type | Default | Kind |
-|-------|------|---------|------|
-| `task_id` | `str` | — | positional |
-| `checkpoint` | `dict` | — | positional |
-| `writes` | `Callable[[sqlite3.Connection], None] \| None` | `None` | keyword-only |
+| Param | Type | Default | Kind | Constraints |
+|-------|------|---------|------|-------------|
+| `task_id` | `str` | — | positional | ID of a `running` task (spec 00 §5 format) |
+| `key` | `Literal["loop", "state", "scratchpad"]` | — | positional | the caller's own key: impl 05 writes `loop`, impl 06 `state`, impl 07 `scratchpad` (R-21) |
+| `value` | `Mapping[str, object]` | — | positional | JSON object |
+| `writes` | `Callable[[sqlite3.Connection], None] \| None` | `None` | keyword-only | additive (D08-12): durable writes that commit with the checkpoint |
 
 Returns `None`.
 
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Replace the task checkpoint and run the caller's durable writes in the same transaction (design 08 §3.7, §4.3, §5.12 idempotency rule). |
-| Preconditions | `writes` performs only SQL on the given connection and is safe to re-run after a rollback (it runs again when `sqlite_write` retries the transaction). |
-| Algorithm | `retry_call("sqlite_write", backend.save_checkpoint, task_id, fn)` where the backend opens `BEGIN IMMEDIATE`, reads the current checkpoint, calls `build_checkpoint_envelope`, runs `writes(conn)` if given, then `UPDATE task SET checkpoint = :env, updated_at = :now WHERE task_id = :id AND status = 'running'`; 0 rows → rollback and `JobStateError("task not running", task_id)`; any exception → rollback and re-raise. `loop_dropped` → log WARNING `jobs.checkpoint.loop_dropped`. The spec 05 caller enforces `checkpoint_min_interval_s`. |
-| Concurrency | One writer transaction; spec 06 serialises its own writes on one thread per swarm process. |
-| Tests | UT08-68, UT08-69, FT08-06 |
+| Purpose | Replace one key of the task checkpoint envelope and run the caller's durable writes in the same transaction, never erasing the other keys (R-21; design 08 §3.7, §4.3, §5.12 idempotency rule). |
+| Preconditions | `writes` performs only SQL on the given connection, never calls `run_write` itself, and is safe to re-run after a rollback (it runs again when `run_write` retries the transaction). |
+| Postconditions | On return, `task.checkpoint[key] == value` (unless `loop` was dropped for size) and every other envelope key is unchanged. |
+| Algorithm | `backend.save_checkpoint(task_id, key, value, writes)` (U08-97), which inside one `run_write(op="task_checkpoint")` reads the current checkpoint, calls `build_checkpoint_envelope(key, value, existing)`, runs `writes(conn)` if given, then `UPDATE task SET checkpoint = :env, updated_at = :now WHERE task_id = :id AND status = 'running'`; 0 rows → rollback and `JobStateError("task not running", task_id)`; any exception → rollback and re-raise. `loop_dropped` → log WARNING `jobs.checkpoint.loop_dropped`. The impl 05 caller enforces `checkpoint_min_interval_s` for the `loop` key. |
+| Concurrency | The read and the update run in one `BEGIN IMMEDIATE` transaction, so two owners saving different keys of the same task at the same time both keep their key. Spec 06 serialises its own writes on one thread per swarm process. |
+| Tests | UT08-68, UT08-69, UT08-109, FT08-06 |
 
 #### U08-61 `herness.core.jobs.complete_task`
 
@@ -1283,7 +1368,7 @@ Returns `Literal["pending", "dead"]`.
 
 #### U08-63 `herness.core.jobs.release_task`
 
-`release_task(task_id: str) -> None`: `UPDATE task SET status = 'pending', attempts = MAX(attempts - 1, 0), updated_at = :now WHERE task_id = :id AND status = 'running'`. 0 rows → log DEBUG `jobs.task.release_skipped` and return (releasing a task that already finished is harmless). Kind: function. Tests: UT08-71.
+`release_task(task_id: str) -> None`: `UPDATE task SET status = 'pending', attempts = MAX(attempts - 1, 0), updated_at = :now WHERE task_id = :id AND status = 'running'`. 0 rows → log DEBUG `jobs.task.release_skipped` and return (releasing a task that already finished is harmless). A cancelled or preempted running task is released with this function, never left `running` (R-36). Kind: function. Tests: UT08-71.
 
 ### 3.12 Cron, windows and arbitration
 
@@ -1336,7 +1421,7 @@ Returns `ActiveWindow` (frozen dataclass: `spec: WindowSpec`, `start_at: datetim
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | The window active at `now` in `cfg.weights.business_timezone` (design 08 §5.10). Additive public helper (D08-12) used by status, chat policy and spec 06 (chat reserved slots). |
+| Purpose | The window active at `now` in `cfg.weights.business_timezone` (design 08 §5.10). Additive public helper (D08-12) used by status, chat policy and spec 06 (chat reserved slots): `window_at(now).spec.name == "chat"` is the test for an open chat window that impl 06 D06-09 asks for. |
 | Algorithm | 1. `local = now.astimezone(tz)`. 2. For each window and each candidate start date `d` in (`local.date()`, `local.date() − 1 day`): skip when `days` is set and `d`'s weekday is not in it; `start_at = resolve_local(d + start)`, `end_at = resolve_local(d' + end)` where `d' = d + 1 day` if `end ≤ start` else `d`; match when `start_at ≤ now < end_at`. 3. Validation (U08-67) guarantees exactly one match outside DST transitions; if none matches (a DST-shortened minute), use the window matched at `now + 1 hour`; if several match, take the one with the latest `start_at`. |
 | Tests | UT08-75, PT08-05 |
 
@@ -1367,7 +1452,7 @@ Returns `datetime | None` (instant at which `stop("preempt")` is due; `None` = n
 |-------|------|------|
 | `loaded` | `GpuClass` | positional |
 | `window` | `ActiveWindow` | positional |
-| `claimable` | `Mapping[GpuClass, int]` | positional (queued, due, claimable jobs per class under the chat-window priority rule) |
+| `claimable` | `Mapping[GpuClass, int]` | positional (queued, due jobs claimable by the GPU slot per class under the chat-window priority rule; key `none` counts only `GPU_SLOT_KINDS` jobs, R-43) |
 | `requested` | `GpuClass \| None` | keyword-only (external `worker.requested_class`, spec 10 deploy up/down) |
 
 Returns `ArbiterDecision` (frozen dataclass: `action: Literal["keep","swap","idle"]`, `target: GpuClass`, `reason: str`).
@@ -1376,7 +1461,7 @@ Returns `ArbiterDecision` (frozen dataclass: `action: Literal["keep","swap","idl
 |-------|---------|
 | Kind | function (pure) |
 | Purpose | Design 08 §5.10 arbiter, run only while the GPU slot is free. |
-| Algorithm | 1. `requested` set and ≠ `loaded`: if `requested == "none"` or `requested in window.spec.classes` → `swap` to it (reason `requested`); else → `idle` with reason `request_not_allowed` (the supervisor logs WARNING `jobs.gpu.request_rejected` and clears the request). 2. `loaded in classes` and `claimable[loaded] > 0` → `keep`. 3. First `c` in `classes` (preference order) with `claimable[c] > 0` → `keep` if `c == loaded` else `swap` to `c`. 4. `window.spec.preload` set and ≠ `loaded` → `swap` to preload (reason `preload`). 5. Else `idle` with `target = loaded`. |
+| Algorithm | 1. `requested` set and ≠ `loaded`: if `requested == "none"` or `requested in window.spec.classes` → `swap` to it (reason `requested`); else → `idle` with reason `request_not_allowed` (the supervisor logs WARNING `jobs.gpu.request_rejected` and clears the request). 2. `loaded in classes` and `claimable[loaded] > 0` → `keep`. 2a. `claimable.get("none", 0) > 0` → `keep` (a `GPU_SLOT_KINDS` job starts on the loaded class without a swap and switches in-job, R-43). 3. First `c` in `classes` (preference order) with `claimable[c] > 0` → `keep` if `c == loaded` else `swap` to `c`. 4. `window.spec.preload` set and ≠ `loaded` → `swap` to preload (reason `preload`). 5. Else `idle` with `target = loaded`. |
 | Tests | UT08-78 |
 
 ### 3.13 Scheduler
@@ -1462,14 +1547,14 @@ Returns `ChatMode`.
 |-------|---------|
 | Kind | function |
 | Purpose | Design 08 §5.10 `chat_policy(now)` pseudocode. |
-| Algorithm | 1. `chat_key` = first key of `chains.chain_for("chat", "fast")` whose `config(key).off_network` is false; none → `ConfigError("chat chain has no local client")`. 2. `g = gpu_state()`. If `g.loaded_class() == "reasoning"` and `g.service_healthy("vllm-reasoning")` and `breaker("model:" + chat_key).state() != "open"` → `"live"`. 3. `mode = S.chat.in_hours_unavailable if window_at(now).spec.name == "chat" else S.chat.off_hours`. 4. `mode == "cloud"` and not `cfg.security.egress.enabled` → `"small_model"`. 5. `mode == "small_model"` and `breaker("model:" + first key of chain_for("chat_off_hours", "fast")).state() == "open"` → `"defer"`. 6. Return `mode`. |
+| Algorithm | 1. `chat_key` = first key of `chains.chain_for("chat", "fast")` whose `config(key).off_network` is false; none → `ConfigError("chat chain has no local client")`. 2. `g = gpu_state()`. If `g.loaded_class() == "reasoning"` and `g.service_healthy("vllm-reasoning")` and `breaker("model:" + chat_key).state() != "open"` → `"live"`. 3. `mode = S.chat.in_hours_unavailable if window_at(now).spec.name == "chat" else S.chat.off_hours`. 4. `mode == "cloud"` and either not `cfg.security.egress.enabled`, or `cfg.profile == "hybrid"` and `cfg.security.data_policy` does not record approval for `chat` → `"small_model"` (R-38; the approval flag is added by impl 10, O08-13). 5. `mode == "small_model"` and `breaker("model:" + first key of chain_for("chat_off_hours", "fast")).state() == "open"` → `"defer"`. 6. Return `mode`. |
 | Complexity and limits | < 5 ms p95 on warm caches: worker row cached 5 s, service health cached 5 s, breaker cached 5 s (BT08-09, O08-05). |
-| Security notes | TH08-07 (`cloud` never returned without egress). |
+| Security notes | TH08-07 (`cloud` never returned without egress, nor in `hybrid` without the `chat` approval, R-38). |
 | Tests | UT08-84, BT08-09 |
 
 #### U08-76 `herness.core.jobs.chat_model_profile`
 
-`chat_model_profile(mode: ChatMode, depth: str = "fast") -> str | None`: `live` → first key of `chain_for("chat", depth)` with `off_network` false; `small_model` → first key of `chain_for("chat_off_hours", depth)`; `cloud` → first key of `chain_for("chat", depth)` with `off_network` true, or `None` with WARNING `jobs.chat.no_cloud_client` when there is none; `defer` → `None` (design 08 §3.6). Kind: function. Tests: UT08-85.
+`chat_model_profile(mode: ChatMode, depth: str = "fast") -> str | None`: `live` → first key of `chain_for("chat", depth)` with `off_network` false; `small_model` → first key of `chain_for("chat_off_hours", depth)`; `cloud` → first key of `chain_for("chat", depth)` with `off_network` true, or `None` with WARNING `jobs.chat.no_cloud_client` when there is none (the impl 05 adapter sends that call with egress purpose `reasoning` and `payload_class = "aggregated_evidence"`, R-38); `defer` → `None` (design 08 §3.6). Kind: function. Tests: UT08-85.
 
 #### U08-77 `herness.core.jobs.chat_next_live_at`
 
@@ -1482,6 +1567,7 @@ Returns `datetime | None` (UTC).
 | Field | Content |
 |-------|---------|
 | Kind | function |
+| Purpose | ETA of the next `live` chat window. Impl 06 uses it as `scheduled_for` for the `chat` job under `defer` and for escalation runs enqueued under `small_model`, which wait for the next live window instead of being refused (R-35). |
 | Algorithm | 1. If some alive worker has `gpu_class_loaded == "swapping"` and `requested_class == "reasoning"` → `now + SWAP_ETA_S` (360 s, the design 08 §8 decider → reasoning target; O08-04). 2. `w = window_at(now)`; walk the following windows (`w = window_at(w.end_at)`) for at most 8 days; return the `start_at` of the first whose `preload == "reasoning"` or whose `classes` contain `reasoning`. 3. None → `None`. |
 | Tests | UT08-86 |
 
@@ -1524,7 +1610,7 @@ Warm-up requests (design 08 §5.8 "Warm-up"):
 |-------|---------|
 | Kind | class |
 | Purpose | Loopback-only HTTP for health and warm-up. |
-| Algorithm | Every request first checks that the URL scheme is `http` and the host is `127.0.0.1`, `localhost` or `::1` (else `ConfigError`); the client is an `httpx.Client(timeout=timeout_s, follow_redirects=False, trust_env=False)` built here (lint allowlist delta D08-06); response bodies are read up to 64 KB and discarded. |
+| Algorithm | Every request first checks that the URL scheme is `http` and the host is `127.0.0.1`, `localhost` or `::1` (else `ConfigError`); the client comes from `herness.core.egress.loopback_http_client(svc.url, timeout_s=timeout_s)` (X:10/herness.core.egress.loopback_http_client, R-06), the only factory for loopback model-server clients; this module constructs no `httpx` client (D08-06 resolved). Redirects are not followed; a 3xx answer counts as unhealthy. Response bodies are read up to 64 KB and discarded. The bearer value comes from `herness.core.secrets.resolve` of the `bearer_secret` reference (`secret:OPENJEV_API_KEY` for OpenJev, R-53). |
 | Security notes | TH08-12, TH08-02 (bearer never logged). |
 | Tests | UT08-89, ST08-12 |
 
@@ -1590,6 +1676,26 @@ Context manager. `__enter__` creates the parent directory, opens the file in `a+
 
 `gpu_state() -> GpuStateReader` returns a process-wide `WorkerGpuState`. `loaded_class()` reads `list_workers()` at most every 5 s and returns `gpu_class_loaded` of the alive worker with `gpu_slot = 1` (alive per U08-54), or `"none"` when there is none. `service_healthy(name)` calls `LoopbackHttp.healthy(svc, timeout_s=2)` at most every 5 s per service and caches the result. Kind: function plus class. Concurrency: cache under a lock. Tests: UT08-84, BT08-09.
 
+#### U08-102 `herness.core.jobs.request_gpu_class`
+
+| Param | Type | Default | Kind | Constraints |
+|-------|------|---------|------|-------------|
+| `cls` | `GpuClass` | — | positional | any member, including `large` (R-47) and `none` (unload) |
+
+Returns `Literal["requested", "no_worker"]`.
+
+| Field | Content |
+|-------|---------|
+| Kind | function |
+| Purpose | The manual GPU class switch behind `herness gpu load CLASS` / `gpu unload` (impl 09, R-47) and `herness deploy up|down` with a live worker (impl 10): it asks the worker's arbiter for a class and never starts or stops containers itself (design 08 §5.8, design 09 CLI table). |
+| Preconditions | The caller has checked the admin role and written the audit line (impl 09, impl 10; TH08-11). |
+| Postconditions | `requested`: the alive GPU worker's `requested_class = cls`. `no_worker`: nothing changed; impl 09 prints the "no worker" warning with the fix (R-45) and impl 10 takes its GPU-lock path. |
+| Algorithm | 1. `workers = backend.list_workers()`; pick the worker that is alive per U08-54 and has `gpu_slot = 1`; none → return `"no_worker"`. 2. `backend.set_requested_class(worker_id, cls)` (U08-96). 3. Log INFO `jobs.gpu.class_requested` (`worker_id`, `class`); return `"requested"`. The arbiter (U08-70 step 1) swaps when the active window allows `cls` or `cls == "none"`, else rejects and clears the request with WARNING `jobs.gpu.request_rejected`. Callers poll `gpu_state().loaded_class()` for the result. |
+| Side effects | One `worker` update. |
+| Concurrency | Safe from any process; the supervisor reads the request on its next free GPU tick. |
+| Security notes | TH08-09: the request goes through the arbiter, so a manual load never makes two classes resident. |
+| Tests | UT08-108 |
+
 ### 3.16 Pipe, job contexts, worker and inline runs
 
 #### U08-84 `herness.core.jobs.pipe.PipeMessage`, `encode_message`, `decode_message`
@@ -1624,13 +1730,13 @@ Context manager. `__enter__` creates the parent directory, opens the file in `a+
 | Kind | class |
 | Purpose | `JobContext` inside a child process; all effects go through the pipe to the supervisor (design 08 §5.8 last paragraph, §5.9). |
 | Invariants | A daemon reader thread (`herness-pipe-reader`) is the only reader of `conn`: `stop` sets `_stop_reason` (first one wins) and a `threading.Event`; `gpu_reply` goes into a `queue.Queue` keyed by `request_id`. Writes to `conn` are serialised by a lock. |
-| Algorithm | `should_yield()` → `_stop_reason is not None`. `heartbeat(note)`: send at most one message per second (later calls within the second overwrite a pending note that the next allowed send carries); `note` is cut to 200 chars and passed through `redact_text`. `require_gpu_class(cls, timeout_s)`: `slot == "cpu"` → `ConfigError("GPU control requires the GPU slot")`; send `gpu_request(op="require_class", cls)`; wait for the reply up to `timeout_s` or the default (`R.gpu.stop_timeout_s + 60 + max start_timeout_s of cls + R.gpu.warmup_timeout_s + 60`); no reply → `ModelUnavailable("gpu request timed out")`; `ok == False` → raise the named class with the message. `gpu_scope(cls)`: call `require_gpu_class(cls)` and remember the reply's `previous_class`; on exit (normal or exception) call `require_gpu_class(previous_class)` unless `previous_class` equals `cls`; a restore failure during exception exit is logged at ERROR `jobs.gpu.restore_failed` and the original exception propagates. `save_state(state)`: canonical JSON ≤ 4 MiB else `SchemaViolation`; send `save_state`. `load_state()`: `row.result.get("state", {})` copied (empty on first attempt). `services.start/stop/healthy` send the corresponding `gpu_request` op (same slot check and reply handling; `healthy` returns the reply's `healthy`). |
+| Algorithm | `job` returns `row` (R-42). `should_yield()` → `_stop_reason is not None`. `heartbeat(note)`: send at most one message per second (later calls within the second overwrite a pending note that the next allowed send carries); `note` is cut to 200 chars and passed through `redact_text`. `require_gpu_class(cls, timeout_s)`: `slot == "cpu"` → `ConfigError("GPU control requires the GPU slot")`; send `gpu_request(op="require_class", cls)`; wait for the reply up to `timeout_s` or the default (`R.gpu.stop_timeout_s + 60 + max start_timeout_s of cls + R.gpu.warmup_timeout_s + 60`); no reply → `ModelUnavailable("gpu request timed out")`; `ok == False` → raise the named class with the message. `gpu_scope(cls)`: call `require_gpu_class(cls)` and remember the reply's `previous_class`; on exit (normal or exception) call `require_gpu_class(previous_class)` unless `previous_class` equals `cls`; a restore failure during exception exit is logged at ERROR `jobs.gpu.restore_failed` and the original exception propagates. `save_state(state)`: canonical JSON ≤ 4 MiB else `SchemaViolation`; send `save_state`. `load_state()`: `row.result.get("state", {})` copied (empty on first attempt). `services.start/stop/healthy` send the corresponding `gpu_request` op (same slot check and reply handling; `healthy` returns the reply's `healthy`). |
 | Concurrency | Handler thread plus the reader thread. |
 | Tests | UT08-98, UT08-99 |
 
 #### U08-86 `herness.core.jobs.InlineJobContext`, `InlineServiceControl`
 
-Same behavior as U08-85 with direct calls: `require_gpu_class` → `controller.swap(cls, reason="in_job")` (the controller's own lock serialises it); `services.*` → `controller.service_*`; `save_state` → `backend.save_job_state(job_id, owner, bytes)` (0 rows → `JobStateError`); `heartbeat` stores the note in memory (no worker row exists for inline runs); `should_yield` reads a `threading.Event` set by the inline SIGINT handler or the heartbeat thread. `controller is None` (a `none`-class job) → GPU calls raise `ConfigError`. Kind: class. Tests: IT08-12.
+Same behavior as U08-85 with direct calls: `require_gpu_class` → `controller.swap(cls, reason="in_job")` (the controller's own lock serialises it); `services.*` → `controller.service_*`; `save_state` → `backend.save_job_state(job_id, owner, bytes)` (0 rows → `JobStateError`); `heartbeat` stores the note in memory (no worker row exists for inline runs); `should_yield` reads a `threading.Event` set by the inline SIGINT handler or the heartbeat thread. `controller is None` (a `none`-class job whose kind is not in `GPU_SLOT_KINDS`) → GPU calls raise `ConfigError`. Kind: class. Tests: IT08-12.
 
 #### U08-87 `herness.core.jobs.Supervisor`
 
@@ -1638,7 +1744,7 @@ Same behavior as U08-85 with direct calls: `require_gpu_class` → `controller.s
 |-------|------|------|
 | `options` | `WorkerOptions` (frozen dataclass: `gpu_classes: tuple[GpuClass, ...]`, `concurrency: int` (0–16), `once: bool`, `bootstrap: str` as `"module:function"`) | positional |
 
-Method `run() -> int` returns the process exit code (0 normal, 2 `ConfigError` at start, 3 store unavailable shutdown).
+Method `run() -> int` returns the process exit code under the R-46 scheme: 0 normal end; 1 operation failed (a `ConfigError` at start, the GPU lock held by another owner, or the store-unavailable shutdown). The worker never returns 2, 3 or 4 (delta D08-23).
 
 | Field | Content |
 |-------|---------|
@@ -1652,20 +1758,20 @@ Method `run() -> int` returns the process exit code (0 normal, 2 `ConfigError` a
 | Tests | IT08-04–IT08-11, IT08-13, FT08-07, FT08-09, FT08-10, BT08-11 |
 
 Algorithm `run()`:
-1. Import and call `options.bootstrap` (loads config, binds backends, registers handlers and probes).
-2. `upsert_worker(status="starting", gpu_slot, cpu_slots=concurrency, version=herness.__version__, faults_enabled)` where `faults_enabled` is true when `HERNESS_FAULTS` is set (the plan is loaded eagerly here so a bad plan fails at start).
-3. GPU slot: enter `GpuLock` (failure → log ERROR `jobs.worker.gpu_lock_held`, return 2); `controller = GpuController(...)`; `controller.detect_loaded_class()`.
+1. Import and call `options.bootstrap` (loads config, binds backends, registers handlers and probes). Then `issues = validate_resilience_config(cfg)` (U08-99); any issue → log ERROR `jobs.worker.config_invalid` with the paths and return 1.
+2. `upsert_worker(status="starting", gpu_slot, cpu_slots=concurrency, version=herness.__version__, faults_enabled)` where `faults_enabled` is true when a fault plan was loaded, which happens only with `HERNESS_FAULTS` set and `HERNESS_ENV=test` (R-40; the plan is loaded eagerly here so a bad plan fails at start with exit 1; outside the test environment the plan is ignored with WARNING `resilience.faults.ignored`).
+3. GPU slot: enter `GpuLock` (failure → log ERROR `jobs.worker.gpu_lock_held`, return 1); `controller = GpuController(...)`; `controller.detect_loaded_class()`.
 4. Crash recovery: for `row in running_on_host(host)`, parse the pid from `lease_owner`; if the pid ≠ own pid and `psutil.pid_exists(pid)` is false, collect the owner; `requeue_owned(owners, now)`; one `lease_expired` event per job (detail `outcome`).
 5. Install signal handlers: `SIGINT`; `SIGBREAK` on Windows; `SIGTERM` on other systems. First signal → `draining = True`; second → `terminate_now = True`.
 6. `update_worker(status="running")`; loop `tick(now)` then sleep `R.jobs.tick_s` until the loop ends (step 8).
-7. `tick(now)` runs `_tick_guarded` (top-level `except Exception`): a `StoreBusy` or other failure logs ERROR `jobs.supervisor.tick_failed` and increments `failed_ticks`; a clean tick resets it; `failed_ticks ≥ 10` → log CRITICAL `jobs.supervisor.store_unavailable`, `draining = True`, exit code 3 at the end. Inside a tick, in order:
+7. `tick(now)` runs `_tick_guarded` (top-level `except Exception`): a `StoreBusy` or other failure logs ERROR `jobs.supervisor.tick_failed` and increments `failed_ticks`; a clean tick resets it; `failed_ticks ≥ 10` → log CRITICAL `jobs.supervisor.store_unavailable`, `draining = True`, exit code 1 at the end (R-46). Inside a tick, in order:
    a. Every `reaper_interval_s`: `reap_expired(now)` (events `lease_expired`, counter `herness_jobs_lease_expired_total{kind}`); `run_scheduler(now)`; `run_due_probes(now)`; restart check — for each open breaker `model:<k>` whose client's `gpu_class` equals `controller.loaded` and whose class has exactly one service, submit `controller.restart_service(service)` to the GPU executor when it is idle; `flush_metrics()`.
    b. Drain child messages with `conn.poll(0)`: `heartbeat` → `last_hb = now`, `note`; `save_state` → `save_job_state(job_id, owner, bytes)`; `gpu_request` → submit to the GPU executor (`require_class` → `controller.swap(cls, reason="in_job")` and reply with `previous_class`; `service_*` → the controller method); completed futures → send `gpu_reply`; `outcome` → keep for step c.
    c. Reap exited children: with an outcome → `finish_job(row, owner, outcome_or_error, attempt_started_at, stop_reason)`; without one → `finish_job(..., ModelUnavailable("child_crash"), ...)`. `join()` the process.
    d. Every `heartbeat_s` per running child: `heartbeat_job(job_id, owner, now + lease_s)`; `False` → send `stop("cancel")` once and remember the time; a child still alive `cancel_grace_s` later → `terminate()`, then `finish_job` (which finalises a canceled job or logs lease lost).
    e. Stall: `now − last_hb > stall_timeout_large_s` when `controller.loaded == "large"`, else `stall_timeout_s` → `terminate()`, `finish_job(..., ModelUnavailable("stalled"))`.
    f. Preemption for the GPU child: `d = preempt_deadline(controller.loaded, controller.class_since, now)`; `d` and `now ≥ d` and not yet sent → send `stop("preempt")`, record `preempt_sent_at`; `now ≥ preempt_sent_at + S.preempt_grace_min` → `terminate()` and `finish_yield(job_id, owner, next_window_allowing(row.gpu_class, now), now)` (no attempt charge), event `job_yield` with `stop_reason: "preempt"`.
-   g. Not draining: CPU slots free → `_claim(owner=cpu owner, allowed=["none"])`. GPU slot free and GPU executor idle → `requested = worker.requested_class` if it was set by someone other than this supervisor (spec 10 deploy up/down); `claimable = claimable_counts(...)` with the chat-window rule (`min_priority = S.batch_in_chat_min_priority`, exempt kinds `["chat"]` when `window_at(now).spec.name == "chat"`); `d = arbiter_decide(controller.loaded, window, claimable, requested=requested)`; `swap` → submit `controller.swap(d.target, reason=d.reason)` (on `ModelUnavailable`: `postpone_class(d.target, now, now + 10 min)`, design 08 §5.8 "B jobs rescheduled +10 min without attempt charge"); `keep` → `_claim(owner=gpu owner, allowed=[controller.loaded], min_priority as above)`. Each claimed row starts a child: `Pipe(duplex=True)`, `Process(target=child_main, args=(job_id, owner, slot, options.bootstrap, child_conn))`, `start()`.
+   g. Not draining: CPU slots free → `_claim(owner=cpu owner, allowed=["none"])` (`GPU_SLOT_KINDS` jobs excluded by the owner suffix, U08-48). GPU slot free and GPU executor idle → `requested = worker.requested_class` if it was set by someone other than this supervisor (spec 10 deploy up/down); `claimable = claimable_counts(...)` with the chat-window rule (`min_priority = S.batch_in_chat_min_priority`, exempt kinds `["chat"]` when `window_at(now).spec.name == "chat"`); `d = arbiter_decide(controller.loaded, window, claimable, requested=requested)`; `swap` → submit `controller.swap(d.target, reason=d.reason)` (on `ModelUnavailable`: `postpone_class(d.target, now, now + 10 min)`, design 08 §5.8 "B jobs rescheduled +10 min without attempt charge"); `keep` → `_claim(owner=gpu owner, allowed=[controller.loaded, "none"], min_priority as above)` (class `none` admits only `GPU_SLOT_KINDS` jobs for the GPU owner, R-43). Each claimed row starts a child: `Pipe(duplex=True)`, `Process(target=child_main, args=(job_id, owner, slot, options.bootstrap, child_conn))`, `start()`.
    h. Every `heartbeat_s`: `update_worker(heartbeat_at=now, gpu_class_loaded, current_jobs=[{"job_id", "slot", "kind", "started_at", "note"}], status)`.
    i. `once`: after the first claimed job is finished, set `draining`; if nothing was claimable on the first tick, end the loop with exit code 0 and log INFO `jobs.worker.nothing_to_do`.
 8. Draining: send `stop("shutdown")` to every child once; keep ticking steps b–c (no claims) until no child is alive or `shutdown_grace_s` passed; then `terminate()` the rest and call `finish_yield(job_id, owner, now, now)` for each (requeued at once, no charge). `terminate_now` skips the grace wait; those jobs stay `running` and are requeued by crash recovery at the next start (design 08 §5.9). Then `update_worker(status="stopped")`, `flush_metrics()`, release `GpuLock`. GPU services are left as they are.
@@ -1680,12 +1786,12 @@ Algorithm `run()`:
 | `bootstrap` | `str` | positional (`"module:function"`) |
 | `conn` | `Connection` | positional |
 
-Returns `None` (process exit code 0; 3 when the lease is not ours).
+Returns `None` (process exit code 0; 1 when the lease is not ours, R-46). The child's exit code is internal: the supervisor treats any exit without an `outcome` message as `child_crash`.
 
 | Field | Content |
 |-------|---------|
 | Kind | function (child process entry; arguments are plain strings so the spawn payload carries no objects, TH08-13) |
-| Algorithm | 1. Ignore `SIGINT` and, on Windows, `SIGBREAK` (the supervisor coordinates stops through the pipe). 2. Import and call `bootstrap`. 3. `row = get(job_id)`; if `row.status != "running"` or `row.lease_owner != owner` → exit 3. 4. `ctx = ChildJobContext(conn, row, slot=slot)`. 5. `handler = resolve_handler(row.kind)` (a `ConfigError` becomes the outcome). 6. `res = run_handler(ctx, handler)`. 7. Send `outcome` (`done`/`yield` with `result`, or `error` with class name and redacted message cut to 2 KB). 8. `flush_metrics()`; close `conn`; return. |
+| Algorithm | 1. Ignore `SIGINT` and, on Windows, `SIGBREAK` (the supervisor coordinates stops through the pipe). 2. Import and call `bootstrap`. 3. `row = get(job_id)`; if `row.status != "running"` or `row.lease_owner != owner` → exit 1. 4. `ctx = ChildJobContext(conn, row, slot=slot)`. 5. `handler = resolve_handler(row.kind)` (a `ConfigError` becomes the outcome). 6. `res = run_handler(ctx, handler)`. 7. Send `outcome` (`done`/`yield` with `result`, or `error` with class name and redacted message cut to 2 KB). 8. `flush_metrics()`; close `conn`; return. |
 | Tests | IT08-04, IT08-07 |
 
 #### U08-89 `herness.core.jobs.run_worker`
@@ -1703,8 +1809,8 @@ Returns `JobOutcome`.
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | CLI path when no worker is alive (design 08 §5.7 last paragraph, spec 09 §5.6). |
-| Algorithm | 1. `owner = f"{host}:{pid}:cli"`; `row = claim(owner=owner, allowed_classes=["none","reasoning","decider","large"], job_id=job_id)`; `None` → `JobStateError("job not claimable", job_id)`. 2. If `row.gpu_class != "none"`: enter `GpuLock` (a `ConfigError` → `finish_yield(job_id, owner, now, now)` then re-raise); `controller = GpuController(worker_id=None, ...)`; `controller.detect_loaded_class()`; `controller.swap(row.gpu_class, reason="inline")` when needed (a `ModelUnavailable` → `finish_job` with that error, then re-raise). 3. Start a daemon heartbeat thread: every `heartbeat_s`, `heartbeat_job(job_id, owner, now + lease_s)`; `False` → set the stop event with reason `cancel`. 4. Install a SIGINT handler that sets the stop event with reason `shutdown` (Ctrl+C → yield). 5. `res = run_handler(InlineJobContext(...), resolve_handler(row.kind))`. 6. `finish_job(row, owner, res, attempt_started_at, stop_reason)`. 7. `finally`: stop the heartbeat thread, restore the SIGINT handler, release the lock. 8. `res` is a `JobOutcome` → return it; a `HernessError` → raise it. |
+| Purpose | In-process run of one job, kept by R-45. CLI commands enqueue by default; the admin-only `--inline` flag of impl 09 calls this function (design 08 §5.7 last paragraph, spec 09 §5.6). |
+| Algorithm | 1. `owner = f"{host}:{pid}:cli"`; `row = claim(owner=owner, allowed_classes=["none","reasoning","decider","large"], job_id=job_id)`; `None` → `JobStateError("job not claimable", job_id)`. 2. If `row.gpu_class != "none"` or `row.kind in GPU_SLOT_KINDS` (R-43): enter `GpuLock` (a `ConfigError` → `finish_yield(job_id, owner, now, now)` then re-raise); `controller = GpuController(worker_id=None, ...)`; `controller.detect_loaded_class()`; `controller.swap(row.gpu_class, reason="inline")` when the class is not `none` and differs from the loaded class (a `ModelUnavailable` → `finish_job` with that error, then re-raise). 3. Start a daemon heartbeat thread: every `heartbeat_s`, `heartbeat_job(job_id, owner, now + lease_s)`; `False` → set the stop event with reason `cancel`. 4. Install a SIGINT handler that sets the stop event with reason `shutdown` (Ctrl+C → yield). 5. `res = run_handler(InlineJobContext(...), resolve_handler(row.kind))`. 6. `finish_job(row, owner, res, attempt_started_at, stop_reason)`. 7. `finally`: stop the heartbeat thread, restore the SIGINT handler, release the lock. 8. `res` is a `JobOutcome` → return it; a `HernessError` → raise it. |
 | Tests | IT08-12 |
 
 ### 3.17 Status, health and resume
@@ -1753,24 +1859,24 @@ Returns `ResumeResult` (frozen dataclass: `job_id: str | None`, `created: bool`,
 
 ### 3.18 Store adapters (L1)
 
-#### U08-94 `herness.store.ops_resilience.SqliteResilienceBackend`
+#### U08-94 `herness.store.ops.resilience.SqliteResilienceBackend`
 
 | Field | Content |
 |-------|---------|
 | Kind | class (implements `ResilienceBackend`) |
-| Purpose | SQL for `source_health`, `resilience_event`, `metric_sample`. |
-| Preconditions | Uses the per-thread connection and `BEGIN IMMEDIATE` helper of impl 02 (X:02/herness.store.ops.connect, X:02/herness.store.ops.write_tx). |
-| Algorithm | `health_get`: `SELECT * FROM source_health WHERE source = ?`. `health_apply(key, fn, now)`: `write_tx`: select the row, `after = fn(before)`; if `after` is not `None`, `INSERT ... ON CONFLICT(source) DO UPDATE SET state, failures, trips, opened_at, last_error, updated_at`; return `(before, after)`. `health_claim_probe`: the design 08 §5.3 statement with the stale half-open extension `UPDATE source_health SET state = 'half_open', updated_at = :now WHERE source = :key AND ((state = 'open' AND :now >= :probe_due) OR (state = 'half_open' AND updated_at < :stale_before)) RETURNING source`. `health_reset`: `UPDATE ... SET state = 'closed', failures = 0, trips = 0, opened_at = NULL, updated_at = :now WHERE source IN (...) AND (state != 'closed' OR failures != 0)` returning the keys. `insert_event`: plain insert. `count_events`, `event_counts`, `latest_event`: indexed by `resilience_event(kind, ts)`. `insert_metric_samples`: `executemany` in one transaction. `purge_events(before)`, `purge_metric_samples(before)`: `DELETE ... WHERE ts < ?` returning the count (called by spec 10's purge, X:10/maintenance purge handler). All SQL is parameterised; the `IN (...)` placeholder list is generated from the list length only. |
-| Concurrency | Per-thread connections; writes in `BEGIN IMMEDIATE`. |
+| Purpose | SQL for `source_health` and `resilience_event` (area `herness/store/ops/resilience.py`, R-08); metric rows are delegated to U08-100. |
+| Preconditions | Reads use `read_one()` / `read_all()` and every write uses `run_write(fn, op=...)` of impl 02 (X:02/herness.store.ops.connection, X:02/herness.store.ops.run_write; R-10). |
+| Algorithm | `health_get`: `SELECT * FROM source_health WHERE source = ?`. `health_apply(key, fn, now)`: `run_write`: select the row, `after = fn(before)`; if `after` is not `None`, `INSERT ... ON CONFLICT(source) DO UPDATE SET state, failures, trips, opened_at, last_error, updated_at`; return `(before, after)`. `health_claim_probe`: the design 08 §5.3 statement with the stale half-open extension `UPDATE source_health SET state = 'half_open', updated_at = :now WHERE source = :key AND ((state = 'open' AND :now >= :probe_due) OR (state = 'half_open' AND updated_at < :stale_before)) RETURNING source`. `health_reset`: `UPDATE ... SET state = 'closed', failures = 0, trips = 0, opened_at = NULL, updated_at = :now WHERE source IN (...) AND (state != 'closed' OR failures != 0)` returning the keys. `insert_event`: plain insert. `count_events`, `event_counts`, `latest_event`: indexed by `resilience_event(kind, ts)`. `insert_metric_samples(samples)`: returns `herness.store.ops.metrics.record_metric_samples(samples)` (U08-100). Module function `purge_events(before: datetime) -> int`: `DELETE FROM resilience_event WHERE ts < ?` in `run_write(op="resilience_event_purge")`, returning the count; called with `now − 90 days` by the `herness.admin` retention purge (R-07; X:10/herness.admin retention purge) and re-exported as `herness.store.ops.purge_events`. All SQL is parameterised; the `IN (...)` placeholder list is generated from the list length only. |
+| Concurrency | Per-thread connections; writes in `run_write` (`BEGIN IMMEDIATE`). |
 | Tests | UT08-12–UT08-19, UT08-29, UT08-32, IT08-01 |
 
-#### U08-95 `herness.store.ops_jobs.SqliteJobsBackend` (job methods)
+#### U08-95 `herness.store.ops.jobs.SqliteJobsBackend` (job methods)
 
 | Method | SQL (all timestamps as ts text; JSON as TEXT) |
 |--------|---------------------------------------------|
-| `insert_job` | `write_tx`: if `sched_check`: `SELECT 1 FROM job WHERE (idem_key = :sched_key) OR (json_extract(payload, '$.schedule') = :schedule AND json_extract(payload, '$.fire_at') = :fire_at) LIMIT 1` → found: return `(existing job_id, False)`. Then the design 08 §5.7 `INSERT ... ON CONFLICT (idem_key) WHERE status IN ('queued','running') DO NOTHING RETURNING job_id`; no row → `SELECT job_id FROM job WHERE idem_key = :idem_key AND status IN ('queued','running')` → `(that id, False)`. Else `(new id, True)` |
-| `claim_job` | the design 08 §5.7 claim statement, with `:allowed_classes` and `:exclusive_kinds` as JSON arrays, extended by `AND (:min_priority IS NULL OR j.priority >= :min_priority OR j.kind IN (SELECT value FROM json_each(:exempt_kinds)))` inside the subquery; returns the updated row |
-| `claimable_counts` | `SELECT gpu_class, COUNT(*)` with the same `WHERE` as the claim subquery, grouped by class |
+| `insert_job` | `run_write`: if `sched_check`: `SELECT 1 FROM job WHERE (idem_key = :sched_key) OR (json_extract(payload, '$.schedule') = :schedule AND json_extract(payload, '$.fire_at') = :fire_at) LIMIT 1` → found: return `(existing job_id, False)`. Then the design 08 §5.7 `INSERT ... ON CONFLICT (idem_key) WHERE status IN ('queued','running') DO NOTHING RETURNING job_id`; no row → `SELECT job_id FROM job WHERE idem_key = :idem_key AND status IN ('queued','running')` → `(that id, False)`. Else `(new id, True)` |
+| `claim_job` | the design 08 §5.7 claim statement, with `:allowed_classes` and `:exclusive_kinds` as JSON arrays, extended inside the subquery by `AND (:min_priority IS NULL OR j.priority >= :min_priority OR j.kind IN (SELECT value FROM json_each(:exempt_kinds)))` and by the slot rule of U08-48: `AND (j.gpu_class != 'none' OR :slot = 'cli' OR ((j.kind IN (SELECT value FROM json_each(:gpu_slot_kinds))) = (:slot = 'gpu')))`, with `:slot` in `gpu`, `cpu`, `cli` and `:gpu_slot_kinds` = `GPU_SLOT_KINDS` as a JSON array (R-43); returns the updated row |
+| `claimable_counts` | `SELECT gpu_class, COUNT(*)` with the same `WHERE` as the claim subquery for slot `gpu`, grouped by class |
 | `heartbeat_job` | design 08 §5.7 heartbeat statement; returns `rowcount == 1` |
 | `finish_done` | `UPDATE job SET status='done', result=:result, finished_at=:now, lease_owner=NULL, lease_expires_at=NULL WHERE job_id=:id AND lease_owner=:owner AND status='running'` |
 | `finish_yield` | `SET status='queued', attempts=attempts-1, scheduled_for=:resume_at, lease_owner=NULL, lease_expires_at=NULL` with the same guard |
@@ -1778,8 +1884,8 @@ Returns `ResumeResult` (frozen dataclass: `job_id: str | None`, `created: bool`,
 | `finish_failed` | `SET status='failed', finished_at=:now, last_error=:le, lease_owner=NULL, lease_expires_at=NULL` with the same guard |
 | `finalize_canceled` | `SET finished_at=:now, lease_owner=NULL, lease_expires_at=NULL WHERE job_id=:id AND lease_owner=:owner AND status='canceled'` |
 | `save_job_state` | `SET result = json_object('state', json(:state)) WHERE job_id=:id AND lease_owner=:owner AND status='running'` |
-| `cancel_job`, `retry_job` | `write_tx` read-then-update per U08-51, U08-52; `retry_job` catches the unique-index `IntegrityError` → `conflict` |
-| `reap_expired` | the two design 08 §5.7 reaper statements in one `write_tx`, preceded by a `SELECT job_id, kind, attempts, max_attempts` of the affected rows to report them |
+| `cancel_job`, `retry_job` | `run_write` read-then-update per U08-51, U08-52; `retry_job` catches the unique-index `IntegrityError` → `conflict` |
+| `reap_expired` | the two design 08 §5.7 reaper statements in one `run_write`, preceded by a `SELECT job_id, kind, attempts, max_attempts` of the affected rows to report them |
 | `requeue_owned` | the same two statements with `lease_owner IN (...)` in place of the expiry test |
 | `running_on_host` | `SELECT * FROM job WHERE status='running' AND lease_owner LIKE :host || ':%'` (`:host` escaped for `LIKE`) |
 | `postpone_class`, `sched_fired`, `recent_scheduled`, `rekey_on`, `queue_stats`, `get_job`, `list_jobs` | straightforward parameterised selects and one update per U08-41 |
@@ -1787,28 +1893,51 @@ Returns `ResumeResult` (frozen dataclass: `job_id: str | None`, `created: bool`,
 | Field | Content |
 |-------|---------|
 | Kind | class |
-| Purpose | Every write to `job` (design 08 §3.7 last paragraph). |
-| Concurrency | `BEGIN IMMEDIATE` for every write; `busy_timeout = 10000`. |
+| Purpose | Every write to `job` (design 08 §3.7 last paragraph); area `herness/store/ops/jobs.py` (R-08). |
+| Concurrency | Every write in `run_write` (`BEGIN IMMEDIATE`, `sqlite_write` policy); the connection settings, including `busy_timeout`, are impl 02's. |
 | Security notes | TH08-08 (owner guard on every completion). |
-| Tests | UT08-52–UT08-62, IT08-02, BT08-02, BT08-03 |
+| Tests | UT08-52–UT08-62, UT08-107, IT08-02, BT08-02, BT08-03 |
 
-#### U08-96 `herness.store.ops_worker.WorkerSqlMixin`
+#### U08-96 `herness.store.ops.worker.WorkerSqlMixin`
 
-`upsert_worker(row: WorkerRow)` (`INSERT ... ON CONFLICT(worker_id) DO UPDATE`), `update_worker(worker_id, **fields)` (column names checked against a fixed allowlist `status, gpu_class_loaded, requested_class, current_jobs, heartbeat_at, faults_enabled`; values bound as parameters), `list_workers()`, `set_requested_class(worker_id, cls)` (used by spec 10 deploy up/down through X:10), `run_row(run_id)` (`SELECT kind, status FROM run WHERE run_id = ?`). Kind: class (mixin of `SqliteJobsBackend`). Tests: UT08-65.
+`upsert_worker(row: WorkerRow)` (`INSERT ... ON CONFLICT(worker_id) DO UPDATE`), `update_worker(worker_id, **fields)` (column names checked against a fixed allowlist `status, gpu_class_loaded, requested_class, current_jobs, heartbeat_at, faults_enabled`; values bound as parameters), `list_workers()`, `set_requested_class(worker_id, cls)` (`UPDATE worker SET requested_class = ? WHERE worker_id = ?`; called only by `request_gpu_class`, U08-102, which serves impl 09 `gpu load/unload` and impl 10 `deploy up/down`), `run_row(run_id)` (`SELECT kind, status FROM run WHERE run_id = ?`). Area `herness/store/ops/worker.py` (R-08). Kind: class (mixin of `SqliteJobsBackend`). Tests: UT08-65, UT08-108.
 
-#### U08-97 `herness.store.ops_tasks.TaskSqlMixin`
+#### U08-97 `herness.store.ops.tasks.TaskSqlMixin`
 
-`recover_tasks`, `claim_task`, `save_checkpoint(task_id, build: Callable[[dict | None, sqlite3.Connection], bytes])`, `complete_task`, `fail_task`, `release_task`, each implementing the SQL named in U08-57–U08-63 in one `write_tx`. The `writes` callback receives the same connection inside the transaction; any exception rolls back. Only this mixin writes `task.status`, `task.attempts` and `task.checkpoint` (design 08 §3.7). Kind: class (mixin). Tests: UT08-66–UT08-71.
+`recover_tasks`, `claim_task`, `save_checkpoint(task_id, key, value, writes)`, `complete_task`, `fail_task`, `release_task`, each implementing the SQL named in U08-57–U08-63 in one `run_write` (area `herness/store/ops/tasks.py`, R-08). `save_checkpoint` reads `task.checkpoint`, applies `build_checkpoint_envelope(key, value, existing)` (U08-59) and writes the result in the same transaction (R-21). The `writes` callback receives the same connection inside the transaction; any exception rolls back. Only this mixin writes `task.status`, `task.attempts` and `task.checkpoint` (design 08 §3.7). Kind: class (mixin). Tests: UT08-66–UT08-71, UT08-109.
 
-#### U08-98 `herness.store.ops_resilience.bind_core_backends`
+#### U08-98 `herness.store.ops.resilience.bind_core_backends`
 
-`bind_core_backends() -> None`: constructs `SqliteResilienceBackend()` and `SqliteJobsBackend()` and calls `herness.core.resilience.bind_ops_backend` and `herness.core.jobs.bind_jobs_backend` (L1 → L0 imports are allowed). Called by every composition root (X:09/herness.cli entry, X:09/herness.cli.worker_bootstrap, X:09/app/common) after `load_config`. Kind: function. Tests: IT08-04.
+`bind_core_backends() -> None`: constructs `SqliteResilienceBackend()` and `SqliteJobsBackend()` and calls `herness.core.resilience.bind_ops_backend` and `herness.core.jobs.bind_jobs_backend` (L1 → L0 imports are allowed). Called by every composition root (X:09/herness.cli entry, X:09/herness.cli.worker_bootstrap, X:09/app/common) after `load_config` (R-04). Re-exported as `herness.store.ops.bind_core_backends`. Kind: function. Tests: IT08-04.
+
+#### U08-100 `herness.store.ops.metrics.record_metric_samples`, `purge_metric_samples`
+
+| Param | Type | Default | Kind | Constraints |
+|-------|------|---------|------|-------------|
+| `samples` | `Sequence[MetricSample]` | — | positional | U08-101 values; ≤ 100 000 per call |
+| `conn` | `sqlite3.Connection \| None` | `None` | keyword-only | when given, the caller is inside its own `run_write` callback and the rows join that transaction |
+
+Returns `int` (rows written).
+
+| Field | Content |
+|-------|---------|
+| Kind | function (two) |
+| Purpose | The single writer of `metric_sample` (R-12). Every spec records component metrics through this name (it replaces `write_metric_samples` and `record_metric_sample`) or through the buffered L0 API of U08-19–U08-22 and U08-103, which calls it. Counters, gauges and histograms are all accepted; the kind travels in `MetricSample.kind`. |
+| Preconditions | Every sample passed pydantic validation (U08-101); more than 100 000 samples → `ConfigError("too many metric samples")`. |
+| Postconditions | One `metric_sample` row per sample, columns exactly as impl 02 §4.3.6: `ts` (ts text), `name`, `kind`, `value`, `labels` (canonical JSON), `component`. |
+| Algorithm | 1. Empty input → return 0. 2. Build parameter tuples; `labels` = canonical JSON of the label map; a labels text longer than 1 024 bytes → `ConfigError` naming the metric (the table's length check). 3. With `conn`: one `executemany("INSERT INTO metric_sample (ts, name, kind, value, labels, component) VALUES (?, ?, ?, ?, ?, ?)")` on it. Without `conn`: the same statement in chunks of 500 rows, each chunk in its own `run_write(op="metric_samples")`. 4. Return the row count. `purge_metric_samples(before: datetime) -> int`: `DELETE FROM metric_sample WHERE ts < ?` in `run_write(op="metric_purge")`, returning the count; called with `now − 90 days` by the `herness.admin` retention purge (R-07, O08-09). |
+| Side effects | `metric_sample` inserts or deletes. |
+| Errors | `StoreBusy` after the `run_write` policy; `SchemaViolation` for a table constraint failure (mapped by `run_write`); `ConfigError` as above. Callers treat metrics as best effort: they log and continue. |
+| Concurrency | Per-thread connection; each chunk is one short writer transaction. |
+| Complexity and limits | 500 rows per transaction; O(n). |
+| Security notes | TH08-02 (labels are identifiers only), TH08-10 (row cap per call). |
+| Tests | UT08-32, UT08-110 |
 
 ## 4. State and data
 
 ### 4.1 Ops tables
 
-The migration files that create these tables are delivered by impl 02 (X:02/herness/store/migrations, applied by X:02/herness.store.ops.migrate). The columns below restate spec 02 §5.1–§5.3 with the types and constraints 08 needs; impl 02 MUST create them exactly so (delta D08-13 for `metric_sample`). All timestamps are ts text (fixed width, UTC); JSON is TEXT.
+The migration files that create these tables are impl 02 migrations 001–006 (X:02/herness/store/migrations, applied by X:02/herness.store.ops.migrate; R-11). The columns below restate impl 02 §4.3 with the constraints 08 relies on. Every column and index 08 reads or writes exists in impl 02 migrations 001–006, so this spec adds no migration in its range 050–059 (R-11); a future 08-only column gets a migration numbered 050 or above and a unit here. All timestamps are ts text (fixed width, UTC); JSON is TEXT.
 
 #### 4.1.1 `job` (owner 08)
 
@@ -1885,23 +2014,23 @@ Idempotency: upsert on `source`; transitions are read-modify-write in one `BEGIN
 | `run_id`, `job_id`, `task_id` | TEXT | yes | |
 | `detail` | TEXT | no | JSON object of allowlisted scalar fields |
 
-Index `resilience_event(kind, ts)`. Retention 90 days, purged through `purge_events` by spec 10's purge job (X:10/maintenance purge). Inserts are append-only; no idempotency key (an event written twice after a crash is acceptable history).
+Index `resilience_event(kind, ts)`. Retention 90 days, purged through `purge_events` (U08-94) by the `herness.admin` retention purge (R-07; X:10/herness.admin retention purge). Inserts are append-only; no idempotency key (an event written twice after a crash is acceptable history).
 
 #### 4.1.5 `task` mechanics (table owner 06, mechanics 08)
 
-08 writes only `status`, `attempts`, `checkpoint`, `result`, `last_error`, `updated_at`, through U08-57–U08-63. Idempotency: every update is guarded by the expected current status; durable side effects run inside `save_checkpoint(..., writes=)` or `complete_task(..., writes=)` in the same transaction (design 08 §5.12). Index `task(run_id, status)` (spec 02 §5.3).
+08 writes only `status`, `attempts`, `checkpoint`, `result`, `last_error`, `updated_at`, through U08-57–U08-63. The `checkpoint` column holds the R-21 envelope; each key is replaced only by its owner's `save_checkpoint` call. Idempotency: every update is guarded by the expected current status; durable side effects run inside `save_checkpoint(..., writes=)` or `complete_task(..., writes=)` in the same transaction (design 08 §5.12). Index `task(run_id, status)` (spec 02 §5.3).
 
 #### 4.1.6 `metric_sample` (table owner impl 02; recording API 08)
 
-Columns 08 writes (delta D08-13): `sample_id` INTEGER PK autoincrement; `ts` TEXT not null; `name` TEXT not null; `kind` TEXT not null (`counter`, `histogram`); `value` REAL not null; `labels` TEXT not null (canonical JSON object); `component` TEXT not null; `host` TEXT not null; `pid` INTEGER not null. Index `metric_sample(name, ts)`. Retention 90 days (`purge_metric_samples`, called by spec 10's purge; O08-09). Append-only.
+Table from impl 02 migration 006 (R-12): rowid primary key; `ts` TEXT not null (ts check); `name` TEXT not null (`GLOB 'herness_*'`); `kind` TEXT not null (`counter`, `gauge`, `histogram`); `value` REAL not null; `labels` TEXT not null (JSON object, ≤ 1 024 bytes); `component` TEXT not null. Indexes `metric_sample_name_ts` on (`name`, `ts`) and `metric_sample_ts` on (`ts`). The earlier 08 draft columns `sample_id`, `host` and `pid` are dropped (D08-13 resolved by R-12). Only U08-100 writes it. Retention 90 days (`purge_metric_samples`, called by the `herness.admin` retention purge, R-07; O08-09). Append-only; no idempotency key (a sample written twice after a crash is acceptable).
 
 ### 4.2 Files
 
 | File | Written by | Content | Rules |
 |------|-----------|---------|-------|
 | `data/locks/gpu.lock` | U08-82 | empty; OS byte lock | created on demand; ACL per spec 10 (service account only) |
-| Fault plan (path in `HERNESS_FAULTS`) | operators and spec 11 tests | list of `FaultRule` | read once per process; ≤ 64 KB; never written by Herness |
-| `task.checkpoint` envelope | U08-59/U08-60 | design 08 §4.3 JSON | ≤ 4 MiB; `loop` dropped first |
+| Fault plan (path in `HERNESS_FAULTS`) | spec 11 tests | JSON list of `FaultRule` (R-40) | honoured only with `HERNESS_ENV=test`, else ignored with a WARNING; read once per process; `.json` only; ≤ 64 KB; never written by Herness |
+| `task.checkpoint` envelope | U08-59/U08-60 | `{schema_version, loop, state, scratchpad}` (R-21) | ≤ 4 MiB; key-scoped replace; `loop` dropped first |
 
 ### 4.3 In-memory state
 
@@ -1909,7 +2038,7 @@ Columns 08 writes (delta D08-13): `sample_id` INTEGER PK autoincrement; `ts` TEX
 |-------|--------|----------|-------------|
 | Breaker cache (row + read time, 5 s) | `CircuitBreaker` in `ProcessState.breakers` | process | per-breaker lock |
 | Fault plan and rule counters | `ProcessState` | process | `ProcessState.lock` |
-| Metric buffer (≤ 10 000 observations plus counter aggregates) | `ProcessState` | until flush | `ProcessState.lock` |
+| Metric buffer (≤ 10 000 histogram observations, counter aggregates, ≤ 1 000 gauge keys with their latest value) | `ProcessState` | until flush | `ProcessState.lock` |
 | Handler and probe registries | `ProcessState` | process | written at bootstrap only |
 | `auth_dropped` | `ProcessState` | process (entries are per `run_id`) | `ProcessState.lock` |
 | Policy cache keyed by `config_hash` | `ProcessState` | process | `ProcessState.lock` |
@@ -1937,15 +2066,16 @@ Columns 08 writes (delta D08-13): `sample_id` INTEGER PK autoincrement; `ts` TEX
 
 **F08-03 Enqueue** (U08-46)
 1. U08-45 validates the payload. Failure → `SchemaViolation`, nothing written.
-2. `insert_job` in `BEGIN IMMEDIATE`: sched check → existing id; insert or dedupe → id. `StoreBusy` → `sqlite_write` retries; exhausted → `StoreBusy` to caller.
-3. Log and metric.
+2. `priority=None` becomes `DEFAULT_PRIORITY[kind]` (R-41).
+3. `insert_job` in one `run_write` (`BEGIN IMMEDIATE`): sched check → existing id; insert or dedupe → id. `StoreBusy` → retried by the `run_write` `sqlite_write` policy; exhausted → `StoreBusy` to caller.
+4. Log and metric.
 
-**F08-04 Supervisor tick** (U08-87 step 7) — steps a–i as listed in U08-87. Failure at any step: `StoreBusy` after retries or any exception → the tick stops at that step, children keep running, `failed_ticks += 1`; 10 in a row → graceful shutdown (F08-09) with exit code 3 (design 08 §6).
+**F08-04 Supervisor tick** (U08-87 step 7) — steps a–i as listed in U08-87. Failure at any step: `StoreBusy` after retries or any exception → the tick stops at that step, children keep running, `failed_ticks += 1`; 10 in a row → graceful shutdown (F08-09) with exit code 1 (design 08 §6, R-46).
 
 **F08-05 Job run in a child and completion**
 1. U08-48 claims (lease, attempts + 1, `job.after_claim` fault point).
 2. Supervisor spawns U08-88 with plain-string arguments. Child bootstrap failure → child exits without outcome → step 5 treats it as `child_crash`.
-3. Child verifies lease ownership (exit 3 if not ours), resolves the handler, runs U08-56.
+3. Child verifies lease ownership (exit 1 if not ours), resolves the handler, runs U08-56 with `ctx` as the only argument (R-42).
 4. Child sends `outcome`; heartbeats and `save_state` flow meanwhile (state written with the owner guard).
 5. Supervisor reaps the child → U08-50 applies the outcome: `done` (+ chain advance), `yield` (−1 attempt), requeue with backoff, or `failed` (+ `chain_broken`). Lease lost → WARNING only.
 
@@ -1972,15 +2102,15 @@ Columns 08 writes (delta D08-13): `sample_id` INTEGER PK autoincrement; `ts` TEX
 
 **F08-11 Scheduler fire, catch-up and chain** — U08-72 per entry: latest fire `F`; too old → `schedule_missed` once; else submit with sched check (`schedule_fired` when created). On `done`, U08-73 enqueues the next enabled, non-skipped step; on `failed`, `chain_broken`. Chain repair re-runs U08-73 over the last 24 h of finished scheduled jobs. A broken entry logs `jobs.schedule.error` and never blocks others.
 
-**F08-12 Rekey planning and night** — spec 10 calls U08-74 → `maintenance {"action":"rekey"}` at the next `schedule.rekey.cron` fire ≥ 12 h ahead, priority 70, class `decider`, `rekey_planned` event. That night the `nightly` build fires with `rekey_night: true`; priority 70 > 60 and `exclusive_kinds` make the rekey job run first; decider is allowed in the Saturday `reviews` window so the build is not preempted at 21:00; U08-73 skips the standard review steps with `chain_skipped` reason `rekey`. Canceling the rekey job (U08-51) leaves the old key active (spec 10).
+**F08-12 Rekey planning and night** — spec 10 calls U08-74 → `maintenance {"action":"rekey"}` at the next `schedule.rekey.cron` fire ≥ 12 h ahead, priority 70, class `decider`, `rekey_planned` event. That night the `nightly` build (class `none`, a `GPU_SLOT_KINDS` job, R-43) fires with `rekey_night: true`; both jobs are claimed by the GPU slot, and priority 70 > 60 and `exclusive_kinds` make the rekey job run first; the build's enrichment stages enter `ctx.gpu_scope("decider")`, and decider is allowed in the Saturday `reviews` window so the build is not preempted at 21:00; U08-73 skips the standard review steps with `chain_skipped` reason `rekey`. Canceling the rekey job (U08-51) leaves the old key active (spec 10).
 
-**F08-13 Task lifecycle and resume** — spec 06 `resume()` → U08-57 resets `running` and eligible `failed` tasks (and `dead` with `retry_dead`); U08-58 claims each pending task (+1 attempt); spec 05 `after_step` → U08-60 checkpoints; findings commit through `writes`; U08-61 completes; errors → U08-62 (`pending` or `dead`); cancel or preempt → spec 06 either leaves the row `running` (reset by the next recovery) or calls U08-63. `herness resume` → U08-93 enqueues `resume:<run_id>` at priority 80.
+**F08-13 Task lifecycle and resume** — spec 06 `resume()` → U08-57 resets `running` and eligible `failed` tasks (and `dead` with `retry_dead`); U08-58 claims each pending task (+1 attempt); spec 05 `after_step` → U08-60 checkpoints; findings commit through `writes`; U08-61 completes; errors → U08-62 (`pending` or `dead`); cancel or preempt → spec 06 calls U08-63 `release_task` (R-36). Spec 05 saves key `loop`, spec 06 key `state` and spec 07 key `scratchpad` of the same envelope, and no save erases another owner's key (R-21). `herness resume` → U08-93 enqueues `resume:<run_id>` at priority 80.
 
-**F08-14 Inline run** — U08-90: claim the named job as `<host>:<pid>:cli`; take `GpuLock` and swap when the class is not `none`; heartbeat thread; handler in-process; Ctrl+C → `shutdown` → `yield`; U08-50 applies the outcome; lock released in `finally`.
+**F08-14 Inline run** — U08-90 (admin-only `--inline`, R-45): claim the named job as `<host>:<pid>:cli`; take `GpuLock` when the class is not `none` or the kind is in `GPU_SLOT_KINDS`, and swap when the class is not `none`; heartbeat thread; handler in-process; Ctrl+C → `shutdown` → `yield`; U08-50 applies the outcome; lock released in `finally`.
 
-**F08-15 Chat mode decision** — U08-75: live when reasoning is loaded, `vllm-reasoning` healthy and the chat model breaker not open; else the configured in-hours or off-hours mode; `cloud` without egress becomes `small_model`; `small_model` with its breaker open becomes `defer`. Spec 06 enqueues the `chat` job for `defer`; U08-77 gives the ETA.
+**F08-15 Chat mode decision** — U08-75: live when reasoning is loaded, `vllm-reasoning` healthy and the chat model breaker not open; else the configured in-hours or off-hours mode; `cloud` without egress, or in the `hybrid` profile without the `chat` data-policy approval, becomes `small_model` (R-38); `small_model` with its breaker open becomes `defer`. Spec 06 enqueues the `chat` job for `defer` and enqueues escalation runs under `small_model` for the next live window (R-35); U08-77 gives the ETA used as `scheduled_for`.
 
-**F08-16 Fault injection** — U08-34: without `HERNESS_FAULTS`, return; with it, load and validate the plan once (bad plan → `ConfigError` at first use or at worker start), log WARNING, set the worker flag, and apply the first matching rule's action.
+**F08-16 Fault injection** — U08-34: without `HERNESS_FAULTS`, return; with it but `HERNESS_ENV` not `test`, ignore the plan and log `resilience.faults.ignored` once (R-40); under `test`, load and validate the JSON plan once (bad plan → `ConfigError` at first use or at worker start), log WARNING, set the worker flag, and apply the first matching rule's action.
 
 ## 6. Error handling
 
@@ -1994,8 +2124,8 @@ Columns 08 writes (delta D08-13): `sample_id` INTEGER PK autoincrement; `ts` TEX
 | Output fails schema | `OutputValidationError` | U08-35, U08-38 | 2 repairs, then next candidate | none unless the chain is exhausted (task `dead`) | `resilience.output.repaired` |
 | Refusal | `ModelRefused` | U08-38 | next candidate, no retry | as above | `resilience.chain.fallback_used` |
 | Egress refused | `EgressBlocked` | U08-38 | next local candidate | as above | `resilience.chain.fallback_used` |
-| SQLite locked or busy | `StoreBusy` | U08-28 (`sqlite_write`) | 6 attempts within 30 s | none; beyond → caller error; supervisor skips the tick | `resilience.call.retry_scheduled` |
-| Supervisor tick fails 10 times in a row | — | U08-87 | graceful shutdown, exit 3 | worker stops; status shows no worker | `jobs.supervisor.store_unavailable` |
+| SQLite locked or busy | `StoreBusy` | impl 02 `run_write` with policy `sqlite_write` (U08-28, R-10) | 6 attempts within 30 s | none; beyond → caller error; supervisor skips the tick | `resilience.call.retry_scheduled` |
+| Supervisor tick fails 10 times in a row | — | U08-87 | graceful shutdown, exit 1 (R-46) | worker stops; status shows no worker | `jobs.supervisor.store_unavailable` |
 | Handler raises a foreign exception | `FatalError` | U08-56 | none | job `failed` with `last_error` | `jobs.handler.crashed` |
 | Child exits without outcome | `ModelUnavailable("child_crash")` | U08-87 | job backoff until `max_attempts` | job retried | `jobs.job.rescheduled` |
 | Child silent past stall timeout | `ModelUnavailable("stalled")` | U08-87 | job backoff | job retried | `jobs.job.stalled` |
@@ -2005,7 +2135,9 @@ Columns 08 writes (delta D08-13): `sample_id` INTEGER PK autoincrement; `ts` TEX
 | Service start or warm-up fails | `ModelUnavailable` | U08-81 | stop services, class `none`, breaker failure | as above | `jobs.gpu.swap_failed` |
 | Start of a service from another class | `ConfigError` | U08-81 → handler | none | job `failed` | `jobs.job.failed` |
 | GPU call from a CPU slot | `ConfigError` | U08-85 | none | job `failed` | `jobs.job.failed` |
-| Second GPU worker on the host | `ConfigError` | U08-82 | none | `herness worker` exits 2 | `jobs.worker.gpu_lock_held` |
+| Second GPU worker on the host | `ConfigError` | U08-82 | none | `herness worker` exits 1 (R-46) | `jobs.worker.gpu_lock_held` |
+| Invalid schedule or window set at worker start | `ConfigError` issues from U08-99 | U08-87 | none | `herness worker` exits 1; `herness config validate` lists the same issues | `jobs.worker.config_invalid` |
+| `HERNESS_FAULTS` set outside `HERNESS_ENV=test` | — | U08-34 | plan ignored (R-40) | none; status shows no faults | `resilience.faults.ignored` |
 | Invalid fault plan | `ConfigError` | U08-33 | none | process fails at first fault point or worker start | `resilience.faults.invalid` |
 | Payload too large or holds secrets | `SchemaViolation` | U08-45 | none | enqueue refused | `jobs.job.rejected` |
 | Checkpoint > 4 MiB | warning, then `SchemaViolation` | U08-59 | `loop` dropped first | resume restarts that task from its spec | `jobs.checkpoint.loop_dropped` |
@@ -2036,13 +2168,13 @@ Retries happen only in the resilience layer (ENG §3.4). Error messages carry `j
 | TH08-03 | TB10 | I | Job payload carries a secret or record text into the ops store | M | M | `validate_payload`: ≤ 64 KB, key regex, known secret values, credential and URL-token scan (U08-45) | ASVS v5.0.0-V2.2, ASVS v5.0.0-V13.3 | ST08-03 |
 | TH08-04 | TB1, TB6 | D | A hostile or broken server sends a huge `Retry-After` and parks work | M | M | `retry_after_cap_s`; above the cap the call re-raises and the job reschedules at a known time (U08-28) | ASVS v5.0.0-V2.4 | ST08-04 |
 | TH08-05 | TB1, TB6 | D | Retry storms hammer a down source or model | M | M | Bounded attempts and `max_elapsed_s`, full jitter, breakers with exponential cooldown, single probe claim across processes (U08-24, U08-28) | ASVS v5.0.0-V15.4, LLM10 | ST08-05 |
-| TH08-06 | TB10 | T, D | `HERNESS_FAULTS` set in production kills processes or corrupts behavior unnoticed | L | H | Hook inert without the variable; plan file ≤ 64 KB, safe parser, closed action and point sets; WARNING log, `worker.faults_enabled`, `FAULTS ENABLED` in status and a degraded `health()` (U08-33, U08-34, U08-92) | ASVS v5.0.0-V13.1, ASVS v5.0.0-V16.3 | ST08-06 |
+| TH08-06 | TB10 | T, D | `HERNESS_FAULTS` set in production kills processes or corrupts behavior unnoticed | L | H | Hook inert without the variable and outside `HERNESS_ENV=test` (a plan is then ignored with a WARNING, R-40); JSON-only plan file ≤ 64 KB, closed action and point sets; WARNING log, `worker.faults_enabled`, `FAULTS ENABLED` in status and a degraded `health()` (U08-33, U08-34, U08-92) | ASVS v5.0.0-V13.1, ASVS v5.0.0-V16.3 | ST08-06 |
 | TH08-07 | TB6 | I | Fallback or chat routing sends data off-network when the profile forbids egress | L | H | Off-network candidates removed unless `security.egress.enabled`; `cloud` mode degraded to `small_model`; spec 10 egress guard still checks each call; `EgressBlocked` falls back to local (U08-37, U08-75) | ASVS v5.0.0-V14.2, LLM02 | ST08-07 |
 | TH08-08 | TB10 | T | A stale lease owner (clock jump, reaped job) completes a job or saves state, duplicating side effects | M | M | Every completion and state write guarded by `lease_owner` and `status`; heartbeat 0 rows stops the child (U08-50, U08-95) | ASVS v5.0.0-V15.4 | ST08-08 |
 | TH08-09 | TB8 | S, T | A second GPU-capable worker or a manual `deploy up` loads a second class and corrupts VRAM state | L | M | OS lock on `data/locks/gpu.lock`; deploy up/down goes through `worker.requested_class` while a worker lives (U08-82, U08-70) | ASVS v5.0.0-V15.4 | ST08-09 |
 | TH08-10 | TB10, TB4 | D | Unbounded payloads, results, checkpoints or pipe messages exhaust the ops store or memory | L | M | Caps: payload 64 KB, result 1 MiB, checkpoint 4 MiB, pipe message 8 MiB, metric buffer 10 000 (U08-03, U08-45, U08-59, U08-84, U08-20) | ASVS v5.0.0-V2.3 | ST08-10 |
 | TH08-11 | TB10 | R | Job cancel or retry actions cannot be attributed | M | L | 08 logs every cancel and retry with `job_id`; spec 09 checks the admin role and writes the `audit` line with the actor (X:09 job control) | ASVS v5.0.0-V16.3 | ST08-11 |
-| TH08-12 | TB8 | S | Another local process binds a model port and answers health or warm-up checks | L | M | Loopback-only URLs enforced per request; bearer key on OpenJev and vLLM; ports bound by spec 10 firewall rules; host compromise is accepted residual R2 | ASVS v5.0.0-V12.1 | ST08-12 |
+| TH08-12 | TB8 | S | Another local process binds a model port and answers health or warm-up checks | L | M | Loopback-only URLs enforced per request, with clients only from `herness.core.egress.loopback_http_client` (R-06); bearer key on OpenJev (`secret:OPENJEV_API_KEY`, R-53) and vLLM; fixed ports 8000, 8100, 8200 (R-51); ports bound by spec 10 firewall rules; host compromise is accepted residual R2 | ASVS v5.0.0-V12.1 | ST08-12 |
 | TH08-13 | TB8 | T, E | Unsafe deserialisation of supervisor↔child messages | L | H | JSON bytes only (`send_bytes`), pydantic strict validation, 8 MiB cap; spawn arguments are plain strings (U08-84, U08-88) | ASVS v5.0.0-V1.5 | ST08-13 |
 | TH08-14 | TB4 | D | Prompt-injected text drives an agent into endless tool loops or repair cycles | M | M | Second loop signal stops the task (`guard_stop`); repairs capped at 2; chain length bounded; spec 06 budgets (U08-35, U08-40) | LLM01, LLM10 | ST08-14 |
 | TH08-15 | TB4 | I | Repair prompt echoes attacker-controlled values into logs or traces | L | L | Repair error lines hold JSON pointer paths and validator names only; traces carry paths only; the echoed assistant text goes only back to the same model (U08-35, U08-36) | LLM05, ASVS v5.0.0-V16.2 | ST08-15 |
@@ -2052,7 +2184,7 @@ Retries happen only in the resilience layer (ENG §3.4). Error messages carry `j
 | ASVS section | Requirement area | Where |
 |--------------|------------------|-------|
 | ASVS v5.0.0-V1.2 | Injection prevention (OS command, SQL) | U08-78 argv; parameterised SQL in U08-94–U08-97; allowlisted column names in U08-96 |
-| ASVS v5.0.0-V1.5 | Safe deserialization | U08-33 `yaml.safe_load`; U08-84 JSON pipe |
+| ASVS v5.0.0-V1.5 | Safe deserialization | U08-33 JSON-only fault plans (R-40); U08-84 JSON pipe |
 | ASVS v5.0.0-V2.2, V2.3, V2.4 | Input validation, business limits, anti-automation | U08-02, U08-45, U08-59; attempt, elapsed and Retry-After caps |
 | ASVS v5.0.0-V12.1 | Communication security configuration | Loopback-only local HTTP; off-network only via spec 10 |
 | ASVS v5.0.0-V13.1, V13.3 | Configuration, secret management | Section models with `extra="forbid"`; secrets only by reference (U08-06, U08-79, U08-74) |
@@ -2075,7 +2207,7 @@ AI RMF functions served: **Manage** (fallback chains, breakers, preemption, dead
 
 | Secret | Used by | Resolution | Exposure |
 |--------|---------|------------|----------|
-| `R.gpu.classes.decider.services.openjev.health.bearer_secret` (default `openjev.api_key`, D08-08) | U08-79 health and warm-up | `herness.core.secrets.resolve` per request (X:10) | Authorization header only; never logged |
+| `R.gpu.classes.decider.services.openjev.health.bearer_secret` (default `secret:OPENJEV_API_KEY`, R-53; D08-08 resolved) | U08-79 health and warm-up | `herness.core.secrets.resolve` per request (X:10) | Authorization header only; never logged |
 | vLLM key from the reasoning client's `api_key` reference in `models.yaml` | U08-79 warm-up | same | same |
 | `redact.hmac_key.next` | U08-74 | same | only the 8-hex `key_id` leaves the function |
 
@@ -2117,7 +2249,7 @@ All events carry `ts`, `level`, `event`, `component` (`resilience` or `jobs`), t
 | `resilience.decider.skipped` / `.fallback` | DEBUG / WARNING | `decider`, `reason` | U08-39 |
 | `resilience.event.dropped` | WARNING | `kind`, `error_type` | U08-18 |
 | `resilience.metrics.flush_failed` / `.dropped` | WARNING | `rows` / `count` | U08-22, U08-20 |
-| `resilience.faults.enabled` / `.invalid` / `.kill` / `.no_service_hook` | WARNING / ERROR / CRITICAL / WARNING | `plan`, `rules`, `point` | U08-33, U08-34 |
+| `resilience.faults.enabled` / `.invalid` / `.kill` / `.no_service_hook` / `.ignored` | WARNING / ERROR / CRITICAL / WARNING / WARNING | `plan`, `rules`, `point`, `env` | U08-33, U08-34 |
 | `resilience.timeout.hook_failed` | WARNING | `error_type` | U08-32 |
 | `resilience.backend.bound` | DEBUG | `port` | U08-10 |
 | `jobs.job.enqueued` | INFO (DEBUG when deduped) | `job_id`, `kind`, `priority`, `created`, `scheduled_for` | U08-46 |
@@ -2141,7 +2273,8 @@ All events carry `ts`, `level`, `event`, `component` (`resilience` or `jobs`), t
 | `jobs.checkpoint.loop_dropped` | WARNING | `task_id`, `bytes` | U08-60 |
 | `jobs.window.class_never_allowed` | WARNING | `class` | U08-68 |
 | `jobs.chat.no_cloud_client` | WARNING | `depth` | U08-76 |
-| `jobs.worker.started` / `.stopped` / `.gpu_lock_held` / `.nothing_to_do` | INFO / INFO / ERROR / INFO | `worker_id`, `slots`, `exit_code` | U08-87 |
+| `jobs.worker.started` / `.stopped` / `.gpu_lock_held` / `.nothing_to_do` / `.config_invalid` | INFO / INFO / ERROR / INFO / ERROR | `worker_id`, `slots`, `exit_code`, `paths` | U08-87 |
+| `jobs.gpu.class_requested` | INFO | `worker_id`, `class` | U08-102 |
 | `jobs.supervisor.tick_failed` / `.store_unavailable` | ERROR / CRITICAL | `failed_ticks`, `error_type` | U08-87 |
 
 ### 8.2 Metrics (`metric_sample`)
@@ -2162,6 +2295,10 @@ All events carry `ts`, `level`, `event`, `component` (`resilience` or `jobs`), t
 | `herness_jobs_gpu_swap_failed_total` | counter | `to` | U08-81 |
 | `herness_jobs_schedule_fired_total` / `_missed_total` | counter | `schedule` | U08-72 |
 | `herness_jobs_supervisor_tick_seconds` | histogram | none | U08-87 |
+| `herness_jobs_queue_depth_count` | gauge | `gpu_class` | U08-87 step 7a through U08-103 |
+| `herness_jobs_gpu_vram_used_mb` | gauge | none | U08-81 step 7 through U08-103 |
+
+Every row reaches `metric_sample` through the single writer `herness.store.ops.metrics.record_metric_samples` (U08-100, R-12).
 
 Derived views for the dashboard and spec 11 (design 08 §5.14) come from `resilience_event` and these samples: retries and fallbacks per policy or profile per day, breaker opens per key, queue wait and run time p50/p95 per kind, swap duration, dead-letter count.
 
@@ -2181,6 +2318,7 @@ All keys come from `config/resilience.yaml` unless stated. Every key is read thr
 |----------|------|---------|------------|---------|-------------|
 | `resilience.retry.policies.<name>.*` | `PolicySettings` | design 08 §7 table | U08-06 | yes | internal |
 | `resilience.retry.job_backoff.base_s` / `.cap_s` | float | 60 / 3600 | > 0, cap ≥ base | yes | internal |
+| `resilience.retry.retry_after_max_s` | float | 86400 | > 0 (U08-17 clamp; D08-27) | yes | internal |
 | `resilience.breakers.{source,model,decider}.failure_threshold` | int | 8 / 5 / 5 | ≥ 1 | yes | internal |
 | `resilience.breakers.{source,model,decider}.cooldown_s` / `.cooldown_max_s` | float | 300/3600, 60/900, 60/900 | max ≥ base | yes | internal |
 | `resilience.breakers.restart_max_per_hour` | int | 1 | ≥ 0 | yes | internal |
@@ -2194,23 +2332,26 @@ All keys come from `config/resilience.yaml` unless stated. Every key is read thr
 | `resilience.jobs.max_attempts.<kind>` | int | design 08 §7 | every kind, 1–20 | yes | internal |
 | `resilience.gpu.compose_cmd`, `compose_file`, `vram_check_cmd` | list[str] / str | design 08 §7 | non-empty; no NUL | yes | internal |
 | `resilience.gpu.vram_free_threshold_mb`, `stop_timeout_s`, `warmup_timeout_s` | int | 2000, 120, 120 | > 0 | yes | internal |
-| `resilience.gpu.classes.<class>.services.<svc>.{url, health.path, health.bearer_secret, start_timeout_s, start_on_entry}` | see U08-06 | design 08 §7 | loopback URL; service in one class | yes | internal (secret name) |
+| `resilience.gpu.classes.<class>.services.<svc>.{url, health.path, health.bearer_secret, start_timeout_s, start_on_entry}` | see U08-06 | design 08 §7; URLs `http://127.0.0.1:8000` (vLLM), `:8100` (OpenJev), `:8200` (llama.cpp) per R-51; OpenJev `bearer_secret` `secret:OPENJEV_API_KEY` (R-53) | loopback URL; service in one class; `bearer_secret` matches `^secret:[A-Z][A-Z0-9_]{0,63}$` | yes | internal (secret reference) |
 | `schedule.windows[]` | `WindowSpec` | design 08 §7 | U08-67 full-week coverage | yes | internal |
 | `schedule.preempt_grace_min` | int | 15 | ≥ 0 | yes | internal |
 | `schedule.batch_in_chat_min_priority` | int | 70 | 0–100 | yes | internal |
 | `schedule.chat.off_hours` / `.in_hours_unavailable` | enum | `small_model` / `small_model` | `small_model`, `defer`, `cloud` | yes | internal |
 | `schedule.rekey.cron` / `.min_notice_h` | str / int | `0 19 * * SAT` / 12 | cron parses; 0–168 | yes | internal |
-| `schedule.jobs[]` | `ScheduledJob` | design 08 §7 | U08-07 | yes | internal |
+| `schedule.jobs[]` | `ScheduledJob` | design 08 §7, with `nightly.job.gpu_class = none` (R-43) | U08-07 shape; U08-99 cron parse | yes | internal |
 | `schedule.maintenance.catch_up_max` | str | `12h` | `^\d+(m\|h\|d)$` | yes | internal |
 | `weights.yaml: business_timezone` (`cfg.weights.business_timezone`) | IANA name | spec 04 | `zoneinfo` loads it | yes | internal |
 | `herness.yaml: security.egress.enabled` | bool | profile | spec 10 (file-only) | yes | internal |
 | `herness.yaml: paths.data` | path | `data` | spec 10 | yes | internal |
 | `herness.yaml: backup.nightly_at` | `HH:MM` | `01:30` | spec 10 | yes | internal |
-| `sources.yaml: sources.<s>.{enabled, schedule, reconcile.schedule}` | bool / cron | spec 01 | cron parses (U08-64 through spec 01's validator) | yes | internal |
+| `sources.yaml: sources.<s>.{enabled, schedule, reconcile.schedule}` | bool / cron | spec 01 | cron shape in spec 01 settings; full parse by U08-99 through impl 10 `SECTION_VALIDATORS` (R-03) | yes | internal |
+| `herness.yaml: profile` and `security.data_policy` `chat` approval | str / bool | `local` / not approved | spec 10; the `chat` approval flag is added by impl 10 (R-38, O08-13) | yes | internal |
 | `models.yaml: models.*` (through `ChainRegistry`) | spec 05 | spec 05 | spec 05 | yes | internal |
-| env `HERNESS_FAULTS` | path | unset | U08-33 | yes (read once per process) | internal |
+| env `HERNESS_FAULTS` | path to a `.json` plan | unset | U08-33; honoured only with `HERNESS_ENV=test` (R-40) | yes (read once per process) | internal |
+| env `HERNESS_ENV` | str | unset | `test` enables fault plans (R-40); any other value or unset ignores them | yes (read once per process) | internal |
+| env `HERNESS_STUB_SERVICES` | JSON object, service name → loopback base URL | unset | read only by the `kill_service:` fault action under `HERNESS_ENV=test` (impl 11 DD11-04) | yes | internal |
 
-Constants (not configurable): `BREAKER_CACHE_S = 5`, `HALF_OPEN_STALE_S = 600`, `METRIC_FLUSH_INTERVAL_S = 10`, `METRIC_BUFFER_MAX = 10000`, `CHECKPOINT_MAX_BYTES = 4194304`, `MAX_PIPE_MSG_BYTES = 8388608`, `PAYLOAD_MAX_BYTES = 65536`, `RESULT_MAX_BYTES = 1048576`, `COMPOSE_UP_TIMEOUT_S = 120`, `SWAP_ETA_S = 360`, `SOURCE_SYNC_CATCH_UP = 1 h`, `SOURCE_RECONCILE_CATCH_UP = 12 h`, `SWAP_FAILURE_POSTPONE = 10 min`, supervisor store-failure limit 10 ticks.
+Constants (not configurable): `BREAKER_CACHE_S = 5`, `HALF_OPEN_STALE_S = 600`, `METRIC_FLUSH_INTERVAL_S = 10`, `METRIC_BUFFER_MAX = 10000`, `METRIC_GAUGE_KEYS_MAX = 1000`, `CHECKPOINT_MAX_BYTES = 4194304`, `CHECKPOINT_SCHEMA_VERSION = 1`, `GPU_SLOT_KINDS = {build_pipeline}`, `MAX_PIPE_MSG_BYTES = 8388608`, `PAYLOAD_MAX_BYTES = 65536`, `RESULT_MAX_BYTES = 1048576`, `COMPOSE_UP_TIMEOUT_S = 120`, `SWAP_ETA_S = 360`, `SOURCE_SYNC_CATCH_UP = 1 h`, `SOURCE_RECONCILE_CATCH_UP = 12 h`, `SWAP_FAILURE_POSTPONE = 10 min`, supervisor store-failure limit 10 ticks.
 
 ## 10. Performance and capacity
 
@@ -2228,21 +2369,21 @@ Constants (not configurable): `BREAKER_CACHE_S = 5`, `HALF_OPEN_STALE_S = 600`, 
 | BT08-10 | `herness resume` → first task running | idle worker, class loaded, fake LLM | dev box | < 30 s | `integration` + `slow` |
 | BT08-11 | Supervisor idle CPU | worker with no jobs for 10 min | dev box | < 1 % of one core (`psutil.Process.cpu_percent`) | `slow` |
 
-Resource limits the code enforces: payload 64 KB; job result 1 MiB; checkpoint 4 MiB; pipe message 8 MiB; metric buffer 10 000 observations; event detail 20 keys; repair echo 4 000 chars; error message 2 KB; cron search 1 830 days; one GPU slot and `R.jobs.cpu_slots` CPU slots per worker; one GPU executor thread.
+Resource limits the code enforces: payload 64 KB; job result 1 MiB; checkpoint 4 MiB; pipe message 8 MiB; metric buffer 10 000 observations and 1 000 gauge keys; 100 000 samples per `record_metric_samples` call; Retry-After clamp `retry_after_max_s` (86 400 s); event detail 20 keys; repair echo 4 000 chars; error message 2 KB; cron search 1 830 days; one GPU slot and `R.jobs.cpu_slots` CPU slots per worker; one GPU executor thread.
 
 ## 11. Test specification
 
-Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`, store adapter tests in `tests/unit/store/`, integration in `tests/integration/jobs/`, fault in `tests/fault/`, benchmarks in `tests/bench/`. Common fixtures: `process_state_reset` (calls `reset_process_state`, seeds `rng` with `random.Random(0)`, replaces `sleep`/`asleep` with a fake clock that advances `freezegun` time), `ops_db` (temp SQLite migrated by X:02/herness.store.ops.migrate and bound with U08-98), `cfg_default` (config from design 08 §7 defaults, business timezone `Europe/London` for DST cases), `fake_chain_registry` (in-memory `ChainRegistry` with the spec 05 default clients), `fake_gpu` (`tests/support/fake_gpu.py`: a fake `ComposeRunner` recording argv and service states, a stub loopback health/warm-up server on ephemeral ports, a fake VRAM reader), `fake_llm` (X:11/tests.support.StubLLMServer or an in-process scripted `AsyncCompleter`), `recording_tracer` (collects `emit` calls). Every test names its ID in the docstring.
+Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`, store adapter tests in `tests/unit/store/`, integration in `tests/integration/jobs/`, fault in `tests/fault/`, benchmarks in `tests/bench/`. Common fixtures: `process_state_reset` (calls `reset_process_state`, seeds `rng` with `random.Random(0)`, replaces `sleep`/`asleep` with a fake clock that advances `freezegun` time), `ops_db` (temp SQLite migrated by X:02/herness.store.ops.migrate and bound with U08-98), `cfg_default` (config from design 08 §7 defaults, business timezone `Europe/London` for DST cases), `fake_chain_registry` (in-memory `ChainRegistry` with the spec 05 default clients), `fake_gpu` (`tests/support/fake_gpu.py`: a fake `ComposeRunner` recording argv and service states, a stub loopback health/warm-up server on ephemeral ports, a fake VRAM reader), `fake_llm` (impl 11 `tests/support/fake_llm.py`: X:11/tests.support.fake_llm.FakeLLMServer over HTTP or X:11/tests.support.fake_llm.FakeLLMClient in process, R-65), `fault_env` (sets `HERNESS_ENV=test` and writes a JSON plan for `HERNESS_FAULTS`; every FT08 test uses it, R-40), `recording_tracer` (collects `emit` calls). Every test names its ID in the docstring.
 
 ### 11.1 Unit tests
 
 | ID | Unit / flow | Setup | Action | Expected | Marker |
 |----|-------------|-------|--------|----------|--------|
-| UT08-01 | U08-01, U08-02, U08-04 | none | build `JobSpec` with priority −1, 101, extra field, naive `scheduled_for` | each raises `ValidationError`; valid spec is frozen; literal sets equal design 08 | unit |
+| UT08-01 | U08-01, U08-02, U08-04 | none | build `JobSpec` with priority −1, 101, `None`, extra field, naive `scheduled_for` | −1, 101, extra field and naive time raise `ValidationError`; `None` accepted (R-41); valid spec is frozen; literal sets equal design 08; `JobContext` is importable from `herness.core.jobs` and not from `herness.core.types` (R-02) | unit |
 | UT08-02 | U08-03 | none | `JobOutcome(status="done")`; oversize result | `result == {}`; oversize raises | unit |
-| UT08-03 | U08-06 | `cfg_default` | load | every field equals design 08 §7; missing policy key rejected; non-loopback service URL rejected | unit |
-| UT08-04 | U08-07, U08-67 | windows with a 1-minute gap, an overlap, two `chat` windows | validate | issues name the minute ranges; default windows give no issue | unit |
-| UT08-05 | U08-07 | invalid cron, `then` kind `foo`, preload not in classes, window class not in `gpu.classes` | validate | each rejected with its path | unit |
+| UT08-03 | U08-06, U08-07 | `cfg_default` | load | every field equals design 08 §7 with the R-43, R-51 and R-53 defaults (`nightly` class `none`; ports 8000/8100/8200; OpenJev `secret:OPENJEV_API_KEY`); `retry_after_max_s == 86400`; missing policy key rejected; non-loopback service URL rejected; `bearer_secret` `openjev.api_key` rejected by the reference regex | unit |
+| UT08-04 | U08-67, U08-99 | windows with a 1-minute gap, an overlap, two `chat` windows | `validate_resilience_config` | issues with path `schedule.windows` name the minute ranges; default windows give no issue | unit |
+| UT08-05 | U08-07, U08-99 | cron with 4 fields, cron `60 * * * *`, source schedule `*/0 * * * *`, `then` kind `foo`, preload not in classes, window class not in `gpu.classes` | load, then `validate_resilience_config` | 4-field cron, kind, preload and class rejected by the model with their paths; the two unparsable crons reported by U08-99 with paths `schedule.jobs[0].cron` and `sources.<name>.schedule` | unit |
 | UT08-06 | U08-11, U08-12 | `cfg_default` | `policy(n)` for every name; `policy("bogus")` | values equal the §5.2 table; `gpu_health` constant; bogus → `ConfigError` | unit |
 | UT08-07 | U08-13 | client infos (off-network; `large`; `reasoning`; `null`) | select | `llm_cloud`, `llm_large`, `llm_local`, `llm_local` | unit |
 | UT08-08 | U08-14 | policy `llm_cloud`, fake clock | `RateLimited(retry_after=7)` then success | slept ≥ 7 s and ≤ 120 s | unit |
@@ -2282,9 +2423,9 @@ Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`,
 | UT08-42 | U08-38 | candidate 1 raises `AuthError` in run `run_A` | two calls in `run_A`, one in `run_B` | `fallback` reason `auth`; second `run_A` call skips candidate 1; `run_B` still tries it | unit |
 | UT08-43 | U08-39 | deciders: `laya` raises `RuntimeError`, `openjev` breaker open, `llm` returns outputs; gpu reasoning loaded | decide | `laya` classified `ModelUnavailable` and retried 3×, `openjev` skipped (unavailable in reasoning), `llm` decides; `([outputs], [])` | unit |
 | UT08-44 | U08-39 | loaded `decider`, `openjev` unhealthy, order `[openjev, llm]` | decide | `([], items)` | unit |
-| UT08-45 | U08-40 | `LoopState(nudges=0)` and `(nudges=1)`; tracer | policy | `nudge` with no event; `stop` with one `guard_stop` row and trace event (`cause`, `step`) | unit |
+| UT08-45 | U08-40 | `LoopState(loop_signals=1, nudges=3)` and `(loop_signals=2, nudges=0)`; tracer | policy | first: `nudge` with no event (nudges ignored, R-66); second: `stop` with one `guard_stop` row carrying the tracer's `run_id`/`task_id` and a trace event (`cause`, `step`) | unit |
 | UT08-46 | U08-34 | env unset; spy on `open` | 1 000 calls | no file access, no effect | unit |
-| UT08-47 | U08-33 | plans: unknown point, unknown action, `nth`+`count`, `p` without seed, 70 KB file, symlink, `!!python/object` YAML tag | load | each `ConfigError` | unit |
+| UT08-47 | U08-33 | plans: unknown point, unknown action, `nth`+`count`, `p` without seed, 70 KB file, symlink, a valid plan saved with suffix `.yaml` (R-40) | load | each `ConfigError` | unit |
 | UT08-48 | U08-34 | rules `nth: 3`; `count: 2`; `p: 0.2, seed: 7`; label filter `model: local-30b` | 10 calls each | fires on call 3 only; calls 1–2; the same call indices on two runs; only matching labels fire | unit |
 | UT08-49 | U08-34 | one rule per action | call | error classes per U08-34 table; `delay` sleeps on the fake clock; `kill_service` calls the hook | unit |
 | UT08-50 | U08-34 | valid plan | first call | WARNING `resilience.faults.enabled`; `faults_enabled` true | unit |
@@ -2305,7 +2446,7 @@ Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`,
 | UT08-65 | U08-54, U08-96 | worker rows with heartbeat 89 s and 91 s old (`heartbeat_s` 30) | `worker_alive()` | true, false | unit |
 | UT08-66 | U08-57 | tasks running(2), done(1), failed(1, below cap), failed(3, at cap), dead(1) | recover without and with `retry_dead` | running → pending, attempts unchanged; done untouched; one failed reset; dead reset only with `retry_dead` (attempts 0) | unit |
 | UT08-67 | U08-58 | pending and running tasks | `claim_task` | true and attempts +1; false for running | unit |
-| UT08-68 | U08-59, U08-60 | existing checkpoint with `scratchpad`; new checkpoint without it; 5 MB `loop`; 5 MB `state` | save | scratchpad kept; `loop` dropped with warning; 5 MB state → `SchemaViolation` | unit |
+| UT08-68 | U08-59, U08-60 | envelope with `scratchpad`; save key `loop` 5 MB; save key `state` 5 MB; envelope with `schema_version` 2; envelope with an extra top-level key | save | first: `scratchpad` kept and `loop` dropped with warning; 5 MB state → `SchemaViolation`; version 2 and extra key → `SchemaViolation` | unit |
 | UT08-69 | U08-60, U08-61 | `writes` inserting a finding then raising; task not running | save / complete | finding row absent after rollback; not running → `JobStateError` | unit |
 | UT08-70 | U08-62 | attempts 1 and 3 with max 3; errors `ModelUnavailable`, `OutputValidationError`, `BudgetExceeded`, `CircuitOpen` | fail | pending / dead per U08-62 | unit |
 | UT08-71 | U08-63 | running task attempts 2; done task | release | pending with attempts 1; done unchanged, DEBUG log | unit |
@@ -2315,18 +2456,18 @@ Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`,
 | UT08-75 | U08-66 | default windows; instants each hour across one week and at 23:59 Sunday | `window_at` | window names per design 08 §5.10 table | unit |
 | UT08-76 | U08-69 | decider job loaded 05:00 Tue at 07:01; large loaded by in-job switch at 22:00 Sun then 06:30 Mon; reasoning at 08:00 | deadline | 07:00 (06:00 + 60 overrun); 07:00 Mon; `None` | unit |
 | UT08-77 | U08-68 | Tuesday 10:00, class `decider` | next allowed | 19:00 same day | unit |
-| UT08-78 | U08-70 | table of loaded × window × claimable × requested | decide | per U08-70 steps | unit |
+| UT08-78 | U08-70 | table of loaded × window × claimable (including key `none` for `GPU_SLOT_KINDS` jobs) × requested (including `large` and `none`) | decide | per U08-70 steps; `claimable["none"] > 0` gives `keep` without a swap | unit |
 | UT08-79 | U08-72, U08-43 | `nightly` with `catch_up_max` 6h; worker down 18:00–20:00 and 18:00–02:00 | run scheduler | enqueued once with `fire_at` 19:00 and priority 60; second case `schedule_missed` once | unit |
 | UT08-80 | U08-73 | nightly on Sunday and Tuesday; step 1 `done`, step 2 `failed` | advance | Sunday: both review steps `chain_skipped` (`skip_on`), eval `disabled`; Tuesday: step 2 enqueued after step 1; failure → one `chain_broken` | unit |
 | UT08-81 | U08-74 | fake secret; now Friday 10:00 and Saturday 10:00 | `schedule_rekey` | Saturday 19:00 same week; next Saturday 19:00 (< 12 h notice); idem `rekey:<8 hex>`; `rekey_planned` | unit |
 | UT08-82 | U08-71 | sources `jira` (schedule, reconcile), `snow` disabled; `backup.nightly_at` 01:30 | collect | entries `sync.jira`, `reconcile.jira`, `maintenance` (`30 1 * * *`, then purge), config jobs | unit |
 | UT08-83 | U08-72 | one entry whose submit raises `SchemaViolation` | run | `jobs.schedule.error` logged; other entries fire | unit |
-| UT08-84 | U08-75 | table: windows {chat, reviews} × loaded {reasoning, decider, swapping} × vLLM healthy {t, f} × chat breaker {closed, open} × off-hours breaker {closed, open} × egress {off, on} × config modes {small_model, defer, cloud} | policy | expected `ChatMode` per the design pseudocode; `cloud` never with egress off | unit |
+| UT08-84 | U08-75 | table: windows {chat, reviews} × loaded {reasoning, decider, swapping} × vLLM healthy {t, f} × chat breaker {closed, open} × off-hours breaker {closed, open} × egress {off, on} × profile {local, hybrid} × `chat` approval {absent, present} × config modes {small_model, defer, cloud} | policy | expected `ChatMode` per the design pseudocode; `cloud` never with egress off, and never in `hybrid` without the approval (R-38) | unit |
 | UT08-85 | U08-76 | fake chains | each mode × depth | first local / chat_off_hours / first off-network / `None` | unit |
 | UT08-86 | U08-77 | Tue 19:30; Tue 03:00; swap to reasoning in progress | ETA | 21:00 Tue (reviews allows reasoning); 06:00; now + 360 s | unit |
 | UT08-87 | U08-78 | `fake_gpu` capturing argv | up/stop/kill/ps; service `"x; rm -rf"` | exact argv lists, `shell=False`; bad name → `ConfigError` | unit |
 | UT08-88 | U08-78 | ps output as array and as JSON lines; garbage | parse | service states; garbage → `ModelUnavailable` | unit |
-| UT08-89 | U08-79 | stub server; URL `http://10.0.0.1:8000` | healthy / warm-up | bearer header sent, not logged; non-loopback → `ConfigError`; warm-up bodies match the table | unit |
+| UT08-89 | U08-79 | stub server; spy on `herness.core.egress.loopback_http_client`; URL `http://10.0.0.1:8000`; stub answering 302 | healthy / warm-up | every client comes from the spy (R-06); bearer header sent, not logged; non-loopback → `ConfigError`; 302 → unhealthy; warm-up bodies match the table | unit |
 | UT08-90 | U08-80 | fake VRAM readings 20 000, 1 500; never below | wait | returns on second poll; timeout → `ModelUnavailable("vram_not_freed")` | unit |
 | UT08-91 | U08-81 | `fake_gpu`, loaded decider | swap to reasoning | stop openjev, VRAM, up vllm, health, warm-up; worker `swapping` then `reasoning`; `gpu_swap`; `model:local-30b` reset | unit |
 | UT08-92 | U08-81 | warm-up fails | swap | vllm stopped; class `none`; breaker failure; `gpu_swap_failed`; `ModelUnavailable` | unit |
@@ -2340,8 +2481,16 @@ Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`,
 | UT08-100 | U08-91 | `ops_db` seeded with workers, jobs, events, breakers | snapshot | every key present; counts equal the seeded rows | unit |
 | UT08-101 | U08-92 | no worker; worker + open breaker; clean | health | `down`, `degraded`, `ok` | unit |
 | UT08-102 | U08-93 | runs `done`, `running`, `chat` | resume | `job_id None`; review job with `resume:<run_id>`, priority 80; `JobStateError` | unit |
-| UT08-103 | §2 layering | repository | run `lint-imports` | contracts pass: `herness.core` imports no `herness.store`/`harness`; `herness.core.types` imports only errors and ids | unit |
+| UT08-103 | §2 layering | repository | run `lint-imports` | contracts pass: `herness.core` imports no `herness.store`/`harness`; `herness.core.types.jobs` imports only pydantic, stdlib, `herness.core.errors`, `herness.core.ids` and `herness.core.types.harness`; `herness.core.resilience.settings` imports only stdlib, pydantic, `herness.core.types` and `herness.core.errors` (R-03); no module under `herness/core/jobs/` constructs an `httpx` client (R-06) | unit |
 | UT08-104 | U08-27 | registered probe fns (succeeding, failing), open breakers due and not due | `run_due_probes` | due+success → closed; due+failure → open with trips+1; not due untouched; no fn → skipped | unit |
+| UT08-105 | U08-34 | valid JSON plan in `HERNESS_FAULTS`; `HERNESS_ENV` unset, then `prod`, then `test`; spy on `open` | 10 `fault_point` calls per case | unset and `prod`: no file access, no fault, one `resilience.faults.ignored` WARNING per process; `test`: plan loaded and applied (R-40) | unit |
+| UT08-106 | U08-43, U08-46, U08-47 | `ops_db` | `enqueue` of each `JobKind` with `priority=None`, and one with `priority=10` | stored priority equals `DEFAULT_PRIORITY[kind]`; explicit 10 kept (R-41) | unit |
+| UT08-107 | U08-48, U08-95 | `ops_db`; queued `build_pipeline` class `none`, `sync` class `none`, `review` class `reasoning` | claim with owners `h:1:cpu0`, `h:1:gpu` (allowed `[reasoning, none]`), `h:1:cli` | CPU owner gets only `sync`; GPU owner gets `build_pipeline` or `review` by priority, never `sync`; CLI owner can claim any of them by `job_id` (R-43) | unit |
+| UT08-108 | U08-102, U08-96 | `ops_db`; no worker; then an alive GPU worker; then a stale one | `request_gpu_class("large")`, `request_gpu_class("none")` | `no_worker` and no write; `requested` with `requested_class` set and INFO log; stale worker → `no_worker` | unit |
+| UT08-109 | U08-59, U08-60, U08-97 | `ops_db`; running task | save `state` {a}, then `loop` {b}, then `scratchpad` {c}, then `state` {d}; two threads saving `loop` and `scratchpad` at once | envelope `{schema_version: 1, loop: b, state: d, scratchpad: c}`; no save erased another key; concurrent saves keep both keys (R-21) | unit |
+| UT08-110 | U08-100, U08-101 | `ops_db` | `record_metric_samples` with 1 201 samples (counter, gauge, histogram); again inside a caller's `run_write` with `conn`; a sample with 1 100-byte labels; `MetricSample` with a free-text label value; `purge_metric_samples(now − 90 d)` | 1 201 rows in 3 transactions; `conn` rows commit with the caller; labels → `ConfigError`; free text → `ValidationError`; purge removes only older rows | unit |
+| UT08-111 | U08-103, U08-22 | `ops_db`, fake clock | `record_gauge("herness_jobs_queue_depth_count", 5, component="jobs", labels={"gpu_class": "none"})`, then 3 for the same key, then 1 001 distinct keys; `flush_metrics()` | one `gauge` row with value 3 for the first key; negative value accepted; `_total` name and NaN → `ConfigError`; key 1 001 dropped and counted | unit |
+| UT08-112 | U08-17 | fixed `now`; headers `Retry-After: 120`, `Retry-After: 1.5`, `Retry-After: <HTTP date now + 60 s>`, `<date now − 60 s>`, `<date with no zone>`, `Retry-After: soon`, `Retry-After: 999999`, `X-RateLimit-Reset` in epoch seconds and in epoch milliseconds; `max_s = 3600` | parse | 120; `None` (not RFC 9110 delay-seconds); 60; 0; `None`; `None`; 3600 (clamped); both epoch forms give the delay to `now` | unit |
 
 ### 11.2 Property tests (hypothesis)
 
@@ -2349,7 +2498,7 @@ Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`,
 |----|------|----------|--------|
 | PT08-01 | U08-14 | For random attempt 1–20 and policy values, 10 000 samples lie in `[0, min(cap, base·2^(a−1))]`; with `retry_after ≤ cap` result in `[retry_after, cap]` | unit |
 | PT08-02 | U08-15 | Job backoff in `[0, min(3600, 60·2^(a−1))]` | unit |
-| PT08-03 | U08-17 | Any header strings: never raises; result `None` or ≥ 0; integer seconds parsed exactly | unit |
+| PT08-03 | U08-17 | Any header strings and any `max_s` > 0: never raises; result `None` or within `[0, max_s]`; integer delay-seconds below `max_s` parsed exactly | unit |
 | PT08-04 | U08-64 | Random valid crons and instants: `next_after(t) > t`, `latest_at_or_before(next_after(t)) == next_after(t)`, no fire between `t` and `next_after(t)` at minute resolution | unit |
 | PT08-05 | U08-66, U08-67 | For configs passing validation and random instants, exactly one window contains the instant (outside DST transition hours) | unit |
 | PT08-06 | U08-44 | Key order permutations of a payload give one idem key; distinct payloads give distinct keys in samples | unit |
@@ -2360,14 +2509,14 @@ Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`,
 |----|------|-------|--------|----------|--------|
 | IT08-01 | F08-01 | `ops_db`; two processes with open breaker due | both call `allow()` 100× concurrently | exactly one `True` | integration |
 | IT08-02 | F08-03, U08-48 | 5 000 jobs across classes and kinds incl. exclusive kinds | 8 threads × 1 000 claims, completing each | no job claimed twice; per-thread claims in non-increasing priority among due jobs; never two exclusive kinds running | integration |
-| IT08-03 | F08-12 | rekey planned for Saturday; fake clock Saturday 18:59–23:00; worker with fake handlers | run | rekey job claimed before `build_pipeline`; build payload `rekey_night`; standard reviews `chain_skipped` reason `rekey`; no preemption at 21:00 | integration |
+| IT08-03 | F08-12 | rekey planned for Saturday; fake clock Saturday 18:59–23:00; worker with fake handlers | run | rekey job claimed before `build_pipeline` (both by the GPU slot; the build has class `none`, R-43); build payload `rekey_night`; the build's `gpu_scope("decider")` swaps to decider; standard reviews `chain_skipped` reason `rekey`; no preemption at 21:00 | integration |
 | IT08-04 | F08-04, F08-05 | worker `--concurrency 1`, fake handlers returning `done` | enqueue 3 `none` jobs | all `done` in child processes; events and metrics written | integration |
 | IT08-05 | F08-04 d | handler that loops until `should_yield`; cancel while running; handler ignoring stop | cancel | first yields → `canceled` finalised; second terminated after `cancel_grace_s` (set 2 s) | integration |
 | IT08-06 | F08-04 e | handler sleeping without heartbeat; `stall_timeout_s` 3 s | run | child killed; job requeued with `ModelUnavailable("stalled")` | integration |
 | IT08-07 | F08-05 | handler calling `os._exit(9)` | run | `child_crash`; requeued; attempt 2 succeeds | integration |
 | IT08-08 | F08-09 | long handler checkpointing via `save_state` | send SIGINT (Windows `CTRL_BREAK_EVENT`) once; separately twice | first: job `yield`, `queued`, attempts unchanged, state kept; second: terminated, requeued at next start | integration |
 | IT08-09 | F08-10 | `running` rows owned by `<host>:<dead pid>:cpu0` | start worker | requeued within 10 s; attempts unchanged by recovery | integration |
-| IT08-10 | F08-04 i | backend raising `StoreBusy` for every tick | run 12 ticks | children untouched for 9; after 10 graceful shutdown, exit 3 | integration |
+| IT08-10 | F08-04 i | backend raising `StoreBusy` for every tick | run 12 ticks | children untouched for 9; after 10 graceful shutdown, exit 1 (R-46) | integration |
 | IT08-11 | U08-89 | `--once` with 2 queued jobs; with none | run | one job done, exit 0; none → `nothing_to_do`, exit 0 | integration |
 | IT08-12 | F08-14 | no worker; queued `reasoning` job; `fake_gpu` | `run_inline`; second case SIGINT mid-handler | `done` with swap performed; SIGINT → `yield`, lock released | integration |
 | IT08-13 | U08-87 g | chat window; queued review priority 40 and 75, chat priority 75 | tick | chat and priority-75 review claimable; priority-40 review stays queued | integration |
@@ -2387,9 +2536,9 @@ Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`,
 | FT08-09 | F9 | `gpu.after_stop kill`, worker restart | detection leaves exactly one class or none; never two classes running | fault, gpu (target PC) |
 | FT08-10 | F10 | 08:00 boundary during a decider job | yields within `preempt_grace_min`, attempts unchanged, finished batches not redone at 19:00 | fault, gpu (target PC) |
 | FT08-11 | F11 | `sqlite.write error:StoreBusy count=4` | writes succeed on retry; no lost job state | fault |
-| FT08-12 | F12 | `build_pipeline` with `ctx.services.start("openjev")` then `ctx.require_gpu_class("reasoning")` on `fake_gpu` | `gpu_class_loaded` decider → reasoning; never two services up; `gpu_swap` events | fault |
+| FT08-12 | F12 | `build_pipeline` (class `none`, R-43) entering `ctx.gpu_scope("decider")`, calling `ctx.services.start("openjev")`, then `ctx.require_gpu_class("reasoning")` on `fake_gpu` | job claimed by the GPU slot; `gpu_class_loaded` none → decider → reasoning; never two services up; `gpu_swap` events | fault |
 
-Phase 3 acceptance: FT08-01–FT08-07, FT08-11, FT08-12 in CI (CPU, stubs); FT08-08–FT08-10 on the target PC; `status_snapshot()` counters equal the suite's `resilience_event` rows.
+Phase 3 acceptance: FT08-01–FT08-07, FT08-11, FT08-12 in CI (CPU, stubs, `HERNESS_ENV=test`); FT08-08–FT08-10 on the target PC; `status_snapshot()` counters equal the suite's `resilience_event` rows.
 
 ### 11.5 Security tests
 
@@ -2398,12 +2547,12 @@ Phase 3 acceptance: FT08-01–FT08-07, FT08-11, FT08-12 in CI (CPU, stubs); FT08
 | ST08-01 | TH08-01 | Service names `openjev;calc`, `$(id)`, `../x` in config and in `gpu_request` | config rejects; request `ConfigError`; no subprocess started | unit |
 | ST08-02 | TH08-02 | Errors whose text holds a known secret, an e-mail, a bearer header, 10 KB of ticket text flow through `classify`, `finish_job`, `record_event`, breaker `last_error`, logs | none of the planted values in `job.last_error`, `resilience_event.detail`, `source_health.last_error`, captured logs | unit |
 | ST08-03 | TH08-03 | Enqueue payloads with a secret value, `password=...`, 65 537 bytes | `SchemaViolation`; no row | unit |
-| ST08-04 | TH08-04 | Stub returns `Retry-After: 86400` and an HTTP date a year ahead | call re-raises at once; job requeued at `now + retry_after` without sleeping | unit |
+| ST08-04 | TH08-04 | Stub returns `Retry-After: 86400` and an HTTP date a year ahead | call re-raises at once; job requeued at `now + 86400 s` without sleeping in both cases (the year-ahead date is clamped by `retry_after_max_s`) | unit |
 | ST08-05 | TH08-05 | Endpoint always 503; 20 concurrent callers for 10 min (fake clock) | calls stop after the threshold; while open no calls; one probe per cooldown | integration |
-| ST08-06 | TH08-06 | `HERNESS_FAULTS` pointing to a symlink, a 1 MB file, YAML with `!!python/object/apply` | `ConfigError`; nothing executed; valid plan shows `faults_enabled` in status and `degraded` health | unit |
+| ST08-06 | TH08-06 | `HERNESS_ENV=test` with `HERNESS_FAULTS` pointing to a symlink, a 1 MB file, a `.yaml` file with `!!python/object/apply`; and a valid plan with `HERNESS_ENV` unset | `ConfigError` for the first three; nothing executed; the unset-env case ignores the plan with `resilience.faults.ignored`; a valid plan under `test` shows `faults_enabled` in status and `degraded` health | unit |
 | ST08-07 | TH08-07 | Profile `local`; chain starts with `claude-opus`; chat mode config `cloud` | `claude-opus` never called; `chat_policy` returns `small_model` | unit |
 | ST08-08 | TH08-08 | Owner A's lease reaped and reclaimed by B; A completes and saves state | A's writes change 0 rows; B's result kept | unit |
-| ST08-09 | TH08-09 | Start a second GPU worker; `deploy up large` while a worker runs in the chat window | second exits 2; request rejected and logged | integration |
+| ST08-09 | TH08-09 | Start a second GPU worker; `request_gpu_class("large")` (the `deploy up large` path) while a worker runs in the chat window | second exits 1 (R-46); request rejected and logged | integration |
 | ST08-10 | TH08-10 | Oversized result, checkpoint, pipe message, 20 000 metric observations | each rejected or capped as specified; memory bounded | unit |
 | ST08-11 | TH08-11 | Cancel and retry jobs | `jobs.job.cancel_requested` / `retry_requested` logged with `job_id` | unit |
 | ST08-12 | TH08-12 | Service URL `http://attacker.example:8000` in config; redirect from loopback to external host | config rejected; redirect not followed (unhealthy) | unit |
@@ -2415,31 +2564,45 @@ Phase 3 acceptance: FT08-01–FT08-07, FT08-11, FT08-12 in CI (CPU, stubs); FT08
 
 All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff format --check` clean, `mypy --strict herness/` 0 errors, `lint-imports` passes, the card's tests pass with their IDs, and no new suppression other than those in §2.
 
-### T08-01 Shared types, error class and resilience section model
+### T08-01 Shared types and error class
 
 | Field | Content |
 |-------|---------|
-| Goal | 08 aliases, `JobSpec`, `JobOutcome`, `JobContext`/`ServiceControl` protocols, `JobStateError` and `ResilienceSection` exist. |
-| Depends on | X:00/herness.core.types (module exists), X:00/herness.core.errors (taxonomy), X:10/herness.core.config (settings convention) |
-| Units | U08-01–U08-06 |
-| Files | `herness/core/types.py` (08 section), `herness/core/errors.py` (08 section), `herness/core/resilience/settings.py`, `herness/core/resilience/__init__.py` (lazy map skeleton) |
-| Tests | UT08-01, UT08-02, UT08-03 |
+| Goal | The `herness.core.types.jobs` submodule (08 aliases, `JobSpec`, `JobOutcome`, `MetricSample`) is re-exported from `herness.core.types` and registered in `TYPE_OWNERS`, and `JobStateError` exists (R-01, R-19). |
+| Depends on | X:00/herness.core.types (package skeleton, `__init__` and `_ownership`), X:00/herness.core.errors (taxonomy) |
+| Units | U08-01, U08-02, U08-03, U08-05, U08-101 |
+| Files | `herness/core/types/jobs.py`, `herness/core/types/__init__.py` (08 import line), `herness/core/types/_ownership.py` (08 `TYPE_OWNERS` entries), `herness/core/errors.py` (08 section) |
+| Tests | UT08-01, UT08-02 |
 | Threats | TH08-10 (result cap) |
-| Acceptance checks | `pytest -k "UT08-01 or UT08-02 or UT08-03"` passes; importing `herness.core.resilience.settings` imports no module outside pydantic, stdlib and `herness.core.types` (checked by UT08-103 once it exists) |
+| Acceptance checks | `pytest -k "UT08-01 or UT08-02"` passes; the impl 00 ownership check passes with the 08 names; `from herness.core.types import JobSpec, MetricSample` works and `herness.core.types` exports no `JobContext` |
+| Blocked by | none |
+| Size | S |
+
+### T08-26 Configuration section models
+
+| Field | Content |
+|-------|---------|
+| Goal | `ResilienceSection`, `ScheduleSection` and the root `ResilienceConfig` exist in the single settings module `herness.core.resilience.settings` with the R-43, R-51 and R-53 defaults (R-03). |
+| Depends on | T08-01, X:10/herness.core.config (settings convention and the `HernessConfig.resilience` field) |
+| Units | U08-06, U08-07 |
+| Files | `herness/core/resilience/settings.py`, `herness/core/resilience/__init__.py` (lazy map skeleton) |
+| Tests | UT08-03 |
+| Threats | TH08-01, TH08-12 (allowlisted service names, loopback URLs) |
+| Acceptance checks | `pytest -k "UT08-03"` passes; loading the design 08 §7 YAML into `ResilienceConfig` succeeds; importing `herness.core.resilience.settings` imports no herness module other than `herness.core.types` and `herness.core.errors` (R-03; UT08-103 once it exists) |
 | Blocked by | none |
 | Size | M |
 
-### T08-02 Cron parser and schedule section model
+### T08-02 Cron parser and resilience config validator
 
 | Field | Content |
 |-------|---------|
-| Goal | `CronExpr`, `resolve_local`, `ScheduleSection`, `ResilienceConfig`, `validate_windows` exist and validate the design 08 §7 file. |
-| Depends on | T08-01 |
-| Units | U08-07, U08-64, U08-65, U08-67 |
-| Files | `herness/core/jobs/cron.py`, `herness/core/jobs/settings.py`, `herness/core/jobs/__init__.py` (lazy map skeleton) |
+| Goal | `CronExpr`, `resolve_local`, `validate_windows` and `validate_resilience_config` exist, and impl 10 can register the validator in `SECTION_VALIDATORS`. |
+| Depends on | T08-26, X:10/herness.core.config.ConfigIssue, X:10/herness.core.config.SECTION_VALIDATORS |
+| Units | U08-64, U08-65, U08-67, U08-99 |
+| Files | `herness/core/jobs/cron.py`, `herness/core/jobs/validate.py`, `herness/core/jobs/__init__.py` (lazy map skeleton) |
 | Tests | UT08-04, UT08-05, UT08-72, UT08-73, UT08-74, PT08-04, PT08-05 |
 | Threats | none |
-| Acceptance checks | Loading the design 08 §7 YAML into `ResilienceConfig` succeeds; spec 10's root model can mount it (X:10/herness.core.config.HernessConfig field `resilience`) |
+| Acceptance checks | `validate_resilience_config` returns no issue for the design 08 §7 defaults; `herness config validate` lists U08-99 issues through the `resilience` entry of `SECTION_VALIDATORS` |
 | Blocked by | none |
 | Size | M |
 
@@ -2447,13 +2610,13 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 
 | Field | Content |
 |-------|---------|
-| Goal | Backend and registry protocols, `ProcessState`, bind functions, `JobRow`/`WorkerRow`/`NewJob` exist. |
+| Goal | Backend, registry and tracer protocols, the `JobContext`/`ServiceControl` protocols (R-02, R-42), `ProcessState`, bind functions, `JobRow`/`WorkerRow`/`NewJob` and the import-linter contracts exist. |
 | Depends on | T08-01 |
-| Units | U08-08, U08-09, U08-10, U08-41, U08-42 |
-| Files | `herness/core/resilience/ports.py`, `herness/core/resilience/_state.py`, `herness/core/jobs/ports.py` |
+| Units | U08-04, U08-08, U08-09, U08-10, U08-41, U08-42 |
+| Files | `herness/core/resilience/ports.py`, `herness/core/resilience/_state.py`, `herness/core/jobs/ports.py`, `pyproject.toml` (import-linter contracts) |
 | Tests | UT08-63 (row parsing part), UT08-103 |
 | Threats | none |
-| Acceptance checks | `reset_process_state` fixture registered in `tests/conftest.py` (X:11/tests/conftest.py hook); `lint-imports` contract "herness.core must not import herness.store or herness.harness" added to `pyproject.toml` and passing |
+| Acceptance checks | `reset_process_state` fixture registered in `tests/conftest.py` (X:11/tests/conftest.py hook); `lint-imports` contracts "herness.core must not import herness.store or herness.harness" and the R-03 settings contract for `herness.core.resilience.settings` pass |
 | Blocked by | none |
 | Size | M |
 
@@ -2461,13 +2624,13 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 
 | Field | Content |
 |-------|---------|
-| Goal | `RetryPolicy`, `policy`, `policy_for_client`, jitter, job backoff, `classify`, `parse_retry_after`. |
+| Goal | `RetryPolicy`, `policy`, `policy_for_client`, jitter, job backoff, `classify` and the single Retry-After parser `parse_retry_after` (clamped to `retry_after_max_s`; impl 01 switches to it). |
 | Depends on | T08-03, X:10/herness.core.redact.redact_text, X:10/herness.core.config.config_hash |
 | Units | U08-11–U08-17 |
 | Files | `herness/core/resilience/policies.py`, `herness/core/resilience/classify.py` |
-| Tests | UT08-06, UT08-07, UT08-10, UT08-11, PT08-01, PT08-02, PT08-03 |
+| Tests | UT08-06, UT08-07, UT08-10, UT08-11, UT08-112, PT08-01, PT08-02, PT08-03 |
 | Threats | TH08-02, TH08-04 |
-| Acceptance checks | `pytest -m unit tests/unit/core/resilience -k "UT08-06 or UT08-07 or UT08-10 or UT08-11 or PT08-0"` passes; `classify` imports neither `openai`, `anthropic` nor `duckdb` (asserted by checking `sys.modules` after import in a subprocess) |
+| Acceptance checks | `pytest -m unit tests/unit/core/resilience -k "UT08-06 or UT08-07 or UT08-10 or UT08-11 or UT08-112 or PT08-01 or PT08-02 or PT08-03"` passes; `classify` imports neither `openai`, `anthropic` nor `duckdb` (asserted by checking `sys.modules` after import in a subprocess) |
 | Blocked by | none |
 | Size | M |
 
@@ -2476,13 +2639,13 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Field | Content |
 |-------|---------|
 | Goal | `SqliteResilienceBackend`, `record_event`, metric recording and flushing work against a migrated ops store. |
-| Depends on | T08-04, X:02/herness.store.ops.connect, X:02/herness.store.ops.write_tx, X:02/herness/store/migrations (tables `source_health`, `resilience_event`, `metric_sample`), X:00/herness.core.ids.new_ulid, X:00/herness.core.logging |
-| Units | U08-18–U08-22, U08-94 |
-| Files | `herness/store/ops_resilience.py`, `herness/core/resilience/events.py`, `herness/core/resilience/metrics.py` |
-| Tests | UT08-29, UT08-30, UT08-31, UT08-32, ST08-02 (event and log part), ST08-10 (metric part) |
+| Depends on | T08-04, X:02/herness.store.ops.connection, X:02/herness.store.ops.run_write, X:02/herness/store/migrations (tables `source_health`, `resilience_event`, `metric_sample`), X:00/herness.core.ids.new_ulid, X:00/herness.core.logging |
+| Units | U08-18–U08-22, U08-94, U08-100, U08-103 |
+| Files | `herness/store/ops/resilience.py`, `herness/store/ops/metrics.py`, `herness/core/resilience/events.py`, `herness/core/resilience/metrics.py` |
+| Tests | UT08-29, UT08-30, UT08-31, UT08-32, UT08-110, UT08-111, ST08-02 (event and log part), ST08-10 (metric part) |
 | Threats | TH08-02, TH08-10 |
-| Acceptance checks | Rows written match §4.1.3, §4.1.4, §4.1.6; `resilience.event.dropped` asserted |
-| Blocked by | O08-02 (metric_sample DDL agreed with impl 02) |
+| Acceptance checks | Rows written match §4.1.3, §4.1.4, §4.1.6; `resilience.event.dropped` asserted; `herness.store.ops.metrics.record_metric_samples` accepts counter, gauge and histogram samples from any caller (R-12) |
+| Blocked by | none (O08-02 resolved by R-12) |
 | Size | M |
 
 ### T08-06 Circuit breakers and probes
@@ -2521,9 +2684,9 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Depends on | T08-04 |
 | Units | U08-33, U08-34 |
 | Files | `herness/core/resilience/faults.py` |
-| Tests | UT08-46–UT08-50, ST08-06 |
+| Tests | UT08-46–UT08-50, UT08-105, ST08-06 |
 | Threats | TH08-06 |
-| Acceptance checks | UT08-46 proves zero file access without the variable |
+| Acceptance checks | UT08-46 proves zero file access without the variable; UT08-105 proves a plan is ignored outside `HERNESS_ENV=test` (R-40); no `pyyaml` import in `herness/core/resilience/faults.py` |
 | Blocked by | none |
 | Size | M |
 
@@ -2532,7 +2695,7 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Field | Content |
 |-------|---------|
 | Goal | `complete_validated`, `build_repair_request`, `ModelChain` with candidates, retry, repair and fallback. |
-| Depends on | T08-07, T08-08, X:05/herness.core.types.LLMRequest, X:05/herness.core.types.LLMResponse, X:05/herness.core.types.Message, X:05/herness.core.types.Tracer |
+| Depends on | T08-07, T08-08, X:05/herness.core.types.LLMRequest, X:05/herness.core.types.LLMResponse, X:05/herness.core.types.Message, X:05/herness.harness.tracing.Tracer |
 | Units | U08-35–U08-38 |
 | Files | `herness/core/resilience/chain.py` |
 | Tests | UT08-33–UT08-42, ST08-07, ST08-15 |
@@ -2546,13 +2709,13 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Field | Content |
 |-------|---------|
 | Goal | `DeciderChain` and `loop_signal_policy`. |
-| Depends on | T08-07, X:03/herness.core.types.DecisionInput, X:03/herness.core.types.QuestionSet, X:05/herness.core.types.LoopState, X:05/herness.core.types.LoopSignal |
+| Depends on | T08-07, X:03/herness.core.types.DecisionInput, X:03/herness.core.types.QuestionSet, X:05/herness.core.types.LoopState (with the R-66 `loop_signals` counter), X:05/herness.core.types.LoopSignal, X:05/herness.harness.tracing.Tracer (`run_id`, `task_id`, R-66) |
 | Units | U08-39, U08-40 |
 | Files | `herness/core/resilience/deciders.py`, `herness/core/resilience/loop_policy.py` |
 | Tests | UT08-43, UT08-44, UT08-45, ST08-14 (unit part with a stub loop) |
 | Threats | TH08-14 |
 | Acceptance checks | `guard_stop` row and trace event asserted |
-| Blocked by | D08-04, D08-05 (defaults in place; no block) |
+| Blocked by | none (D08-04 and D08-05 accepted by R-66) |
 | Size | S |
 
 ### T08-11 Jobs store backend
@@ -2562,7 +2725,7 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Goal | All `job` and `worker` SQL of U08-95 and U08-96. |
 | Depends on | T08-03, T08-07, X:02/herness/store/migrations (tables `job`, `worker`, `run`) |
 | Units | U08-95, U08-96 |
-| Files | `herness/store/ops_jobs.py`, `herness/store/ops_worker.py` |
+| Files | `herness/store/ops/jobs.py`, `herness/store/ops/worker.py` |
 | Tests | UT08-53, UT08-62, UT08-65, IT08-02, ST08-08 |
 | Threats | TH08-08 |
 | Acceptance checks | IT08-02 (8 × 1 000 claims) has no double claim; `EXPLAIN QUERY PLAN` of the claim uses the `job(status, gpu_class, scheduled_for, priority)` index |
@@ -2577,7 +2740,7 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Depends on | T08-11, X:10/herness.core.secrets.known_values, X:10/herness.core.redact.get_redactor |
 | Units | U08-43–U08-48, U08-51–U08-56 |
 | Files | `herness/core/jobs/queue.py`, `herness/core/jobs/handlers.py` |
-| Tests | UT08-51, UT08-52, UT08-55–UT08-57, UT08-60, UT08-61, UT08-63, UT08-64, PT08-06, ST08-03, ST08-11, BT08-02, BT08-03 |
+| Tests | UT08-51, UT08-52, UT08-55–UT08-57, UT08-60, UT08-61, UT08-63, UT08-64, UT08-106, UT08-107, PT08-06, ST08-03, ST08-11, BT08-02, BT08-03 |
 | Threats | TH08-03, TH08-10, TH08-11 |
 | Acceptance checks | BT08-02 p95 < 10 ms; BT08-03 p95 < 20 ms |
 | Blocked by | none |
@@ -2605,7 +2768,7 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Depends on | T08-12, T08-13, X:10/herness.core.secrets.resolve, X:01/sources.yaml settings (`SourceSettings.schedule`, `reconcile.schedule`) |
 | Units | U08-71–U08-74 |
 | Files | `herness/core/jobs/scheduler.py` |
-| Tests | UT08-54, UT08-79–UT08-83 |
+| Tests | UT08-54, UT08-79–UT08-83, IT08-03 |
 | Threats | TH08-02 (key id only) |
 | Acceptance checks | UT08-79 enqueues exactly one job per missed fire |
 | Blocked by | none |
@@ -2632,10 +2795,10 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Goal | `recover_run_tasks`, `claim_task`, checkpoint envelope, `save_checkpoint`, `complete_task`, `fail_task`, `release_task` with their SQL. |
 | Depends on | T08-07, T08-11, X:02/herness/store/migrations (table `task`, index `task(run_id, status)`) |
 | Units | U08-57–U08-63, U08-97 |
-| Files | `herness/core/jobs/tasks.py`, `herness/store/ops_tasks.py` |
-| Tests | UT08-66–UT08-71 |
+| Files | `herness/core/jobs/tasks.py`, `herness/store/ops/tasks.py` |
+| Tests | UT08-66–UT08-71, UT08-109 |
 | Threats | TH08-10 |
-| Acceptance checks | UT08-69 proves the `writes` rollback |
+| Acceptance checks | UT08-69 proves the `writes` rollback; UT08-109 proves key-scoped checkpoint saves never erase another owner's key (R-21) |
 | Blocked by | none |
 | Size | M |
 
@@ -2644,12 +2807,12 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Field | Content |
 |-------|---------|
 | Goal | `ComposeRunner`, `LoopbackHttp`, VRAM helpers, `GpuLock`, and the `tests/support/fake_gpu.py` fixture. |
-| Depends on | T08-07, X:10/herness.core.egress lint allowlist entry (D08-06) |
+| Depends on | T08-07, X:10/herness.core.egress.loopback_http_client (R-06) |
 | Units | U08-78, U08-79, U08-80, U08-82 |
 | Files | `herness/core/jobs/gpu_services.py`, `herness/core/jobs/gpu_lock.py` |
 | Tests | UT08-87–UT08-90, UT08-95, ST08-01, ST08-12 |
 | Threats | TH08-01, TH08-09, TH08-12 |
-| Acceptance checks | argv lists asserted exactly; spec 10 lint test passes with the allowlist entry |
+| Acceptance checks | argv lists asserted exactly; UT08-103 finds no `httpx` client construction under `herness/core/jobs/` |
 | Blocked by | open-questions (b)15 for the real OpenJev warm-up body (fake server used until Phase 4) |
 | Size | M |
 
@@ -2657,11 +2820,11 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 
 | Field | Content |
 |-------|---------|
-| Goal | `GpuController` swap, service control, detection, restart; `gpu_state()`. |
+| Goal | `GpuController` swap, service control, detection, restart; `gpu_state()`; `request_gpu_class` for `gpu load/unload` and `deploy up/down` (R-47). |
 | Depends on | T08-06, T08-17, T08-11 |
-| Units | U08-81, U08-83 |
+| Units | U08-81, U08-83, U08-102 |
 | Files | `herness/core/jobs/gpu.py` |
-| Tests | UT08-91–UT08-94, UT08-96 |
+| Tests | UT08-91–UT08-94, UT08-96, UT08-108 |
 | Threats | TH08-01, TH08-09 |
 | Acceptance checks | `fake_gpu` never shows services of two classes running during UT08-91–UT08-94 |
 | Blocked by | none |
@@ -2705,7 +2868,7 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Files | `herness/core/jobs/supervisor.py`, `herness/core/jobs/child.py` |
 | Tests | IT08-04–IT08-11, IT08-13, ST08-09, BT08-11 |
 | Threats | TH08-08, TH08-09, TH08-13 |
-| Acceptance checks | IT08-08 passes on Windows (`CTRL_BREAK_EVENT`) and Linux (SIGTERM) runners |
+| Acceptance checks | IT08-08 passes on Windows (`CTRL_BREAK_EVENT`) and Linux (SIGTERM) runners; the worker exits only with 0 or 1 (R-46) |
 | Blocked by | open-questions (b)19 (`wsl.exe` from a service session) for service-mode deployment only |
 | Size | M |
 
@@ -2730,10 +2893,10 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Goal | `bind_core_backends`, complete lazy export maps of both packages, import-linter contracts. |
 | Depends on | T08-16, T08-22, X:02/herness.store.ops (composition entry calls) |
 | Units | U08-98 (and the export maps of U08-10) |
-| Files | `herness/store/ops_resilience.py` (add function), `herness/core/resilience/__init__.py`, `herness/core/jobs/__init__.py`, `pyproject.toml` (import-linter contracts) |
+| Files | `herness/store/ops/resilience.py` (add function), `herness/store/ops/__init__.py` (08 re-export block), `herness/core/resilience/__init__.py`, `herness/core/jobs/__init__.py` |
 | Tests | UT08-103, IT08-04 (bound through `bind_core_backends`) |
 | Threats | none |
-| Acceptance checks | every public name of design 08 §3 importable from `herness.core.resilience` / `herness.core.jobs`; `python -c "import herness.core.jobs.settings"` does not import `herness.core.jobs.supervisor` |
+| Acceptance checks | every public name of design 08 §3 importable from `herness.core.resilience` / `herness.core.jobs`; `python -c "import herness.core.resilience.settings"` does not import `herness.core.jobs.supervisor`; `herness.store.ops.record_metric_samples`, `purge_metric_samples`, `purge_events` and `bind_core_backends` are importable from `herness.store.ops` |
 | Blocked by | none |
 | Size | S |
 
@@ -2742,12 +2905,12 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Field | Content |
 |-------|---------|
 | Goal | FT08-01–FT08-12 and the integration-level security tests exist. |
-| Depends on | T08-23, X:11/tests.support.StubLLMServer, X:11/tests.support.StubDeciderServer, X:06/herness.harness.swarm (review runs), X:01/herness.connectors.runner, X:02/herness.model.build (F8) |
+| Depends on | T08-23, X:11/tests.support.fake_llm.FakeLLMServer, X:11/tests.support.stub_decider.StubDeciderServer, X:06/herness.harness.swarm (review runs), X:01/herness.connectors.runner, X:02/herness.model.build (F8) |
 | Units | none (tests only) |
 | Files | `tests/fault/test_resilience_f01_f12.py`, `tests/support/fake_gpu.py` (extended) — test files only |
 | Tests | FT08-01–FT08-12, ST08-05, ST08-14 |
 | Threats | TH08-05, TH08-14 |
-| Acceptance checks | CPU subset (FT08-01–07, 11, 12) passes in CI; FT08-08–10 pass on the target PC |
+| Acceptance checks | CPU subset (FT08-01–07, 11, 12) passes in CI with `HERNESS_ENV=test` and JSON plans (R-40); FT08-08–10 pass on the target PC |
 | Blocked by | open-questions (b)9 and (b)15 for FT08-08–FT08-10 on real containers |
 | Size | M |
 
@@ -2767,46 +2930,66 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 
 ## 13. Design deltas and open items
 
+Cross-spec rulings are recorded in [`DECISIONS.md`](DECISIONS.md) (R-01 to R-66). This spec applies R-01, R-02, R-03, R-04, R-06, R-07, R-08, R-09, R-10, R-11, R-12, R-14, R-19, R-21, R-35, R-36, R-38, R-39, R-40, R-41, R-42, R-43, R-44, R-45, R-46, R-47, R-51, R-53, R-65 and R-66; the other rulings do not concern this spec. The Status column below marks each delta "Resolved by R-nn" (the ruling settled it, and this spec follows the ruling), "Accepted (R-nn)" (the ruling adopted this spec's proposal) or "Still open" (no ruling; the current default applies until the design specs are edited, DECISIONS §9).
+
 ### 13.1 Design deltas
 
-| # | Design spec | Change needed | Reason | Current default |
-|---|-------------|---------------|--------|-----------------|
-| D08-01 | 08 §1, 00 §3 | `herness/core/resilience.py` and `jobs.py` become packages with the same import paths | ENG §2.4 400-line limit | packages as in §2 |
-| D08-02 | 08 §3.7, 00 §4 | "helpers write through `herness.store.ops`" is realised by L1 adapters `herness/store/ops_{resilience,jobs,worker,tasks}.py` behind L0 ports bound at the composition root | ENG §2.1: L0 must not import L1 | ports (U08-08, U08-41) |
-| D08-03 | 00 §6 | `ModelChain` and `loop_signal_policy` are behavior, defined in `herness.core.resilience`, not `core/types.py`; `JobContext` is a Protocol in `types.py` with concrete classes in `herness.core.jobs.context` | `core.types` may import only errors and ids | as stated |
-| D08-04 | 05 §4.8 | `LoopState` gains `loop_signals: int` (incremented by the loop before `on_loop_signal`) | `nudges` also counts `max_tokens` continuation nudges | policy uses `state.nudges + 1` |
-| D08-05 | 05 §5.7 | `Tracer` exposes read-only `run_id` and `task_id` | `guard_stop` rows need the IDs | `None` when absent |
-| D08-06 | 10 §3.5 | The HTTP-client lint allowlists `herness/core/jobs/gpu_services.py` (loopback only), or spec 10 provides `loopback_client()` | health and warm-up need a local client | allowlist entry |
-| D08-07 | 03 §3.3, 05 §7 | Ports disagree: OpenJev 8100 (08, 10) vs 8080 (03); llama.cpp 8200 (08, 10) vs `local-large-offload` base URL 8080 (05) | contradiction | 08/10 values |
-| D08-08 | 08 §7 vs 03, 10 §3.3 | OpenJev bearer secret named `openjev.api_key` in 08 but `OPENJEV_API_KEY` in 03 and 10 | contradiction | 08 reads whatever name `bearer_secret` holds; the default should become `OPENJEV_API_KEY` |
-| D08-09 | 01 §5, §6 | Spec 01 says an open circuit reschedules the sync job; 08 §5.2 says `done` with `skipped_open_circuit` | contradiction | 08 rule in U08-49 |
-| D08-10 | 06 §6.4 vs 08 §3.7 | 06 leaves canceled tasks `running` for recovery; 08 also offers `release_task` | both valid; 06 should state which it uses | both supported |
-| D08-11 | 02 §5.2 | `worker.current_jobs` entries gain `note` (last heartbeat note) | status shows the note (08 §5.14) | additive JSON field |
-| D08-12 | 08 §3 | Additive public API: `window_at`, `enqueue_resume`, `health`, `ComponentHealth`, `register_probe`, `run_due_probes`, `bind_ops_backend`, `bind_chain_registry`, `bind_jobs_backend`, metrics API, `complete_validated(model=)`, `DeciderChain(resolve=)`, `schedule_rekey(now=)` | needed to wire and test the design | as specified |
-| D08-13 | 02 §5, ENG E5 | `metric_sample` columns of §4.1.6 | ENG §4 recording API | impl 02 creates them |
-| D08-14 | 00 §5 | `resilience_event.event_id` format `evt_<ulid>` | ID not listed | `evt_<ulid>` |
-| D08-15 | 08 §3.4 vs §4.1 | `enqueue(priority=50)` default vs per-kind defaults | internal inconsistency | signature keeps 50; scheduler, rekey and resume use §4.1 values |
-| D08-16 | 00 §7 | New `JobStateError(FatalError)` | state conflicts need a taxonomy class | as U08-05 |
-| D08-17 | 11 §5.5 vs 08 §5.13 | 11 speaks of a JSON plan with `HERNESS_ENV=test`; 08 accepts a YAML or JSON path without an env gate | contradiction | 08 rule |
-| D08-18 | 02 §5.2 | Optional `worker.services JSON` column so `chat_policy` needs no HTTP health call | chat_policy < 5 ms target | 5 s per-process health cache (O08-05) |
-| D08-19 | ENG §2.3, §3.4 | Exceptions: module state holder `ProcessState`; broad `except` at the classification boundary, decider crash wrapper and probe runner | design-mandated caches and conversions | listed in §2 |
+| # | Design spec | Change needed | Reason | Current default | Status |
+|---|-------------|---------------|--------|-----------------|--------|
+| D08-01 | 08 §1, 00 §3 | `herness/core/resilience.py` and `jobs.py` become packages with the same import paths | ENG §2.4 400-line limit | packages as in §2 | Still open |
+| D08-02 | 08 §3.7, 00 §4 | "helpers write through `herness.store.ops`" is realised by the L1 areas `herness/store/ops/{resilience,metrics,jobs,worker,tasks}.py` behind L0 ports bound at the composition root | ENG §2.1: L0 must not import L1 | ports (U08-08, U08-41) | Resolved by R-04, R-08 |
+| D08-03 | 00 §6 | `ModelChain` and `loop_signal_policy` are behavior in `herness.core.resilience`; `JobContext` and `ServiceControl` are protocols in `herness.core.jobs` (no longer in `core.types`); the 08 data types are in `herness.core.types.jobs` | `core.types` holds data types only | as stated (U08-01–U08-04) | Accepted (R-01, R-02) |
+| D08-04 | 05 §4.8 | `LoopState` gains a loop-signal counter `loop_signals`, separate from `nudges`, incremented by the loop before the policy call | `nudges` also counts `max_tokens` continuation nudges | U08-40 reads `state.loop_signals` | Accepted (R-66) |
+| D08-05 | 05 §5.7 | `Tracer` exposes read-only `run_id` and `task_id` | `guard_stop` rows need the IDs | `TracerLike` port (U08-08) | Accepted (R-66) |
+| D08-06 | 10 §3.5 | Loopback health and warm-up clients | health and warm-up need a local client | clients only from `herness.core.egress.loopback_http_client` (U08-79); no allowlist entry | Resolved by R-06 |
+| D08-07 | 03 §3.3, 05 §7 | Port disagreement for OpenJev and llama.cpp | contradiction | vLLM 8000, OpenJev 8100, llama.cpp 8200 (U08-06, §9) | Resolved by R-51 |
+| D08-08 | 08 §7 vs 03, 10 §3.3 | OpenJev bearer secret name | contradiction | `secret:OPENJEV_API_KEY` | Resolved by R-53 |
+| D08-09 | 01 §5, §6 | Open circuit during a sync | contradiction | sync ends `done` with outcome `skipped_open_circuit`; the next scheduled run retries (U08-49) | Resolved by R-39 |
+| D08-10 | 06 §6.4 vs 08 §3.7 | How a cancelled running task is handled | two options | `release_task` (U08-63) | Resolved by R-36 |
+| D08-11 | 02 §5.2 | `worker.current_jobs` entries gain `note` (last heartbeat note) | status shows the note (08 §5.14) | additive JSON field; no migration needed | Still open |
+| D08-12 | 08 §3 | Additive public API: `window_at`, `enqueue_resume`, `health`, `ComponentHealth`, `register_probe`, `run_due_probes`, `bind_ops_backend`, `bind_chain_registry`, `bind_jobs_backend`, metrics API including `record_gauge`, `complete_validated(model=)`, `DeciderChain(resolve=)`, `schedule_rekey(now=)`, `save_checkpoint(writes=)`, `request_gpu_class`, `validate_resilience_config`, `parse_retry_after(max_s=)` | needed to wire and test the design | as specified | Still open |
+| D08-13 | 02 §5, ENG E5 | `metric_sample` columns | the earlier 08 draft added `sample_id`, `host`, `pid` | impl 02 migration 006 columns only (§4.1.6); writer U08-100 | Resolved by R-12 |
+| D08-14 | 00 §5 | `resilience_event.event_id` format `evt_<ulid>` | ID not listed | `evt_<ulid>` | Still open |
+| D08-15 | 08 §3.4 vs §4.1 | `enqueue(priority=50)` default vs per-kind defaults | internal inconsistency | `priority: int \| None = None`, `None` = `DEFAULT_PRIORITY[kind]` (U08-02, U08-47) | Resolved by R-41 |
+| D08-16 | 00 §7 | New `JobStateError(FatalError)` | state conflicts need a taxonomy class | as U08-05 | Accepted (R-19) |
+| D08-17 | 11 §5.5 vs 08 §5.13 | Fault plan format and gate | contradiction | JSON only; honoured only with `HERNESS_ENV=test`, otherwise ignored with a WARNING (U08-33, U08-34) | Resolved by R-40 |
+| D08-18 | 02 §5.2 | Optional `worker.services JSON` column so `chat_policy` needs no HTTP health call | chat_policy < 5 ms target | 5 s per-process health cache (O08-05); a column would need migration 050 (R-11) | Still open |
+| D08-19 | ENG §2.3, §3.4 | Exceptions: module state holder `ProcessState`; broad `except` at the classification boundary, decider crash wrapper and probe runner | design-mandated caches and conversions | listed in §2 | Still open |
+| D08-20 | 08 §5.1, §5.9, §7 | `build_pipeline` starts with GPU class `none` (default `nightly` step) and takes `decider` through `ctx.gpu_scope`; `GPU_SLOT_KINDS` jobs of class `none` run in the GPU slot | in-job switches need the GPU slot | U08-43, U08-48, U08-70, U08-95 | Accepted (R-43) |
+| D08-21 | 08 §7, 10 §3.1 | All `config/resilience.yaml` models in `herness.core.resilience.settings`; week coverage and cron parsing move to `validate_resilience_config`, run by impl 10 `SECTION_VALIDATORS` and at worker start | a settings module may not import `herness.core.jobs.cron` | U08-06, U08-07, U08-99 | Accepted (R-03) |
+| D08-22 | 08 §3.7, §4.3 | Checkpoint envelope `{schema_version, loop, state, scratchpad}` and key-scoped `save_checkpoint(task_id, key, value)` | a whole-object replace erased other owners' keys (impl 05 D05-04) | U08-59, U08-60 | Accepted (R-21) |
+| D08-23 | 08 §3.8 | `herness worker` exit codes 0 and 1 only (was 2 for a start `ConfigError` and 3 for the store-unavailable shutdown) | one exit-code scheme | U08-87 | Resolved by R-46 |
+| D08-24 | 08 §5.13 | `kill_service:<name>` first looks up `HERNESS_STUB_SERVICES` under `HERNESS_ENV=test` and posts `/__control/kill` to the stub | impl 11 DD11-04 needs it for FT11-03 | U08-34 | Still open |
+| D08-25 | 08 §5.10 | Chat `cloud` mode in the `hybrid` profile only with the `chat` data-policy approval | D5 data policy | U08-75 | Accepted (R-38) |
+| D08-26 | 08 §5.10 | Escalation under `small_model` is enqueued for the next live window, not refused | impl 06 D06-17 | U08-77 purpose, F08-15 | Resolved by R-35 |
+| D08-27 | 08 §5.2, §7 | `parse_retry_after` is the single Retry-After parser (impl 01 U01-61 switches to it); new key `resilience.retry.retry_after_max_s` (default 86 400 s) clamps its result | one parser; bounded reschedule times | U08-17, U08-06 | Still open |
+| D08-28 | 08 §5.14, ENG §4 | Gauge recording: `record_gauge` and `kind = "gauge"` samples through `record_metric_samples` | impl 03 request RQ-04 | U08-100, U08-101, U08-103 | Still open |
 
 ### 13.2 Open items (with current defaults)
 
-| # | Item | Default | Blocks |
-|---|------|---------|--------|
-| O08-01 | Design 08 Q7 / open-questions (b)15: OpenJev health `GET /v1/models` and warm-up `POST /v1/systemone` body against the pinned image | body in U08-79 | T08-17 real-container check, FT08-12 on hardware |
-| O08-02 | `metric_sample` DDL agreed with impl 02 | §4.1.6 columns | T08-05 |
-| O08-03 | Catch-up windows for per-source schedules (not in design) | sync 1 h, reconcile 12 h | none |
-| O08-04 | ETA while a swap to reasoning is running | now + 360 s | none |
-| O08-05 | Service health for `chat_policy` without an HTTP call (D08-18) | 5 s cache, 2 s timeout | none |
-| O08-06 | Default priority of `distill` (absent from design 08 §4.1) | 40 | none |
-| O08-07 | When the task status `failed` is written (never by 08) | 08 writes only `pending`/`dead` | none |
-| O08-08 | Retention of finished `job` rows | not purged by 08 | none |
-| O08-09 | Retention of `metric_sample` | 90 days via spec 10 purge | none |
-| O08-10 | open-questions (b)19: `wsl.exe` from a non-interactive service session | fallback per spec 10 (auto-logon) | T08-21 service deployment |
-| O08-11 | open-questions (b)9 / D7: OpenJev weights on the target GPU | tests use fakes | T08-24 F8–F10, T08-25 BT08-07 |
-| O08-12 | Open decisions D3 (cadence), D4 (chat hours), D5 (egress) | design defaults in §9 | none |
+| # | Item | Default | Blocks | Status |
+|---|------|---------|--------|--------|
+| O08-01 | Design 08 Q7 / open-questions (b)15: OpenJev health `GET /v1/models` and warm-up `POST /v1/systemone` body against the pinned image | body in U08-79 | T08-17 real-container check, FT08-12 on hardware | Still open |
+| O08-02 | `metric_sample` DDL agreed with impl 02 | impl 02 §4.3.6 columns | none | Resolved by R-12 |
+| O08-03 | Catch-up windows for per-source schedules (not in design) | sync 1 h, reconcile 12 h | none | Still open |
+| O08-04 | ETA while a swap to reasoning is running | now + 360 s | none | Still open |
+| O08-05 | Service health for `chat_policy` without an HTTP call (D08-18) | 5 s cache, 2 s timeout | none | Still open |
+| O08-06 | Default priority of `distill` (absent from design 08 §4.1) | 40 | none | Still open |
+| O08-07 | When the task status `failed` is written (never by 08) | 08 writes only `pending`/`dead` | none | Still open |
+| O08-08 | Retention of finished `job` rows | not purged by 08 | none | Still open |
+| O08-09 | Retention of `metric_sample` | 90 days via the `herness.admin` retention purge (R-07) | none | Still open |
+| O08-10 | open-questions (b)19: `wsl.exe` from a non-interactive service session | fallback per spec 10 (auto-logon) | T08-21 service deployment | Still open |
+| O08-11 | open-questions (b)9 / D7: OpenJev weights on the target GPU | tests use fakes | T08-24 F8–F10, T08-25 BT08-07 | Still open |
+| O08-12 | Open decisions D3 (cadence), D4 (chat hours), D5 (egress) | design defaults in §9 | none | Still open |
+| O08-13 | Name of the `chat` approval flag in `security.data_policy` (R-38; impl 10 adds it) | treated as not approved, so `cloud` becomes `small_model` in `hybrid` | none | Still open |
+
+### 13.3 Contradictions found in this pass
+
+| # | Between | Contradiction | This spec's position | Status |
+|---|---------|---------------|----------------------|--------|
+| C08-01 | R-03 vs impl 10 §2 (settings import rule) | Impl 10 lets a `settings.py` module import `herness.core.secrets` and other `settings.py` modules; R-03 allows only the standard library, pydantic, `herness.core.types` and `herness.core.errors` | follows R-03: one settings module, secret references checked by a local regex (U08-06, D08-21) | Still open |
+| C08-02 | impl 06 D06-09 vs U08-66 | Impl 06 states that no 08 function reports whether the chat window is open | `window_at(now).spec.name == "chat"` is that test (U08-66) | Still open |
+| C08-03 | impl 02 U02-38 vs the earlier 08 draft | `run_write` already applies `retry_call("sqlite_write")`; the earlier 08 draft wrapped backend calls in a second `retry_call` | 08 never adds a second `sqlite_write` retry (§3 intro) | Resolved by R-10 |
 
 ## 14. Dependencies
 
@@ -2815,25 +2998,24 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Package | Minimum version | Licence | Use |
 |---------|-----------------|---------|-----|
 | `tenacity` | 9 | Apache-2.0 | retry engine (U08-28, U08-29) |
-| `httpx` | 0.27 | BSD-3-Clause | exception classes; loopback client (U08-16, U08-79) |
+| `httpx` | 0.27 | BSD-3-Clause | exception classes in `classify` (U08-16); the loopback client objects themselves come from `herness.core.egress.loopback_http_client` (U08-79, R-06) |
 | `pydantic` | 2.9 | MIT | config, types, pipe messages |
 | `structlog` | 24 | MIT or Apache-2.0 | logging |
 | `psutil` | 5.9 | BSD-3-Clause | pid checks, CPU benchmark |
 | `tzdata` | 2024.1 | Apache-2.0 | `zoneinfo` data on Windows |
-| `pyyaml` | 6.0 | MIT | fault plans (`safe_load`) |
 | `jsonschema` | 4.21 | MIT | schema validation in repair without a model |
 | Dev: `pytest`, `hypothesis`, `freezegun`, `respx`, `pytest-benchmark`, `pytest-timeout` | per spec 00 §9 | MIT/MPL-2.0/Apache-2.0 | tests |
 
-No new dependency beyond spec 00 §9.
+No new dependency beyond spec 00 §9. `pyyaml` is no longer used by this spec: fault plans are JSON only (R-40).
 
 ### 14.2 Internal dependencies
 
 | Spec | Units used |
 |------|------------|
-| 00 artifacts | `herness.core.errors` taxonomy; `herness.core.ids.new_ulid`; `herness.core.time` (now and ts formatting); `herness.core.logging`; `herness.core.types` module |
-| 02 | `herness.store.ops.connect`, `write_tx`, `migrate`; migrations for `job`, `worker`, `source_health`, `resilience_event`, `task`, `run`, `metric_sample` |
+| 00 artifacts | `herness.core.errors` taxonomy (R-19); `herness.core.ids.new_ulid` and `canonical_json` (R-14); `herness.core.time` (now and ts formatting); `herness.core.logging`; the `herness.core.types` package skeleton, `__init__` re-export and `TYPE_OWNERS` (U00-44, U00-45, R-01) |
+| 02 | `herness.store.ops.connection`, `run_write`, `read_one`, `read_all`, `migrate` (R-10); migrations 001–006 for `job`, `worker`, `source_health`, `resilience_event`, `task`, `run`, `metric_sample` (R-11, R-12); the `herness.store.ops` package `__init__` that re-exports the 08 block |
 | 03 | `DecisionInput`, `DecisionOutput`, `QuestionSet`; decider registry entries; `Decider.health` as probe |
-| 05 | `LLMRequest`, `LLMResponse`, `Message`, `TextPart`, `LoopState`, `LoopSignal`, `Tracer`; `LLMRegistry` (as `ChainRegistry`); consumers `HarnessHooks`, `GatedClient` |
-| 06 | consumer of task helpers, `ModelChain`, `JobContext`, chat policy; `review` and `chat` handlers |
-| 01, 04, 07, 10, 11 | handlers and consumers; 10: `get_config`, `config_hash`, `secrets.resolve`, `secrets.known_values`, `redact_text`, `get_redactor`, registry, egress lint, purge; 11: stub servers |
-| 09 | composition roots (`herness.cli` entry, `worker_bootstrap`, `app/common`), CLI and dashboard rendering of §3.17 |
+| 05 | `LLMRequest`, `LLMResponse`, `Message`, `TextPart`, `LoopState` (with `loop_signals`, R-66), `LoopSignal`; `Tracer` structurally through `TracerLike` (R-66); `LLMRegistry` (as `ChainRegistry`); consumers `HarnessHooks`, `GatedClient`; caller of `save_checkpoint` for key `loop` (R-21) |
+| 06 | consumer of task helpers (key `state` of the checkpoint envelope, `release_task` for cancelled tasks, R-21, R-36), `ModelChain`, `JobContext`, chat policy and `chat_next_live_at` (R-35); `review` and `chat` handlers |
+| 01, 03, 04, 07, 10, 11 | handlers and consumers; 01 switches to `parse_retry_after` (D08-27); 02, 03, 04, 05, 09, 11 write metrics through `record_metric_samples` (R-12); 07: key `scratchpad` of the checkpoint envelope (R-21); 10: `get_config`, `config_hash`, `ConfigIssue`, `SECTION_VALIDATORS`, `secrets.resolve`, `secrets.known_values`, `redact_text`, `get_redactor`, registry, `egress.loopback_http_client` (R-06), the `security.data_policy` `chat` approval (R-38), `herness.admin` retention purge (R-07), `deploy up/down` through `request_gpu_class`; 11: `tests/support/fake_llm.py` (`FakeLLMClient`, `FakeLLMServer`, R-65) and `StubDeciderServer` |
+| 09 | composition roots (`herness.cli` entry, `worker_bootstrap`, `app/common`), CLI and dashboard rendering of §3.17; `gpu load/unload` through `request_gpu_class` (R-47); admin-only `--inline` through `run_inline` (R-45) |

@@ -1,14 +1,15 @@
 # 00 — Foundation: core primitives and repository scaffolding (implementation spec)
 
-Status: Draft v1 · 2026-09-24
+Status: Draft v2 · 2026-09-24 (consistency pass: rulings of [`DECISIONS.md`](DECISIONS.md) applied)
 Design spec: [`docs/specs/00-overview-and-contracts.md`](../specs/00-overview-and-contracts.md) (design 00)
 Standards: [`docs/impl/ENG-STANDARDS.md`](ENG-STANDARDS.md) (ENG)
+Rulings: [`docs/impl/DECISIONS.md`](DECISIONS.md) (cited as `R-nn`; they win over design 00 where they differ, until the design edits of DECISIONS §9 land)
 Phase: 1
 Depends on implementation specs: none (this is the bottom of the stack). Consumed by every other implementation spec. Soft references to impl 09, 10 and 11 are listed in §14.
 
 ## 1. Scope and traceability
 
-This spec builds the L0 foundation modules that design 00 assigns to itself: `herness/core/errors.py` (error taxonomy, design 00 §7), `herness/core/time.py` (UTC clock and timestamp text, design 00 §8), `herness/core/ids.py` (identifiers, canonical JSON and `query_id`, design 00 §5), `herness/core/logging.py` with its private helper `herness/core/_log_pipeline.py` (structured JSON logging, design 00 §8), and the module structure, import rules and ownership check of the shared-types package `herness/core/types/` (design 00 §6). The fields of the shared types are owned by specs 03, 05, 06, 07, 08 and 09 and are not specified here. It also builds the repository scaffolding that ENG requires: `pyproject.toml` (dependencies, ruff, mypy, import-linter, pytest, coverage), `.pre-commit-config.yaml`, `.secrets.baseline`, the CI-side check scripts in `tools/`, the hosted CI workflow and the release workflow (SBOM and signed provenance for SLSA Build L2), `.gitignore`, `.gitattributes`, `.env.example` and the README. Out of scope: `registry.py`, `config.py`, `secrets.py`, `redact.py`, `egress.py`, `audit.py` (impl 10); `resilience.py`, `jobs.py` (impl 08); `result_hash` (impl 04, `herness.metrics.evidence.result_hash`); tracing (impl 05).
+This spec builds the L0 foundation modules that design 00 assigns to itself: `herness/core/errors.py` (error taxonomy, design 00 §7, with `NotFound`, `hint` and `details` added by R-19), `herness/core/time.py` (UTC clock and timestamp text, design 00 §8), `herness/core/ids.py` (identifiers, and the single implementations of `canonical_json`, `normalize_sql` and `query_id`, design 00 §5 and R-14), `herness/core/numbers.py` (marker parsing, the numeral scanner of design 00 §12.1 and `NumberRef` display formatting, R-16), `herness/core/logging.py` with its private helper `herness/core/_log_pipeline.py` (structured JSON logging, design 00 §8), and the package skeleton, re-export, import rules and ownership check of the shared-types package `herness/core/types/` (design 00 §6, R-01, R-02). The fields of the shared types are owned by specs 03, 05, 06, 07, 08 and 09 and are not specified here. The ownership checker also enforces the settings-module import rule of R-03. It also builds the repository scaffolding that ENG requires: `pyproject.toml` (dependencies, ruff, mypy, import-linter, pytest, coverage), `.pre-commit-config.yaml`, `.secrets.baseline`, the CI-side check scripts in `tools/`, the hosted CI workflow and the release workflow (SBOM and signed provenance for SLSA Build L2), `.gitignore`, `.gitattributes`, `.env.example` and the README. Out of scope: `registry.py`, `config.py`, `secrets.py`, `redact.py`, `egress.py` including `loopback_http_client` (R-06), `audit.py` (impl 10); `resilience.py`, `jobs.py` (impl 08); `result_hash`, `rows_equivalent`, `iter_batch_rows` (impl 04, `herness.metrics.evidence`, R-15); tracing (impl 05); the config key `reports.allowed_numeral_patterns` (impl 09; this spec only compiles and applies the list its callers pass in); the `herness.admin` package (impl 10, R-07) beyond its place in the layer contract.
 
 ### 1.1 Traceability matrix
 
@@ -16,18 +17,19 @@ This spec builds the L0 foundation modules that design 00 assigns to itself: `he
 |----------|---------------------|--------|-------|-------|-------|
 | 00 preamble | Spec 00 wins over 01–11 | §13 (deltas raised, never applied locally) | — | — | — |
 | 00 §1 | Spec index; `herness/core/` owned by 00, 08, 10 | §2 | U00-49 | T00-01 | UT00-56 |
-| 00 §2.1 | Numbers come from SQL | §3.3 (`query_id` is the single ID function used by 04 and 05) | U00-32 | T00-05 | UT00-32, PT00-05 |
+| 00 §2.1 | Numbers come from SQL | §3.3 (`query_id` is the single ID function used by 04 and 05, R-14); §3.10 (uncited-numeral scanner shared by 05 and 09, R-16) | U00-32, U00-68 | T00-05, T00-16 | UT00-32, PT00-05, UT00-76 |
 | 00 §2.2 | Every number traceable by `query_id` | §3.3 | U00-29, U00-31, U00-32 | T00-05 | UT00-30, UT00-31, UT00-32, PT00-04, PT00-05 |
 | 00 §2.3 | Deterministic core, pluggable edges | §3.6 (layer contracts); registry is impl 10 | U00-52 | T00-09 | UT00-58, ST00-10 |
 | 00 §2.4 | Idempotent and resumable jobs | §4.3 (foundation writes are append-only logs); owners name their keys | U00-32 | T00-05 | PT00-05 |
-| 00 §2.5 | Local by default | §3.6 (ruff banned HTTP client APIs outside egress and connectors); egress is impl 10 | U00-50 | T00-01 | ST00-09 |
+| 00 §2.5 | Local by default | §3.6 (ruff bans on building `httpx` clients and transports anywhere except `herness.core.egress`, R-06); egress and the socket guard are impl 10 | U00-50 | T00-01 | ST00-09 |
 | 00 §2.6 | Small plain Python, pinned dependencies | §3.6, §14 | U00-49 | T00-01 | UT00-56 |
 | 00 §3 | Python 3.12, `uv`, single package, layout | §2, §3.6 | U00-48, U00-49, U00-61, U00-62 | T00-01, T00-02 | UT00-55, UT00-56, ST00-11 |
+| R-58 | Editable install in development; the target box installs the release wheel through `herness deploy install` after attestation and SBOM checks | §3.6 (U00-49), §3.8 (U00-60), §3.9 (U00-63) | U00-49, U00-60, U00-63 | T00-01, T00-02, T00-15 | UT00-56, ST00-08 |
 | 00 §4 | Storage layout (`data/` gitignored; app log path) | §4.2, §3.4, §3.6 | U00-36, U00-40, U00-61 | T00-02, T00-06, T00-07 | UT00-36, ST00-11 |
-| 00 §5 | Identifier formats, `new_ulid()`, `query_id`, `build_id` | §3.3 | U00-19 … U00-34 | T00-05 | UT00-19 … UT00-34, PT00-03 … PT00-05, FT00-02, ST00-05, ST00-17 |
-| 00 §5.1 | `result_hash` implemented once in `herness.metrics.evidence` | §3.3 (U00-29 notes: row hashing uses its own encoding) | — (X:04/herness.metrics.evidence.result_hash) | — | — |
-| 00 §6 | Shared protocols and types; one owner each | §3.5 | U00-44 … U00-47 | T00-08 | UT00-48 … UT00-54, ST00-15 |
-| 00 §7 | Error taxonomy | §3.1, §6 | U00-01 … U00-08 | T00-03 | UT00-01 … UT00-08, PT00-01, ST00-13 |
+| 00 §5 | Identifier formats, `new_ulid()`, `query_id`, `build_id`; single `canonical_json`, `normalize_sql`, `query_id` (R-14) | §3.3 | U00-19 … U00-34 | T00-05 | UT00-19 … UT00-34, PT00-03 … PT00-05, FT00-02, ST00-05, ST00-17 |
+| 00 §5.1 | `result_hash` implemented once in `herness.metrics.evidence` (R-15) | §3.3 (U00-29 notes: row hashing uses its own encoding) | — (X:04/herness.metrics.evidence.result_hash) | — | — |
+| 00 §6 | Shared protocols and types; one owner each; types package with one submodule per owner (R-01); behavioral classes in owner packages (R-02) | §3.5 | U00-44 … U00-47 | T00-08 | UT00-48 … UT00-54, UT00-72, UT00-80, UT00-81, ST00-15 |
+| 00 §7 | Error taxonomy, plus `NotFound`, `hint` and `details` (R-19) | §3.1, §6 | U00-01 … U00-08 | T00-03 | UT00-01 … UT00-08, UT00-71, PT00-01, ST00-13 |
 | 00 §8 logging | structlog JSON lines to stderr and `data/logs/herness-<date>.jsonl`; required keys; no sensitive data above DEBUG; scrubber | §3.4, §8 | U00-35 … U00-43 | T00-06, T00-07 | UT00-35 … UT00-47, FT00-01, ST00-01 … ST00-04 |
 | 00 §8 tracing | Spec 05 `Tracer` is the only trace writer | Not applicable here (impl 05) | — | — | — |
 | 00 §8 time | Aware UTC; SQLite fixed-width text; business timezone via `tzdata` | §3.2 | U00-09 … U00-18 | T00-04 | UT00-09 … UT00-18, PT00-02, ST00-14 |
@@ -35,19 +37,21 @@ This spec builds the L0 foundation modules that design 00 assigns to itself: `he
 | 00 §9 | Dependencies with minimum versions | §3.6, §14 | U00-49 | T00-01 | UT00-56 |
 | 00 §10 | Open decisions D1–D7 | §13.2 | — | — | — |
 | 00 §11 | Configuration files and owners | Not applicable (impl 10); `.env.example` only | U00-62 | T00-02 | ST00-11 |
-| 00 §12.1 | Numbers in model text as markers | Not applicable (impl 05, 06, 09) | — | — | — |
+| 00 §12.1 | Numbers in model text as markers; allowed numerals; `NumberRef` formats | §3.10 (`herness.core.numbers`, R-16); the Verifier (05) and the renderer (09) import it | U00-64 … U00-70 | T00-16 | UT00-74 … UT00-79, PT00-06, PT00-07, ST00-18, BT00-05 |
 | 00 §12.2 | Report hand-off via `ReportDraft` | §3.5 (ownership of `ReportDraft` and helpers registered to 06) | U00-45 | T00-08 | UT00-48 |
 | 00 §12.3 | Interfaces between harness specs | §3.5 (behavioral names declared in owner packages, DD-01) | U00-46 | T00-08 | UT00-54 |
 | 00 §12.4 | Compaction is append-only | Not applicable (impl 07) | — | — | — |
-| 00 Performance targets | Design 00 sets none | §10 sets foundation budgets | U00-20, U00-32, U00-36, U00-40, U00-56 | T00-05, T00-07, T00-11 | BT00-01 … BT00-04 |
+| 00 Performance targets | Design 00 sets none | §10 sets foundation budgets | U00-20, U00-32, U00-36, U00-40, U00-56, U00-68 | T00-05, T00-07, T00-11, T00-16 | BT00-01 … BT00-05 |
 | 00 Open questions | §10 decisions | §13.2 | — | — | — |
-| ENG §2.1 | Layer contracts in `pyproject.toml` | §3.6 | U00-52 | T00-09 | UT00-58, ST00-10 |
+| ENG §2.1 | Layer contracts in `pyproject.toml`, including `herness.admin` (R-07), no `herness.core` → `herness.store` imports (ports, R-04), no `herness.enrich` → `herness.harness` imports (R-05), and the settings exception (R-03) | §3.6, §3.5 | U00-47, U00-52 | T00-08, T00-09 | UT00-58, UT00-73, ST00-10 |
 | ENG §2.4 | Module line limit checked in CI | §3.7 | U00-55 | T00-10 | UT00-59, UT00-60, IT00-02 |
 | ENG §3.1 | Tooling baseline (ruff, mypy strict, pre-commit) | §3.6 | U00-50, U00-51, U00-54 | T00-01, T00-12 | UT00-57, IT00-01 |
 | ENG §5.6, §7, E2 | Hosted CI, audit, SBOM, signed provenance | §3.8 | U00-58 … U00-60 | T00-13, T00-14, T00-15 | ST00-06, ST00-07, ST00-08, ST00-16, UT00-69, UT00-70 |
 | ENG §6, §7 | Traceability check by script | §3.7 | U00-56 | T00-11 | UT00-61 … UT00-68, BT00-04 |
 | ENG §14 E1 | mypy strict on all of `herness/` | §3.6 | U00-51 | T00-01 | UT00-57 |
 | ENG §14 E3 | Dev deps add import-linter, pip-audit, cyclonedx-bom, detect-secrets; osv-scanner binary | §3.6, §3.8 | U00-49, U00-59 | T00-01, T00-14 | UT00-56 |
+| ENG §14 E6 | `herness/core/types/` is a package; behavioral classes live with their owners (R-01, R-02) | §3.5 | U00-44 … U00-47 | T00-08 | UT00-48 … UT00-54, UT00-72, UT00-80, UT00-81, ST00-15 |
+| ENG §14 E7 | Settings import exception (R-03); persistence ports (R-04); egress only through `herness.core.egress` (R-06) | §3.5, §3.6 | U00-47, U00-50, U00-52 | T00-01, T00-08, T00-09 | UT00-58, UT00-73, ST00-09, ST00-10 |
 
 ## 2. Module map
 
@@ -56,18 +60,19 @@ This spec builds the L0 foundation modules that design 00 assigns to itself: `he
 | `herness/__init__.py` | Package root; exposes the installed version | `__version__` | L0 | `importlib.metadata` | 30 |
 | `herness/py.typed` | PEP 561 marker (empty file) | — | — | — | 1 |
 | `herness/core/__init__.py` | Foundation package marker; docstring only, no imports, no re-exports | — | L0 | none | 10 |
-| `herness/core/errors.py` | Error taxonomy of design 00 §7 plus two helpers | `HernessError`, `RetryableError`, `RecoverableError`, `FatalError`, the 17 leaf classes, `error_kind`, `to_log_fields` | L0 | none (standard library only) | 260 |
+| `herness/core/errors.py` | Error taxonomy of design 00 §7 plus `NotFound` (R-19) and two helpers | `HernessError`, `RetryableError`, `RecoverableError`, `FatalError`, the 18 leaf classes, `error_kind`, `to_log_fields` | L0 | none (standard library only) | 300 |
 | `herness/core/time.py` | UTC clock, sleeps, timestamp text formats, time zones | `now`, `monotonic`, `sleep`, `asleep`, `ensure_utc`, `format_utc`, `parse_utc`, `parse_iso`, `utc_day`, `zone`, `DB_TS_LEN`, `MAX_SLEEP_S` | L0 | `herness.core.errors`, `tzdata` (data only) | 200 |
 | `herness/core/ids.py` | ULIDs, prefixed IDs, `build_id`, `record_id`, canonical JSON, SHA-256, `query_id`, tokens | `CROCKFORD_ALPHABET`, `ULID_LEN`, `IdKind`, `ID_PREFIXES`, `new_ulid`, `new_id`, `new_build_id`, `is_valid_ulid`, `is_valid_id`, `is_valid_build_id`, `make_record_id`, `split_record_id`, `canonical_json`, `sha256_hex`, `normalize_sql`, `query_id`, `new_token`, `RECORD_KEY_MAX_LEN` | L0 | `herness.core.errors`, `herness.core.time` | 330 |
+| `herness/core/numbers.py` | Marker parsing, uncited-numeral scanner and `NumberRef` display formatting shared by the Verifier (05) and the renderer (09) (R-16) | `MARKER_RE`, `ANY_MARKER_RE`, `MARKER_ID_RE`, `NUMERAL_RE`, `MAX_SCAN_CHARS`, `HIT_TEXT_MAX`, `MAX_ALLOWED_PATTERNS`, `MAX_PATTERN_CHARS`, `NUMBER_FORMATS`, `DEFAULT_FORMAT_BY_UNIT`, `Marker`, `MalformedMarker`, `MarkerScan`, `NumeralHit`, `FormattableNumber`, `parse_markers`, `compile_allowed_patterns`, `find_uncited`, `format_value`, `format_number` | L0 | `herness.core.errors` only | 320 |
 | `herness/core/logging.py` | Public logging API: configure, get logger, bind context IDs, reset | `LogLevel`, `configure_logging`, `get_logger`, `bind_ids`, `reset_logging`, `REQUIRED_KEYS`, `CONTEXT_ID_KEYS`, `SECRET_KEYS`, `TEXT_KEYS`, `MAX_FIELD_CHARS`, `MAX_LINE_BYTES`, `EVENT_NAME_RE`, `COMPONENT_RE` | L0 | `structlog`, `herness.core.errors`, `herness.core.ids`, `herness.core.time`, `herness.core._log_pipeline` | 260 |
 | `herness/core/_log_pipeline.py` | Private: structlog processors and the daily JSONL file handler | none public (private units U00-39 … U00-43) | L0 | `structlog`, `herness.core.errors`, `herness.core.time` | 330 |
 | `herness/core/types/__init__.py` | Re-exports every shared type from its owner submodule; defines nothing | `__all__` plus every name in `TYPE_OWNERS` whose owner submodule exists | L0 | owner submodules of this package only | 150 |
 | `herness/core/types/_ownership.py` | Ownership tables read by the ownership checker | `TYPE_OWNERS`, `OWNER_MODULES`, `OWNER_IMPORTS`, `DECLARED_ELSEWHERE` | L0 | none | 120 |
-| `herness/core/types/{decisions,harness,swarm,memory,jobs,reports}.py` | Owner submodules; created by impl 03, 05, 06, 07, 08, 09 respectively | per owner | L0 | per U00-44 rules | set by owner spec (≤ 400) |
+| `herness/core/types/{decisions,harness,swarm,memory,jobs,reports}.py`, or the package `herness/core/types/<submodule>/` | Owner submodules (R-01); created by impl 03, 05, 06, 07, 08, 09 respectively. An owner whose types exceed the 400-line module limit uses the package form (§3.5) | per owner | L0 | per §3.5 import rules | set by owner spec (≤ 400 per file) |
 | `tools/__init__.py` | Makes `tools` importable (`tools.synth_data` of impl 11, the check scripts) | — | Tooling | — | 5 |
 | `tools/check_module_size.py` | CI check of module line budgets | `main` | Tooling | `tomllib` | 200 |
 | `tools/check_traceability.py` | CI check that every task, unit, flow, threat and test ID resolves | `main` | Tooling | none | 390 |
-| `tools/check_type_ownership.py` | CI check of shared-type ownership and `core.types` import rules | `main` | Tooling | `ast`, `herness.core.types._ownership` | 330 |
+| `tools/check_type_ownership.py` | CI check of shared-type ownership, `core.types` import rules and the settings-module import rule (R-03) | `main` | Tooling | `ast`, `herness.core.types._ownership` | 390 |
 | `tools/check_audit.py` | Dependency-audit gate over pip-audit and osv-scanner JSON | `main` | Tooling | `tomllib` | 300 |
 | `tools/check_licences.py` | Licence gate over the CycloneDX SBOM | `main` | Tooling | `tomllib` | 250 |
 | `tools/audit_ignore.toml` | Time-boxed audit exceptions (starts empty: `ignore = []`) | — | Tooling | — | 50 |
@@ -79,7 +84,7 @@ This spec builds the L0 foundation modules that design 00 assigns to itself: `he
 | `.github/workflows/release.yml` | Release: build, SBOM, licence gate, provenance and SBOM attestations, GitHub release | — | — | — | 150 |
 | `.gitignore`, `.gitattributes`, `.env.example`, `README.md` | Repository hygiene and onboarding | — | — | — | 80, 20, 40, 200 |
 
-Stdlib-name shadowing: `herness/core/logging.py`, `herness/core/time.py` and `herness/core/types/__init__.py` shadow standard-library module names inside the package. All imports in the repository are absolute, so `import logging` inside `herness/core/logging.py` resolves to the standard library. Ruff rule `A005` is suppressed for exactly these three files (listed in §3.6 U00-50 and §13.3).
+Stdlib-name shadowing: `herness/core/logging.py`, `herness/core/time.py`, `herness/core/numbers.py` and `herness/core/types/__init__.py` shadow standard-library module names inside the package. All imports in the repository are absolute, so `import logging` inside `herness/core/logging.py` resolves to the standard library. Ruff rule `A005` is suppressed for exactly these four files (listed in §3.6 U00-50 and §13.3).
 
 Import convention for `herness.core.time`: callers write `from herness.core import time as clock` and call `clock.now()`, `clock.sleep()`. `from herness.core.time import ...` is banned by ruff `ICN003` (U00-50), because impl 11's `FakeClock` patches the module attributes and a `from` import would bind the unpatched function.
 
@@ -93,7 +98,7 @@ Conventions for this section:
 
 ### 3.1 `herness.core.errors`
 
-The module defines exactly the classes of design 00 §7 with exactly those parents. No other spec adds classes to this file; a subclass needed by a component is declared in that component's module and listed in its implementation spec (ENG §3.4). Module constants: `MAX_MESSAGE_CHARS = 1000`, `MAX_CONTEXT_STR_CHARS = 200`.
+The module defines exactly the classes of design 00 §7 with exactly those parents, plus `NotFound(RecoverableError)` and the optional `hint` and `details` attributes of `HernessError` (R-19). No other spec adds classes to this file; a subclass needed by a component is declared in that component's module and listed in its implementation spec (ENG §3.4). Under R-19 this covers `JobStateError` (impl 08) and the added attributes of `EgressBlocked` and `ConfigError` (impl 10): impl 10 declares them in its own modules (as subclasses); the classes in this file carry no attributes beyond those specified here. Module constants: `MAX_MESSAGE_CHARS = 1000`, `MAX_CONTEXT_STR_CHARS = 200`, `MAX_HINT_CHARS = 500`, `MAX_DETAILS = 50`, `MAX_DETAIL_KEY_CHARS = 64`, `MAX_DETAIL_VALUE_CHARS = 2000`; private `_DETAIL_KEY_RE = ^[A-Za-z0-9_.\-]{1,64}$`.
 
 #### U00-01 herness.core.errors.HernessError
 
@@ -102,24 +107,26 @@ Signature (`__init__`):
 | Name | Type | Default | Kind | Constraints |
 |------|------|---------|------|-------------|
 | `message` | `str` | — | positional-only | Names the operation and identifiers; never a secret value, ticket text or personal data (ENG §3.4) |
-| `**context` | `str \| int \| float \| bool \| None` | — | keyword (variadic) | Identifier fields such as `record_id`, `job_id`, `query_id` |
+| `hint` | `str \| None` | `None` | keyword-only | Operator-facing fix, for example the command to run (R-19); never a secret value, ticket text or personal data |
+| `details` | `Mapping[str, str] \| None` | `None` | keyword-only | Structured identifiers for the caller (CLI output, report contract, job record) (R-19); same content rule as `hint` |
+| `**context` | `str \| int \| float \| bool \| None` | — | keyword (variadic) | Identifier fields such as `record_id`, `job_id`, `query_id`; the names `hint` and `details` are taken by the two parameters above |
 
 Returns: `None` (constructor).
 
 | Field | Content |
 |-------|---------|
 | Kind | class (base of the taxonomy; subclass of `Exception`) |
-| Purpose | Root of every error Herness raises, carrying a bounded message and a scalar-only identifier context. |
+| Purpose | Root of every error Herness raises, carrying a bounded message, a scalar-only identifier context, an optional operator hint and optional string details. |
 | Preconditions | None enforced at run time beyond the steps below; mypy enforces the types. |
-| Postconditions | `self.message` holds the bounded message; `self.context` is a read-only mapping of scalars; `str(self) == self.message`; `self.args == (self.message,)`. |
-| Invariants | `len(self.message) <= MAX_MESSAGE_CHARS + 1`; every `context` value is a scalar; every string `context` value has at most `MAX_CONTEXT_STR_CHARS + 1` characters. |
-| Algorithm | 1. If `len(message) > MAX_MESSAGE_CHARS`, keep the first `MAX_MESSAGE_CHARS` characters and append `…` (U+2026).<br>2. Build `ctx: dict[str, scalar]`: for each `(key, value)` in `context` in call order: if `value` is `bool`, `int`, `float` or `None`, keep it; if `value` is `str`, apply the step-1 rule with limit `MAX_CONTEXT_STR_CHARS`; otherwise store the string `"<" + type(value).__name__ + ">"` (the value itself is never stringified, so objects holding secrets cannot leak through `repr`).<br>3. Call `Exception.__init__(self, bounded_message)`.<br>4. Store `self.message = bounded_message` and `self._context = ctx`.<br>5. Property `context` returns `types.MappingProxyType(self._context)`.<br>6. `__reduce__` returns `(_rebuild, (type(self), self.message, dict(self._context), {name: getattr(self, name) for name in type(self)._extra_attrs}))`. Module-private function `_rebuild(cls, message, context, extra)` creates the instance with `cls.__new__(cls)`, calls `Exception.__init__(obj, message)`, sets `message`, `_context` and each extra attribute, and returns it. This keeps exceptions picklable by `multiprocessing` although subclasses take keyword-only arguments.<br>7. Class attribute `_extra_attrs: ClassVar[tuple[str, ...]] = ()`; subclasses with extra attributes override it (U00-04 … U00-06). |
+| Postconditions | `self.message` holds the bounded message; `self.context` is a read-only mapping of scalars; `self.hint` is `None` or a bounded string; `self.details` is a read-only `Mapping[str, str]` (empty when not given); `str(self) == self.message`; `self.args == (self.message,)`. |
+| Invariants | `len(self.message) <= MAX_MESSAGE_CHARS + 1`; every `context` value is a scalar; every string `context` value has at most `MAX_CONTEXT_STR_CHARS + 1` characters; `self.hint` is `None` or has at most `MAX_HINT_CHARS + 1` characters; `self.details` has at most `MAX_DETAILS` entries, every key matches `_DETAIL_KEY_RE` and every value is a `str` of at most `MAX_DETAIL_VALUE_CHARS + 1` characters. |
+| Algorithm | 1. If `len(message) > MAX_MESSAGE_CHARS`, keep the first `MAX_MESSAGE_CHARS` characters and append `…` (U+2026).<br>2. Build `ctx: dict[str, scalar]`: for each `(key, value)` in `context` in call order: if `value` is `bool`, `int`, `float` or `None`, keep it; if `value` is `str`, apply the step-1 rule with limit `MAX_CONTEXT_STR_CHARS`; otherwise store the string `"<" + type(value).__name__ + ">"` (the value itself is never stringified, so objects holding secrets cannot leak through `repr`).<br>3. `hint`: `None` stays `None`; a `str` is bounded by the step-1 rule with limit `MAX_HINT_CHARS`; any other type is stored as `"<" + type(hint).__name__ + ">"`.<br>4. `details`: build `det: dict[str, str]` from the first `MAX_DETAILS` entries of `details` in iteration order (later entries are dropped; `None` gives `{}`). For the entry at position `i`: the key is kept when it is a `str` matching `_DETAIL_KEY_RE`, else it becomes `"key_" + str(i)`; a `str` value is bounded by the step-1 rule with limit `MAX_DETAIL_VALUE_CHARS`; any other value becomes `"<" + type(value).__name__ + ">"`. When a replacement key already exists, the later entry overwrites the earlier one.<br>5. Call `Exception.__init__(self, bounded_message)`.<br>6. Store `self.message = bounded_message`, `self._context = ctx`, `self.hint = bounded_hint`, `self._details = det`.<br>7. Properties `context` and `details` return `types.MappingProxyType(self._context)` and `types.MappingProxyType(self._details)`.<br>8. `__reduce__` returns `(_rebuild, (type(self), self.message, dict(self._context), self.hint, dict(self._details), {name: getattr(self, name) for name in type(self)._extra_attrs}))`. Module-private function `_rebuild(cls, message, context, hint, details, extra)` creates the instance with `cls.__new__(cls)`, calls `Exception.__init__(obj, message)`, sets `message`, `_context`, `hint`, `_details` and each extra attribute, and returns it. This keeps exceptions picklable by `multiprocessing` although subclasses take keyword-only arguments.<br>9. Class attribute `_extra_attrs: ClassVar[tuple[str, ...]] = ()`; subclasses with extra attributes override it (U00-04 … U00-06). Subclass constructors pass `hint` and `details` through to this constructor unchanged. |
 | Side effects | None. |
 | Errors | None raised by the constructor. |
 | Concurrency | Immutable after construction; safe to share across threads. |
-| Complexity and limits | O(len(message) + number of context entries); message capped at 1,000 characters, each string context value at 200. |
-| Security notes | TH00-06: non-scalar context values are replaced by their type name; long values are truncated. |
-| Tests | UT00-02, UT00-08, PT00-01 |
+| Complexity and limits | O(len(message) + number of context and details entries); message capped at 1,000 characters, each string context value at 200, hint at 500, details at 50 entries of at most 2,000 characters each. |
+| Security notes | TH00-06: non-scalar context and details values are replaced by their type name; long values are truncated; `hint` and `details` follow the ENG §3.4 content rule (no secrets, ticket text or personal data). |
+| Tests | UT00-02, UT00-08, UT00-71, PT00-01 |
 
 #### U00-02 herness.core.errors.RetryableError, RecoverableError, FatalError
 
@@ -151,6 +158,7 @@ Returns: `None` (constructor).
 | `QueryError` | `RecoverableError` | SQL failed or was rejected; returned as an error tool result with a hint |
 | `PolicyViolation` | `RecoverableError` | Memory write policy or injection scan refused a write; pending or rejected |
 | `ReportContractError` | `RecoverableError` | A draft fails the rendering contract |
+| `NotFound` | `RecoverableError` | A requested object (run, job, task, record, memory item, report, file) does not exist; the caller reports it or chooses another object (R-19) |
 | `ConfigError` | `FatalError` | Configuration is invalid or incomplete |
 | `AuthError` | `FatalError` | Authentication with a source or model endpoint failed |
 | `SchemaViolation` | `FatalError` | Data does not match its declared contract |
@@ -160,12 +168,12 @@ Returns: `None` (constructor).
 
 | Field | Content |
 |-------|---------|
-| Kind | class (14 classes listed above) |
-| Purpose | Leaf error types of design 00 §7 that need no attributes beyond `message` and `context`. |
+| Kind | class (15 classes listed above) |
+| Purpose | Leaf error types of design 00 §7 and R-19 that need no attributes beyond those of U00-01. |
 | Signature | Inherited from U00-01 unchanged. |
 | Preconditions | As U00-01. |
 | Postconditions | As U00-01. |
-| Invariants | Each class's direct parent is exactly the one in the table. Names are fixed by design 00 §7 (hence the `N818` suppression, §13.3). |
+| Invariants | Each class's direct parent is exactly the one in the table. Names are fixed by design 00 §7 and R-19 (hence the `N818` suppression, §13.3). |
 | Algorithm | No behavior beyond U00-01. |
 | Side effects | None. |
 | Errors | None. |
@@ -286,13 +294,13 @@ Returns: `dict[str, str | int | float | bool | None]`.
 | Purpose | Turn an exception into safe, flat, JSON-serialisable log or job-record fields. |
 | Preconditions | None. |
 | Postconditions | Every value is a scalar; the dict never contains the message of a non-Herness exception or of any `__cause__`/`__context__`. |
-| Algorithm | 1. `out = {"error_type": type(exc).__name__, "error_kind": error_kind(exc)}`.<br>2. If `exc` is a `HernessError`: set `out["error_message"] = exc.message`. For each extra attribute name in `type(exc)._extra_attrs`: value `v = getattr(exc, name)`; if `v` is a `datetime`, store `v.isoformat()`; else store `v`. For each `(k, v)` in `exc.context`: if `k` already in `out`, store under `"ctx_" + k`; else under `k`.<br>3. If `exc` is not a `HernessError`, set `out["error_message"] = ""` (third-party messages can carry URLs with tokens; the traceback in the log line goes through the scrubber instead).<br>4. `cause = exc.__cause__ or exc.__context__`; set `out["cause_type"] = type(cause).__name__` when `cause` is not `None`, else `None`.<br>5. Return `out`. |
+| Algorithm | 1. `out = {"error_type": type(exc).__name__, "error_kind": error_kind(exc)}`.<br>2. If `exc` is a `HernessError`: set `out["error_message"] = exc.message` and `out["error_hint"] = exc.hint`; for each `(k, v)` in `exc.details`, set `out["detail_" + k] = v`. For each extra attribute name in `type(exc)._extra_attrs`: value `v = getattr(exc, name)`; if `v` is a `datetime`, store `v.isoformat()`; else store `v`. For each `(k, v)` in `exc.context`: if `k` already in `out`, store under `"ctx_" + k`; else under `k`.<br>3. If `exc` is not a `HernessError`, set `out["error_message"] = ""` (third-party messages can carry URLs with tokens; the traceback in the log line goes through the scrubber instead).<br>4. `cause = exc.__cause__ or exc.__context__`; set `out["cause_type"] = type(cause).__name__` when `cause` is not `None`, else `None`.<br>5. Return `out`. |
 | Side effects | None. |
 | Errors | None. |
 | Concurrency | Pure. |
 | Complexity and limits | O(context size). |
-| Security notes | TH00-06: third-party and cause messages never reach job records (impl 08 `last_error`) through this function. |
-| Tests | UT00-07, PT00-01, ST00-13 |
+| Security notes | TH00-06: third-party and cause messages never reach job records (impl 08 `last_error`) through this function. `hint` and `details` are copied because they are bounded Herness-authored values (U00-01). |
+| Tests | UT00-07, UT00-71, PT00-01, ST00-13 |
 
 ### 3.2 `herness.core.time`
 
@@ -734,7 +742,7 @@ Returns: `str`.
 | Field | Content |
 |-------|---------|
 | Kind | function (pure) |
-| Purpose | The one canonical JSON encoding for identifiers derived by hashing (`query_id`, and `config_hash` in impl 10). |
+| Purpose | The one canonical JSON encoding for identifiers derived by hashing (`query_id`, and `config_hash` in impl 10). Single implementation per R-14: impl 04 and impl 05 call it and define no copy. |
 | Preconditions | Every node is one of the supported types below. |
 | Postconditions | Equal inputs (including dicts with different insertion order) give byte-identical output. |
 | Algorithm | 1. Convert recursively with depth counter starting at 0; depth above 64 → `SchemaViolation("canonical JSON too deep")`. Conversion by type, checked in this order: `bool` → itself; `int` → itself; `float` → itself if finite, else `SchemaViolation("non-finite float")`; `str` → itself; `None` → itself; `decimal.Decimal` → `str(d)` if finite, else `SchemaViolation("non-finite decimal")`; `datetime.datetime` → `herness.core.time.format_utc(dt)` (naive raises there); `datetime.date` → `d.isoformat()`; `pathlib.PurePath` → `p.as_posix()`; `enum.Enum` → convert `e.value`; `Mapping` → every key must be `str` (else `SchemaViolation("non-string key")`), values converted; `list` or `tuple` → list of converted items; anything else (including `set`, `bytes`, pydantic models) → `SchemaViolation("unsupported type", type=type(x).__name__)`. Callers pass `model.model_dump(mode="json")` for models.<br>2. Return `json.dumps(converted, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)`. |
@@ -778,7 +786,7 @@ Returns: `str`.
 | Field | Content |
 |-------|---------|
 | Kind | function (pure) |
-| Purpose | `normalized_sql` of design 00 §5: whitespace collapsed, trailing semicolons removed. |
+| Purpose | `normalized_sql` of design 00 §5: whitespace collapsed, trailing semicolons removed. Single implementation per R-14 (impl 04 and impl 05 call it). |
 | Preconditions | None. |
 | Postconditions | No leading or trailing whitespace; no run of two whitespace characters; does not end with `;`. |
 | Algorithm | 1. Replace every maximal run of characters matching `\s` (Unicode) with one ASCII space.<br>2. Strip leading and trailing spaces.<br>3. While the result ends with `;`: remove that character, then strip trailing spaces.<br>4. Return the result (possibly empty). Whitespace inside string literals is collapsed too; this is intended by design 00 §5 (the ID is not used to execute SQL). |
@@ -802,7 +810,7 @@ Returns: `str` `q_` + 16 lowercase hex.
 | Field | Content |
 |-------|---------|
 | Kind | function (pure) |
-| Purpose | The single implementation of design 00 §5 `query_id`, used by impl 04 (metrics evidence) and impl 05 (tools, Verifier) so both produce identical IDs (DD-03). |
+| Purpose | The single implementation of design 00 §5 `query_id`, used by impl 04 (metrics evidence) and impl 05 (tools, Verifier) so both produce identical IDs (DD-03, R-14). |
 | Preconditions | See constraints. |
 | Postconditions | Same normalised SQL, params and build give the same ID. |
 | Algorithm | 1. `norm = normalize_sql(sql)`; if empty, raise `SchemaViolation("empty SQL for query_id")`.<br>2. If not `is_valid_build_id(build_id)`, raise `SchemaViolation("bad build_id for query_id")`.<br>3. `payload = canonical_json({"sql": norm, "params": params, "build_id": build_id})`.<br>4. Return `"q_" + sha256_hex(payload)[:16]`. |
@@ -810,7 +818,7 @@ Returns: `str` `q_` + 16 lowercase hex.
 | Errors | empty SQL, bad build ID, non-canonicalisable params → `SchemaViolation`. |
 | Concurrency | Pure. |
 | Complexity and limits | O(len(sql) + size of params); BT00-02. |
-| Security notes | TH00-14 (accepted residual R-03: a `Decimal` and a `str` with the same text encode identically). |
+| Security notes | TH00-14 (accepted residual RR-03: a `Decimal` and a `str` with the same text encode identically). |
 | Tests | UT00-32, PT00-05, BT00-02 |
 
 #### U00-33 herness.core.ids.new_token
@@ -999,7 +1007,7 @@ Signature (`__init__`):
 | Algorithm | `emit(record)` (called with the handler lock held by `logging.Handler.handle`):<br>1. `line = self.format(record)`.<br>2. If `_failed_at` is not `None` and `clock.monotonic() - _failed_at < FILE_RETRY_S`: `_dropped += 1`; return.<br>3. `day = clock.utc_day(clock.now())`. If `day != _day` or `_stream is None`: close `_stream` if open; open `log_dir / (LOG_FILE_PREFIX + day + ".jsonl")` with mode `"a"`, `encoding="utf-8"`, `newline="\n"`; set `_day = day`.<br>4. If `_failed_at` is not `None` (recovering): write the recovery line (below) to the file and to `sys.stderr`; set `_failed_at = None`, `_dropped = 0`.<br>5. Write `line + "\n"` in one `write` call; `flush()`.<br>6. On `OSError` in steps 3–5: close `_stream` (a second `OSError` on close is ignored), set `_stream = None`, `_failed_at = clock.monotonic()`, `_dropped += 1`, and write the failure line to `sys.stderr`.<br>Failure line: one JSON object with `ts` (`format_utc(now)`), `level: "error"`, `event: "core.logging.sink_failed"`, `component: "core.logging"`, `path` (the file path as POSIX text), `error_type` (exception class name), `retry_in_s: 60.0`. Recovery line: `level: "info"`, `event: "core.logging.sink_recovered"`, `component: "core.logging"`, `path`, `dropped_lines`. Both are built directly with `json.dumps` (not through `logging`, which would recurse).<br>`close()`: close `_stream` under the handler lock, then `super().close()`. |
 | Side effects | Appends to the day file; writes to stderr on failure and recovery. |
 | Errors | None escape `emit`; `OSError` handled by step 6. |
-| Concurrency | Thread-safe through the `logging.Handler` lock. Several processes append to the same day file; each line is one `write` call (residual R-01). |
+| Concurrency | Thread-safe through the `logging.Handler` lock. Several processes append to the same day file; each line is one `write` call (residual RR-01). |
 | Complexity and limits | One file open per process per day; lines already capped at `MAX_LINE_BYTES` by U00-43. |
 | Security notes | TH00-04 (a full disk does not stop the process). File ACLs are applied by impl 10. |
 | Tests | UT00-36, FT00-01, BT00-03 |
@@ -1060,22 +1068,24 @@ All three have the structlog processor signature of U00-41.
 
 ### 3.5 `herness.core.types` (structure and ownership only)
 
-Shape: a package. Each owning spec writes its shared types in its own submodule; `__init__.py` re-exports them, so the import path of design 00 §6 (`from herness.core.types import NumberRef`) is unchanged. The fields are owned by the specs in `TYPE_OWNERS`. DD-01 and DD-02 (§13.1) record the structural changes to design 00 §3 and §6.
+Shape: a package (R-01, ENG §2.1, ENG §14 E6). Each owning spec writes its shared types in its own submodule; `__init__.py` re-exports them, so the import path of design 00 §6 (`from herness.core.types import NumberRef`) is unchanged. The package holds data types only (pydantic models, enums, `TypedDict`s, and the pure protocols of rule 5). The fields are owned by the specs in `TYPE_OWNERS`. Behavioral classes live in their owner packages (R-02, `DECLARED_ELSEWHERE`). DD-01 and DD-02 (§13.1) record the structural changes to design 00 §3 and §6, accepted by R-01 and R-02.
+
+A submodule is either a module `herness/core/types/<submodule>.py` or, when the owner's types exceed the 400-line module limit (ENG §2.4), a package `herness/core/types/<submodule>/` whose `__init__.py` holds only imports from the package's own modules and an `__all__` tuple (the owner splits its types over those modules as its spec's module map states). Both forms are imported as `herness.core.types.<submodule>`; exactly one form exists per owner.
 
 | Submodule | Owner | May import these sibling submodules |
 |-----------|-------|-------------------------------------|
-| `herness/core/types/decisions.py` | 03 | none |
-| `herness/core/types/harness.py` | 05 | none |
-| `herness/core/types/swarm.py` | 06 | `harness` |
-| `herness/core/types/memory.py` | 07 | `harness`, `swarm` |
-| `herness/core/types/jobs.py` | 08 | `harness` |
-| `herness/core/types/reports.py` | 09 | none |
+| `herness.core.types.decisions` | 03 | none |
+| `herness.core.types.harness` | 05 | none |
+| `herness.core.types.swarm` | 06 | `harness`, `jobs` |
+| `herness.core.types.memory` | 07 | `harness`, `swarm` |
+| `herness.core.types.jobs` | 08 | `harness` |
+| `herness.core.types.reports` | 09 | none |
 
 Import rules for every file in `herness/core/types/`:
 
 1. Standard-library modules (per `sys.stdlib_module_names`).
 2. Third-party: `pydantic`, `pydantic_core`, `typing_extensions`, `annotated_types` only.
-3. Herness: `herness.core.errors`, `herness.core.ids`, and the sibling submodules allowed above. Nothing else (ENG §2.1).
+3. Herness: `herness.core.errors`, `herness.core.ids`, the sibling submodules allowed above, and (inside a package-form submodule) the modules of the same submodule package. Nothing else (ENG §2.1).
 4. Code outside `herness/core/types/` imports shared types only from `herness.core.types`, never from a submodule or from `_ownership`.
 5. A shared model that must refer to a behavioral object listed in `DECLARED_ELSEWHERE` (for example spec 05 `ToolContext.tracer`) refers to a `typing.Protocol` that the same owner declares in its submodule and registers in `TYPE_OWNERS`.
 
@@ -1103,35 +1113,35 @@ Import rules for every file in `herness/core/types/`:
 |-------|---------|
 | Kind | constant (three read-only mappings) |
 | Purpose | Machine-readable ownership tables for the checker (U00-47). |
-| Signature | `OWNER_MODULES: Final[Mapping[str, str]] = {"03": "decisions", "05": "harness", "06": "swarm", "07": "memory", "08": "jobs", "09": "reports"}`.<br>`OWNER_IMPORTS: Final[Mapping[str, frozenset[str]]]` = the sibling column of the table above, keyed by owner (`"06": {"harness"}`, `"07": {"harness", "swarm"}`, `"08": {"harness"}`, others empty).<br>`TYPE_OWNERS: Final[Mapping[str, str]]` (name → owner), initial content = design 00 §6 minus `DECLARED_ELSEWHERE`:<br>• `"03"`: `DecisionInput`, `DecisionOutput`, `QuestionSet`, `Question`, `Answer`.<br>• `"05"`: `Message`, `ToolCall`, `LLMRequest`, `LLMResponse`, `Usage`, `Budgets`, `ToolContext`, `ToolResult`, `NumberRef`, `Evidence`, `AgentResult`, `LoopState`, `VerificationResult`, `BudgetLedger`.<br>• `"06"`: `TaskSpec`, `EntityScope`, `TaskInputs`, `TaskBudget`, `Finding`, `Challenge`, `CheckResult`, `CrossCheck`, `VerificationRecord`, `ReportDraft`, `Section`, `Paragraph`, `RecommendationItem`, `RankedEntity`, `ChatAnswer`, `ChatEvent`, `Coverage`.<br>• `"07"`: `MemoryItem`, `MemoryProposal`, `RecallHit`, `RecommendationDraft`, `MemoryRunContext`, `PriorRecommendation`, `PriorContext`, `ConfidenceAdjustment`.<br>• `"08"`: `JobSpec`, `JobOutcome`, `ChatMode`.<br>• `"09"`: `ReportManifest`. |
+| Signature | `OWNER_MODULES: Final[Mapping[str, str]] = {"03": "decisions", "05": "harness", "06": "swarm", "07": "memory", "08": "jobs", "09": "reports"}`.<br>`OWNER_IMPORTS: Final[Mapping[str, frozenset[str]]]` = the sibling column of the table above, keyed by owner (`"06": {"harness", "jobs"}`, `"07": {"harness", "swarm"}`, `"08": {"harness"}`, others empty; the graph is acyclic).<br>`TYPE_OWNERS: Final[Mapping[str, str]]` (name → owner). Content = the design 00 §6 names minus `DECLARED_ELSEWHERE`, plus every helper type the owner implementation specs declare in their submodule (collected from their `herness.core.types.*` unit blocks in the consistency pass; RQ-03 of impl 03):<br>• `"03"` (U03-01 … U03-08): `QuestionType`, `Entity`, `Question`, `QuestionSet`, `DecisionInput`, `Answer`, `DecisionOutput`.<br>• `"05"` (U05-01 … U05-16): `TextPart`, `ToolCall`, `ToolCallPart`, `ToolResultPart`, `ReasoningPart`, `Message`, `SystemBlock`, `ToolSpec`, `RequestMeta`, `LLMRequest`, `Usage`, `LLMResponse`, `Tool`, `AsyncTool`, `ToolErrorInfo`, `ToolResult`, `SqlLimits`, `Budgets`, `BudgetLedger`, `TraceEmitter`, `WarehouseHandle`, `OpsHandle`, `VectorHandle`, `VectorHit`, `ToolContext`, `NumberRef`, `Evidence`, `NumberCheck`, `UncitedSpan`, `ItemResult`, `VerificationResult`, `VerifiableItem`, `LoopSignal`, `LoopLimits`, `LoopState`, `LoopCheckpoint`, `AgentResult`.<br>• `"06"` (U06-01 … U06-21, U06-140): `RunKind`, `Depth`, `Role`, `Specialty`, `ScopeEntityType`, `SkepticCheck`, `SKEPTIC_CHECKS`, `RejectReason`, `FindingStatus`, `Banner`, `SectionId`, `EntityScope`, `TaskInputs`, `TaskBudget`, `TaskSpec`, `PlannedTask` (R-28), `Finding`, `CheckResult`, `Challenge`, `CrossCheck`, `VerificationRecord`, `SwarmTaskState` (R-21), `Paragraph`, `Section`, `RecommendationItem`, `RankedEntity`, `Coverage`, `ReportDraft`, `ChatAnswer`, `ChatEvent`. The function `impact_usd` (U06-08) is not registered: the package holds data types only (R-01, ENG §2.1; contradiction C-09 in §13.1).<br>• `"07"` (U07-01 … U07-10): `Layer`, `Kind`, `Status`, `KIND_LAYER`, `Provenance`, `MemoryItem`, `MemoryProposal`, `RecallHit`, `MemoryRunContext`, `RecommendationDraft`, `PriorRecommendation`, `PriorContext`, `ConfidenceAdjustment`, `SimilarOutcome`.<br>• `"08"` (U08-01 … U08-03, U08-101): `GpuClass`, `JobKind`, `ServiceName`, `ChatMode`, `BreakerState`, `PolicyName`, `JobSpec`, `JobOutcome`, `MetricSample`.<br>• `"09"` (U09-01): `ReportManifest`. |
 | Preconditions | — |
 | Postconditions | — |
-| Invariants | Names are unique across owners. Owner cards append the helper models they place in their submodule (for example spec 05 `TextPart`, `SystemBlock`, `ToolSpec`); they never remove a design 00 §6 name without a design delta. |
+| Invariants | Names are unique across owners. Owner cards append any further helper type they place in their submodule, in the same card, and never remove a design 00 §6 name without a design delta or a ruling. `JobContext` is not in this table: it is behavioral and lives in `herness.core.jobs` (R-02, U00-46). `PlannerOutput` (05) is not a shared type: it lives with the 05 role definitions and refers to `PlannedTask` (R-28). |
 | Algorithm | Not applicable. |
 | Side effects | None. |
 | Errors | None. |
 | Concurrency | Immutable (`types.MappingProxyType`). |
 | Complexity and limits | — |
 | Security notes | TH00-09. |
-| Tests | UT00-48, UT00-49, UT00-50 |
+| Tests | UT00-48, UT00-49, UT00-50, UT00-80 |
 
 #### U00-46 herness.core.types._ownership.DECLARED_ELSEWHERE
 
 | Field | Content |
 |-------|---------|
 | Kind | constant |
-| Purpose | Names listed in design 00 §6 that are behavioral (stateful classes, functions, or protocols that reference non-type objects) and are declared in the owner's package as the owner design specs place them (DD-01). |
-| Signature | `DECLARED_ELSEWHERE: Final[Mapping[str, tuple[str, str]]]` name → (owner, module): `LoopHooks` → (`"05"`, `herness.harness.loop`); `HarnessHooks` → (`"05"`, `herness.harness.loop`); `GatedClient` → (`"05"`, `herness.harness.loop`); `Tracer` → (`"05"`, `herness.harness.tracing`); `RunBudget` → (`"06"`, `herness.harness.budget`); `ModelChain` → (`"08"`, `herness.core.resilience`); `loop_signal_policy` → (`"08"`, `herness.core.resilience`); `JobContext` → (`"08"`, `herness.core.jobs`). |
+| Purpose | Names listed in design 00 §6 that are behavioral (stateful classes, functions, or protocols that reference non-type objects) and are declared in the owner's package (DD-01, accepted by R-02). |
+| Signature | `DECLARED_ELSEWHERE: Final[Mapping[str, tuple[str, str]]]` name → (owner, module), module paths per R-02 and the owner implementation specs: `LoopHooks` → (`"05"`, `herness.harness.loop`); `HarnessHooks` → (`"05"`, `herness.harness.hooks`); `GatedClient` → (`"05"`, `herness.harness.hooks`); `Tracer` → (`"05"`, `herness.harness.tracing`); `RunBudget` → (`"06"`, `herness.harness.budget`); `ModelChain` → (`"08"`, `herness.core.resilience`); `loop_signal_policy` → (`"08"`, `herness.core.resilience`); `JobContext` → (`"08"`, `herness.core.jobs`). |
 | Preconditions | — |
 | Postconditions | — |
-| Invariants | No name appears in both `TYPE_OWNERS` and `DECLARED_ELSEWHERE`. |
+| Invariants | No name appears in both `TYPE_OWNERS` and `DECLARED_ELSEWHERE`. The module of an entry may be a package (impl 08 makes `herness.core.jobs` and `herness.core.resilience` packages, placing `JobContext` in `herness.core.jobs.ports`); a definition in the named module or in any module inside the named package satisfies the entry. |
 | Algorithm | Not applicable. |
 | Side effects | None. |
 | Errors | None. |
 | Concurrency | Immutable. |
 | Complexity and limits | — |
 | Security notes | None. |
-| Tests | UT00-54 |
+| Tests | UT00-54, UT00-81 |
 
 #### U00-47 tools.check_type_ownership.main
 
@@ -1144,16 +1154,16 @@ Returns: `int` exit code (0 pass, 1 violations, 2 usage error). Run as `python -
 | Field | Content |
 |-------|---------|
 | Kind | function (CLI entry) |
-| Purpose | Enforce one owner per shared type and the §3.5 import rules by static analysis (owner submodules are parsed, not imported). |
+| Purpose | Enforce one owner per shared type, the §3.5 import rules, and the settings-module import rule of R-03 (ENG §2.1 settings exception), by static analysis (files are parsed, not imported). |
 | Preconditions | `<root>/herness/core/types/_ownership.py` exists. |
 | Postconditions | Every violation printed as `<path>:<line>: <CODE> <message>`; exit 1 if any. |
-| Algorithm | 1. Load the four tables from `<root>/herness/core/types/_ownership.py` by executing it with `runpy.run_path` (the file has no imports beyond `types` and `typing`). Table checks: a name in both `TYPE_OWNERS` and `DECLARED_ELSEWHERE` → `OWN001`; an owner used in `TYPE_OWNERS` but missing from `OWNER_MODULES` → `OWN002`.<br>2. For each owner, path `<root>/herness/core/types/<submodule>.py`. If absent, write `INFO pending owner <owner>` and skip step 3 for it.<br>3. Parse the submodule with `ast`. Collect top-level names defined by `class`, `def`, `Assign`, `AnnAssign` and `TypeAlias` statements. (a) Each name that `TYPE_OWNERS` gives this owner must be defined → else `OWN010 missing`. (b) Each defined public name (no leading `_`) must be in `TYPE_OWNERS` with this owner → else `OWN011 unregistered` or `OWN012 wrong owner`. (c) Each `Import` and `ImportFrom` must satisfy §3.5 import rules 1–3 (relative imports resolved against `herness.core.types`) → else `OWN020 forbidden import <module>`. (d) A name of `DECLARED_ELSEWHERE` defined here → `OWN043`.<br>4. Parse `__init__.py`: any `class`, `def`, or assignment other than `__all__` → `OWN030`; for each existing owner submodule, the set of names imported from it must equal that owner's `TYPE_OWNERS` names → else `OWN031`; `__all__` must be a literal tuple equal to the sorted union of imported names → else `OWN032`.<br>5. Walk every `*.py` under `<root>/herness` and `<root>/app`, excluding `herness/core/types/`. For each file: (a) a `class` or `def` at any nesting level, or an assignment target at module or class level, whose name is in `TYPE_OWNERS` → `OWN040 redefined outside core.types`; (b) an import of `herness.core.types.<submodule>` or `herness.core.types._ownership` → `OWN041 import via submodule`; (c) a name of `DECLARED_ELSEWHERE` defined (class, def or assignment target) in a module other than its declared module → `OWN042`.<br>6. Sort violations by path and line; write them; return 1 if any, else 0. Output uses `sys.stdout.write` (no `print`, ruff `T20`). |
+| Algorithm | 1. Load the four tables from `<root>/herness/core/types/_ownership.py` by executing it with `runpy.run_path` (the file has no imports beyond `types` and `typing`). Table checks: a name in both `TYPE_OWNERS` and `DECLARED_ELSEWHERE` → `OWN001`; an owner used in `TYPE_OWNERS` but missing from `OWNER_MODULES` → `OWN002`.<br>2. For each owner, the module form is `<root>/herness/core/types/<submodule>.py` and the package form is the directory `<root>/herness/core/types/<submodule>/` with an `__init__.py`. Both present → `OWN003 two forms`. Neither present → write `INFO pending owner <owner>` and skip step 3 for it. The owner's files are the module, or every `*.py` file of the package (recursively).<br>3. Parse each owner file with `ast`. Collect top-level names defined by `class`, `def`, `Assign`, `AnnAssign` and `TypeAlias` statements in all owner files, excluding a package's `__init__.py` and excluding the name `__all__`. (a) Each name that `TYPE_OWNERS` gives this owner must be defined → else `OWN010 missing`. (b) Each defined public name (no leading `_`) must be in `TYPE_OWNERS` with this owner → else `OWN011 unregistered` or `OWN012 wrong owner`. (c) Each `Import` and `ImportFrom` must satisfy §3.5 import rules 1–3 (relative imports resolved against the file's own package) → else `OWN020 forbidden import <module>`. (d) A name of `DECLARED_ELSEWHERE` defined here → `OWN043`. (e) Package form only: the package's `__init__.py` may contain only a docstring, imports from the package's own modules and an assignment to `__all__`; anything else → `OWN033`; the names it imports must equal the owner's `TYPE_OWNERS` names → else `OWN031`.<br>4. Parse `__init__.py`: any `class`, `def`, or assignment other than `__all__` → `OWN030`; for each existing owner submodule, the set of names imported from it must equal that owner's `TYPE_OWNERS` names → else `OWN031`; `__all__` must be a literal tuple equal to the sorted union of imported names → else `OWN032`.<br>5. Walk every `*.py` under `<root>/herness` and `<root>/app`, excluding `herness/core/types/`. For each file: (a) a `class` or `def` at any nesting level, or an assignment target at module or class level, whose name is in `TYPE_OWNERS` → `OWN040 redefined outside core.types`; (b) an import of `herness.core.types.<submodule>` or `herness.core.types._ownership` → `OWN041 import via submodule`; (c) a name of `DECLARED_ELSEWHERE` defined (class, def or assignment target) in a module that is neither its declared module nor inside its declared package → `OWN042`.<br>6. Settings modules (R-03): for every file named `settings.py` under `<root>/herness`, each `Import` and `ImportFrom` (relative imports resolved) must name a standard-library module (per `sys.stdlib_module_names`), `pydantic`, `pydantic_core`, `typing_extensions` or `annotated_types` (the modules pydantic's own constraint types come from), or exactly `herness.core.types` or `herness.core.errors` → else `OWN050 forbidden import in settings module <module>`. Import-linter contract C6 (U00-52) enforces the Herness part of the same rule; this step adds the third-party part, which import-linter does not check.<br>7. Sort violations by path and line; write them; return 1 if any, else 0. Output uses `sys.stdout.write` (no `print`, ruff `T20`). |
 | Side effects | Reads files; writes to stdout. |
 | Errors | Bad arguments → exit 2 with usage on stderr. A file that fails to parse → violation `OWN090 syntax error` (not an exception). |
 | Concurrency | Single-threaded CLI. |
 | Complexity and limits | O(total size of scanned files); < 3 s on the full repository. |
-| Security notes | TH00-09. |
-| Tests | UT00-49, UT00-50, UT00-51, UT00-52, UT00-53, UT00-54, ST00-15, IT00-02 |
+| Security notes | TH00-09; TH00-08 (settings modules cannot pull in higher layers or I/O libraries). |
+| Tests | UT00-49, UT00-50, UT00-51, UT00-52, UT00-53, UT00-54, UT00-72, UT00-73, UT00-81, ST00-15, IT00-02 |
 
 ### 3.6 Package root and project configuration
 
@@ -1182,9 +1192,9 @@ Static configuration units U00-49 … U00-54 and U00-59 … U00-63 have no run-t
 |-------|---------|
 | Kind | configuration file |
 | Purpose | Declare the package, its dependencies with the design 00 §9 minimum versions, dev tooling (ENG §14 E3), the lock and index policy, and the build backend. |
-| Algorithm | **`[build-system]`**: `requires = ["hatchling>=1.25,<2"]`; `build-backend = "hatchling.build"`.<br>**`[project]`**: `name = "herness"`; `version = "0.1.0"`; `description = "Local-first IT operations analytics and agent harness"`; `readme = "README.md"`; `requires-python = ">=3.12,<3.13"`; `license = "LicenseRef-Proprietary"` (open item O-04); `classifiers` = `"Private :: Do Not Upload"`, `"Programming Language :: Python :: 3.12"`, `"Operating System :: Microsoft :: Windows"`, `"Operating System :: POSIX :: Linux"`; `dependencies` = the rows of table 14.1 with scope `runtime`, each with exactly the lower bound shown.<br>**`[project.optional-dependencies]`**: `ner = ["presidio-analyzer", "spacy"]`; `pdf = ["weasyprint"]`.<br>**`[project.scripts]`**: `herness = "herness.cli:main"` (X:09/herness.cli.main).<br>**`[dependency-groups]`**: `dev` = the rows of table 14.1 with scope `dev`.<br>**`[tool.uv]`**: `required-version = "==<the uv version that generated uv.lock in T00-01>"`; `default-groups = ["dev"]`.<br>**`[[tool.uv.index]]`**: `name = "pytorch-cu128"`; `url = "https://download.pytorch.org/whl/cu128"`; `explicit = true` (open item O-05).<br>**`[tool.uv.sources]`**: `torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]`.<br>**`[tool.hatch.build.targets.wheel]`**: `packages = ["herness"]` (package data such as `herness/model/sql/*.sql` and `herness/reports/templates/**` is included because hatchling ships every file under the package).<br>**`[tool.hatch.build.targets.sdist]`**: `include = ["herness", "README.md", "pyproject.toml", "uv.lock"]`. |
+| Algorithm | **`[build-system]`**: `requires = ["hatchling>=1.25,<2"]`; `build-backend = "hatchling.build"`.<br>**`[project]`**: `name = "herness"`; `version = "0.1.0"`; `description = "Local-first IT operations analytics and agent harness"`; `readme = "README.md"`; `requires-python = ">=3.12,<3.13"`; `license = "LicenseRef-Proprietary"` (open item O-04); `classifiers` = `"Private :: Do Not Upload"`, `"Programming Language :: Python :: 3.12"`, `"Operating System :: Microsoft :: Windows"`, `"Operating System :: POSIX :: Linux"`; `dependencies` = the rows of table 14.1 with scope `runtime`, each with exactly the lower bound shown.<br>**`[project.optional-dependencies]`**: `ner = ["presidio-analyzer", "spacy"]`; `pdf = ["weasyprint"]`.<br>**`[project.scripts]`**: `herness = "herness.cli:main"` (X:09/herness.cli.main).<br>**`[dependency-groups]`**: `dev` = the rows of table 14.1 with scope `dev`.<br>**`[tool.uv]`**: `required-version = "==<the uv version that generated uv.lock in T00-01>"`; `default-groups = ["dev"]`.<br>**`[[tool.uv.index]]`**: `name = "pytorch-cu128"`; `url = "https://download.pytorch.org/whl/cu128"`; `explicit = true` (open item O-05).<br>**`[tool.uv.sources]`**: `torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]`.<br>**`[tool.hatch.build.targets.wheel]`**: `packages = ["herness"]` (package data such as `herness/model/sql/*.sql` and `herness/reports/templates/**` is included because hatchling ships every file under the package).<br>**`[tool.hatch.build.targets.sdist]`**: `include = ["herness", "README.md", "pyproject.toml", "uv.lock"]`.<br>**Install modes (R-58)**: Development: `uv sync --frozen` installs `herness` into `.venv` as an editable install (uv's default for a project with a `[build-system]`); no development command in this spec or the README passes `--no-editable`. Target box: never installed from a checkout; the release wheel built by U00-60 is installed by `herness deploy install` (X:10/herness deploy install) after it verifies the wheel's provenance attestation and SBOM. |
 | Complexity and limits | Whole `pyproject.toml` ≤ 400 lines, including U00-50 … U00-53 and the `[tool.herness.*]` tables of U00-55 and U00-58. |
-| Security notes | TH00-11: installs come only from `uv.lock` (`uv sync --frozen`, `UV_FROZEN=1` in CI), which records SHA-256 hashes; the torch index is `explicit`, so no other package resolves from it. |
+| Security notes | TH00-11: installs come only from `uv.lock` (`uv sync --frozen`, `UV_FROZEN=1` in CI), which records SHA-256 hashes; the torch index is `explicit`, so no other package resolves from it. TH00-13: the target box runs only attested release wheels (R-58). |
 | Tests | UT00-56 |
 
 #### U00-50 `pyproject.toml`: ruff configuration
@@ -1192,8 +1202,8 @@ Static configuration units U00-49 … U00-54 and U00-59 … U00-63 have no run-t
 | Field | Content |
 |-------|---------|
 | Kind | configuration file section |
-| Purpose | ENG §3.1 lint and format rules, plus bans that enforce ENG §3.5, spec 10 §3.5 and the `herness.core.time` import convention. |
-| Algorithm | **`[tool.ruff]`**: `line-length = 100`; `target-version = "py312"`; `src = ["herness", "app", "tools", "tests"]`; `extend-exclude = ["data", "docs"]`.<br>**`[tool.ruff.lint]`**: `select` = `E`, `W`, `F`, `I`, `N`, `UP`, `B`, `A`, `C4`, `C90`, `SIM`, `PT`, `PL`, `RUF`, `S`, `DTZ`, `TRY`, `ASYNC`, `PERF`, `ANN`, `BLE`, `EM`, `G`, `LOG`, `T20`, `ERA` (ENG §3.1) plus `TID251` and `ICN003` (needed for the bans below; stricter than ENG, §13.3). `ignore = ["TRY003"]` (taxonomy errors carry operation-specific messages by design, ENG §3.4; §13.3).<br>**`[tool.ruff.lint.per-file-ignores]`**: `"tests/**" = ["S101", "PLR2004", "S311", "ANN"]`; `"herness/core/errors.py" = ["N818"]` (class names fixed by design 00 §7); `"herness/core/logging.py" = ["A005"]`; `"herness/core/time.py" = ["A005"]`; `"herness/core/types/__init__.py" = ["A005"]`; `"herness/core/egress.py" = ["TID251"]`; `"herness/connectors/**" = ["TID251"]` (the only places allowed to build HTTP clients, spec 10 §3.5; pickle there is still caught by `S301`).<br>**`[tool.ruff.lint.mccabe]`**: `max-complexity = 10`.<br>**`[tool.ruff.lint.pylint]`**: `max-args = 6` (open item O-06).<br>**`[tool.ruff.lint.isort]`**: `known-first-party = ["herness", "app", "tools"]`.<br>**`[tool.ruff.lint.flake8-tidy-imports.banned-api]`** (target → message): `pickle`, `marshal`, `shelve` → "ENG §3.5: no pickle, marshal or shelve"; `yaml.load`, `yaml.unsafe_load`, `yaml.full_load` → "use yaml.safe_load (ENG §3.5)"; `requests`, `urllib.request`, `httpx.Client`, `httpx.AsyncClient` → "HTTP clients only via herness.core.egress or herness.connectors.base.http_client (spec 10 §3.5)"; `datetime.datetime.utcnow`, `datetime.datetime.utcfromtimestamp` → "naive datetime; use herness.core.time".<br>**`[tool.ruff.lint.flake8-import-conventions]`**: `banned-from = ["herness.core.time"]`.<br>**`[tool.ruff.format]`**: `quote-style = "double"`; `line-ending = "lf"`. |
+| Purpose | ENG §3.1 lint and format rules, plus bans that enforce ENG §3.5, the egress rule of ENG §2.1 and R-06, and the `herness.core.time` import convention. |
+| Algorithm | **`[tool.ruff]`**: `line-length = 100`; `target-version = "py312"`; `src = ["herness", "app", "tools", "tests"]`; `extend-exclude = ["data", "docs"]`.<br>**`[tool.ruff.lint]`**: `select` = `E`, `W`, `F`, `I`, `N`, `UP`, `B`, `A`, `C4`, `C90`, `SIM`, `PT`, `PL`, `RUF`, `S`, `DTZ`, `TRY`, `ASYNC`, `PERF`, `ANN`, `BLE`, `EM`, `G`, `LOG`, `T20`, `ERA` (ENG §3.1) plus `TID251` and `ICN003` (needed for the bans below; stricter than ENG, §13.3). `ignore = ["TRY003"]` (taxonomy errors carry operation-specific messages by design, ENG §3.4; §13.3).<br>**`[tool.ruff.lint.per-file-ignores]`**: `"tests/**" = ["S101", "PLR2004", "S311", "ANN"]`; `"herness/core/errors.py" = ["N818"]` (class names fixed by design 00 §7); `"herness/core/logging.py" = ["A005"]`; `"herness/core/time.py" = ["A005"]`; `"herness/core/numbers.py" = ["A005"]`; `"herness/core/types/__init__.py" = ["A005"]`; `"herness/core/egress.py" = ["TID251"]` (the only module allowed to build `httpx` clients and transports, R-06; pickle there is still caught by `S301`). Connectors get no exception: they obtain `httpx` clients from `herness.core.egress`, and vendor SDKs (Snowflake, `pymongo`, `msal`) build their own clients only for hosts in `sources.<name>.hosts`, which the impl 10 socket guard enforces at run time (R-06).<br>**`[tool.ruff.lint.mccabe]`**: `max-complexity = 10`.<br>**`[tool.ruff.lint.pylint]`**: `max-args = 6` (open item O-06).<br>**`[tool.ruff.lint.isort]`**: `known-first-party = ["herness", "app", "tools"]`.<br>**`[tool.ruff.lint.flake8-tidy-imports.banned-api]`** (target → message): `pickle`, `marshal`, `shelve` → "ENG §3.5: no pickle, marshal or shelve"; `yaml.load`, `yaml.unsafe_load`, `yaml.full_load` → "use yaml.safe_load (ENG §3.5)"; `requests`, `urllib.request`, `httpx.Client`, `httpx.AsyncClient`, `httpx.HTTPTransport`, `httpx.AsyncHTTPTransport`, and the client-creating shortcuts `httpx.request`, `httpx.stream`, `httpx.get`, `httpx.post`, `httpx.put`, `httpx.patch`, `httpx.delete`, `httpx.head`, `httpx.options` → "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"; `datetime.datetime.utcnow`, `datetime.datetime.utcfromtimestamp` → "naive datetime; use herness.core.time".<br>**`[tool.ruff.lint.flake8-import-conventions]`**: `banned-from = ["herness.core.time"]`.<br>**`[tool.ruff.format]`**: `quote-style = "double"`; `line-ending = "lf"`. |
 | Security notes | TH00-08. |
 | Tests | UT00-57, ST00-09 |
 
@@ -1212,17 +1222,17 @@ Static configuration units U00-49 … U00-54 and U00-59 … U00-63 have no run-t
 
 | ID | Name | Type | Definition |
 |----|------|------|------------|
-| C1 | `herness layers` | `layers` | Layers high to low: `herness.cli`; `herness.eval`; `herness.reports`; `herness.harness`; `herness.enrich`; `herness.metrics`; `herness.connectors` \| `herness.model` (pipe = independent siblings); `herness.store`; `herness.core`. `ignore_imports`: `herness.core.config -> herness.**.settings` (spec 10 §3.1 section models; §13.1 C-02). Result: ENG §2.1 upward imports forbidden; `metrics` cannot import `enrich`; `reports` cannot import `eval`; `connectors` and `model` are independent. |
+| C1 | `herness layers` | `layers` | Layers high to low: `herness.cli`; `herness.eval` \| `herness.admin` (pipe = independent siblings; `herness.admin` is the L5 package of R-07); `herness.reports`; `herness.harness`; `herness.enrich`; `herness.metrics`; `herness.connectors` \| `herness.model`; `herness.store`; `herness.core`. `ignore_imports` holds exactly one entry, the named **settings exception** (ENG §2.1, R-03), written with the TOML comment `# settings exception (ENG §2.1, R-03)` on the line above it: `herness.core.config -> herness.**.settings`. Result: ENG §2.1 upward imports forbidden; `herness.core` never imports `herness.store`, so L0 reaches the ops store only through ports bound by the composition root (R-04); `herness.enrich` never imports `herness.harness` (R-05); `metrics` cannot import `enrich`; `reports` cannot import `eval` or `admin`; `eval` and `admin` are independent; `connectors` and `model` are independent. |
 | C2 | `herness never imports app or tools` | `forbidden` | `source_modules = ["herness"]`; `forbidden_modules = ["app", "tools"]`. |
-| C3 | `core base order` | `layers` | Layers high to low: `herness.core.logging`; `herness.core._log_pipeline` \| `herness.core.types`; `herness.core.ids`; `herness.core.time`; `herness.core.errors`. |
-| C4 | `core base is closed` | `forbidden` | `source_modules` = the six modules of C3; `forbidden_modules` = every other existing module of `herness.core` (`config`, `registry`, `secrets`, `redact`, `egress`, `audit`, `resilience`, `jobs`, and any `settings`) and every existing top-level package of C1 other than `herness.core`. Indirect imports are checked (default). |
+| C3 | `core base order` | `layers` | Layers high to low: `herness.core.logging`; `herness.core._log_pipeline` \| `herness.core.types`; `herness.core.ids`; `herness.core.time` \| `herness.core.numbers`; `herness.core.errors`. Result: `herness.core.numbers` (R-16) imports only `herness.core.errors` from the core base; it reads `NumberRef` values structurally through its own `FormattableNumber` protocol (U00-65), not by importing `herness.core.types`. |
+| C4 | `core base is closed` | `forbidden` | `source_modules` = the seven modules of C3; `forbidden_modules` = every other existing module of `herness.core` (`config`, `registry`, `secrets`, `redact`, `egress`, `audit`, `resilience`, `jobs`, and any `settings`) and every existing top-level package of C1 other than `herness.core`. Indirect imports are checked (default). |
 | C5 | `types import only errors and ids` | `forbidden` | `source_modules = ["herness.core.types"]`; `forbidden_modules = ["herness.core.time", "herness.core.logging", "herness.core._log_pipeline"]`; `allow_indirect_imports = true` (types reach `time` only indirectly through `ids`; ENG §2.1 restricts direct imports). |
-| C6 | `settings modules are leaves` | `forbidden` | `source_modules` = every existing `herness/**/settings.py` module; `forbidden_modules` = every existing herness package or module except `herness.core.errors`, `herness.core.ids`, `herness.core.types` and the settings module itself. Added by the first card (in any spec) that creates a settings module; each later settings card appends its module. |
+| C6 | `settings modules are leaves` | `forbidden` | `source_modules` = every existing `herness/**/settings.py` module; `forbidden_modules` = every existing herness package or module except `herness.core.errors`, `herness.core.types` and the settings module itself (R-03); `allow_indirect_imports = true` (a settings module reaches `herness.core.ids` and `herness.core.time` only through `herness.core.types`; R-03 restricts direct imports). The third-party part of R-03 (standard library and pydantic only) is checked by U00-47 step 6. Added by the first card (in any spec) that creates a settings module; each later settings card appends its module. |
 
 | Field | Content |
 |-------|---------|
 | Kind | configuration file section |
-| Purpose | Enforce ENG §2.1 layering and the core-base rules mechanically. |
+| Purpose | Enforce ENG §2.1 layering (including R-03, R-04, R-05 and R-07) and the core-base rules mechanically. |
 | Security notes | TH00-08. |
 | Tests | UT00-58, ST00-10 |
 
@@ -1407,7 +1417,7 @@ Trigger: `push` of tags matching `v*.*.*`. Jobs:
 | Field | Content |
 |-------|---------|
 | Kind | configuration file (GitHub Actions workflow) |
-| Purpose | SLSA Build L2 release (ENG §5.6): build only on a hosted runner, signed provenance and an SBOM attestation per artifact, licence gate, signed-tag check. Verification before install is X:10/herness deploy install (ENG §14 E4). |
+| Purpose | SLSA Build L2 release (ENG §5.6): build only on a hosted runner, signed provenance and an SBOM attestation per artifact, licence gate, signed-tag check. The release assets (wheel, `herness-<version>.cdx.json` SBOM and the two attestations) are the inputs of X:10/herness deploy install, which verifies the attestation and SBOM before installing the wheel on the target box (ENG §14 E4, R-58). |
 | Security notes | TH00-12, TH00-13. Herness builds no container image of its own; third-party images are pinned by digest by impl 10. |
 | Tests | ST00-08 |
 
@@ -1439,14 +1449,167 @@ Trigger: `push` of tags matching `v*.*.*`. Jobs:
 |-------|---------|
 | Kind | documentation file |
 | Purpose | Onboarding for developers and operators; links to the design and implementation specs rather than restating them. |
-| Algorithm | Sections in order: (1) **Herness** — one paragraph of purpose and the six principles as links to design 00 §2. (2) **Status** — current phase and link to `docs/specs/open-questions.md`. (3) **Requirements** — Windows 11 Pro with WSL2 (Linux supported), Python 3.12 via `uv` (pinned version from `pyproject.toml`), NVIDIA GPU with 24 GB or more for Phases 3–4 (design 10). (4) **Quick start (development)** — `uv sync --frozen`; `uv run pre-commit install`; set `HERNESS_ENV=dev` in the shell; optionally copy `.env.example` to `.env`; `uv run pytest -m unit`; generate a tiny synthetic dataset (`uv run python tools/synth_data.py --seed 7 --scale tiny`, design 11 §3.1); `uv run herness config validate --profile synth`. (5) **Repository layout** — link to design 00 §3 and the impl module maps. (6) **Configuration and secrets** — link to design 10; secrets live in Windows Credential Manager (`herness secrets set`); never put secrets in files. (7) **Development workflow** — task cards, ENG §8 definition of done, the quality-gate table of ENG §7, how to run each check locally (commands of U00-54 and U00-59). (8) **Testing** — markers and selections (design 11 §4.1–4.2). (9) **CI and releases** — required checks, branch protection of `main` (required checks of U00-59, signed annotated tags `vX.Y.Z`), what the release produces (wheel, sdist, SBOM, provenance), how to verify an attestation with `gh attestation verify <wheel> --repo <owner>/<repo>`. (10) **Security** — how to report a vulnerability internally; ENG §5 summary link. (11) **Documentation index** — links to `docs/architecture.html`, `docs/specs/`, `docs/impl/`. (12) **Licence** — per O-04. |
+| Algorithm | Sections in order: (1) **Herness** — one paragraph of purpose and the six principles as links to design 00 §2. (2) **Status** — current phase and link to `docs/specs/open-questions.md`. (3) **Requirements** — Windows 11 Pro with WSL2 (Linux supported), Python 3.12 via `uv` (pinned version from `pyproject.toml`), NVIDIA GPU with 24 GB or more for Phases 3–4 (design 10). (4) **Quick start (development)** — `uv sync --frozen` (installs `herness` in editable mode, R-58); `uv run pre-commit install`; set `HERNESS_ENV=dev` in the shell; optionally copy `.env.example` to `.env`; `uv run pytest -m unit`; generate a tiny synthetic dataset (`uv run python tools/synth_data.py --seed 7 --scale tiny`, design 11 §3.1); `uv run herness config validate --profile synth`. (5) **Repository layout** — link to design 00 §3 and the impl module maps. (6) **Configuration and secrets** — link to design 10; secrets live in Windows Credential Manager (`herness secrets set`); never put secrets in files. (7) **Development workflow** — task cards, ENG §8 definition of done, the quality-gate table of ENG §7, how to run each check locally (commands of U00-54 and U00-59). (8) **Testing** — markers and selections (design 11 §4.1–4.2). (9) **CI and releases** — required checks, branch protection of `main` (required checks of U00-59, signed annotated tags `vX.Y.Z`), what the release produces (wheel, sdist, SBOM, provenance), how to verify an attestation with `gh attestation verify <wheel> --repo <owner>/<repo>`, and that the target box installs only the release wheel through `herness deploy install`, which runs that verification and the SBOM check first (R-58; design 10). (10) **Security** — how to report a vulnerability internally; ENG §5 summary link. (11) **Documentation index** — links to `docs/architecture.html`, `docs/specs/`, `docs/impl/`. (12) **Licence** — per O-04. |
 | Tests | None (documentation; reviewed in T00-02). |
+
+### 3.10 `herness.core.numbers` (R-16)
+
+One implementation of design 00 §12.1 that the Verifier (impl 05), the renderer and report contract (impl 09) and every other spec that checks model-written numbers (06, 07, 11) import instead of keeping their own copies. The module has three parts: marker parsing (U00-66), the uncited-numeral scanner with its allowed-pattern compiler (U00-67, U00-68), and `NumberRef` display formatting for every `format` value (U00-69, U00-70). It is pure: no I/O, no clock, no logging, no configuration access. The allowed-numeral patterns come from `config/app.yaml: reports.allowed_numeral_patterns` (key owned by impl 09); the caller reads the key and passes the list to U00-67. The module imports only the standard library (`re`, `decimal`, `unicodedata`, `dataclasses`, `typing`, `types`) and `herness.core.errors` (contract C3). It does not import `herness.core.types`: it reads `NumberRef` through the structural protocol `FormattableNumber` (U00-65), which the impl 05 `NumberRef` model satisfies.
+
+#### U00-64 herness.core.numbers constants
+
+| Field | Content |
+|-------|---------|
+| Kind | constant |
+| Purpose | The marker, numeral and format definitions of design 00 §12.1, design 05 §5.6 step 3 and design 09 §4.1 rule 5, defined once. |
+| Signature | `MARKER_RE: Final[re.Pattern[str]]` = `\[\[(n[0-9]{1,39})\]\]` (a valid marker; group 1 is the id; the 39-digit bound keeps every valid marker inside `ANY_MARKER_RE`).<br>`ANY_MARKER_RE: Final[re.Pattern[str]]` = `\[\[([^\[\]]{0,40})\]\]` (any double-bracket token; group 1 is the inner text).<br>`MARKER_ID_RE: Final[re.Pattern[str]]` = `^n[0-9]+$`.<br>`NUMERAL_RE: Final[re.Pattern[str]]` = `(?<![\w.])[-+]?\$?\d[\d,]*(\.\d+)?\s*(%\|k\|K\|M\|bn\|x)?(?!\w)`, identical to design 05 §5.6 step 3 (each `\|` in this table cell stands for a plain alternation bar in the pattern); compiled without flags, so `\d` and `\w` are Unicode-aware.<br>`MAX_SCAN_CHARS: Final = 100_000`; `HIT_TEXT_MAX: Final = 80`; `MAX_ALLOWED_PATTERNS: Final = 50`; `MAX_PATTERN_CHARS: Final = 200`; `TOO_LONG_TEXT: Final = "<text too long>"`; `NOT_AVAILABLE: Final = "n/a"`.<br>`NUMBER_FORMATS: Final[frozenset[str]]` = `usd`, `usd_compact`, `int`, `pct1`, `ratio2`, `hours1`, `minutes0`, `prob2` (the `NumberRef.format` values of design 00 §12.1) plus `plain` (the fallback of design 09 §4.1 rule 5, never a `NumberRef.format` value).<br>`DEFAULT_FORMAT_BY_UNIT: Final[Mapping[str, str]]` (a `MappingProxyType`) = `usd` → `usd_compact`, `pct` → `pct1`, `count` → `int`, `hours` → `hours1`, `minutes` → `minutes0`, `ratio` → `ratio2`; every other unit uses `plain`. |
+| Preconditions | — |
+| Postconditions | — |
+| Invariants | Every string matched by `MARKER_RE` is also matched by `ANY_MARKER_RE`, and its group 1 matches `MARKER_ID_RE`. |
+| Algorithm | Not applicable. |
+| Side effects | None. |
+| Errors | None. |
+| Concurrency | Immutable (compiled patterns are thread-safe). |
+| Complexity and limits | Scan cap 100,000 characters; hit text 80 characters; 1–50 allowed patterns of 1–200 characters each. |
+| Security notes | TH00-15. |
+| Tests | UT00-74, UT00-76, UT00-79 |
+
+#### U00-65 herness.core.numbers result types and `FormattableNumber`
+
+| Field | Content |
+|-------|---------|
+| Kind | class (four frozen dataclasses and one protocol) |
+| Purpose | Plain result values of the parser and scanner, and the read-only view of a `NumberRef` the formatter needs. |
+| Signature | `Marker` (`@dataclass(frozen=True, slots=True)`): `id: str`, `start: int`, `end: int`.<br>`MalformedMarker` (same decorator): `text: str` (the inner text, at most 40 characters), `start: int`, `end: int`.<br>`MarkerScan` (same decorator): `markers: tuple[Marker, ...]`, `malformed: tuple[MalformedMarker, ...]`; property `ids -> tuple[str, ...]` = the `id` of every marker in text order, duplicates kept.<br>`NumeralHit` (same decorator): `text: str` (at most `HIT_TEXT_MAX` characters), `start: int`, `end: int`.<br>`FormattableNumber` (`typing.Protocol`, not runtime-checkable) with read-only properties `value -> float \| int \| str`, `unit -> str`, `format -> str \| None`. |
+| Preconditions | — |
+| Postconditions | — |
+| Invariants | `0 <= start < end`; offsets index the text passed to the producing function. Callers convert these values to their own models at their boundary (impl 05 `UncitedSpan`, impl 09 `UncitedHit`). |
+| Algorithm | Not applicable. |
+| Side effects | None. |
+| Errors | None. |
+| Concurrency | Immutable. |
+| Complexity and limits | — |
+| Security notes | None. |
+| Tests | UT00-74, UT00-76, UT00-78 |
+
+#### U00-66 herness.core.numbers.parse_markers
+
+| Name | Type | Default | Kind | Constraints |
+|------|------|---------|------|-------------|
+| `text` | `str` | — | positional | any; only the first `MAX_SCAN_CHARS` characters are parsed |
+
+Returns: `MarkerScan`.
+
+| Field | Content |
+|-------|---------|
+| Kind | function (pure) |
+| Purpose | Find every number marker `[[nK]]` of design 00 §12.1 in model-written text and every malformed double-bracket token. |
+| Preconditions | None. |
+| Postconditions | `markers` and `malformed` are each sorted by `start` and do not overlap; every marker id matches `MARKER_ID_RE`; offsets refer to `text`. |
+| Algorithm | 1. `scan = text[:MAX_SCAN_CHARS]`.<br>2. For each `ANY_MARKER_RE` match on `scan`, in order: when group 1 fully matches `MARKER_ID_RE`, append `Marker(id=group 1, start, end)`; otherwise append `MalformedMarker(text=group 1, start, end)`.<br>3. Return `MarkerScan(tuple(markers), tuple(malformed))`. Checking that each id has a `NumberRef`, that ids are unique and that every `NumberRef` is used stays with the caller (impl 05 `unknown_markers`, impl 09 contract rules), which compares `MarkerScan.ids` with its `numbers` list. |
+| Side effects | None. |
+| Errors | None. |
+| Concurrency | Pure. |
+| Complexity and limits | O(len(text)), capped at 100,000 characters. |
+| Security notes | TH00-15: a token such as `[[1,250]]` is malformed, never a marker, so it cannot hide a numeral. |
+| Tests | UT00-74 |
+
+#### U00-67 herness.core.numbers.compile_allowed_patterns
+
+| Name | Type | Default | Kind | Constraints |
+|------|------|---------|------|-------------|
+| `patterns` | `Sequence[str]` | — | positional | the list of `reports.allowed_numeral_patterns`; 1–50 entries; each a `str` of 1–200 characters that compiles |
+
+Returns: `tuple[re.Pattern[str], ...]` in input order.
+
+| Field | Content |
+|-------|---------|
+| Kind | function (pure) |
+| Purpose | Validate and compile the allowed-numeral pattern list once, so the Verifier, the renderer and every other caller apply the same compiled list (design 00 §12.1). |
+| Preconditions | See constraints; violations raise `ConfigError`. |
+| Postconditions | One compiled pattern per input string, compiled without flags. |
+| Algorithm | 1. If `patterns` is a `str` (a single string is also a `Sequence`), raise `ConfigError("allowed numeral patterns must be a list")`.<br>2. If `len(patterns)` is 0 or above `MAX_ALLOWED_PATTERNS`, raise `ConfigError("allowed numeral pattern count out of range", count=len(patterns))`.<br>3. For each `(i, p)`: if `p` is not a `str`, or `len(p)` is 0 or above `MAX_PATTERN_CHARS`, raise `ConfigError("invalid allowed numeral pattern", index=i)`; `re.compile(p)`, where `re.error` → `ConfigError("allowed numeral pattern does not compile", index=i)` from the exception. The pattern text is not copied into the error.<br>4. Return the tuple. |
+| Side effects | None. |
+| Errors | not a list, count out of range, bad entry, compile failure → `ConfigError` (`count` or `index`). |
+| Concurrency | Pure. |
+| Complexity and limits | At most 50 patterns of at most 200 characters. |
+| Security notes | TB10: the patterns are operator configuration; bounding their number and length limits the cost of a pathological pattern. |
+| Tests | UT00-75 |
+
+#### U00-68 herness.core.numbers.find_uncited
+
+| Name | Type | Default | Kind | Constraints |
+|------|------|---------|------|-------------|
+| `text` | `str` | — | positional | model-written text; only the first `MAX_SCAN_CHARS` characters are scanned |
+| `allowed` | `Sequence[re.Pattern[str]]` | — | positional | the result of U00-67 |
+
+Returns: `tuple[NumeralHit, ...]`.
+
+| Field | Content |
+|-------|---------|
+| Kind | function (pure) |
+| Purpose | The numeral scanner of design 00 §12.1: find every numeral outside a valid marker that no allowed pattern covers. |
+| Preconditions | `allowed` compiled by U00-67. |
+| Postconditions | Hits sorted by `(start, end)`; offsets refer to `text`; an empty result means the text carries numbers only through markers and allowed numerals. |
+| Algorithm | 1. `scan = text[:MAX_SCAN_CHARS]`; `markers = parse_markers(scan).markers` (U00-66).<br>2. `blanked` = `scan` with the span of every valid marker replaced by the same number of spaces (offsets are preserved). Malformed markers are not blanked, so numerals inside them are scanned.<br>3. `allowed_spans` = every non-empty match of every pattern in `allowed`, found with `finditer` on `blanked`.<br>4. For each `NUMERAL_RE` match on `blanked` with span `(s, e)`: record `(s, e)` as a numeral span; then, while `e > s` and `blanked[e - 1]` is whitespace, decrease `e`. The token is exempt when some allowed span `(a, b)` has `a <= s` and `e <= b`. Otherwise add `NumeralHit(text=scan[s:e][:HIT_TEXT_MAX], start=s, end=e)`.<br>5. For each index `i` of `blanked` whose character `ch` is not an ASCII digit, is not whitespace and has `unicodedata.numeric(ch, None) is not None` (superscripts, fractions, Roman numeral and other numeric characters that `\d` does not match), and `i` lies inside no numeral span of step 4 and no allowed span: add `NumeralHit(text=ch, start=i, end=i + 1)`.<br>6. If `len(text) > MAX_SCAN_CHARS`, add `NumeralHit(text=TOO_LONG_TEXT, start=MAX_SCAN_CHARS, end=len(text))`, so an overlong text never passes.<br>7. Return the hits sorted by `(start, end)`. |
+| Side effects | None. |
+| Errors | None. |
+| Concurrency | Pure. |
+| Complexity and limits | O(len(text) × len(allowed)), text capped at 100,000 characters; BT00-05. |
+| Security notes | TH00-15 (LLM09): Unicode digits (`\d` is Unicode-aware), other numeric characters (step 5), numerals inside malformed markers (step 2) and text past the scan cap (step 6) are all reported. |
+| Tests | UT00-76, UT00-77, PT00-07, ST00-18, BT00-05 |
+
+#### U00-69 herness.core.numbers.format_value
+
+| Name | Type | Default | Kind | Constraints |
+|------|------|---------|------|-------------|
+| `value` | `object` | — | positional | a `NumberRef.value`: `int`, `float`, decimal `str` or `decimal.Decimal` |
+| `unit` | `str` | — | positional | a `NumberRef.unit` value |
+| `fmt` | `str \| None` | — | positional | a `NumberRef.format` value or `None` |
+
+Returns: `str`.
+
+| Field | Content |
+|-------|---------|
+| Kind | function (pure) |
+| Purpose | Display a number deterministically for every `NumberRef.format` value (design 00 §12.1, design 09 §4.1 rule 5), on every OS and locale. |
+| Preconditions | None (invalid input gives `NOT_AVAILABLE`). |
+| Postconditions | The result is `NOT_AVAILABLE` or a fixed-point string (never exponent notation) built only from the characters `0123456789,.$%-`, space, `K`, `M`, `B`, `h`, `m`, `i` and `n`. The same arguments always give the same result. |
+| Algorithm | 1. `f = fmt` when `fmt is not None`, else `DEFAULT_FORMAT_BY_UNIT.get(unit, "plain")`. If `f not in NUMBER_FORMATS`, return `NOT_AVAILABLE`.<br>2. Convert: a `bool` → return `NOT_AVAILABLE`; an `int`, `float`, `str` or `Decimal` → `d = Decimal(str(value))`, where `decimal.InvalidOperation` → return `NOT_AVAILABLE`; any other type → return `NOT_AVAILABLE`. If `d` is not finite, return `NOT_AVAILABLE`.<br>3. Rounding is `quantize` with `ROUND_HALF_EVEN` in a local `decimal.Context` of precision 60 (the global context is neither used nor changed). "Grouped" means the integer digits in groups of three from the right joined by `,`, built by string slicing (no `locale`). A result that rounds to zero is written without a minus sign. A negative result puts `-` first (before `$`).<br>4. Rules by `f`: `usd` → `$`, grouped integer part, 2 decimals (`-$1,250,000.00`). `usd_compact` → with `a = abs(d)`, pick the tier: `a >= 1e9` → divide by `1e9`, 2 decimals, suffix `B`; `a >= 1e6` → divide by `1e6`, 2 decimals, suffix `M`; `a >= 1e3` → divide by `1e3`, 1 decimal, suffix `K`; else 0 decimals and no suffix; when the rounded mantissa is 1000 or more and a higher tier exists, use the next higher tier instead (`999960` → `$1.00M`, `999.6` → `$1.0K`); the `B` tier mantissa is grouped; examples `$1.84M`, `$12.5K`, `$950`. `int` → 0 decimals, grouped (`1,204`). `pct1` → 1 decimal and `%` (unit `pct` stores 0–100; `42.0%`). `ratio2` and `prob2` → 2 decimals (`0.37`). `hours1` → 1 decimal and ` h` (`3.5 h`). `minutes0` → 0 decimals and ` min` (`45 min`). `plain` → when `d` is integral, the `int` rule; else quantize to 4 decimals, drop trailing zeros of the fraction, and use the `int` rule when no fraction digit is left (`7`, `0.1234`).<br>5. Return the string, written in fixed-point form (`format(x, "f")` on the quantized `Decimal`). |
+| Side effects | None. |
+| Errors | None: unconvertible or non-finite values and unknown formats give `NOT_AVAILABLE`, which the renderer counts as unlinked (impl 09). |
+| Concurrency | Pure (local decimal context). |
+| Complexity and limits | O(number of digits). |
+| Security notes | TB5: the output alphabet contains no markup characters. |
+| Tests | UT00-78, UT00-79, PT00-06 |
+
+#### U00-70 herness.core.numbers.format_number
+
+| Name | Type | Default | Kind | Constraints |
+|------|------|---------|------|-------------|
+| `ref` | `FormattableNumber` | — | positional | an impl 05 `NumberRef` or any object with the three read-only attributes |
+
+Returns: `str`.
+
+| Field | Content |
+|-------|---------|
+| Kind | function (pure) |
+| Purpose | Display a `NumberRef` value; the single formatter the renderer, dashboard, chat and stored-text renderings use (R-16). |
+| Preconditions | None. |
+| Postconditions | Equals `format_value(ref.value, ref.unit, ref.format)`. |
+| Algorithm | 1. Return `format_value(ref.value, ref.unit, ref.format)` (U00-69). |
+| Side effects | None. |
+| Errors | None. |
+| Concurrency | Pure. |
+| Complexity and limits | As U00-69. |
+| Security notes | As U00-69. |
+| Tests | UT00-78 |
 
 ## 4. State and data
 
 ### 4.1 Tables and migrations
 
-Not applicable: the foundation owns no ops-store or warehouse table and no migration. `metric_sample` (ENG §4) is owned by impl 08.
+Not applicable: the foundation owns no ops-store or warehouse table and no migration, so it has no range under R-11. `metric_sample` (ENG §4) is created by impl 02 migration 006 and written by `herness.store.ops.metrics.record_metric_samples` (impl 08) (R-12).
 
 ### 4.2 Files
 
@@ -1466,6 +1629,7 @@ Not applicable: the foundation owns no ops-store or warehouse table and no migra
 | Logging `_state` (installed handlers, settings) and the global `logging`/structlog configuration | `herness.core.logging` | lock-protected (`_config_lock`) for configuration; handlers use the `logging.Handler` lock | `reset_logging()` (U00-39), called by the test fixture `configured_logging` in `tests/unit/core/conftest.py` |
 | `DailyJsonlHandler` stream, day, failure clock | `herness.core._log_pipeline` | handler lock | `close()` |
 | Log context IDs | structlog `contextvars` | per thread and per asyncio task | `bind_ids` exit; `reset_logging()` |
+| Compiled marker, numeral and format constants | `herness.core.numbers` | immutable | not needed |
 
 These are exceptions to ENG §2.3 (module-level mutable state) and are listed in §13.3.
 
@@ -1496,8 +1660,8 @@ These are exceptions to ENG §2.3 (module-level mutable state) and are listed in
 #### F00-02 Logging bootstrap in a composition root (X:09/herness.cli.main, job worker, Streamlit page wrapper)
 
 1. Process start: call `configure_logging("INFO")` (U00-36) with stderr only and no scrubber. State: root handlers installed. Failure: none possible with these arguments.
-2. Load configuration (X:10/herness.core.config.load_config). Failure: `ConfigError` is logged to stderr through the bootstrap configuration and the process exits (impl 09 exit code).
-3. Call `configure_logging(cfg.logging.level, log_dir=cfg.paths.logs, scrubber=X:10/herness.core.redact.scrub_secrets)`. State: handlers replaced; `core.logging.configured` emitted. Failure: `ConfigError` (bad level, directory not creatable) → logged to stderr, process exits with the impl 09 configuration exit code.
+2. Load configuration (X:10/herness.core.config.load_config). Failure: `ConfigError` is logged to stderr through the bootstrap configuration and the process exits with code 1 (operation failed, R-46).
+3. Call `configure_logging(cfg.logging.level, log_dir=cfg.paths.logs, scrubber=X:10/herness.core.redact.scrub_secrets)`. State: handlers replaced; `core.logging.configured` emitted. Failure: `ConfigError` (bad level, directory not creatable) → logged to stderr, process exits with code 1 (R-46).
 4. Around each job, run or task, the owner wraps work in `bind_ids(job_id=..., run_id=...)` (U00-37). Failure: `SchemaViolation` for an invalid ID → the caller's error path (a programming error; the job fails `FatalError`).
 5. On shutdown, `reset_logging()` (U00-39) closes the file. Failure: none.
 
@@ -1549,10 +1713,17 @@ These are exceptions to ENG §2.3 (module-level mutable state) and are listed in
 
 #### F00-10 An owner spec adds its shared types
 
-1. The owner card creates `herness/core/types/<submodule>.py` (U00-45 `OWNER_MODULES`) with only the imports allowed by §3.5.
+1. The owner card creates `herness/core/types/<submodule>.py`, or the package `herness/core/types/<submodule>/` when its types exceed 400 lines (U00-45 `OWNER_MODULES`, R-01), with only the imports allowed by §3.5.
 2. It adds any helper model names to `TYPE_OWNERS` in `_ownership.py`.
 3. It adds one import line and the names to `__all__` in `herness/core/types/__init__.py` (U00-44).
 4. `python -m tools.check_type_ownership` (U00-47) and `lint-imports` (C3–C5) pass. Failure: pre-commit and CI `lint` block the change with `OWN0xx` codes.
+
+#### F00-11 Check the numbers in model-written text (Verifier 05, renderer and report contract 09, and 06, 07, 11)
+
+1. At construction, the caller reads `reports.allowed_numeral_patterns` from configuration and calls `compile_allowed_patterns` (U00-67) once. State: the caller holds the compiled tuple. Failure: `ConfigError` → the caller's constructor fails and the process start fails (the impl 09 config validator reports the same list earlier through `herness config validate`).
+2. Per text field, the caller calls `parse_markers(text)` (U00-66) and compares `MarkerScan.ids` with the field's `numbers` list. Failure: none raised; malformed markers, ids without a `NumberRef`, duplicate ids and unused `NumberRef`s are recorded by the caller (impl 05 `unknown_markers` and `bad_refs`; impl 09 contract violations).
+3. The caller calls `find_uncited(text, allowed)` (U00-68). Failure: none raised; every `NumeralHit` is an uncited numeral that the caller turns into its own record (impl 05 `UncitedSpan`, which fails the item; impl 09 `UncitedHit`, which blocks or flags the render per `reports.strict_numbers`).
+4. The renderer, dashboard and chat display each marker with `format_number(ref)` (U00-70). Failure: none raised; `n/a` means the value could not be displayed and the renderer counts the number as unlinked (impl 09).
 
 ## 6. Error handling
 
@@ -1567,6 +1738,9 @@ These are exceptions to ENG §2.3 (module-level mutable state) and are listed in
 | Non-canonicalisable value, empty SQL or bad build ID for `query_id` | `SchemaViolation` | impl 05 tool wrapper → `ToolInputError` result; impl 04 → metric run fails | none | Agent gets an error tool result; metric error | impl 05 / 04 events |
 | `new_token` size out of range | `SchemaViolation` | Not caught | none | Programming error | — |
 | ULID timestamp overflow | `SchemaViolation` | Not caught | none | Not reachable before year 10889 | — |
+| Allowed-numeral pattern list not a list, empty, longer than 50, an entry empty or over 200 characters, or not compiling | `ConfigError` (`count` or `index`) | Caller's constructor (impl 05 Verifier, impl 09 renderer); the impl 09 config validator reports it at load | none | `herness config validate` lists the issue; a process that reaches the constructor exits with code 1 (R-46) | `config.validate.failed` (impl 10) |
+| Model-written text holds malformed markers or uncited numerals | none raised | Caller (F00-11) | none | Verifier fails the item; renderer marks or blocks per impl 09 | caller's event (impl 05, impl 09) |
+| Number value cannot be displayed (non-numeric, non-finite, `bool`, unknown format) | none raised (`n/a`) | Renderer (impl 09) | none | `n/a` shown, number counted as unlinked | impl 09 event |
 | Invalid log level | `ConfigError` | Composition root | none | Process exits with configuration error | stderr bootstrap line |
 | File logging requested without scrubber | `ConfigError` | Composition root | none | Process exits | stderr bootstrap line |
 | Log directory cannot be created | `ConfigError` | Composition root | none | Process exits | stderr bootstrap line |
@@ -1585,7 +1759,8 @@ These are exceptions to ENG §2.3 (module-level mutable state) and are listed in
 | TB9 Package index, container registry, model hub → build and deploy | `uv.lock` with hashes, explicit torch index, pinned actions and hooks, audit and licence gates, SBOM and provenance |
 | TB10 Operator → CLI and config files | `parse_iso`, `split_record_id`, `is_valid_id`, `zone` validate operator input; `.env.example` and `.gitignore` keep secrets out of git |
 | TB3 Ticket and model text → logs (internal flow from any component into the log sink) | `guard_sensitive`, scrubber slot, value normalisation, size limits, JSON escaping |
-| TB6 Host → off-network endpoints (indirect) | ruff bans on HTTP client construction outside egress and connectors |
+| TB6 Host → off-network endpoints (indirect) | ruff bans on `httpx` client and transport construction outside `herness.core.egress` (R-06) |
+| TB4 Model output → Verifier; TB5 Model output → rendered reports, dashboard and chat (through callers) | `herness.core.numbers` parses markers, finds uncited numerals and formats cited values for the Verifier and the renderer (R-16) |
 
 ### 7.2 (b) STRIDE threats
 
@@ -1596,21 +1771,22 @@ These are exceptions to ENG §2.3 (module-level mutable state) and are listed in
 | TH00-03 | TB3 / logs | T, R | Log forging: a value with newlines or JSON fragments creates fake lines or events | Medium | Medium | One `json.dumps` per line escapes control characters (U00-43); context IDs validated (U00-37) | ASVS v5.0.0-V16.4 | ST00-03 |
 | TH00-04 | TB3 / logs | D | Oversized or flooding values exhaust disk or make lines unreadable; disk-full stops the process | Low | Medium | 2,000-character field cap, 16 KiB line cap (U00-43); file sink failure is non-fatal with retry (U00-40); retention purge (impl 10) | ASVS v5.0.0-V16.4 | ST00-04 |
 | TH00-05 | TB10 | S | A sequential or guessable identifier is used as a bearer secret (session or approval link) | Low | High | ULIDs documented as non-secret; `new_token` (CSPRNG, ≥ 128 bits) for bearer values (U00-33) | ASVS v5.0.0-V11; ASVS v5.0.0-V7 | ST00-05 |
-| TH00-06 | TB6 / logs | I | A third-party exception message (URL with query token) copied into job records or log fields | Medium | Medium | `to_log_fields` never copies non-Herness or cause messages (U00-08); `HernessError` context is scalar-only and bounded (U00-01) | ASVS v5.0.0-V16.5 | ST00-13 |
+| TH00-06 | TB6 / logs | I | A third-party exception message (URL with query token) copied into job records or log fields | Medium | Medium | `to_log_fields` never copies non-Herness or cause messages (U00-08); `HernessError` context is scalar-only and bounded, and `hint` and `details` (R-19) are bounded strings with non-string values replaced by their type name (U00-01) | ASVS v5.0.0-V16.5 | ST00-13 |
 | TH00-07 | TB10 | T | Malformed timestamp text breaks SQLite text ordering or smuggles content through a timestamp field | Low | Medium | Strict fixed-width parser with length check first (U00-15); naive datetimes rejected (U00-13) | ASVS v5.0.0-V2 | ST00-14 |
-| TH00-08 | TB6, TB9 | E | Layering bypass: lower layer imports a higher one, or a module builds its own HTTP client, or uses pickle or `yaml.load` | Medium | High | import-linter contracts C1–C6 (U00-52); ruff banned APIs and bandit rules (U00-50); both in pre-commit and CI | ASVS v5.0.0-V15.2; ASVS v5.0.0-V15.3 | ST00-09, ST00-10 |
+| TH00-08 | TB6, TB9 | E | Layering bypass: lower layer imports a higher one, a settings module pulls in a higher layer or an I/O library, a module other than `herness.core.egress` builds its own `httpx` client or transport, or code uses pickle or `yaml.load` | Medium | High | import-linter contracts C1–C6 (U00-52); settings rule OWN050 (U00-47, R-03); ruff banned APIs with the only `TID251` exception on `herness/core/egress.py` (U00-50, R-06); all in pre-commit and CI; the impl 10 socket guard is the run-time backstop | ASVS v5.0.0-V15.2; ASVS v5.0.0-V15.3 | ST00-09, ST00-10 |
 | TH00-09 | internal | T | A shared type is redefined in another package and drifts from its owner's contract | Medium | Medium | Ownership checker (U00-47) in pre-commit and CI; import rules C3–C5 | ASVS v5.0.0-V15.2 | ST00-15 |
 | TH00-10 | TB10 | I | A secret is committed (a real `.env`, a key in code or fixtures) | Medium | High | `.gitignore` of `.env` and `data/`; empty `.env.example`; detect-secrets and `detect-private-key` in pre-commit and CI | ASVS v5.0.0-V13.3 | ST00-11, ST00-12 |
 | TH00-11 | TB9 | T | A tampered or vulnerable dependency is installed | Medium | High | `uv.lock` hashes with frozen installs; pip-audit plus osv-scanner gate (U00-57), fail closed on unknown severity; licence gate (U00-58); nightly audit | ASVS v5.0.0-V15.2; LLM03 | ST00-07, ST00-16 |
 | TH00-12 | TB9 | T, E | CI compromise: unpinned third-party action, `pull_request_target` with a write token, or script injection from pull-request text | Low | High | Actions pinned by SHA; read-only default permissions; no `pull_request_target`; untrusted values only through `env` (§3.8 rules) | ASVS v5.0.0-V15.2; LLM03 | ST00-06 |
 | TH00-13 | TB9 | S, R | A release artifact built on a developer machine, or altered after build, is installed | Low | High | Release only from the hosted workflow on a verified signed tag; provenance and SBOM attestations (U00-60); verification at install (X:10) | ASVS v5.0.0-V15.2; LLM03 | ST00-08 |
-| TH00-14 | internal | T | Two different parameter sets produce the same `query_id` because of encoding ambiguity | Low | Low | Sorted keys, no whitespace, type-specific encodings, non-finite numbers rejected (U00-29); residual R-03 | ASVS v5.0.0-V11 | ST00-17 |
+| TH00-14 | internal | T | Two different parameter sets produce the same `query_id` because of encoding ambiguity | Low | Low | Sorted keys, no whitespace, type-specific encodings, non-finite numbers rejected (U00-29); residual RR-03 | ASVS v5.0.0-V11 | ST00-17 |
+| TH00-15 | TB4, TB5 | T | A model-written numeral escapes the uncited-numeral check (Unicode or full-width digits, superscripts or fractions, a numeral inside a malformed marker, text past the scan cap), so an unverified number reaches a finding, report or chat answer; or the Verifier and the renderer disagree because each keeps its own scanner | Medium | High | One shared implementation (R-16) used by 05 and 09; Unicode-aware `NUMERAL_RE`; numeric-character pass; malformed markers not blanked; overlong text always reported (U00-66, U00-68) | ASVS v5.0.0-V2; LLM09; LLM05 | ST00-18 |
 
 ### 7.3 (c) ASVS 5.0 mapping
 
 | ASVS reference | Requirement area | How this spec meets it | Tests |
 |----------------|-----------------|------------------------|-------|
-| ASVS v5.0.0-V2 | Input validation | Strict parsers and validators for timestamps, IDs, record IDs, zone names | UT00-15, UT00-16, UT00-25 … UT00-29, ST00-14 |
+| ASVS v5.0.0-V2 | Input validation | Strict parsers and validators for timestamps, IDs, record IDs, zone names; marker parsing and the uncited-numeral scan of model output; bounded allowed-pattern list | UT00-15, UT00-16, UT00-25 … UT00-29, ST00-14, UT00-74 … UT00-77, ST00-18 |
 | ASVS v5.0.0-V11 | Cryptography and random values | `secrets` CSPRNG for ULID randomness and tokens; `hashlib` SHA-256 only | UT00-33, UT00-34, ST00-05 |
 | ASVS v5.0.0-V13.3 | Secret management | No secrets in repo, `.env` ignored, empty example, secret scanning | ST00-11, ST00-12 |
 | ASVS v5.0.0-V15.2 | Security architecture and dependencies | Layer contracts, lock with hashes, audit, SBOM, provenance, licence gate | ST00-06 … ST00-10, ST00-16 |
@@ -1625,7 +1801,9 @@ These are exceptions to ENG §2.3 (module-level mutable state) and are listed in
 |------|-----------|--------------|
 | LLM02 Sensitive information disclosure | Prompts and completions must not reach logs above DEBUG | `TEXT_KEYS` guard (U00-41), scrubber slot |
 | LLM03 Supply chain | Python packages and CI actions | Lock hashes, pins, audit, SBOM, provenance (U00-49, U00-57 … U00-60) |
-| Other items (LLM01, LLM04–LLM10) | Not applicable: the foundation builds no prompt, calls no model and stores no model output | — |
+| LLM05 Improper output handling | Numbers in model text must appear only as `NumberRef` markers | Marker parsing (U00-66); formatter output alphabet has no markup (U00-69) |
+| LLM09 Misinformation | Every number in model-written text is cited and re-run | One uncited-numeral scanner shared by the Verifier and the renderer (U00-68, TH00-15, R-16) |
+| Other items (LLM01, LLM04, LLM06–LLM08, LLM10) | Not applicable: the foundation builds no prompt, calls no model and stores no model output | — |
 | NIST AI RMF | Not applicable: ENG §5.4 names specs 03, 05, 06, 07, 11 | — |
 
 NIST SSDF practices realised here: PO (ENG adoption through pre-commit and CI), PS (lock with hashes, signed tags, protected `main`), PW (ruff `S`, mypy strict, security tests per threat), RV (pip-audit and osv-scanner in CI and nightly, time-boxed ignores with expiry).
@@ -1643,20 +1821,23 @@ The foundation modules resolve no secret. The scrubber they call is provided by 
 | ULIDs, prefixed IDs, `build_id`, `query_id` | internal | Not secrets |
 | `record_id` | internal | Source keys; never personal data by construction of spec 01 keys |
 | Tokens from `new_token` | confidential | Never logged |
-| `HernessError.message` and `context` | internal | Must not hold personal data or secrets (ENG §3.4) |
+| `HernessError.message`, `context`, `hint` and `details` | internal | Must not hold personal data or secrets (ENG §3.4, R-19) |
+| `MarkerScan`, `NumeralHit`, formatted numbers | internal | Derived from model-written text that is redacted upstream; hit text capped at 80 characters |
 | SBOM, audit reports, coverage | internal | CI artifacts |
 | `.env` | confidential | Never committed |
 | `.env.example`, README, workflows | public within the organisation | No values |
 
 ### 7.7 (g) Accepted residual risks
 
+Residual-risk IDs use the prefix `RR-` so they cannot be confused with the ruling IDs `R-nn` of `DECISIONS.md`.
+
 | ID | Risk | Reason accepted | Owner |
 |----|------|-----------------|-------|
-| R-01 | Lines from several processes appending to the same day file can interleave on Windows under heavy concurrent logging | Each line is one `write` call under 16 KiB; interleaving needs simultaneous large writes; logs are diagnostic, not the audit trail (impl 10 owns the chained audit log) | impl 00 |
-| R-02 | ULIDs minted in the same millisecond are sequential (+1) and predictable | ULIDs are identifiers only; bearer values use `new_token` | impl 00 |
-| R-03 | `canonical_json` encodes `Decimal("1")` and `"1"` identically, so `query_id` can collide for params differing only in that type | Parameters come from typed templates (impl 04) or are `{}` (impl 05); the collision would map two identical-text queries to one ID on one build | impl 00 |
-| R-04 | The build backend (`hatchling`) is resolved by range, not by hash, during `uv build` | Build runs only on the hosted runner; the backend is a well-maintained PyPA-adjacent project; provenance records the build | impl 00 |
-| R-05 | Vulnerability databases lag disclosures | Nightly audit re-checks; ENG §5.5 triage times | impl 00 |
+| RR-01 | Lines from several processes appending to the same day file can interleave on Windows under heavy concurrent logging | Each line is one `write` call under 16 KiB; interleaving needs simultaneous large writes; logs are diagnostic, not the audit trail (impl 10 owns the chained audit log) | impl 00 |
+| RR-02 | ULIDs minted in the same millisecond are sequential (+1) and predictable | ULIDs are identifiers only; bearer values use `new_token` | impl 00 |
+| RR-03 | `canonical_json` encodes `Decimal("1")` and `"1"` identically, so `query_id` can collide for params differing only in that type | Parameters come from typed templates (impl 04) or are `{}` (impl 05); the collision would map two identical-text queries to one ID on one build | impl 00 |
+| RR-04 | The build backend (`hatchling`) is resolved by range, not by hash, during `uv build` | Build runs only on the hosted runner; the backend is a well-maintained PyPA-adjacent project; provenance records the build | impl 00 |
+| RR-05 | Vulnerability databases lag disclosures | Nightly audit re-checks; ENG §5.5 triage times | impl 00 |
 
 ## 8. Observability
 
@@ -1668,11 +1849,11 @@ The foundation modules resolve no secret. The scrubber they call is provided by 
 | `core.logging.sink_failed` | ERROR | `path`, `error_type`, `retry_in_s` | File write or open failed (stderr only) |
 | `core.logging.sink_recovered` | INFO | `path`, `dropped_lines` | First successful file write after a failure (file and stderr) |
 
-`errors`, `time` and `ids` emit no log events (pure helpers; callers log).
+`errors`, `time`, `ids` and `numbers` emit no log events (pure helpers; callers log).
 
 ### 8.2 Metrics
 
-None. The foundation sits below the store layer and cannot write `metric_sample` (impl 08, L1 store access). Log-sink health is visible through the events above.
+None. The foundation's modules are pure helpers or the log sink; none records a metric, so none needs the metric port of R-04 (`metric_sample` is created by impl 02 migration 006 and written by `herness.store.ops.metrics.record_metric_samples`, impl 08, R-12). Log-sink health is visible through the events above.
 
 ### 8.3 Trace events
 
@@ -1689,6 +1870,7 @@ Not applicable: the foundation runs no long-lived component. `herness doctor` (i
 | `logging.level` (`config/herness.yaml`, owned by impl 10) | string | `INFO` | one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`, case-insensitive (U00-36) | yes (read at process start) | internal | composition root, passed to U00-36 |
 | `paths.logs` (`config/herness.yaml`, owned by impl 10) | path | `data/logs` | directory creatable (U00-36) | yes | internal | composition root, passed to U00-36 |
 | `weights.business_timezone` (owned by impl 04) | string | set by impl 04 | resolvable by `zone()` (U00-18) | yes | internal | impl 04 and impl 08 via U00-18 |
+| `reports.allowed_numeral_patterns` (`config/app.yaml`, owned by impl 09) | list of regex strings | the five patterns of design 09 §7 | U00-67: a list of 1–50 strings of 1–200 characters that each compile | as impl 09 states (read when the caller is constructed) | internal | impl 05, 06, 07, 09 and 11 callers, passed to U00-67 and U00-68 (R-16) |
 | `[tool.herness.module_budgets]` (`pyproject.toml`) | table | `default = 400`, override for `herness/harness/loop.py` | U00-55 step 1 | not applicable (CI) | public | U00-55 |
 | `[tool.herness.licences]` (`pyproject.toml`) | table | §3.7 initial content | U00-58 step 1 | not applicable | public | U00-58 |
 | `tools/audit_ignore.toml` | TOML | `ignore = []` | U00-57 step 5 | not applicable | public | U00-57 |
@@ -1699,12 +1881,13 @@ Environment variables read by foundation modules: none. `HERNESS_ENV`, `HERNESS_
 
 Design 00 sets no performance targets. The foundation sets these budgets so that it never dominates callers. Reference PC per design 02 §9 (16 cores, 64 GB, NVMe); marker `integration` plus `slow`, files in `tests/bench/`.
 
-| ID | Measure | Dataset and method | Pass threshold |
-|----|---------|--------------------|----------------|
-| BT00-01 | `new_ulid` throughput, one thread | 1,000,000 calls, `pytest-benchmark` | ≥ 200,000 IDs/s |
-| BT00-02 | `query_id` latency | 2 KB SQL with 10 parameters, 10,000 calls | p95 < 50 µs |
-| BT00-03 | Logging throughput to file | 10,000 INFO lines with 10 fields each, pass-through scrubber, file handler only | total < 1.0 s |
-| BT00-04 | `check_traceability` runtime | all `docs/impl/*.impl.md` plus `tests/` of the repository at the time of the run | < 5 s |
+| Measure | ID | Dataset and method | Pass threshold |
+|---------|----|--------------------|----------------|
+| `new_ulid` throughput, one thread | BT00-01 | 1,000,000 calls, `pytest-benchmark` | ≥ 200,000 IDs/s |
+| `query_id` latency | BT00-02 | 2 KB SQL with 10 parameters, 10,000 calls | p95 < 50 µs |
+| Logging throughput to file | BT00-03 | 10,000 INFO lines with 10 fields each, pass-through scrubber, file handler only | total < 1.0 s |
+| `check_traceability` runtime | BT00-04 | all `docs/impl/*.impl.md` plus `tests/` of the repository at the time of the run | < 5 s |
+| `find_uncited` latency | BT00-05 | 100,000-character text with 1,000 valid markers, 500 allowed numerals and 50 uncited numerals; the five default patterns; 100 calls | median < 100 ms per call |
 
 Limits enforced by code:
 
@@ -1712,6 +1895,11 @@ Limits enforced by code:
 |-------|-------|-------|
 | Error message length | 1,000 characters | U00-01 |
 | Error context string length | 200 characters | U00-01 |
+| Error hint length | 500 characters | U00-01 |
+| Error details | 50 entries; key 64 characters; value 2,000 characters | U00-01 |
+| Scanned model text | 100,000 characters (longer text always fails the scan) | U00-66, U00-68 |
+| Uncited hit text | 80 characters | U00-68 |
+| Allowed-numeral patterns | 1–50 patterns of 1–200 characters | U00-67 |
 | Sleep duration | 3,600 s | U00-10, U00-11 |
 | ISO input length | 64 characters | U00-16 |
 | Record source key length | 512 characters | U00-27 |
@@ -1725,13 +1913,13 @@ Limits enforced by code:
 
 ## 11. Test specification
 
-Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, `test_log_pipeline.py`, `test_logging.py`), `tests/unit/core/conftest.py` (fixture `configured_logging(tmp_path)`: calls `configure_logging("DEBUG", log_dir=tmp_path, scrubber=<pass-through processor that replaces the sentinel "SENTINEL-SECRET-9f3a" with "***">, strict_event_names=True)`, yields, then `reset_logging()`), `tests/unit/tools/` (one file per check script, inputs built under `tmp_path`), `tests/unit/repo/` (static checks of `pyproject.toml`, workflows and hygiene files), `tests/integration/repo/` (subprocess runs of the real tools), `tests/bench/test_core_bench.py`. Every test's docstring first line starts with its ID. Time is frozen with `freezegun` or by monkeypatching `herness.core.time.now`; randomness is seeded or monkeypatched.
+Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, `test_numbers.py`, `test_log_pipeline.py`, `test_logging.py`), `tests/unit/core/conftest.py` (fixture `configured_logging(tmp_path)`: calls `configure_logging("DEBUG", log_dir=tmp_path, scrubber=<pass-through processor that replaces the sentinel "SENTINEL-SECRET-9f3a" with "***">, strict_event_names=True)`, yields, then `reset_logging()`), `tests/unit/tools/` (one file per check script, inputs built under `tmp_path`), `tests/unit/repo/` (static checks of `pyproject.toml`, workflows and hygiene files), `tests/integration/repo/` (subprocess runs of the real tools), `tests/bench/test_core_bench.py`. Every test's docstring first line starts with its ID. Time is frozen with `freezegun` or by monkeypatching `herness.core.time.now`; randomness is seeded or monkeypatched.
 
 ### 11.1 Unit tests (marker `unit`)
 
 | ID | Under test | Setup | Action | Expected |
 |----|-----------|-------|--------|----------|
-| UT00-01 | U00-02, U00-03 | none | Inspect `__bases__` of every taxonomy class | Each direct parent equals design 00 §7; exactly 3 category and 17 leaf classes; `RetryableError`, `RecoverableError`, `FatalError` subclass `HernessError` |
+| UT00-01 | U00-02, U00-03 | none | Inspect `__bases__` of every taxonomy class | Each direct parent equals design 00 §7, and `NotFound`'s parent is `RecoverableError` (R-19); exactly 3 category and 18 leaf classes; `RetryableError`, `RecoverableError`, `FatalError` subclass `HernessError` |
 | UT00-02 | U00-01 | none | Construct with a 1,500-character message, context `{"job_id": "job_x", "obj": object(), "long": "a"*300}` | `message` is 1,000 characters plus `…`; `context["obj"] == "<object>"`; `context["long"]` 200 characters plus `…`; `str(e) == e.message`; `context` is read-only |
 | UT00-03 | U00-04 | none | `RateLimited(..., retry_after=x)` for x in `7.0`, `-3`, `nan`, `inf`, `None` | `7.0`, `0.0`, `None`, `None`, `None` |
 | UT00-04 | U00-05 | none | Construct with aware non-UTC `retry_at` and with naive `retry_at` | Stored as UTC; naive read as UTC; `key` kept |
@@ -1788,7 +1976,7 @@ Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, 
 | UT00-55 | U00-48 | installed package | Import `herness` | `__version__ == importlib.metadata.version("herness")` |
 | UT00-56 | U00-49 | parse `pyproject.toml` with `tomllib` | Compare dependency lists with table 14.1 | Every runtime and dev row present with the stated bound; extras `ner`, `pdf`; script `herness`; `Private :: Do Not Upload` classifier |
 | UT00-57 | U00-50, U00-51, U00-53 | parse `pyproject.toml` | Inspect tool tables | ruff `select` equals the ENG §3.1 list plus `TID251`, `ICN003`; `max-complexity = 10`; `max-args = 6`; banned APIs present; mypy `strict = true`, `files` covers `herness`, `app`, `tools`; six pytest markers; `--strict-markers`; coverage `branch = true` |
-| UT00-58 | U00-52 | parse `pyproject.toml`; list top-level packages under `herness/` and modules of `herness/core/` | Compare with contracts C1–C6 | Every existing package of the ENG §2.1 table is in C1; every existing core module named in C3/C4 appears; no contract lists a missing module |
+| UT00-58 | U00-52 | parse `pyproject.toml`; list top-level packages under `herness/` and modules of `herness/core/` | Compare with contracts C1–C6 | Every existing package of the ENG §2.1 table (including `herness.admin`, R-07) is in C1; every existing core module named in C3/C4 (including `herness.core.numbers`) appears; no contract lists a missing module; C1 `ignore_imports` holds exactly the settings exception; C6 does not exempt `herness.core.ids` (R-03) |
 | UT00-59 | U00-55 | tmp tree: `default = 400`, override 220 for `a.py`, doc module map with 150 for `b.py`; files of 221, 151, 400 lines | Run | `MS001` for `a.py` and `b.py`; the 400-line file passes; exit 1 |
 | UT00-60 | U00-55 | tmp: override `limit = 500` with empty reason; two docs giving `c.py` 100 and 120 | Run | `MS003` and `MS002` |
 | UT00-61 | U00-56 | tmp doc referencing a spec-00 unit ID that no doc defines (the test builds the ID string at run time) | Run | `TR001` |
@@ -1801,6 +1989,17 @@ Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, 
 | UT00-68 | U00-56 | tmp doc defining `UT00-01`, `UT00-02`; code carries `UT00-01` | Run with `--require-implemented 00` | `TR009` for `UT00-02` only |
 | UT00-69 | U00-57 | fixture JSON: pip-audit finding `PYSEC-1` alias `GHSA-a`, osv finding `GHSA-a` severity `8.1` | Run | One merged finding with both IDs, severity 8.1, fix available |
 | UT00-70 | U00-58 | none | Evaluate `"MIT OR GPL-3.0-only"`, `"(Apache-2.0 AND BSD-3-Clause)"`, `"Apache-2.0 WITH LLVM-exception"`, `"GPL-3.0-only"`, `"MIT License"` (alias) | allowed, allowed, allowed, denied, allowed |
+| UT00-71 | U00-01, U00-03, U00-08 | none | `NotFound("run not found", hint="h" * 600, details={"a b": "x", "run_id": "run_x", "n": 5} plus 60 further entries, run_id="run_x")`; then `to_log_fields`; then `pickle` round trip (`# noqa: S301`, as UT00-08); then `ConfigError("x")` without hint or details | `hint` is 500 characters plus `…`; `details` has 50 entries; key `"a b"` stored as `key_0`; value `5` stored as `"<int>"`; `error_kind` is `recoverable`; `to_log_fields` holds `error_hint` and `detail_run_id`; the rebuilt object has equal `hint` and `details`; the plain `ConfigError` has `hint is None` and empty `details` |
+| UT00-72 | U00-47 | tmp tree: package form `herness/core/types/harness/` with `__init__.py` importing every 05 `TYPE_OWNERS` name from `llm.py` and `evidence.py`, which define them; second tmp tree with both `harness.py` and `harness/`; third with a `class Extra` in the package `__init__.py` | Run `main(["--root", tmp])` on each | First: exit 0 (no `OWN010`); second: `OWN003`; third: `OWN033` |
+| UT00-73 | U00-47 | tmp `herness/connectors/settings.py` importing `pydantic`, `typing`, `herness.core.errors`, `herness.core.types`, `httpx`, `herness.core.config` and `herness.core.types.harness` | Run | Exactly three `OWN050`, naming `httpx`, `herness.core.config` and `herness.core.types.harness` |
+| UT00-74 | U00-64, U00-65, U00-66 | none | `parse_markers("a [[n1]] b [[n12]] [[x1]] [[]] [[n 1]] [[n1]]")` | Markers `n1`, `n12`, `n1` with their offsets; `ids == ("n1", "n12", "n1")`; malformed `x1`, empty text and `n 1` with offsets |
+| UT00-75 | U00-67 | the five default patterns of design 09 §7 | Compile them; then `[]`, a list of 51 patterns, `["("]`, a 201-character pattern, `[5]`, and the bare string `"\d{4}"` | Five compiled patterns in order; `ConfigError` for each invalid input, with `count` or `index` in the context and no pattern text |
+| UT00-76 | U00-68 | default patterns compiled | `find_uncited("In Q3 2026 cost rose to [[n1]] from 1,200 on 2026-09-24 for INC0012345 and PAY-123 (up 12 %) in 2025.", allowed)` | Exactly two hits, `1,200` and `12 %`, with offsets into the original text; the year, quarter, date and record IDs are exempt |
+| UT00-77 | U00-68 | default patterns compiled | Scan `"up ²"`, `"about ½"`, `"٣ tickets"` (Arabic-Indic digit), `"[[12]] items"`, and a 100,001-character text of letters | One hit each: `²`, `½`, `٣`, `12`; the long text gives one hit `<text too long>` with `start == 100000` and `end == 100001` |
+| UT00-78 | U00-69, U00-70 | none | `format_value` for: `usd` `"-1250000"`; `usd_compact` `1840000`, `12500`, `950`; `int` `1204`; `pct1` `42`; `ratio2` `0.3749`; `hours1` `3.46`; `minutes0` `45.4`; `prob2` `0.805`; `plain` `7.0` and `0.12344`; and `format_number` of a frozen test object with `value="1250000.00"`, `unit="usd"`, `format=None` | `-$1,250,000.00`; `$1.84M`, `$12.5K`, `$950`; `1,204`; `42.0%`; `0.37`; `3.5 h`; `45 min`; `0.80`; `7`, `0.1234`; `$1.25M` |
+| UT00-80 | U00-45 | import `herness.core.types._ownership` | Inspect the tables | `TYPE_OWNERS` maps `QuestionType` and `Entity` to `"03"` (RQ-03) and holds every name listed in U00-45 under its owner; no name appears twice or also in `DECLARED_ELSEWHERE`; `impact_usd` and `JobContext` are absent; `OWNER_IMPORTS["06"] == {"harness", "jobs"}`; the `OWNER_IMPORTS` graph is acyclic |
+| UT00-81 | U00-46, U00-47 | tmp tree with `herness/core/jobs/ports.py` defining `class JobContext(Protocol)` and `herness/core/resilience/chain.py` defining `class ModelChain`; second tree with `herness/harness/other.py` defining `class JobContext` | Run `main(["--root", tmp])` on each | First: no `OWN042`; second: `OWN042` for `JobContext` |
+| UT00-79 | U00-64, U00-69 | none | `format_value` with unit `score` and no format; `usd_compact` of `999960` and `999.6`; `True`; `"abc"`; `float("nan")`; `None`; format `"pct3"`; `int` of `-0.001`; `plain` of `1e22` | `plain` rule applied; `$1.00M`, `$1.0K`; `n/a` × 5; `0`; `10,000,000,000,000,000,000,000` (no exponent) |
 
 ### 11.2 Property tests (marker `unit`, Hypothesis)
 
@@ -1811,6 +2010,8 @@ Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, 
 | PT00-03 | U00-27, U00-28 | valid sources, entities, keys (printable, may include `:`) | `split_record_id(make_record_id(s, e, k)) == (s, e, k)` |
 | PT00-04 | U00-29 | JSON-like nested dicts | Shuffling key insertion order gives identical output; `json.loads(output)` equals the input's canonical conversion |
 | PT00-05 | U00-31, U00-32 | SQL-like text with inserted whitespace runs and trailing `;` | `query_id` unchanged by whitespace and trailing semicolons; differs when `build_id` differs |
+| PT00-06 | U00-69 | finite `Decimal`, `int` and `float` values from −1e15 to 1e15, every member of `NUMBER_FORMATS`, units from design 00 §12.1 | Output is `n/a` or uses only the U00-69 alphabet; contains no `E` or `e`; two calls give identical output |
+| PT00-07 | U00-66, U00-68 | texts built from ASCII words, valid markers `[[nK]]`, years 1900–2099 and ISO dates, joined by single spaces; then one integer 0–99999 inserted as a separate word at a random word boundary | Before insertion `find_uncited` returns no hit; after insertion it returns exactly one hit whose `text` is the inserted integer and whose `start` is its offset in the new text |
 
 ### 11.3 Fault tests (marker `unit`; OS-level faults via `unittest.mock`, allowed by ENG §6)
 
@@ -1831,7 +2032,7 @@ Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, 
 | ST00-06 | TH00-12 | unit | parse both workflow files with `yaml.safe_load` | Inspect | Every third-party `uses:` pinned to 40 hex; no `pull_request_target`; top-level `permissions` is `contents: read`; no `run:` contains `${{ github.event.`, `${{ github.head_ref` or `${{ inputs.`; no `self-hosted` runner; every checkout has `persist-credentials: false` |
 | ST00-07 | TH00-11 | unit | fixture JSON inputs and ignore TOML | Cases: High with fix; High without fix; unknown severity with fix; ignored unexpired; ignored expired (`--today` after `expires`) | exit 1 with `AU001`; exit 0 with `AU002`; exit 1 `AU001`; exit 0 `ignored`; exit 1 `AU003` |
 | ST00-08 | TH00-13 | unit | parse `release.yml` | Inspect | Trigger only tag push `v*.*.*`; `build` needs `ci`; `build` has `id-token: write` and `attestations: write` and uses `attest-build-provenance` on wheel and sdist and `attest-sbom`; tag-verification and version-match steps precede `uv build`; no other job has `id-token: write` |
-| ST00-09 | TH00-08 | integration | tmp copy of `pyproject.toml`; tmp file `herness/x.py` with `import pickle`, `yaml.load(s)`, `httpx.Client()`, `from herness.core.time import now` | `ruff check --config <tmp pyproject> <file>` via subprocess | `TID251` × 3 and `ICN003` reported; exit non-zero |
+| ST00-09 | TH00-08 | integration | tmp copy of `pyproject.toml`; tmp file `herness/x.py` with `import pickle`, `yaml.load(s)`, `httpx.Client()`, `from herness.core.time import now`; tmp file `herness/connectors/y.py` with `httpx.AsyncHTTPTransport()` and `httpx.get(url)` | `ruff check --config <tmp pyproject> <files>` via subprocess | `herness/x.py`: `TID251` × 3 and `ICN003`; `herness/connectors/y.py`: `TID251` × 2 (connectors have no exception, R-06); exit non-zero |
 | ST00-10 | TH00-08 | integration | Copy `herness/` and `pyproject.toml` to `tmp_path`; add `import herness.harness` (created as an empty package in the copy, and appended to C1) to the copied `herness/core/errors.py` | `lint-imports` via subprocess in `tmp_path` | Non-zero exit naming contracts C1 and C4 |
 | ST00-11 | TH00-10 | unit | read `.env.example` and `.gitignore` | Inspect | Every `KEY=value` line has an empty value; no key starts with `HERNESS_SECURITY__`; `.gitignore` contains `.env`, `!.env.example`, `data/` |
 | ST00-12 | TH00-10 | integration | tmp file containing a fake private-key header and an AWS-style key literal built at runtime | `detect-secrets-hook --baseline <copy of .secrets.baseline> <file>` via subprocess | Non-zero exit; finding reported |
@@ -1840,6 +2041,7 @@ Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, 
 | ST00-15 | TH00-09 | unit | tmp tree with owner `harness.py` defining `NumberRef` and `herness/metrics/x.py` defining `class NumberRef(BaseModel)` | Run `check_type_ownership` | Exit 1 with `OWN040` at `herness/metrics/x.py` |
 | ST00-16 | TH00-11 | unit | tmp SBOM with components: `MIT`; `GPL-3.0-only`; no licence; `nvidia-cublas-cu12` proprietary; `pillow` approved in tmp pyproject | Run `check_licences` in enforce and report modes | Enforce: exit 1 with `LC001` for GPL and unknown, `LC002` for nvidia, pillow `approved`; report: exit 0 |
 | ST00-17 | TH00-14 | unit | none | `query_id` with params `{"a": 1}` vs `{"a": "1"}` vs `{"a": 1.0}`; params `{"a": [1, 2]}` vs `{"a": [2, 1]}` | All four IDs distinct from each other where the JSON differs (`1`, `"1"`, `1.0`, list order) |
+| ST00-18 | TH00-15 | unit | default patterns compiled | `find_uncited` on each evasion text: `"cost [[1,250]] USD"`; full-width `"１２ tickets"`; `"³ outages"`; `"Ⅻ teams"`; `"[[n1]]12 more"`; `"1​200 users"` (zero-width space); `"INC 42"`; a 100,050-character text whose only numeral is at offset 100,010 | Every text gives at least one hit; no hit lies inside a valid marker; the long text's hit is `<text too long>` |
 
 ### 11.5 Integration tests (marker `integration`)
 
@@ -1856,6 +2058,7 @@ Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, 
 | BT00-02 | U00-32 | 2 KB SQL, 10 params | 10,000 `query_id` calls with `pytest-benchmark` | p95 < 50 µs |
 | BT00-03 | U00-36, U00-40 | file handler only, pass-through scrubber | 10,000 INFO lines, 10 fields each | < 1.0 s total |
 | BT00-04 | U00-56 | repository | `check_traceability.main` | < 5 s |
+| BT00-05 | U00-68 | 100,000-character synthetic text of §10, five default patterns, reference PC | 100 `find_uncited` calls with `pytest-benchmark` | median < 100 ms |
 
 ## 12. Task cards
 
@@ -1865,7 +2068,7 @@ All cards are Phase 1. Test files are not counted as production files. `uv.lock`
 
 | Field | Content |
 |-------|---------|
-| Goal | `pyproject.toml` with metadata, dependencies, uv, build, ruff, mypy, pytest and coverage configuration exists, `uv.lock` is generated, and `herness` is an importable typed package. |
+| Goal | `pyproject.toml` with metadata, dependencies, uv, build, ruff (including the R-06 egress bans), mypy, pytest and coverage configuration exists, `uv.lock` is generated, and `herness` is an importable typed package installed in editable mode for development (R-58). |
 | Depends on | none |
 | Units | U00-48, U00-49, U00-50, U00-51, U00-53 |
 | Files | `pyproject.toml`, `herness/__init__.py`, `herness/core/__init__.py`, `herness/py.typed` (plus generated `uv.lock`) |
@@ -1893,13 +2096,13 @@ All cards are Phase 1. Test files are not counted as production files. `uv.lock`
 
 | Field | Content |
 |-------|---------|
-| Goal | `herness.core.errors` implements design 00 §7 plus `error_kind` and `to_log_fields`. |
+| Goal | `herness.core.errors` implements design 00 §7 plus `NotFound`, `hint` and `details` (R-19), `error_kind` and `to_log_fields`. |
 | Depends on | T00-01 |
 | Units | U00-01, U00-02, U00-03, U00-04, U00-05, U00-06, U00-07, U00-08 |
 | Files | `herness/core/errors.py` |
-| Tests | UT00-01, UT00-02, UT00-03, UT00-04, UT00-05, UT00-06, UT00-07, UT00-08, PT00-01, ST00-13 |
+| Tests | UT00-01, UT00-02, UT00-03, UT00-04, UT00-05, UT00-06, UT00-07, UT00-08, UT00-71, PT00-01, ST00-13 |
 | Threats | TH00-06 |
-| Acceptance checks | `uv run pytest tests/unit/core/test_errors.py` passes; `uv run mypy` 0 errors; `herness/core/errors.py` ≤ 260 lines; line and branch coverage of the file ≥ 90 % / 85 % |
+| Acceptance checks | `uv run pytest tests/unit/core/test_errors.py` passes; `uv run mypy` 0 errors; `herness/core/errors.py` ≤ 300 lines; line and branch coverage of the file ≥ 90 % / 85 % |
 | Blocked by | none |
 | Size | M |
 
@@ -1963,21 +2166,21 @@ All cards are Phase 1. Test files are not counted as production files. `uv.lock`
 
 | Field | Content |
 |-------|---------|
-| Goal | `herness/core/types/` exists with the empty re-export module, the ownership tables and the static checker. |
+| Goal | `herness/core/types/` exists with the empty re-export module, the ownership tables (R-01, R-02, RQ-03) and the static checker, which accepts module-form and package-form owner submodules and enforces the settings-module import rule (R-03). |
 | Depends on | T00-01, T00-03 |
 | Units | U00-44, U00-45, U00-46, U00-47 |
 | Files | `herness/core/types/__init__.py`, `herness/core/types/_ownership.py`, `tools/__init__.py`, `tools/check_type_ownership.py` |
-| Tests | UT00-48, UT00-49, UT00-50, UT00-51, UT00-52, UT00-53, UT00-54, ST00-15 |
-| Threats | TH00-09 |
+| Tests | UT00-48, UT00-49, UT00-50, UT00-51, UT00-52, UT00-53, UT00-54, UT00-72, UT00-73, UT00-80, UT00-81, ST00-15 |
+| Threats | TH00-09, TH00-08 (settings rule) |
 | Acceptance checks | `uv run python -m tools.check_type_ownership` exits 0 with six `INFO pending owner` lines; `uv run pytest tests/unit/core/test_types_ownership.py tests/unit/tools/test_check_type_ownership.py` passes; mypy 0 errors |
-| Blocked by | DD-01 and DD-02 must be accepted before owner specs add submodules; this card itself proceeds on the default in §13.1 |
+| Blocked by | none (DD-01 and DD-02 accepted by R-01 and R-02) |
 | Size | M |
 
 #### T00-09 Import-linter contracts
 
 | Field | Content |
 |-------|---------|
-| Goal | `pyproject.toml` carries contracts C1–C6 for the modules that exist. |
+| Goal | `pyproject.toml` carries contracts C1–C6 for the modules that exist, including `herness.admin` (R-07), the named settings exception (R-03) and `herness.core.numbers` in C3/C4 once it exists. |
 | Depends on | T00-07, T00-08 |
 | Units | U00-52 |
 | Files | `pyproject.toml` |
@@ -2011,7 +2214,7 @@ All cards are Phase 1. Test files are not counted as production files. `uv.lock`
 | Files | `tools/check_traceability.py` |
 | Tests | UT00-61, UT00-62, UT00-63, UT00-64, UT00-65, UT00-66, UT00-67, UT00-68, IT00-02, BT00-04 |
 | Threats | none (supports ENG §5.1 step 3) |
-| Acceptance checks | `uv run pytest tests/unit/tools/test_check_traceability.py` passes; `uv run python -m tools.check_traceability --require-implemented 00` exits 0 once T00-01 … T00-15 tests exist; IT00-02 passes |
+| Acceptance checks | `uv run pytest tests/unit/tools/test_check_traceability.py` passes; `uv run python -m tools.check_traceability --require-implemented 00` exits 0 once T00-01 … T00-16 tests exist; IT00-02 passes |
 | Blocked by | Consistency pass removing `X:` references from all implementation specs (TR008) |
 | Size | M |
 
@@ -2071,25 +2274,49 @@ All cards are Phase 1. Test files are not counted as production files. `uv.lock`
 | Blocked by | O-03 (licence approvals needed before the first release passes the enforce-mode gate) |
 | Size | S |
 
+#### T00-16 Shared numbers module
+
+| Field | Content |
+|-------|---------|
+| Goal | `herness.core.numbers` provides marker parsing, the uncited-numeral scanner with its allowed-pattern compiler, and `NumberRef` display formatting, as the single implementation that impl 05, 06, 07, 09 and 11 import (R-16). |
+| Depends on | T00-03, T00-09 |
+| Units | U00-64, U00-65, U00-66, U00-67, U00-68, U00-69, U00-70 |
+| Files | `herness/core/numbers.py`, `pyproject.toml` (per-file `A005` ignore; `herness.core.numbers` added to contracts C3 and C4) |
+| Tests | UT00-74, UT00-75, UT00-76, UT00-77, UT00-78, UT00-79, PT00-06, PT00-07, ST00-18, BT00-05 |
+| Threats | TH00-15 |
+| Acceptance checks | `uv run pytest tests/unit/core/test_numbers.py` passes; `uv run pytest tests/bench/test_core_bench.py -k BT00_05` meets §10 on the reference PC; `uv run lint-imports` exits 0 with the module in C3 and C4; `uv run mypy` 0 errors; file ≤ 320 lines; line and branch coverage of the file ≥ 90 % / 85 % |
+| Blocked by | none (the config key `reports.allowed_numeral_patterns` of impl 09 is not needed: tests pass the five design 09 §7 patterns directly) |
+| Size | M |
+
 ## 13. Design deltas and open items
 
 ### 13.1 Design deltas and contradictions
 
-| # | Design spec | Change requested | Reason | Default until resolved |
-|---|-------------|------------------|--------|------------------------|
-| DD-01 | 00 §6 | Split the §6 ownership table: data models and pure protocols live in `herness.core.types`; the behavioral names `LoopHooks`, `HarnessHooks`, `GatedClient`, `Tracer` (05), `RunBudget` (06), `ModelChain`, `loop_signal_policy`, `JobContext` (08) are declared in their owner packages. | They hold state, do I/O or reference `LLMClient`/`ModelChain`, which ENG §2.1 forbids in `core.types`; specs 05 §3, 06 §6.3 and 08 §3 already place them there. | `DECLARED_ELSEWHERE` (U00-46) |
-| DD-02 | 00 §3, §6 | `herness/core/types.py` becomes the package `herness/core/types/` with one submodule per owner; the import path `herness.core.types.<Name>` is unchanged. | Around 60 models cannot fit the 400-line module limit (ENG §2.4). | §3.5 structure |
-| DD-03 | 00 §5 | Name `herness.core.ids.query_id()` as the single implementation of `query_id` (as §5.1 does for `result_hash`), and define canonical JSON as in U00-29 (sorted keys, no whitespace, UTF-8, `Decimal` and dates as strings, non-finite numbers rejected). | Specs 04 §5.3 and 05 §5.4.5 both compute `query_id`; identical IDs require one implementation. Spec 10 §4.4 `config_hash` should use the same `canonical_json`. | U00-29, U00-32 |
-| DD-04 | 00 §5 | Define `<ulid6>` in `build_id` as the last 6 characters of a fresh ULID. | The first 6 characters are timestamp bits and would collide within ~4 minutes. | U00-23 |
-| DD-05 | 11 §3.3, §5.2 | `FakeClock` also patches `herness.core.time.asleep`; callers use `from herness.core import time as clock` (ruff `ICN003` bans `from herness.core.time import ...`). | Async retry and swarm code sleeps through `asleep`; `from` imports defeat patching. | U00-11, U00-50 |
-| DD-06 | 10 §5.2 | Name the module and signature of `scrub_secrets` (default assumed here: `herness.core.redact.scrub_secrets`, a structlog processor). | Design 10 names the processor but not its location; logging receives it by parameter. | U00-36 `scrubber` parameter |
-| DD-07 | 07 §3.1 | Shared memory types (`MemoryItem`, `MemoryProposal`, `RecallHit`, `RecommendationDraft`, `MemoryRunContext`, and the 00 §6 names `PriorRecommendation`, `PriorContext`, `ConfidenceAdjustment`) move from `herness/harness/memory/types.py` to `herness/core/types/memory.py`; the memory package keeps only module-local types. | Contradiction C-01: design 00 §6 (wins) places them in `core.types`. | Checker rule OWN040 enforces design 00 |
-| DD-08 | 00 §9 | Add dev dependencies `types-PyYAML`, `types-jsonschema`, `types-psutil` (mypy stubs) and build backend `hatchling`, in addition to ENG §14 E3. | Needed for `mypy --strict` and `uv build`. | Table 14.1 |
-| DD-09 | 11 §4.1, §8 | Benchmark files carry the `integration` marker plus `slow`. | Spec 11 requires exactly one of `unit`, `integration`, `fault`, `eval` per file, while §8 names only `slow` for benchmarks. | §11.6 |
-| C-01 | 00 §6 vs 07 §3.1 | Memory shared types declared in two places. | — | Resolved by DD-07 |
-| C-02 | 10 §3.1 vs ENG §2.1 | `herness.core.config` (L0) imports section models from `herness/<package>/settings.py` in L2–L5, an upward import. | — | Contract C1 ignores exactly `herness.core.config -> herness.**.settings`; C6 keeps settings modules leaf-only. ENG §2.1 should list this exception. |
-| C-03 | 00 §6 vs 05 §3 / 06 §6.3 / 08 §3 | 00 §6 lists behavioral classes as `core.types` members; the owner specs place them in their packages. | — | Resolved by DD-01 |
-| C-04 | 11 §4.2, §10.5 vs ENG §3.1 | mypy scope four packages vs all of `herness/`; hosted CI optional vs required. | — | ENG applies (E1, E2) |
+Status of every delta and contradiction after the consistency pass. The rulings are in [`DECISIONS.md`](DECISIONS.md) (R-01 … R-66); design edits they require are pending per DECISIONS §9, and until then the ruling wins for implementation.
+
+| # | Design spec | Change requested | Reason | Default until resolved | Status |
+|---|-------------|------------------|--------|------------------------|--------|
+| DD-01 | 00 §6 | Split the §6 ownership table: data models and pure protocols live in `herness.core.types`; the behavioral names `LoopHooks`, `HarnessHooks`, `GatedClient`, `Tracer` (05), `RunBudget` (06), `ModelChain`, `loop_signal_policy`, `JobContext` (08) are declared in their owner packages. | They hold state, do I/O or reference `LLMClient`/`ModelChain`, which ENG §2.1 forbids in `core.types`. | `DECLARED_ELSEWHERE` (U00-46) | Accepted (R-02) |
+| DD-02 | 00 §3, §6 | `herness/core/types.py` becomes the package `herness/core/types/` with one submodule per owner; the import path `herness.core.types.<Name>` is unchanged. | Around 60 models cannot fit the 400-line module limit (ENG §2.4). | §3.5 structure | Accepted (R-01; ENG §14 E6) |
+| DD-03 | 00 §5 | Name `herness.core.ids.query_id()` as the single implementation of `query_id` (as §5.1 does for `result_hash`), and define canonical JSON as in U00-29 (sorted keys, no whitespace, UTF-8, `Decimal` and dates as strings, non-finite numbers rejected). | Specs 04 §5.3 and 05 §5.4.5 both compute `query_id`; identical IDs require one implementation. Spec 10 §4.4 `config_hash` should use the same `canonical_json`. | U00-29, U00-31, U00-32 | Accepted (R-14) |
+| DD-04 | 00 §5 | Define `<ulid6>` in `build_id` as the last 6 characters of a fresh ULID. | The first 6 characters are timestamp bits and would collide within ~4 minutes. | U00-23 | Still open (no ruling; design 00 §5 edit) |
+| DD-05 | 11 §3.3, §5.2 | `FakeClock` also patches `herness.core.time.asleep`; callers use `from herness.core import time as clock` (ruff `ICN003` bans `from herness.core.time import ...`). | Async retry and swarm code sleeps through `asleep`; `from` imports defeat patching. | U00-11, U00-50 | Still open (no ruling; impl 11 and design 11) |
+| DD-06 | 10 §5.2 | Name the module and signature of `scrub_secrets` (default assumed here: `herness.core.redact.scrub_secrets`, a structlog processor). | Design 10 names the processor but not its location; logging receives it by parameter. | U00-36 `scrubber` parameter | Still open (no ruling; impl 10) |
+| DD-07 | 07 §3.1 | Shared memory types move from `herness/harness/memory/types.py` to `herness/core/types/memory.py`; the memory package keeps only module-local types. | Contradiction C-01: design 00 §6 places them in `core.types`. | Checker rule OWN040 enforces design 00 | Resolved by R-01 (impl 07 now declares them in `herness.core.types.memory`) |
+| DD-08 | 00 §9 | Add dev dependencies `types-PyYAML`, `types-jsonschema`, `types-psutil` (mypy stubs) and build backend `hatchling`, in addition to ENG §14 E3. | Needed for `mypy --strict` and `uv build`. | Table 14.1 | Still open (no ruling; design 00 §9 edit) |
+| DD-09 | 11 §4.1, §8 | Benchmark files carry the `integration` marker plus `slow`. | Spec 11 requires exactly one of `unit`, `integration`, `fault`, `eval` per file, while §8 names only `slow` for benchmarks. | §11.6 | Still open (no ruling; impl 11) |
+| DD-10 | 00 §7 | Add `NotFound(RecoverableError)` and the optional `HernessError` attributes `hint` and `details`. | Needed by several specs for missing objects and operator fixes. | U00-01, U00-03, U00-08 | Accepted (R-19; design 00 §7 edit pending per DECISIONS §9) |
+| DD-11 | 00 §12.1 | Name `herness.core.numbers` as the single implementation of marker parsing, the numeral scanner and `NumberRef` formatting. | Specs 05, 06, 07, 09 and 11 each kept their own copy of the patterns; the Verifier and the renderer must decide identically. | §3.10 | Accepted (R-16) |
+| C-01 | 00 §6 vs 07 §3.1 | Memory shared types declared in two places. | — | Resolved by DD-07 | Resolved by R-01 |
+| C-02 | 10 §3.1 vs ENG §2.1 | `herness.core.config` (L0) imports section models from `herness/<package>/settings.py` in L2–L5, an upward import. | — | Contract C1 ignores exactly `herness.core.config -> herness.**.settings`; C6 and OWN050 keep settings modules leaf-only. | Resolved by R-03 (ENG §2.1 settings exception) |
+| C-03 | 00 §6 vs 05 §3 / 06 §6.3 / 08 §3 | 00 §6 lists behavioral classes as `core.types` members; the owner specs place them in their packages. | — | Resolved by DD-01 | Resolved by R-02 |
+| C-04 | 11 §4.2, §10.5 vs ENG §3.1 | mypy scope four packages vs all of `herness/`; hosted CI optional vs required. | — | ENG applies (E1, E2) | Still open (ENG §14 E1, E2 apply; design 11 edit pending per DECISIONS §9) |
+| C-05 | R-01 vs impl 05 and impl 06 module maps | R-01 names one submodule per owner, but the 05 and 06 types exceed the 400-line limit; impl 05 first used four sibling files (`agent`, `evidence`, `llm`, `tooling`) directly under `herness/core/types/`. | — | Package-form submodules `herness/core/types/harness/` and `herness/core/types/swarm/` accepted by §3.5 and U00-47 | Resolved by R-01 (package form; impl 05 and 06 now use it) |
+| C-06 | R-19 vs impl 09 U09-08 | Impl 09 raises `ReportContractError` with `details = {"where": [...], "rules": [...]}` (lists), but R-19 types `details` as `dict[str, str]`; U00-01 stores a non-string value as its type name. | — | U00-01 as specified | Still open (impl 09 must join the lists into strings or use keys per violation) |
+| C-07 | R-02 vs impl 08 draft (`JobContext` in `herness.core.types`) | An earlier impl 08 draft declared `JobContext` and `ServiceControl` in `herness.core.types`. | — | `DECLARED_ELSEWHERE` names `herness.core.jobs`; package prefixes accepted (U00-46) | Resolved by R-02 (impl 08 now places them in `herness.core.jobs.ports`) |
+| C-08 | R-16 vs impl 05 U05-65, impl 07 scanner, impl 09 U09-03/U09-05/U09-11, impl 06 U06-125 | Each spec defines its own `MARKER_RE`, `NUMERAL_RE`, scanner or `format_number`. | — | §3.10 is the single implementation | Resolved by R-16 (owners replace their copies with imports of `herness.core.numbers`) |
+| C-09 | R-01 and ENG §2.1 vs impl 06 U06-08 | Impl 06 declares the function `impact_usd` in `herness.core.types.swarm`, but the types package holds data types only. | — | Not registered in `TYPE_OWNERS`; the checker reports `OWN011` for it until it moves (for example to `herness.harness.swarm`) or a ruling permits pure helper functions in the types package | Still open |
+| C-10 | R-46 vs this spec's `tools/` scripts | R-46 sets exit codes for `herness` CLI commands (`3` for validation problems). The CI check scripts of §3.7 are not CLI commands and keep 0 pass, 1 violations, 2 usage or input error, which pre-commit and CI treat as failure for any non-zero code. | — | §3.7 codes | Still open (no ruling covers `tools/` scripts; no behavior depends on the difference) |
 
 ### 13.2 Open questions inherited from design 00 §10
 
@@ -2099,9 +2326,11 @@ Verification items from `docs/specs/open-questions.md` (b): item 1 is resolved; 
 
 ### 13.3 Open items of this spec
 
+No ruling in `DECISIONS.md` covers O-01 … O-07; all seven are Still open with the defaults below.
+
 | # | Item | Default until resolved | Blocks |
 |---|------|------------------------|--------|
-| O-01 | Confirm on the pinned import-linter (≥ 2.1) the pipe syntax for independent sibling layers and the `**` wildcard in `ignore_imports`. | Use them; if unsupported, express C1's sibling rule as a separate `independence` contract over `herness.connectors` and `herness.model`, and list each existing settings module explicitly in `ignore_imports`. | T00-09 |
+| O-01 | Confirm on the pinned import-linter (≥ 2.1) the pipe syntax for independent sibling layers and the `**` wildcard in `ignore_imports`. | Use them; if unsupported, express each of C1's and C3's sibling rules as a separate `independence` contract (`herness.eval` and `herness.admin`; `herness.connectors` and `herness.model`; `herness.core._log_pipeline` and `herness.core.types`; `herness.core.time` and `herness.core.numbers`), and list each existing settings module explicitly in `ignore_imports`. | T00-09 |
 | O-02 | Confirm osv-scanner CLI flags for scanning a requirements lockfile and its JSON field `groups[].max_severity` on the pinned version. | Scan `build/requirements.lock.txt` as `requirements.txt`; missing `max_severity` counts as unknown (High) in U00-57. | T00-14 |
 | O-03 | Record licence approvals for runtime dependencies outside the ENG §5.6 allowlist. Expected candidates, to be confirmed by the first SBOM: NVIDIA CUDA runtime wheels `nvidia-*` (proprietary), `filelock` (Unlicense), `pillow` (MIT-CMU), `pyphen` (GPL/LGPL/MPL-1.1 tri-licence, via `weasyprint`). | `nvidia-*` report-only; every other non-allowlisted licence fails the `audit` job until an `approved` entry with approver and date is added. | T00-14, T00-15 |
 | O-04 | Herness's own licence. | `LicenseRef-Proprietary` with `Private :: Do Not Upload`; README states "Internal use only". | none |
@@ -2113,11 +2342,11 @@ Exceptions to ENG rules taken by this spec (ENG §2.4, §2.3, §8 item 3):
 
 | Rule | Exception | Where |
 |------|-----------|-------|
-| ruff `A005` | Module names `logging`, `time`, `types` shadow the standard library | `herness/core/logging.py`, `time.py`, `types/__init__.py` (per-file ignore) |
+| ruff `A005` | Module names `logging`, `time`, `numbers`, `types` shadow the standard library | `herness/core/logging.py`, `time.py`, `numbers.py`, `types/__init__.py` (per-file ignore) |
 | ruff `N818` | Error class names fixed by design 00 §7 | `herness/core/errors.py` |
 | ruff `TRY003` | Global ignore; taxonomy errors take operation-specific messages | `pyproject.toml` |
-| ruff `S301` | `pickle` used in UT00-08 to prove multiprocessing transport | `tests/unit/core/test_errors.py` (`# noqa: S301`) |
-| ruff `TID251` | HTTP client construction allowed | `herness/core/egress.py`, `herness/connectors/**` |
+| ruff `S301` | `pickle` used in UT00-08 and UT00-71 to prove multiprocessing transport | `tests/unit/core/test_errors.py` (`# noqa: S301`) |
+| ruff `TID251` | `httpx` client and transport construction allowed (R-06) | `herness/core/egress.py` only |
 | ENG §2.3 module state | ULID generator state; logging configuration state | `herness/core/ids.py`, `herness/core/logging.py`, `herness/core/_log_pipeline.py` |
 | Stricter than ENG | Added ruff rules `TID251`, `ICN003` | `pyproject.toml` |
 
@@ -2193,6 +2422,7 @@ Maintainer health: every package above is an actively maintained, widely used pr
 | Used by this spec | impl 10 | X:10/herness.core.redact.scrub_secrets (scrubber argument, F00-02); X:10/herness.core.redact (`--scan` pre-commit hook); X:10/herness.core.config.load_config (F00-02); X:10/herness deploy install (attestation check, F00-09) |
 | Used by this spec | impl 09 | X:09/herness.cli.main (entry point in `[project.scripts]`, composition root in F00-02) |
 | Used by this spec | impl 11 | X:11/tests/conftest.py (marker rule, Hypothesis profiles); X:11/herness eval mock run (CI step); X:11/tests/support/fake_clock.FakeClock (patches U00-09, U00-10, U00-11 per DD-05) |
-| Used by this spec | impl 04 | X:04/herness.metrics.evidence.result_hash (referenced, not implemented here) |
+| Used by this spec | impl 04 | X:04/herness.metrics.evidence.result_hash (referenced, not implemented here; R-15) |
+| Used by this spec | impl 09 (config) | X:09/config/app.yaml reports.allowed_numeral_patterns (the list callers pass to U00-67, F00-11) |
 | Extends this spec | impl 03, 05, 06, 07, 08, 09 | X:03/herness.core.types.decisions, X:05/herness.core.types.harness, X:06/herness.core.types.swarm, X:07/herness.core.types.memory, X:08/herness.core.types.jobs, X:09/herness.core.types.reports (F00-10) |
-| Consumes this spec | all | `herness.core.errors`, `time`, `ids`, `logging`, `types`; `query_id` by impl 04 and 05; `format_utc` by impl 02 (ops store timestamps) and impl 01 (watermarks); X:08/herness.core.resilience dispatches on U00-02 |
+| Consumes this spec | all | `herness.core.errors` (including `NotFound`, `hint`, `details`, R-19), `time`, `ids`, `logging`, `types`; `canonical_json`, `normalize_sql` and `query_id` by impl 04 and 05 (R-14); `herness.core.numbers` by impl 05 (Verifier), 06, 07, 09 (renderer, report contract, dashboard, chat) and 11 (R-16); `format_utc` by impl 02 (ops store timestamps) and impl 01 (watermarks); X:08/herness.core.resilience dispatches on U00-02 |

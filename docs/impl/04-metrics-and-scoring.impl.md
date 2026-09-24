@@ -2,7 +2,9 @@
 
 Status: Draft v1 · 2026-09-24 · Design spec: [`docs/specs/04-metrics-and-scoring.md`](../specs/04-metrics-and-scoring.md) (Draft v2) · Phase: 2 · Standards: [`ENG-STANDARDS.md`](ENG-STANDARDS.md)
 
-Depends on implementation specs: impl 00 (errors, ids, logging, time), impl 02 (warehouse open, build runner, `core.*` and `meta.*` DDL, stage 300 enrich tables), impl 03 (`enrich.*` content), impl 05 (ops `evidence` writer, `Evidence` type), impl 08 (`JobContext.save_state`, `metric_sample` writer), impl 10 (config loader, `ConfigIssue`), impl 11 (synthetic data generator). Cross-spec task dependencies are written `X:<NN>/<symbol or artifact>` until the consistency pass resolves them.
+Depends on implementation specs: impl 00 (errors, logging, time, and the single implementations of `canonical_json`, `sha256_hex`, `normalize_sql` and `query_id` in `herness.core.ids`, R-14), impl 02 (warehouse open, build runner, `core.*` and `meta.*` DDL, stage 300 enrich tables), impl 03 (`enrich.*` content), impl 05 (ops evidence writer `herness.store.ops.evidence.record_evidence`, R-13; `Evidence` type in `herness.core.types.harness`, re-exported from `herness.core.types`, R-01), impl 08 (`herness.core.jobs.JobContext`, R-02; `herness.core.jobs.run_inline`, R-45; metric writer `herness.store.ops.metrics.record_metric_samples`, R-12), impl 09 (CLI command table, R-47), impl 10 (config loader, `ConfigIssue`, `config_hash`), impl 11 (synthetic data generator). Cross-spec task dependencies are written `X:<NN>/<symbol or artifact>` until the consistency pass resolves them.
+
+Consistency pass: this spec applies the binding rulings of [`DECISIONS.md`](DECISIONS.md). The rulings that change it are R-01, R-02, R-03, R-08, R-10, R-11, R-12, R-13, R-14, R-15, R-40, R-44, R-45, R-47, R-61 and R-64. Each change cites its ruling where it applies, and §13 records the status of every earlier delta.
 
 ## 1. Scope and traceability
 
@@ -13,7 +15,7 @@ This spec builds the package `herness/metrics/`, the stage file `herness/model/s
 | Design § | Requirement (short) | Impl § | Units | Tasks | Tests |
 |----------|---------------------|--------|-------|-------|-------|
 | 04 §1 | Package scope, no model calls, every number from a recorded `SELECT` | 1, 2, 7 | all | T04-01…T04-22 | ST04-02, IT04-02 |
-| 04 §2 | Responsibilities list | 1, 3 | U04-01…U04-81 | T04-01…T04-21 | IT04-01 |
+| 04 §2 | Responsibilities list | 1, 3 | U04-01…U04-82 | T04-01…T04-21 | IT04-01 |
 | 04 §3.1 catalog API | `Period`, `EntityType`, `Unit`, `MetricDef`, `load_catalog`, `MetricCatalog` | 3.3 | U04-14, U04-15, U04-23…U04-25 | T04-02, T04-03 | UT04-13…UT04-18 |
 | 04 §3.1 compute API | `MetricRow`, `MetricResult`, `compute_metric`, `metric_series` | 3.6 | U04-49…U04-53 | T04-08 | UT04-64…UT04-70, IT04-03 |
 | 04 §3.1 `peer_group` | Peer group for team, org, service, work item | 3.8 | U04-61…U04-63 | T04-17 | UT04-71…UT04-74, IT04-04 |
@@ -22,7 +24,7 @@ This spec builds the package `herness/metrics/`, the stage file `herness/model/s
 | 04 §3.1 portfolio API | `Scenario`, `optimize_portfolio`, `PortfolioResult` | 3.10 | U04-72…U04-81 | T04-19, T04-20 | UT04-101…UT04-109, PT04-09, PT04-10 |
 | 04 §3.1 evidence API | `result_hash`, `result_sample`, `run_recorded`, `RecordedQuery` | 3.1, 3.2 | U04-01…U04-13 | T04-01, T04-05 | UT04-01…UT04-12, PT04-01, PT04-02 |
 | 04 §3.1 bullets | Read-only callers, caps, default window, `as_of`, persist modes | 3.4, 3.6, 3.10 | U04-29…U04-32, U04-51, U04-52, U04-80 | T04-04, T04-08, T04-20 | UT04-27…UT04-29, UT04-107, UT04-108, IT04-09 |
-| 04 §3.2 | CLI hook sequence (`herness score`, `metrics list`, nightly) | 5 (F04-02, F04-09) | U04-23, U04-24, U04-56, U04-80 | T04-03, T04-13, T04-20 | UT04-18, UT04-110, UT04-111 |
+| 04 §3.2 | CLI hook sequence (`herness score` enqueues by default, `--inline` runs in-process, R-45; `metrics list`; nightly) | 5 (F04-02, F04-09, F04-14) | U04-23, U04-24, U04-56, U04-80 | T04-03, T04-13, T04-20 | UT04-18, UT04-110, UT04-111, UT04-112 |
 | 04 §3.3 | Scoring steps, order, reads/writes, checkpoint | 3.7, 5 (F04-02, F04-13) | U04-55…U04-59 | T04-13 | UT04-110…UT04-112, FT04-01 |
 | 04 §4.1 catalog file | YAML shape, template contract, macros, bind names, allowed filters, forbidden columns | 3.3, 3.4, 9 | U04-26, U04-28, U04-33…U04-40 | T04-03, T04-04 | UT04-14, UT04-16, UT04-23…UT04-26, ST04-02, ST04-04 |
 | 04 §4.1 grain table | `entity_col` / `entity_join` per source and grain | 3.4 | U04-35 | T04-04 | UT04-23 |
@@ -30,7 +32,7 @@ This spec builds the package `herness/metrics/`, the stage file `herness/model/s
 | 04 §4.2 | Fact tables and closures, column types, `query_id` per row | 3.5, 4.1 | U04-41…U04-47 | T04-06, T04-07 | UT04-30…UT04-35 |
 | 04 §4.3 | Output tables, `metric_value` coverage, `SCORE_UNITS` | 3.3, 3.7, 4.1 | U04-27, U04-58 | T04-03, T04-13 | UT04-117, UT04-118 |
 | 04 §4.4 | `run_recorded`, `params` shape, stored-table hashing, `meta.evidence` row, `result_sample` | 3.1, 3.2 | U04-06, U04-09…U04-12 | T04-01, T04-05 | UT04-05…UT04-10, IT04-06 |
-| 04 §4.4 tolerance | Verifier cell tolerance | 3.1 | U04-07 | T04-01 | UT04-11, PT04-11 |
+| 04 §4.4 tolerance | Verifier cell tolerance; the Verifier (05) calls `rows_equivalent` (R-15) | 3.1 | U04-07 | T04-01 | UT04-11, PT04-11 |
 | 04 §5.1 | Fact derivations (exclusion, durations, repeat, change_caused, cluster, change, work item, `cat_at`) | 3.4, 3.5 | U04-35, U04-43…U04-45 | T04-04, T04-06, T04-07 | UT04-30…UT04-33 |
 | 04 §5.2 | 28 metric definitions | 3.6 | U04-48, U04-40 | T04-08…T04-11 | UT04-36…UT04-63, PT04-03, PT04-04 |
 | 04 §5.2.1 | Epic predictability | 3.6 | U04-48 (#26) | T04-11 | UT04-61 |
@@ -45,7 +47,7 @@ This spec builds the package `herness/metrics/`, the stage file `herness/model/s
 | 04 §5.10 | Portfolio optimizer, constraints, determinism, order_rank, persist modes | 3.10 | U04-72…U04-81 | T04-19, T04-20 | UT04-101…UT04-109, PT04-08…PT04-10, IT04-05, IT04-07 |
 | 04 §6 | Errors and resilience, resumable scoring | 6 | U04-12, U04-51, U04-56, U04-80 | T04-05, T04-08, T04-13, T04-20 | UT04-65, UT04-66, UT04-113, UT04-115, FT04-01…FT04-05 |
 | 04 §7.1 | `metrics.yaml` scoring section | 9 | U04-16…U04-18 | T04-02 | UT04-19, UT04-22 |
-| 04 §7.2 | `weights.yaml`, unconfirmed gate via `weight_change` review item | 9, 5 (F04-12) | U04-19…U04-22 | T04-02 | UT04-19, UT04-20, ST04-05 |
+| 04 §7.2 | `weights.yaml`, unconfirmed gate via `weight_change` review item | 9, 5 (F04-12) | U04-19…U04-22, U04-82 | T04-02 | UT04-19, UT04-20, ST04-05 |
 | 04 §8 | Performance targets | 10 | U04-04, U04-12, U04-47, U04-56, U04-80 | T04-22 | BT04-01…BT04-09 |
 | 04 §9 | Security (read-only, sandbox, no text columns, rationale, weight gate) | 7 | U04-11, U04-26, U04-33, U04-51, U04-80 | T04-03, T04-04, T04-05, T04-08, T04-20 | ST04-01…ST04-14 |
 | 04 §10.1 | Hand-computed fixtures | 11 | U04-43, U04-48 | T04-06…T04-11 | UT04-30…UT04-63 |
@@ -56,8 +58,8 @@ This spec builds the package `herness/metrics/`, the stage file `herness/model/s
 | 04 §11 | Open questions | 13 | — | — | — |
 | 04 §12 | Dependencies | 14 | — | — | — |
 | 04 §13 | Resolved contract changes | 4, 13 | U04-41…U04-45, U04-58 | T04-06, T04-07, T04-13 | UT04-30…UT04-34 |
-| 00 §5 | `query_id` over normalized SQL, params, build_id | 3.2 | U04-09, U04-12 | T04-05 | UT04-10 |
-| 00 §5.1 | Shared `result_hash` | 3.1 | U04-01…U04-05 | T04-01 | UT04-01…UT04-04, PT04-01, IT04-10 |
+| 00 §5 | `query_id` over normalized SQL, params, build_id, computed only by `herness.core.ids` (R-14) | 3.2 | U04-09, U04-12 | T04-01, T04-05 | UT04-10, IT04-11 |
+| 00 §5.1 | Shared `result_hash`, owned here with its pinned canonical rules (R-15) | 3.1 | U04-01…U04-05 | T04-01 | UT04-01…UT04-04, PT04-01, IT04-10 |
 | 00 §12.1 | Units vocabulary | 3.3 | U04-14, U04-27 | T04-02, T04-03 | UT04-15, UT04-117 |
 
 ## 2. Module map
@@ -67,7 +69,7 @@ All paths are repo-relative. Layer L3 per ENG §2.1. `herness.metrics` MUST NOT 
 | Path | Purpose | Public symbols | Layer | Extra imports | Line budget |
 |------|---------|----------------|-------|---------------|-------------|
 | `herness/metrics/__init__.py` | Package marker; docstring only; no re-exports | — | L3 | — | 10 |
-| `herness/metrics/settings.py` | Pydantic section models for `metrics.yaml` and `weights.yaml`; literals; weight-confirmation gate; `weight_change` payload | `Period`, `EntityType`, `Unit`, `Better`, `Aggregation`, `UsdModel`, `MetricDef`, `MetricsDefaults`, `ScoringConfig`, `MetricsCatalogConfig`, `WeightsConfig`, `WeightChangePayload`, `check_weight_confirmations`, `unconfirmed_blocks`, `WEIGHT_USES` | L3 (imported by L0 `herness.core.config`; pydantic and stdlib only) | none (no duckdb, no jinja2, no sqlglot) | 380 |
+| `herness/metrics/settings.py` | Pydantic section models for `metrics.yaml` and `weights.yaml`; literals; weight-confirmation gate; `weight_change` payload | `Period`, `EntityType`, `Unit`, `Better`, `Aggregation`, `UsdModel`, `MetricDef`, `MetricsDefaults`, `ScoringConfig`, `MetricsCatalogConfig`, `WeightsConfig`, `WeightChangePayload`, `WeightIssue`, `check_weight_confirmations`, `unconfirmed_blocks`, `WEIGHT_USES` | L3 (imported by L0 `herness.core.config` under the settings exception, R-03) | only the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03); no duckdb, jinja2, sqlglot, and no `herness.core.config` | 390 |
 | `herness/metrics/catalog.py` | Catalog object, loader, validator, units and flag vocabularies | `MetricCatalog`, `load_catalog`, `catalog_from_config`, `validate_catalog`, `SCORE_UNITS`, `METRIC_FLAGS`, `SOURCE_FILTERS`; re-exports `Period`, `EntityType`, `Unit`, `MetricDef` | L3 | `sqlglot`, `yaml` | 340 |
 | `herness/metrics/_encode.py` | Type-driven cell encoding, row digests, streaming and batch hashing (worker-safe top-level functions) | `encode_cell`, `row_digest`, `HashAccumulator`, `hash_arrow_batch` | L3 | `pyarrow` | 280 |
 | `herness/metrics/evidence.py` | Shared `result_hash`, samples, tolerance compare, recorded execution into `meta.evidence` | `result_hash`, `result_sample`, `rows_equivalent`, `iter_batch_rows`, `canonical_params`, `RecordedQuery`, `IntoSpec`, `run_recorded`, `RESULT_SAMPLE_LIMIT`, `MAX_RESULT_ROWS`, `WRITABLE_TABLES` | L3 | `duckdb`, `pyarrow` | 390 |
@@ -98,7 +100,9 @@ All paths are repo-relative. Layer L3 per ENG §2.1. `herness.metrics` MUST NOT 
 
 Test-side files (not production, no line budget): `tests/unit/metrics/test_*.py`, `tests/integration/metrics/test_*.py`, `tests/fault/metrics/test_*.py`, `tests/bench/test_metrics_bench.py`, `tests/support/metrics_tiny.py` (builds a DuckDB warehouse from the fixture rows), `tests/support/metrics_oracle.py` (pure-Python reference formulas for property tests), `tests/fixtures/metrics_tiny/*.csv`, `tests/fixtures/result_hash_vectors.json`.
 
-Import-linter additions for `pyproject.toml`: contract "metrics does not import enrich" (forbidden `herness.metrics` → `herness.enrich`); contract "settings is light" (forbidden `herness.metrics.settings` → `duckdb`, `jinja2`, `sqlglot`, `ortools`, `pyarrow`, and any other `herness.metrics` module). `herness.core.config` importing `herness.metrics.settings` is the one allowed upward import from L0; it is listed as an exception in `pyproject.toml` because spec 10 §3.1 places section models in the owner's `settings.py`.
+Import-linter additions for `pyproject.toml`: contract "metrics does not import enrich" (forbidden `herness.metrics` → `herness.enrich`, ENG §2.1); contract "settings is light" (forbidden `herness.metrics.settings` → `duckdb`, `jinja2`, `sqlglot`, `ortools`, `pyarrow`, `yaml`, `herness.core.config`, and any other `herness.metrics` module). `herness.core.config` importing `herness.metrics.settings` is the settings exception of R-03 and ENG §2.1; impl 00 owns and encodes that named exception, so this spec adds no exception of its own. Because of R-03, `herness.core.config` cannot import `herness.metrics.catalog`: the catalog SQL cross-check (U04-26) is run by the composition root, not by the config loader (DD04-20).
+
+`herness.metrics` imports these lower-layer modules only: `herness.core.errors`, `herness.core.ids`, `herness.core.time`, `herness.core.logging`, `herness.core.config`, `herness.core.types`, `herness.core.jobs` (type of `JobContext` only), `herness.store.warehouse`, `herness.store._warehouse_rw` (open a build file when no connection is passed), `herness.store.ops.evidence` (R-13) and `herness.store.ops.metrics` (R-12). It defines no `herness.store.ops` function (R-09) and owns no ops table, so it has no migration in any R-11 range.
 
 ## 3. Unit specs
 
@@ -158,7 +162,7 @@ Conventions for this section:
 | Preconditions | Any call after `finish` → `SchemaViolation("accumulator finished")`. |
 | Postconditions | `finish` returns exactly `result_hash(columns, rows)` and `result_sample(columns, rows, sample_limit)` for all rows added. |
 | Invariants | One digest per row added; the sample heap holds at most `sample_limit` (digest, row JSON) pairs with the smallest digests seen (bounded max-heap). |
-| Algorithm | 1. `add_rows`: U04-02 per row; append digest; offer (digest, row JSON) to the heap. 2. `add_digests`: extend digests; offer each sample pair. 3. `finish`: `header = json.dumps([[n, t] for n, t in columns], separators=(",", ":"), ensure_ascii=False)`; sort the digests (byte order equals lowercase-hex order); `body = "\n".join(d.hex() for d in digests)`; `hash = sha256((header + "\n" + body).encode("utf-8")).hexdigest()`; sample = heap pairs sorted by digest, each row JSON parsed with `json.loads` into a `dict` (for duplicate names the last value wins in the sample only). |
+| Algorithm | 1. `add_rows`: U04-02 per row; append digest; offer (digest, row JSON) to the heap. 2. `add_digests`: extend digests; offer each sample pair. 3. `finish`: `header = json.dumps([[n, t] for n, t in columns], separators=(",", ":"), ensure_ascii=False)`; sort the digests (byte order equals lowercase-hex order); `body = "\n".join(d.hex() for d in digests)`; `hash = sha256((header + "\n" + body).encode("utf-8")).hexdigest()`; sample = heap pairs sorted by digest, each row JSON parsed with `json.loads` into a `dict` (for duplicate names the last value wins in the sample only). The header and row texts follow the pinned `result_hash` rules owned here (R-15); they deliberately do not use `herness.core.ids.canonical_json`, which sorts keys and would lose column order (U00-29 security note). |
 | Side effects | none |
 | Errors | Precondition. |
 | Concurrency | Not thread-safe; one instance per result. |
@@ -189,7 +193,7 @@ Conventions for this section:
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | The single implementation of design 00 §5.1 `result_hash`; the harness imports it (design 05 §4.6). |
+| Purpose | The single implementation of design 00 §5.1 `result_hash` with the pinned canonical rules of U04-01…U04-03 (R-15); the harness imports it (design 05 §4.6). |
 | Signature | `columns: Sequence[tuple[str, str]]` (positional; (name, DuckDB type string) in result order); `rows: Iterable[Sequence[Any]]` (positional; any order). Returns `str` (64 lowercase hex). |
 | Preconditions | Type strings are `str()` of the DuckDB relation column types (for example `VARCHAR`, `BIGINT`, `DOUBLE`, `DECIMAL(18,2)`, `TIMESTAMP WITH TIME ZONE`, `VARCHAR[]`); VI04-02. |
 | Postconditions | Independent of row order; `-0.0` equals `0.0`; an empty result hashes to `sha256(header + "\n")`. |
@@ -225,7 +229,7 @@ Conventions for this section:
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Design 04 §4.4 Verifier tolerance: decide whether two results of the same query match when their hashes differ. Spec 05 calls it (DD04-14). |
+| Purpose | Design 04 §4.4 Verifier tolerance: decide whether two results of the same query match when their hashes differ. The Verifier (05) calls it for the cell tolerance (R-15, DD04-14). |
 | Signature | `columns: Sequence[tuple[str, str]]`; `rows_a: Sequence[Sequence[Any]]`; `rows_b: Sequence[Sequence[Any]]` (all positional). Returns `bool`. |
 | Preconditions | none. |
 | Postconditions | `True` iff counts are equal and, after sorting both sides by the same key, every cell pair passes: numeric columns (integer family, `FLOAT`, `REAL`, `DOUBLE`, `DECIMAL`) pass when both NULL or `abs(a - b) <= 1e-9 + 1e-6 * max(abs(a), abs(b))` in `float`; every other column passes when the `encode_cell` texts are equal. |
@@ -243,7 +247,7 @@ Conventions for this section:
 | Field | Content |
 |-------|---------|
 | Kind | function (generator) |
-| Purpose | Turn Arrow record batches into row tuples so the harness feeds `run_sql` batches to `result_hash` (design 05 §5.4.4). |
+| Purpose | Turn Arrow record batches into row tuples so the harness feeds `run_sql` batches to `result_hash` (design 05 §5.4.4). Owned here (R-15); impl 05 imports it and does not re-implement it. |
 | Signature | `batches: Iterable[pyarrow.RecordBatch]` (positional). Returns `Iterator[tuple[object, ...]]`. |
 | Preconditions | Batches share one schema. |
 | Postconditions | Rows in batch order, values as `to_pylist()` gives them. |
@@ -266,13 +270,13 @@ Conventions for this section:
 | Preconditions | Bind keys match `^[a-z_][a-z0-9_]{0,62}$`, else `ConfigError("bad bind name <k>")`. |
 | Postconditions | Values are JSON types only: `Decimal` → string `format(d, "f")`; `date` → ISO string; aware `datetime` → UTC string `YYYY-MM-DDTHH:MM:SS.ffffffZ`; tuples → lists; mapping keys sorted. |
 | Invariants | — |
-| Algorithm | 1. Convert recursively. 2. `text = json.dumps({"bind": b, "template": t}, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)`. 3. Return `json.loads(text)`. |
+| Algorithm | 1. Convert recursively to JSON types as stated in the postconditions (this pre-conversion fixes the `Decimal` and timestamp text forms used for binding; it is not a second canonical encoder). 2. `text = canonical_json({"bind": b, "template": t})` (X:00/herness.core.ids.canonical_json; R-14 forbids a local re-implementation). 3. Return `json.loads(text)`. |
 | Side effects | none |
-| Errors | Naive datetime, non-finite float or unsupported type → `ConfigError("unsupported bind value for <key>")`. |
+| Errors | Naive datetime, non-finite float or unsupported type → `ConfigError("unsupported bind value for <key>")`, raised in step 1 before `canonical_json` is called; a `SchemaViolation` from `canonical_json` (depth above 64) is re-raised as `ConfigError("params not canonicalisable")` `from` the original. |
 | Concurrency | Pure. |
 | Complexity and limits | Callers keep the text ≤ 64 KiB (checked in U04-12). |
 | Security notes | TH04-01. |
-| Tests | UT04-10 |
+| Tests | UT04-10, IT04-11 |
 
 ### 3.2 Recorded execution (`evidence.py`, adapter)
 
@@ -282,7 +286,7 @@ Conventions for this section:
 |-------|---------|
 | Kind | class (frozen dataclass) |
 | Purpose | Everything a caller needs to persist evidence and use a result (design 04 §3.1 `RecordedQuery`). |
-| Signature | Fields: `query_id: str` (`^q_[0-9a-f]{16}$`); `sql: str` (normalized, as executed); `params: dict[str, object]` (U04-09 output); `build_id: str`; `result_hash: str`; `row_count: int`; `result_sample: list[dict[str, object]]` (≤ 50); `columns: tuple[tuple[str, str], ...]`; `rows: list[tuple[object, ...]] | None` (None when materialized); `executed_at: datetime` (UTC); `duration_ms: int`. Method `to_evidence(run_id: str | None) -> herness.core.types.Evidence` (field mapping 1:1, design 05 §4.6). |
+| Signature | Fields: `query_id: str` (`^q_[0-9a-f]{16}$`); `sql: str` (normalized, as executed); `params: dict[str, object]` (U04-09 output); `build_id: str`; `result_hash: str`; `row_count: int`; `result_sample: list[dict[str, object]]` (≤ 50); `columns: tuple[tuple[str, str], ...]`; `rows: list[tuple[object, ...]] | None` (None when materialized); `executed_at: datetime` (UTC); `duration_ms: int`. Method `to_evidence(run_id: str | None) -> herness.core.types.Evidence` (field mapping 1:1, design 05 §4.6; the type is defined in `herness.core.types.harness`, owner 05, and imported through the `herness.core.types` re-export, R-01). |
 | Preconditions | — |
 | Postconditions | — |
 | Invariants | `rows is None` or `len(rows) == row_count`. |
@@ -322,13 +326,13 @@ Conventions for this section:
 | Preconditions | `into` requires `producer is not None` (stored results are always recorded), else `ConfigError`. Canonical params text ≤ 65,536 bytes, else `ConfigError("params too large")`. |
 | Postconditions | `result_hash` equals the hash of re-running `sql` with `params["bind"]` on the same build (for `into`: of the stored rows without the `id_column`). With `producer`, exactly one `meta.evidence` row has this `query_id`. |
 | Invariants | — |
-| Algorithm | 1. `p = canonical_params(params["bind"], params["template"])`. 2. `norm = normalize_sql(sql)` (X:00/herness.core.ids.normalize_sql); if `norm` contains `--`, `/*` or `;` → `ConfigError("recorded SQL must not contain comments or semicolons")`. 3. `build_id` = argument, else `SELECT build_id FROM meta.build` (exactly one row, else `SchemaViolation("meta.build must hold one row")`). 4. `qid = query_id(norm, p, build_id)` (X:00/herness.core.ids.query_id). 5. When `timeout_s` is set, start `threading.Timer(timeout_s, con.interrupt)`; cancel it in `finally`. 6a. No `into`: execute `norm` with named parameters `p["bind"]`; take column names and `str()` of each column type from the result relation; stream Arrow batches of 10,000 rows; per batch extend `rows` (U04-08) and feed `HashAccumulator.add_rows`; more than `max_rows` rows → `QueryError("result too large: more than <max_rows> rows")` with `query_id`. 6b. With `into`: bind `p["bind"]` plus `__query_id` (and `__upstream` for `query_ids`); `replace` executes `CREATE OR REPLACE TABLE <table> AS SELECT s.*, <idexpr> FROM (<norm>) s`; `append` executes `INSERT INTO <table> SELECT s.*, <idexpr> FROM (<norm>) s`; `<idexpr>` = `CAST($__query_id AS VARCHAR) AS query_id` or `list_concat([CAST($__query_id AS VARCHAR)], CAST($__upstream AS VARCHAR[])) AS query_ids` (VI04-01 gives the fallback if DuckDB rejects parameters in DDL). Read back `SELECT * EXCLUDE (<id_column>) FROM <table>`, filtered by `query_id = $__query_id` or `query_ids[1] = $__query_id` for `append`, unfiltered for `replace`. When the read-back count (`SELECT count(*)` with the same filter) is ≥ `HASH_PARALLEL_MIN_ROWS`, serialize each Arrow batch to IPC bytes, hash in a `ProcessPoolExecutor(max_workers=HASH_WORKERS)` via U04-04 in batch order, and merge with `add_digests`; otherwise hash in process. `rows = None`. 7. `(h, n, sample) = acc.finish()`. 8. With `producer`: `INSERT INTO meta.evidence (query_id, sql, params, result_hash, row_count, result_sample, executed_at, producer) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (query_id) DO NOTHING` (params and sample as JSON text); read back the stored `result_hash`; if it differs from `h` → `SchemaViolation("nondeterministic result for <qid>")`. 9. Log `metrics.query.recorded` and record metric samples (§8). 10. Return `RecordedQuery` (`executed_at` from X:00/herness.core.time.utc_now; `duration_ms` from `time.perf_counter`). |
-| Side effects | Writes `meta.evidence` (with `producer`) and the `into` table; log; metric samples through X:08/herness.store.ops.record_metric_samples. |
+| Algorithm | 1. `p = canonical_params(params["bind"], params["template"])`; the 64 KiB check measures `canonical_json(p)` (X:00/herness.core.ids.canonical_json). 2. `norm = normalize_sql(sql)` (X:00/herness.core.ids.normalize_sql, R-14); if `norm` contains `--`, `/*` or `;` → `ConfigError("recorded SQL must not contain comments or semicolons")`. 3. `build_id` = argument, else `SELECT build_id FROM meta.build` (exactly one row, else `SchemaViolation("meta.build must hold one row")`). 4. `qid = query_id(norm, p, build_id)` (X:00/herness.core.ids.query_id, R-14; this package never computes a `query_id` itself). 5. When `timeout_s` is set, start `threading.Timer(timeout_s, con.interrupt)`; cancel it in `finally`. 6a. No `into`: execute `norm` with named parameters `p["bind"]`; take column names and `str()` of each column type from the result relation; stream Arrow batches of 10,000 rows; per batch extend `rows` (U04-08) and feed `HashAccumulator.add_rows`; more than `max_rows` rows → `QueryError("result too large: more than <max_rows> rows")` with `query_id`. 6b. With `into`: bind `p["bind"]` plus `__query_id` (and `__upstream` for `query_ids`); `replace` executes `CREATE OR REPLACE TABLE <table> AS SELECT s.*, <idexpr> FROM (<norm>) s`; `append` executes `INSERT INTO <table> SELECT s.*, <idexpr> FROM (<norm>) s`; `<idexpr>` = `CAST($__query_id AS VARCHAR) AS query_id` or `list_concat([CAST($__query_id AS VARCHAR)], CAST($__upstream AS VARCHAR[])) AS query_ids` (VI04-01 gives the fallback if DuckDB rejects parameters in DDL). Read back `SELECT * EXCLUDE (<id_column>) FROM <table>`, filtered by `query_id = $__query_id` or `query_ids[1] = $__query_id` for `append`, unfiltered for `replace`. When the read-back count (`SELECT count(*)` with the same filter) is ≥ `HASH_PARALLEL_MIN_ROWS`, serialize each Arrow batch to IPC bytes, hash in a `ProcessPoolExecutor(max_workers=HASH_WORKERS)` via U04-04 in batch order, and merge with `add_digests`; otherwise hash in process. `rows = None`. 7. `(h, n, sample) = acc.finish()`. 8. With `producer`: `INSERT INTO meta.evidence (query_id, sql, params, result_hash, row_count, result_sample, executed_at, producer) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (query_id) DO NOTHING` (params and sample as JSON text); read back the stored `result_hash`; if it differs from `h` → `SchemaViolation("nondeterministic result for <qid>")`. 9. Log `metrics.query.recorded` and record metric samples (§8). 10. Return `RecordedQuery` (`executed_at` from X:00/herness.core.time.utc_now; `duration_ms` from `time.perf_counter`). |
+| Side effects | Writes `meta.evidence` (with `producer`) and the `into` table; log; metric samples through X:08/herness.store.ops.metrics.record_metric_samples (R-12). |
 | Errors | Timer interrupt → `QueryError("timeout after <timeout_s>s")` with `query_id`. `duckdb.Error` → `QueryError(<DuckDB message>)` with `query_id`; build-path callers re-raise as `SchemaViolation` naming the template. Steps 2, 3, 8 and preconditions as stated. |
 | Concurrency | One call per connection at a time; callers pass a per-thread cursor. Worker processes are pure. |
 | Complexity and limits | `MAX_RESULT_ROWS`, `HASH_WORKERS`, batch 10,000 rows (U04-13). |
 | Security notes | TH04-01, TH04-06, TH04-09. |
-| Tests | UT04-07, UT04-08, UT04-09, UT04-10, UT04-66, ST04-06, IT04-01 |
+| Tests | UT04-07, UT04-08, UT04-09, UT04-10, UT04-66, ST04-06, IT04-01, IT04-11 |
 
 #### U04-13 herness.metrics.evidence constants
 
@@ -350,7 +354,7 @@ Conventions for this section:
 
 ### 3.3 Settings and catalog (`settings.py`, `catalog.py`)
 
-`settings.py` imports only pydantic and the standard library (design 10 §3.1). The literals and `MetricDef` live there so the spec 10 loader can import them without DuckDB; `catalog.py` re-exports them under the design 04 §3.1 names (DD04-17).
+`settings.py` imports only the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03, ENG §2.1 settings exception). It never imports `herness.core.config`, so nothing in it returns `ConfigIssue` (see U04-82). The literals and `MetricDef` live there so the spec 10 loader can import them without DuckDB; `catalog.py` re-exports them under the design 04 §3.1 names (DD04-17).
 
 #### U04-14 herness.metrics.settings literals
 
@@ -501,10 +505,10 @@ Conventions for this section:
 | Field | Content |
 |-------|---------|
 | Kind | function (pure) |
-| Purpose | Design 04 §7.2 gate: a block may change `unconfirmed` from true to false only with an approved `weight_change` item referencing the new `config_hash`. Called by the spec 10 loader (X:10/herness.core.config.validate). |
-| Signature | `previous: WeightsConfig | None` (last effective weights; None on first load); `current: WeightsConfig`; `new_config_hash: str`; `approved: Sequence[WeightChangePayload]` (payloads of `review_item` rows with `kind='weight_change'`, `status='approved'`) — all positional. Returns `list[herness.core.config.ConfigIssue]`. |
+| Purpose | Design 04 §7.2 gate: a block may change `unconfirmed` from true to false only with an approved `weight_change` item referencing the new `config_hash`. Called by the spec 10 loader (X:10/herness.core.config.validate), which may import it because it lives in `settings.py` (R-03); the loader converts each returned `WeightIssue` into its own `ConfigIssue`. |
+| Signature | `previous: WeightsConfig | None` (last effective weights; None on first load); `current: WeightsConfig`; `new_config_hash: str`; `approved: Sequence[WeightChangePayload]` (payloads of `review_item` rows with `kind='weight_change'`, `status='approved'`; the loader reads them, this function does no I/O) — all positional. Returns `list[WeightIssue]` (U04-82). |
 | Preconditions | `new_config_hash` matches `^cfg_[0-9a-f]{16}$`, else `ConfigError`. |
-| Postconditions | One `error` issue for each block with `current.unconfirmed == false` whose previous value was `true` (or which had no previous config) and which is not listed in `blocks` of any approved payload with `proposed_config_hash == new_config_hash`. Issue `path` = `weights.<block>.unconfirmed`; message "confirming <block> needs an approved weight_change review item for <new_config_hash>". A block already `false` in `previous` needs nothing. |
+| Postconditions | One `WeightIssue` with `severity = "error"` for each block with `current.unconfirmed == false` whose previous value was `true` (or which had no previous config) and which is not listed in `blocks` of any approved payload with `proposed_config_hash == new_config_hash`. Issue `path` = `weights.<block>.unconfirmed`; message "confirming <block> needs an approved weight_change review item for <new_config_hash>". A block already `false` in `previous` needs nothing. |
 | Invariants | — |
 | Algorithm | Iterate blocks in `blocks()` order; build issues as stated. |
 | Side effects | none |
@@ -512,7 +516,25 @@ Conventions for this section:
 | Concurrency | Pure. |
 | Complexity and limits | — |
 | Security notes | TH04-05. |
-| Tests | UT04-20, ST04-05 |
+| Tests | UT04-20, UT04-119, ST04-05 |
+
+#### U04-82 herness.metrics.settings.WeightIssue
+
+| Field | Content |
+|-------|---------|
+| Kind | class (frozen dataclass) |
+| Purpose | Issue type returned by `check_weight_confirmations`, so `settings.py` needs no import of `herness.core.config` (R-03). The spec 10 loader maps it 1:1 onto its `ConfigIssue`. |
+| Signature | Fields: `severity: Literal["error", "warn"]`; `path: str` (1–200 chars, `^weights\.[a-z_]+\.unconfirmed$` for the issues U04-22 emits); `message: str` (1–300 chars, built only from block names and the `config_hash`). |
+| Preconditions | — |
+| Postconditions | — |
+| Invariants | Field constraints checked in `__post_init__`; a violation raises `ConfigError("bad weight issue")`. The message holds no weight values (TH04-05, TH04-11). |
+| Algorithm | Validation only. |
+| Side effects | none |
+| Errors | `ConfigError` as stated. |
+| Concurrency | Immutable. |
+| Complexity and limits | — |
+| Security notes | TH04-05. |
+| Tests | UT04-20, UT04-119 |
 
 #### U04-23 herness.metrics.catalog.MetricCatalog
 
@@ -523,7 +545,7 @@ Conventions for this section:
 | Signature | Constructor `MetricCatalog(config: MetricsCatalogConfig)`. Attributes `version: str` (12 hex), `defaults: MetricsDefaults`, `scoring: ScoringConfig`. Methods: `get(name: str) -> MetricDef`; `describe() -> list[dict[str, object]]`; `names(*, enabled_only: bool = True) -> list[str]` (sorted). |
 | Preconditions | `config` passed U04-26 (the constructor does not re-validate SQL). |
 | Postconditions | — |
-| Invariants | Immutable; `version = sha256(json.dumps(config.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()[:12]`. |
+| Invariants | Immutable; `version = sha256_hex(canonical_json(config.model_dump(mode="json")))[:12]` (X:00/herness.core.ids.sha256_hex and X:00/herness.core.ids.canonical_json, R-14). |
 | Algorithm | `get`: dict lookup; unknown → `ToolInputError("unknown metric <name>; known: <comma-separated enabled names>")`. `describe`: one dict per metric sorted by name, keys `name`, `description`, `grains`, `unit`, `better`, `min_sample_size`, `filters`, `estimate`, `enabled`. |
 | Side effects | none |
 | Errors | `ToolInputError`. |
@@ -557,7 +579,7 @@ Conventions for this section:
 | Kind | function |
 | Purpose | Build the catalog from the already-validated process config (used by `compute_metric`, `peer_group`, `run_scoring`, `optimize_portfolio`). |
 | Signature | `cfg: HernessConfig | None = None` (positional; None → `get_config()`). Returns `MetricCatalog`. |
-| Preconditions | The spec 10 loader ran U04-26 as a cross-check. |
+| Preconditions | The process config passed pydantic validation (spec 10 loader). The SQL cross-check U04-26 ran in this process at start-up: the composition root (`herness.cli` for commands and jobs, `app/common` for the dashboard) calls `validate_catalog` once after the config loads and refuses to start on any `error` issue (DD04-20). `herness.core.config` cannot run it, because R-03 limits its imports to `settings.py` modules. `run_scoring` repeats the check in its validate step (U04-57). |
 | Postconditions | — |
 | Invariants | — |
 | Algorithm | `MetricCatalog(cfg.metrics)`. No caching (ENG §2.3). |
@@ -573,7 +595,7 @@ Conventions for this section:
 | Field | Content |
 |-------|---------|
 | Kind | function (pure) |
-| Purpose | All catalog rules of design 04 §4.1, §5.8 (scorecard), §5.9 (templates) and §10.5; called by `load_catalog` and by the spec 10 loader cross-check. |
+| Purpose | All catalog rules of design 04 §4.1, §5.8 (scorecard), §5.9 (templates) and §10.5; called by `load_catalog`, by the scoring validate step (U04-56 step 6) and by the composition root at start-up and in `herness config validate` and `herness doctor` (impl 09, impl 10). It is never called from `herness.core.config` (R-03; DD04-20). |
 | Signature | `cfg: MetricsCatalogConfig` (positional); `weights: WeightsConfig` (keyword-only). Returns `list[ConfigIssue]`. |
 | Preconditions | — |
 | Postconditions | Empty list iff valid. Issue `path` = `metrics.<name>.<field>` or `scoring.<...>`. |
@@ -1187,7 +1209,7 @@ Filter letters: P `priority`, S `service_id`, T `team_id`, O `org_id`, C `cluste
 | Preconditions | Config loaded (X:10/herness.core.config.get_config). |
 | Postconditions | Nothing is written to the warehouse or the ops store. Rows ordered by (`entity_id`, `period_start`). |
 | Invariants | — |
-| Algorithm | 1. `catalog = catalog_from_config()`; `weights = get_config().weights`. 2. `validate_metric_request`. 3. Connection: `con` as given (not closed here), else open `CURRENT` read-only with X:02/herness.store.warehouse.open_current_readonly (context manager). 4. Required columns: for each `requires_columns` entry, check presence in `information_schema.columns`; missing → `ToolInputError("metric <name> needs <column>, absent in this build")`. 5. Read `meta.build` (`build_id`, `started_at`); `as_of = resolve_as_of(started_at, weights.business_timezone, catalog.scoring.as_of)`. 6. Window: `custom_window(period, *window, as_of, tz)` when `window` is given, else `default_window(period, as_of, tz, catalog.defaults.windows)`. 7. `render_metric_query`. 8. `rq = run_recorded(con, sql, {"bind", "template"}, None, build_id=build_id, timeout_s=catalog.defaults.compute_timeout_s)`. 9. Build `MetricRow`s from `rq.rows` (columns by name from the wrapper). 10. Log `metrics.compute.completed`; count metric `herness_metrics_compute_calls_total{outcome}`. 11. Return `MetricResult` with `rq` fields, `catalog.version`, and `flags` = sorted static flags. |
+| Algorithm | 1. `catalog = catalog_from_config()`; `weights = get_config().weights`. 2. `validate_metric_request`. 3. Connection: `con` as given (not closed here), else open `CURRENT` read-only with X:02/herness.store.warehouse.open_readonly(None) (closed on exit). 4. Required columns: for each `requires_columns` entry, check presence in `information_schema.columns`; missing → `ToolInputError("metric <name> needs <column>, absent in this build")`. 5. Read `meta.build` (`build_id`, `started_at`); `as_of = resolve_as_of(started_at, weights.business_timezone, catalog.scoring.as_of)`. 6. Window: `custom_window(period, *window, as_of, tz)` when `window` is given, else `default_window(period, as_of, tz, catalog.defaults.windows)`. 7. `render_metric_query`. 8. `rq = run_recorded(con, sql, {"bind", "template"}, None, build_id=build_id, timeout_s=catalog.defaults.compute_timeout_s)`. 9. Build `MetricRow`s from `rq.rows` (columns by name from the wrapper). 10. Log `metrics.compute.completed`; count metric `herness_metrics_compute_calls_total{outcome}`. 11. Return `MetricResult` with `rq` fields, `catalog.version`, and `flags` = sorted static flags. |
 | Side effects | Read-only queries; log; metric sample. |
 | Errors | `ToolInputError` (steps 2, 4, 6); `QueryError` (timeout 30 s default, DuckDB error); `StoreBusy` from opening the warehouse (X:02). |
 | Concurrency | Thread-safe when each thread passes its own cursor or `con=None`. |
@@ -1258,12 +1280,12 @@ Filter letters: P `priority`, S `service_id`, T `team_id`, O `org_id`, C `cluste
 | Field | Content |
 |-------|---------|
 | Kind | function (adapter) |
-| Purpose | Run the scoring steps on the writable build file, resumable through the job checkpoint (design 04 §3.1, §3.3, §6). |
+| Purpose | Run the scoring steps on the writable build file, resumable through the job checkpoint (design 04 §3.1, §3.3, §6). Its production caller is the `build_pipeline` job handler (impl 02), which receives `ctx: JobContext` (R-42) and passes `con` and `ctx`. `herness score` never calls it directly: the CLI enqueues that job by default, and the admin-only `--inline` flag runs the same job in-process through `herness.core.jobs.run_inline`, which also supplies a `JobContext` (R-45, F04-14). |
 | Signature | `build_id: str` (positional); `steps: Sequence[str] | None = None` (keyword-only); `con: duckdb.DuckDBPyConnection | None = None` (keyword-only; the build pipeline passes its connection); `ctx: herness.core.jobs.JobContext | None = None` (keyword-only; checkpointing only when given). `con` and `ctx` are DD04-02. Returns `ScoringReport`. |
 | Preconditions | `meta.build` row `build_id` exists with `status = 'building'`, else `ConfigError("build <id> is <status>; scoring runs only before promotion")`. Every name in `steps` ∈ `STEPS`, else `ConfigError("unknown scoring step <s>")`. |
 | Postconditions | Every requested step's tables are fully rewritten; `ScoringReport.steps_done` lists steps completed in this call or earlier (checkpoint). |
 | Invariants | `validate` runs on every call (never checkpointed). `check` runs when `steps is None` or it is listed. |
-| Algorithm | 1. Requested = `STEPS` when None, else the listed names in `STEPS` order, `validate` always first. 2. Connection: `con`, else X:02/herness.store.warehouse.open_build(build_id, read_only=False) (context manager). 3. Read `meta.build` and check the precondition. 4. `cfg = get_config()`; `catalog = catalog_from_config(cfg)`; `as_of = resolve_as_of(started_at, weights.business_timezone, catalog.scoring.as_of)`. 5. Checkpoint: `state = ctx.load_state()` when `ctx`; `done = state["scoring"]["steps_done"]` when `state["scoring"]["build_id"] == build_id` and `state["scoring"]["config_hash"] == config_hash(cfg)` (X:10/herness.core.config.config_hash), else empty. 6. Validate step (U04-57): fact tables present (`SchemaViolation("fact tables missing; stage 400 did not run")`), disabled metrics, `validate_catalog` errors (`ConfigError`); build `StepContext`. 7. For each remaining requested step: when in `done`, log `metrics.scoring.step_skipped` and continue; else log `metrics.scoring.step_started`; `BEGIN TRANSACTION`; call the step (`run_metrics_step`, `run_funding_step`, `run_org_step`, `run_levers_step`, `run_portfolio_step`, `run_check_step`); `COMMIT`; on error `ROLLBACK`, convert `QueryError` to `SchemaViolation("<step> failed: <message>")`, log `metrics.scoring.step_failed`, re-raise. 8. After commit: add to `done`; when `ctx`, `ctx.save_state({**state, "scoring": {"build_id", "config_hash", "steps_done": done}})` and `ctx.heartbeat("scoring:<step>")`; log `metrics.scoring.step_completed`; record `herness_metrics_step_duration_seconds`. 9. If `check` returned `failed_checks`, raise `SchemaViolation("scoring invariants failed: <names>")` after its commit. 10. When `ctx` and `ctx.should_yield()` after a step: return the report with flag `yielded` (the caller returns the spec 08 `yield` outcome). 11. Log `metrics.scoring.completed`; return the report. |
+| Algorithm | 1. Requested = `STEPS` when None, else the listed names in `STEPS` order, `validate` always first. 2. Connection: `con`, else X:02/herness.store._warehouse_rw.open_for_build(build_id, create=False, cfg) with `cfg` = the loaded `BuildConfig` (closed on exit). 3. Read `meta.build` and check the precondition. 4. `cfg = get_config()`; `catalog = catalog_from_config(cfg)`; `as_of = resolve_as_of(started_at, weights.business_timezone, catalog.scoring.as_of)`. 5. Checkpoint: `state = ctx.load_state()` when `ctx`; `done = state["scoring"]["steps_done"]` when `state["scoring"]["build_id"] == build_id` and `state["scoring"]["config_hash"] == config_hash(cfg)` (X:10/herness.core.config.config_hash), else empty. 6. Validate step (U04-57): fact tables present (`SchemaViolation("fact tables missing; stage 400 did not run")`), disabled metrics, `validate_catalog` errors (`ConfigError`); build `StepContext`. 7. For each remaining requested step: when in `done`, log `metrics.scoring.step_skipped` and continue; else log `metrics.scoring.step_started`; `BEGIN TRANSACTION`; call the step (`run_metrics_step`, `run_funding_step`, `run_org_step`, `run_levers_step`, `run_portfolio_step`, `run_check_step`); `COMMIT`; on error `ROLLBACK`, convert `QueryError` to `SchemaViolation("<step> failed: <message>")`, log `metrics.scoring.step_failed`, re-raise. 8. After commit: add to `done`; when `ctx`, `ctx.save_state({**state, "scoring": {"build_id", "config_hash", "steps_done": done}})` and `ctx.heartbeat("scoring:<step>")`; log `metrics.scoring.step_completed`; record `herness_metrics_step_duration_seconds`. 9. If `check` returned `failed_checks`, raise `SchemaViolation("scoring invariants failed: <names>")` after its commit. 10. When `ctx` and `ctx.should_yield()` after a step: return the report with flag `yielded` (the caller returns the spec 08 `yield` outcome). 11. Log `metrics.scoring.completed`; return the report. |
 | Side effects | Writes `metrics.metric_value`, `score.*`, `meta.evidence`, `meta.dq_result`; job state via `ctx.save_state`; logs; metric samples. |
 | Errors | `ConfigError`, `SchemaViolation`; `StoreBusy` from opening the file (retried by spec 08). |
 | Concurrency | Single writer process per build file (design 00 §4). |
@@ -1720,10 +1742,10 @@ All three SQL templates run as one recorded `SELECT` each (self-contained over p
 | Kind | function (adapter) |
 | Purpose | Design 04 §3.1 / §5.10 entry point for build scenarios (`persist=True`) and ad-hoc scenarios on the promoted warehouse (`persist=False`). |
 | Signature | `scenario: Scenario | str` (positional); `persist: bool = True`, `build_id: str | None = None`, `run_id: str | None = None`, `con: DuckDBPyConnection | None = None` (keyword-only). Returns `PortfolioResult`. |
-| Preconditions | `persist=True` needs a writable connection: `con` given, or `build_id` given (opened with X:02/herness.store.warehouse.open_build). A read-only connection (`current_setting('access_mode')` is `read_only`, case-insensitive; VI04-03) with `persist=True` → `ConfigError("warehouse is read-only; use persist=False")`. When `build_id` is given it must equal `meta.build.build_id`, else `ConfigError("build_id mismatch")`. |
+| Preconditions | `persist=True` needs a writable connection: `con` given, or `build_id` given (opened with X:02/herness.store._warehouse_rw.open_for_build, `create=False`). A read-only connection (`current_setting('access_mode')` is `read_only`, case-insensitive; VI04-03) with `persist=True` → `ConfigError("warehouse is read-only; use persist=False")`. When `build_id` is given it must equal `meta.build.build_id`, else `ConfigError("build_id mismatch")`. |
 | Postconditions | `persist=True`: `score.portfolio` holds exactly this scenario's rows (none when not `OPTIMAL`/`FEASIBLE`). `persist=False`: nothing written to the warehouse; the input query written to ops `evidence`. Same scenario on the same build → same selection. |
 | Invariants | — |
-| Algorithm | 1. Config, catalog, weights. 2. Connection: `con`; else `persist` → `open_build(build_id)`; else X:02/herness.store.warehouse.open_current_readonly. 3. Preconditions. 4. `rq = run_recorded(con, *render_named("portfolio_input", {}, binds), "score" if persist else None, build_id=…, timeout_s=None if persist else compute_timeout_s)`. 5. Candidates from rows. 6. `sc = resolve_scenario(scenario, weights.portfolio, Σ effort of candidates with effort)`. 7. `capacities` = None when `not sc.enforce_team_capacity`, else `sc.team_capacity_points` or `weights.team_capacity_points_per_quarter.teams`; `capacity_default` from weights. 8. `outcome = solve_portfolio(...)`; `ranks = order_selected(selected candidates)` (flag `blocks_cycle` when a cycle was broken); `binding_constraints(...)`. 9. Rows for every candidate (flags = row flags). Totals as `Decimal`. 10. `persist=True`: `DELETE FROM score.portfolio WHERE scenario = ?`; when status is `OPTIMAL`/`FEASIBLE`, parameterized `INSERT` of one row per candidate (`scenario`, `budget_usd`, `candidate_id`, `selected`, `order_rank`, `expected_impact_usd`, `solver_status`, `flags`, `query_ids = [rq.query_id]`); then `run_recorded(con, PORTFOLIO_READBACK_SQL, {"bind": {"scenario": name}, "template": {"name": "portfolio_readback", "scenario": name}}, "score", build_id)` where `PORTFOLIO_READBACK_SQL` selects every `score.portfolio` column except `query_ids` with `WHERE scenario = CAST($scenario AS VARCHAR)`. 11. `persist=False`: `X:05/herness.store.ops.record_evidence(rq.to_evidence(run_id))`. 12. Status `INFEASIBLE`/`MODEL_INVALID` → result flags include `infeasible_mandatory` with the mandatory count and budget in `warnings` of the step; log `metrics.portfolio.infeasible`. 13. Log `metrics.portfolio.solved`; histogram `herness_metrics_portfolio_solve_seconds`. |
+| Algorithm | 1. Config, catalog, weights. 2. Connection: `con`; else `persist` → `open_for_build(build_id, create=False, cfg)` with `cfg` = the loaded `BuildConfig`; else X:02/herness.store.warehouse.open_readonly(None). 3. Preconditions. 4. `rq = run_recorded(con, *render_named("portfolio_input", {}, binds), "score" if persist else None, build_id=…, timeout_s=None if persist else compute_timeout_s)`. 5. Candidates from rows. 6. `sc = resolve_scenario(scenario, weights.portfolio, Σ effort of candidates with effort)`. 7. `capacities` = None when `not sc.enforce_team_capacity`, else `sc.team_capacity_points` or `weights.team_capacity_points_per_quarter.teams`; `capacity_default` from weights. 8. `outcome = solve_portfolio(...)`; `ranks = order_selected(selected candidates)` (flag `blocks_cycle` when a cycle was broken); `binding_constraints(...)`. 9. Rows for every candidate (flags = row flags). Totals as `Decimal`. 10. `persist=True`: `DELETE FROM score.portfolio WHERE scenario = ?`; when status is `OPTIMAL`/`FEASIBLE`, parameterized `INSERT` of one row per candidate (`scenario`, `budget_usd`, `candidate_id`, `selected`, `order_rank`, `expected_impact_usd`, `solver_status`, `flags`, `query_ids = [rq.query_id]`); then `run_recorded(con, PORTFOLIO_READBACK_SQL, {"bind": {"scenario": name}, "template": {"name": "portfolio_readback", "scenario": name}}, "score", build_id)` where `PORTFOLIO_READBACK_SQL` selects every `score.portfolio` column except `query_ids` with `WHERE scenario = CAST($scenario AS VARCHAR)`. 11. `persist=False`: X:05/herness.store.ops.evidence.record_evidence(`rq.to_evidence(run_id)`) (R-13). 12. Status `INFEASIBLE`/`MODEL_INVALID` → result flags include `infeasible_mandatory` with the mandatory count and budget in `warnings` of the step; log `metrics.portfolio.infeasible`. 13. Log `metrics.portfolio.solved`; histogram `herness_metrics_portfolio_solve_seconds`. |
 | Side effects | `score.portfolio`, `meta.evidence` (persist) or ops `evidence` (not persist); logs. |
 | Errors | `ConfigError`, `QueryError`, `StoreBusy`. |
 | Concurrency | `persist=True` only in the build writer; `persist=False` any process (read-only). |
@@ -1767,16 +1789,16 @@ Column lists and order are those of design 02 §4.5–4.6 and 04 §4.2; types be
 | `meta.evidence` (rows with producer `facts`, `metrics`, `score`) | design 02 §4.7 | — | `INSERT … ON CONFLICT (query_id) DO NOTHING`; hash compare on conflict | caller's transaction |
 | `meta.dq_result` (checks `score_*`) | design 02 §4.7 | — | delete rows of the same check names, then insert | step `check` / validate |
 
-No indexes are created (DuckDB zone maps suffice for the scans). No migrations: warehouse tables are rebuilt per build.
+No indexes are created (DuckDB zone maps suffice for the scans). No migrations: warehouse tables are rebuilt per build, and this spec owns no ops table, so it uses no migration number of the R-11 ranges.
 
 ### 4.2 Ops store and job state
 
 | Store | Write | Idempotency key | Owner of the function |
 |-------|-------|-----------------|-----------------------|
-| ops `evidence` | `optimize_portfolio(persist=False)` input query | `query_id` (`INSERT OR IGNORE`) | X:05/herness.store.ops.record_evidence |
-| ops `metric_sample` | metric samples (§8) | append-only | X:08/herness.store.ops.record_metric_samples |
-| `job` state (`JobContext.save_state`) | key `scoring` = `{"build_id", "config_hash", "steps_done"}` | overwrite; other keys preserved | X:08/herness.core.jobs.JobContext |
-| `review_item` | none written here; payload schema `WeightChangePayload` defined here | — | spec 02/09 |
+| ops `evidence` | `optimize_portfolio(persist=False)` input query | `query_id` (`INSERT OR IGNORE`) | X:05/herness.store.ops.evidence.record_evidence (R-13) |
+| ops `metric_sample` (table from impl 02 migration 006, R-12) | metric samples (§8) | append-only | X:08/herness.store.ops.metrics.record_metric_samples (R-12) |
+| `job` state (`JobContext.save_state`) | key `scoring` = `{"build_id", "config_hash", "steps_done"}` | overwrite; other keys preserved | X:08/herness.core.jobs.JobContext (R-02). This is job state, not the task checkpoint envelope of R-21, which only 05, 06 and 07 write. |
+| `review_item` | none written here; payload schema `WeightChangePayload` defined here | — | impl 02 (`herness.store.ops.shared`, R-08; decisions through `herness.store.ops.shared.decide_review_item`, R-33) |
 
 ### 4.3 In-memory state
 
@@ -1797,8 +1819,9 @@ No module-level mutable state. Each render creates its own Jinja environment and
 | F04-09 | Ad-hoc portfolio (spec 06, 09) | 1. U04-80 `persist=False` on `CURRENT` read-only. 2. Input query recorded to ops `evidence` via X:05. 3. Solve and return; nothing written to the warehouse. `persist=True` on read-only → `ConfigError`. |
 | F04-10 | Check step | U04-59 over U04-60 checks → `meta.dq_result`; failed error checks returned to U04-56. |
 | F04-11 | Recorded query | U04-12 steps 1–10. Conflicting hash for an existing `query_id` → `SchemaViolation` (nondeterminism). |
-| F04-12 | Weight confirmation | 1. Spec 10 loader loads weights. 2. Calls U04-22 with previous weights, current weights, the new `config_hash`, approved `weight_change` payloads. 3. Any issue → load fails with `ConfigError`; log `metrics.weights.confirmation_rejected`. |
+| F04-12 | Weight confirmation | 1. Spec 10 loader loads weights. 2. Calls U04-22 (allowed by R-03 because it lives in `settings.py`) with previous weights, current weights, the new `config_hash`, approved `weight_change` payloads. 3. The loader converts each returned `WeightIssue` (U04-82) into a `ConfigIssue`; any `error` issue → load fails with `ConfigError`; log `metrics.weights.confirmation_rejected`. |
 | F04-13 | Resume after crash | 1. Job restarts; U04-56 reads `scoring` state. 2. Same build and `config_hash` → skip done steps; else start over. 3. The step that was running re-runs fully (its transaction never committed). |
+| F04-14 | `herness score` (CLI, impl 09 command table, R-47) | 1. Without `--inline` the command enqueues a `build_pipeline` job whose payload names the `score` stage, the build and the steps (impl 09); `priority` is left `None`, so the per-kind default applies (R-41). When `herness.core.jobs.worker_alive()` is false, the command prints a warning naming the fix (start the worker, or rerun with `--inline`) and exits 0 with the job queued (R-44, R-45). 2. With the admin-only `--inline` flag, the command runs the same job in-process through `herness.core.jobs.run_inline` (R-45). 3. In both cases the `build_pipeline` handler (impl 02) calls `load_catalog` (U04-24) and then U04-56 with its `con` and `ctx`, so F04-02 and F04-13 apply unchanged. 4. A scoring failure makes the job fail; `--inline` then exits 1 (R-46). 5. `herness score --scenario` is the read-only F04-09 path and starts no job (impl 09). |
 
 ## 6. Error handling
 
@@ -1931,7 +1954,7 @@ Component name `metrics`. No event carries filter values, SQL text above DEBUG, 
 
 ### 8.3 Trace events and health
 
-No `Tracer` events: spec 05's tool layer traces `get_metric` calls. No long-running component, so no `health()`; `herness doctor` may call `validate_catalog` through the spec 10 validator.
+No `Tracer` events: spec 05's tool layer traces `get_metric` calls. No long-running component, so no `health()`; `herness doctor` and `herness config validate` (composition root, impl 09 and impl 10) call `validate_catalog` directly, not through `herness.core.config` (R-03, DD04-20).
 
 ## 9. Configuration
 
@@ -1994,7 +2017,7 @@ Markers per design 11 §4.1. Property tests use Hypothesis profiles `commit`/`ni
 | UT04-07 | U04-12 | in-memory DuckDB with `meta.*` | run twice with `producer="metrics"` | one `meta.evidence` row; second call keeps it |
 | UT04-08 | U04-12, U04-10 | same | `producer=None` | no evidence row; `rows` returned; `to_evidence` maps fields |
 | UT04-09 | U04-11, U04-12 | table target | `into` replace/append; disallowed table | hash equals re-run of SELECT; `ConfigError` for `core.incident` |
-| UT04-10 | U04-09, U04-12 | params with Decimal, date, datetime | canonicalize; compute `query_id` | JSON types; keys sorted; ID equals X:00 function output |
+| UT04-10 | U04-09, U04-12 | params with Decimal, date, datetime | canonicalize; compute `query_id` | JSON types; keys sorted; the params text equals `herness.core.ids.canonical_json` output and the ID equals `herness.core.ids.query_id` output (R-14) |
 | UT04-11 | U04-07 | pairs differing by 1e-12 and by 1e-3 | compare | true / false |
 | UT04-12 | U04-04, U04-08 | same rows via Arrow IPC and via lists | hash both ways | identical digests and hash |
 | UT04-13 | U04-24, U04-23 | shipped `config/metrics.yaml` | load; reorder keys | loads; `version` unchanged by key order |
@@ -2028,7 +2051,7 @@ Markers per design 11 §4.1. Property tests use Hypothesis profiles `commit`/`ni
 | UT04-68 | U04-40, U04-20 | unconfirmed weights; low coverage; partial period | compute | flags present |
 | UT04-69 | U04-52 | `entity_ids` subset | compute | only those entities |
 | UT04-70 | U04-52 | `priority=[1]`, `org_id` parent | compute | filtered counts; org filter includes descendants |
-| UT04-71 | U04-62 | teams in buckets; metric with few values | `peer_group` | keys `team:crit_hi`, fallback `team:all` |
+| UT04-71 | U04-62 | teams in buckets; metric with few values | `peer_group` | keys spelled `team:crit_hi` (R-61), fallback `team:all` |
 | UT04-72 | U04-62 | services crit 2 | `peer_group` | `service:crit_2`, self excluded |
 | UT04-73 | U04-62 | item with service; item via map; cluster_fix; unresolved | `peer_group` | owning service group; unresolved → size 0 `prior_year` |
 | UT04-74 | U04-62 | 2 peers | `peer_group` | `prior_year`, members kept |
@@ -2070,6 +2093,7 @@ Markers per design 11 §4.1. Property tests use Hypothesis profiles `commit`/`ni
 | UT04-116 | U04-56 | build status `promoted` | run | `ConfigError` |
 | UT04-117 | U04-27 | — | `unit_for` | design 04 §4.3 table |
 | UT04-118 | U04-58 | tiny build | metrics step | every enabled metric × grain × 5 periods has rows or recorded evidence |
+| UT04-119 | U04-22, U04-82 | previous unconfirmed, current confirmed, no approval; a `WeightIssue` built with an empty message | check; construct | returns `WeightIssue` objects (not `ConfigIssue`) with path `weights.<block>.unconfirmed`; empty message → `ConfigError`; an import scan of `herness/metrics/settings.py` finds only the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03) |
 
 ### 11.2 Property tests (`unit`, Hypothesis)
 
@@ -2099,15 +2123,16 @@ Markers per design 11 §4.1. Property tests use Hypothesis profiles `commit`/`ni
 | IT04-05 | `optimize_portfolio` 5 runs | identical output |
 | IT04-06 | `meta.evidence.result_sample` | ≤ 50 rows equal to the first rows in hash order |
 | IT04-07 | `persist=False` on promoted copy vs `persist=True` on build file | same selection; no warehouse writes |
-| IT04-08 | `synth_data.py --scale small` (nightly `full`, marker `slow`) | design 04 §10.3 planted truths |
+| IT04-08 | `synth_data.py --scale small` (nightly `full`, marker `slow`) | design 04 §10.3 planted truths; the truth comparison lives under `tests/`, and nothing under `herness/metrics/` reads truth files (R-64) |
 | IT04-09 | `compute_metric` with `con=None` on `CURRENT` | read-only; file mtime unchanged |
-| IT04-10 | Repository scan | `result_hash` defined only in `herness/metrics/evidence.py` |
+| IT04-10 | Repository scan | `result_hash`, `rows_equivalent` and `iter_batch_rows` defined only in `herness/metrics/evidence.py` (R-15) |
+| IT04-11 | Repository scan of `herness/metrics/` | no definition of `canonical_json`, `normalize_sql` or `query_id` (they are imported from `herness.core.ids`, R-14); no reference to truth files (R-64); no import of `herness.enrich` or `herness.harness` |
 
 ### 11.4 Fault tests (`fault`)
 
 | ID | Fault | Expected |
 |----|-------|----------|
-| FT04-01 | Kill the process during step `funding`, restart the job | `metrics` skipped via checkpoint; funding fully rewritten; tables equal a clean run |
+| FT04-01 | Terminate the job's child process (OS-level kill, no fault point, so impl 08's fault-point registry is unchanged, R-40) after `metrics.scoring.step_started` for `funding`, then restart the job | `metrics` skipped via checkpoint; funding fully rewritten; tables equal a clean run |
 | FT04-02 | Warehouse file locked by another writer | `StoreBusy` raised on open |
 | FT04-03 | Metric template raising a DuckDB error | `SchemaViolation`, step rolled back, build not promoted |
 | FT04-04 | Solver wall limit 1 s on a 5k-candidate instance | `FEASIBLE` or flags `no_solution_found`/`wall_clock_limit`; no exception |
@@ -2143,7 +2168,7 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Field | Content |
 |-------|---------|
 | Goal | `result_hash`, `result_sample`, `rows_equivalent`, `iter_batch_rows`, `canonical_params` and the encoders exist with golden vectors. |
-| Depends on | X:00/herness.core.errors |
+| Depends on | X:00/herness.core.errors, X:00/herness.core.ids.canonical_json (R-14) |
 | Units | U04-01…U04-09, U04-13 |
 | Files | `herness/metrics/__init__.py`, `herness/metrics/_encode.py`, `herness/metrics/evidence.py` |
 | Tests | UT04-01…UT04-06, UT04-11, UT04-12, PT04-01, PT04-02, PT04-11, ST04-12 |
@@ -2157,12 +2182,12 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Field | Content |
 |-------|---------|
 | Goal | Pydantic section models, weight gate, `weight_change` payload, `config/weights.yaml` and the non-metric sections of `config/metrics.yaml`. |
-| Depends on | X:10/herness.core.config.ConfigIssue |
-| Units | U04-14…U04-22 |
+| Depends on | X:00/herness.core.errors, X:00/herness.core.types (package skeleton, R-01) |
+| Units | U04-14…U04-22, U04-82 |
 | Files | `herness/metrics/settings.py`, `config/metrics.yaml`, `config/weights.yaml` |
-| Tests | UT04-15, UT04-19, UT04-20, ST04-05 |
+| Tests | UT04-15, UT04-19, UT04-20, UT04-119, ST04-05 |
 | Threats | TH04-05 |
-| Acceptance checks | Tests pass; `lint-imports` confirms `settings.py` imports no duckdb/jinja2/sqlglot |
+| Acceptance checks | Tests pass; `lint-imports` confirms `settings.py` imports only the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03) |
 | Blocked by | none |
 | Size | M |
 
@@ -2171,7 +2196,7 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Field | Content |
 |-------|---------|
 | Goal | `MetricCatalog`, loaders, validator, `SCORE_UNITS`, flags and filter matrix. |
-| Depends on | T04-02, T04-04 (render used by the validator is stubbed until then; validator tests run after T04-04), X:10/herness.core.config.get_config |
+| Depends on | T04-02, T04-04 (render used by the validator is stubbed until then; validator tests run after T04-04), X:10/herness.core.config.get_config, X:10/herness.core.config.ConfigIssue, X:00/herness.core.ids.canonical_json, X:00/herness.core.ids.sha256_hex |
 | Units | U04-23…U04-28 |
 | Files | `herness/metrics/catalog.py` |
 | Tests | UT04-13, UT04-14, UT04-16…UT04-18, UT04-21, UT04-22, UT04-117, ST04-02, ST04-04, ST04-10 |
@@ -2199,7 +2224,7 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Field | Content |
 |-------|---------|
 | Goal | `RecordedQuery`, `IntoSpec`, `run_recorded` with evidence writes and parallel hashing. |
-| Depends on | T04-01, X:00/herness.core.ids.query_id, X:00/herness.core.ids.normalize_sql, X:00/herness.core.time.utc_now, X:02/meta.evidence DDL, X:08/herness.store.ops.record_metric_samples |
+| Depends on | T04-01, X:00/herness.core.ids.query_id, X:00/herness.core.ids.normalize_sql, X:00/herness.core.time.utc_now, X:02/meta.evidence DDL, X:08/herness.store.ops.metrics.record_metric_samples |
 | Units | U04-10…U04-12 |
 | Files | `herness/metrics/evidence.py` |
 | Tests | UT04-07…UT04-10, ST04-06 (unit part), ST04-09 (IntoSpec), BT04-09 |
@@ -2241,7 +2266,7 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Field | Content |
 |-------|---------|
 | Goal | `compute_metric`, `metric_series`, request validation, and metrics #1–#4. |
-| Depends on | T04-03, T04-07, X:02/herness.store.warehouse.open_current_readonly |
+| Depends on | T04-03, T04-07, X:02/herness.store.warehouse.open_readonly |
 | Units | U04-49…U04-53, U04-48 (#1–#4) |
 | Files | `herness/metrics/compute.py`, `config/metrics.yaml` |
 | Tests | UT04-36…UT04-39, UT04-64…UT04-70, ST04-01, ST04-07, ST04-11 |
@@ -2311,12 +2336,12 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Field | Content |
 |-------|---------|
 | Goal | `run_scoring` with checkpointing, validate step and metrics step; base checks. |
-| Depends on | T04-11, T04-12, X:08/herness.core.jobs.JobContext, X:02/herness.store.warehouse.open_build, X:10/herness.core.config.config_hash |
+| Depends on | T04-11, T04-12, X:08/herness.core.jobs.JobContext, X:02/herness.store._warehouse_rw.open_for_build, X:10/herness.core.config.config_hash |
 | Units | U04-55…U04-60 |
 | Files | `herness/metrics/scoring.py`, `herness/metrics/sql/checks.sql.j2` |
 | Tests | UT04-110…UT04-116, UT04-118, FT04-01 (metrics part), FT04-03 |
 | Threats | TH04-06 |
-| Acceptance checks | Tests pass; `run_scoring(build_id, steps=["metrics","check"])` on the tiny build writes `metric_value` and dq rows |
+| Acceptance checks | Tests pass; `run_scoring(build_id, steps=["metrics","check"])` on the tiny build writes `metric_value` and dq rows; `herness score --inline` wiring (impl 09, R-45) needs no change here because it reaches U04-56 through the `build_pipeline` handler |
 | Blocked by | none |
 | Size | M |
 
@@ -2409,7 +2434,7 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Field | Content |
 |-------|---------|
 | Goal | `Scenario`, `PortfolioResult`, `optimize_portfolio`, `run_portfolio_step`, wired into `run_scoring`. |
-| Depends on | T04-15, T04-19, X:05/herness.store.ops.record_evidence, X:05/herness.core.types.Evidence |
+| Depends on | T04-15, T04-19, X:05/herness.store.ops.evidence.record_evidence, X:05/herness.core.types.harness.Evidence |
 | Units | U04-76…U04-81 |
 | Files | `herness/metrics/portfolio.py`, `herness/metrics/sql/portfolio_input.sql.j2`, `herness/metrics/scoring.py` |
 | Tests | UT04-103, UT04-107…UT04-109, ST04-08, ST04-09, ST04-14 |
@@ -2440,7 +2465,7 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Depends on | T04-21, X:11/tools/synth_data.py |
 | Units | — |
 | Files | none (tests only) |
-| Tests | IT04-01…IT04-10, BT04-01…BT04-08 |
+| Tests | IT04-01…IT04-11, BT04-01…BT04-08 |
 | Threats | TH04-06 |
 | Acceptance checks | `pytest -m integration -k IT04` passes; `pytest -m slow -k BT04` meets §10 on the dev box |
 | Blocked by | none |
@@ -2450,26 +2475,30 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 
 ### 13.1 Design deltas (contract changes requested)
 
-| ID | Design spec | Change |
-|----|-------------|--------|
-| DD04-01 | 04 §3.1 | `run_recorded` gains keyword-only `build_id`, `into`, `timeout_s`, `max_rows` (needed for `query_id` and materialization) |
-| DD04-02 | 04 §3.1, 08 | `run_scoring` gains keyword-only `con` and `ctx: JobContext` (checkpointing needs the job context) |
-| DD04-03 | 04 §3.1, 07 | `metric_series` and `peer_group` gain keyword-only `on_evidence` callback; otherwise callers cannot persist `sql`/`params`/`result_hash` as §3.1 requires |
-| DD04-04 | 04 §4.1 | Template contract allows optional columns `coverage`, `estimated_count`, `unweighted`; flag vocabulary adds `low_coverage`, `partial_period`, `unweighted` |
-| DD04-05 | 04 §4.1, §5.2 | `change_count` is a per-week rate (aggregation `ratio`, denominator = weeks), an exception to "count metrics set numerator = value, denominator NULL" |
-| DD04-06 | 04 §7.1 | New key `metrics.defaults.compute_timeout_s` (30) |
-| DD04-07 | 00 §5.1 | Pin canonical encoding: compact separators, `ensure_ascii=False`, float token text `.9g` with `-0` normalized and non-finite as strings, DECIMAL quantized to scale, 6-digit UTC timestamps, type-driven encoding, header types = DuckDB type strings; golden vectors live in `tests/fixtures/result_hash_vectors.json` (00 §5.1 has none) |
-| DD04-08 | 04 §4.4 | Stored tables append `query_id`/`query_ids`; the hash excludes that column so it equals a re-run of the recorded SELECT |
-| DD04-09 | 04 §4.1, 05 | All bind parameters are cast in SQL and bound from JSON-round-tripped values so the Verifier's re-bind of `params.bind` is exact |
-| DD04-10 | 04 §3.1 | CP-SAT `UNKNOWN` maps to `INFEASIBLE` + flag `no_solution_found`; alternative: add `UNKNOWN` to `solver_status` |
-| DD04-11 | 04 §10.2 | Pain invariant evaluated on unrounded values (rounded cents across ~5k candidates can exceed 0.01) |
-| DD04-12 | 04, 02 §4.6 | `score.funding.title` = work-item key / candidate ID (no text column; see D9) |
-| DD04-13 | 11 §5.1.5 | Spec 11 writes `team:crithi`; spec 04 key is `team:crit_hi`; spec 11 should change |
-| DD04-14 | 05 §5.6 | Verifier should call `herness.metrics.evidence.rows_equivalent` on hash mismatch (04 §4.4 tolerance not reflected in spec 05) |
-| DD04-15 | 05 §5.4.2 | `get_metric` caps IDs at 50, spec 04 at 500: consistent (tool stricter); spec 05 should state `window` end is exclusive |
-| DD04-16 | 04 §4.1 | Forbidden identifiers extended with `text`, `label`, `top_terms`, `alert_name`, `host`, `answer` |
-| DD04-17 | 04 §3.1 | Literals and `MetricDef` defined in `settings.py`, re-exported from `catalog.py` (spec 10 imports settings without DuckDB) |
-| DD04-18 | 04 §3.2 | `run_scoring` refuses builds whose status is not `building` |
+Status values follow the consistency pass: "Resolved by R-nn" (a ruling settled it), "Accepted (R-nn)" (a ruling adopted the delta as written) or "Still open" (no ruling covers it; the design spec change is still pending). All rulings are in [`DECISIONS.md`](DECISIONS.md).
+
+| ID | Design spec | Change | Status |
+|----|-------------|--------|--------|
+| DD04-01 | 04 §3.1 | `run_recorded` gains keyword-only `build_id`, `into`, `timeout_s`, `max_rows` (needed for `query_id` and materialization) | Still open |
+| DD04-02 | 04 §3.1, 08 | `run_scoring` gains keyword-only `con` and `ctx: JobContext` (checkpointing needs the job context) | Still open (consistent with R-42 and R-45: the handler and `run_inline` both supply `ctx`) |
+| DD04-03 | 04 §3.1, 07 | `metric_series` and `peer_group` gain keyword-only `on_evidence` callback; otherwise callers cannot persist `sql`/`params`/`result_hash` as §3.1 requires | Still open |
+| DD04-04 | 04 §4.1 | Template contract allows optional columns `coverage`, `estimated_count`, `unweighted`; flag vocabulary adds `low_coverage`, `partial_period`, `unweighted` | Still open |
+| DD04-05 | 04 §4.1, §5.2 | `change_count` is a per-week rate (aggregation `ratio`, denominator = weeks), an exception to "count metrics set numerator = value, denominator NULL" | Still open |
+| DD04-06 | 04 §7.1 | New key `metrics.defaults.compute_timeout_s` (30) | Still open |
+| DD04-07 | 00 §5.1 | Pin canonical encoding: compact separators, `ensure_ascii=False`, float token text `.9g` with `-0` normalized and non-finite as strings, DECIMAL quantized to scale, 6-digit UTC timestamps, type-driven encoding, header types = DuckDB type strings; golden vectors live in `tests/fixtures/result_hash_vectors.json` (00 §5.1 has none) | Accepted (R-15): impl 04 owns `result_hash` with these pinned rules; `canonical_json` (R-14) stays the encoder for `query_id` and `params` only |
+| DD04-08 | 04 §4.4 | Stored tables append `query_id`/`query_ids`; the hash excludes that column so it equals a re-run of the recorded SELECT | Still open |
+| DD04-09 | 04 §4.1, 05 | All bind parameters are cast in SQL and bound from JSON-round-tripped values so the Verifier's re-bind of `params.bind` is exact | Still open |
+| DD04-10 | 04 §3.1 | CP-SAT `UNKNOWN` maps to `INFEASIBLE` + flag `no_solution_found`; alternative: add `UNKNOWN` to `solver_status` | Still open |
+| DD04-11 | 04 §10.2 | Pain invariant evaluated on unrounded values (rounded cents across ~5k candidates can exceed 0.01) | Still open |
+| DD04-12 | 04, 02 §4.6 | `score.funding.title` = work-item key / candidate ID (no text column; see D9) | Still open |
+| DD04-13 | 11 §5.1.5 | Spec 11 writes `team:crithi`; spec 04 key is `team:crit_hi`; spec 11 should change | Resolved by R-61 (`team:crit_hi`; impl 11 changes its spelling) |
+| DD04-14 | 05 §5.6 | Verifier should call `herness.metrics.evidence.rows_equivalent` on hash mismatch (04 §4.4 tolerance not reflected in spec 05) | Accepted (R-15) |
+| DD04-15 | 05 §5.4.2 | `get_metric` caps IDs at 50, spec 04 at 500: consistent (tool stricter); spec 05 should state `window` end is exclusive | Still open |
+| DD04-16 | 04 §4.1 | Forbidden identifiers extended with `text`, `label`, `top_terms`, `alert_name`, `host`, `answer` | Still open |
+| DD04-17 | 04 §3.1 | Literals and `MetricDef` defined in `settings.py`, re-exported from `catalog.py` (spec 10 imports settings without DuckDB) | Still open (placement allowed by R-03) |
+| DD04-18 | 04 §3.2 | `run_scoring` refuses builds whose status is not `building` | Still open |
+| DD04-19 | 04 §3.2, 09 | `herness score` enqueues a `build_pipeline` job by default and runs it in-process only with the admin-only `--inline` flag through `herness.core.jobs.run_inline`; design 04 §3.2 says the command calls `load_catalog` and `run_scoring` directly (F04-14) | Resolved by R-45 |
+| DD04-20 | 10 §3.1, 09 | `herness.core.config` may import only `settings.py` modules (R-03), so the config loader cannot run the catalog SQL cross-check `validate_catalog` (it lives in `catalog.py`, which needs `sqlglot` and `jinja2`), and `check_weight_confirmations` cannot return `ConfigIssue`. This spec moves the cross-check to the composition root (start-up of `herness.cli` and `app/common`, `herness config validate`, `herness doctor`) and returns `WeightIssue` (U04-82) for the loader to convert. Impl 09 and impl 10 must add the start-up call and the conversion | Still open (follows from R-03) |
 
 ### 13.2 Interpretations adopted (open items with current defaults)
 
@@ -2526,12 +2555,12 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 
 | Spec | Units used |
 |------|-----------|
-| impl 00 | `herness.core.errors` taxonomy; `herness.core.ids.query_id`, `normalize_sql`; `herness.core.time.utc_now`; `herness.core.logging` |
-| impl 02 | `herness.store.warehouse.open_current_readonly`, `open_build`; build runner stage-400 hook; `core.*`, `meta.*` DDL; stage 300 enrich tables |
+| impl 00 | `herness.core.errors` taxonomy; `herness.core.ids.canonical_json`, `sha256_hex`, `normalize_sql`, `query_id` (single implementations, R-14); `herness.core.time.utc_now`; `herness.core.logging`; the settings import exception (R-03) |
+| impl 02 | `herness.store.warehouse.open_readonly`, `herness.store._warehouse_rw.open_for_build`; build runner stage-400 hook; `core.*`, `meta.*` DDL; stage 300 enrich tables |
 | impl 03 | `enrich.cluster`, `enrich.cluster_member`, `enrich.decision`, `enrich.incident_change_link` content |
-| impl 05 | `herness.store.ops.record_evidence`; `herness.core.types.Evidence`; consumer of `result_hash`, `rows_equivalent`, `compute_metric` |
+| impl 05 | `herness.store.ops.evidence.record_evidence` (R-13); `herness.core.types.Evidence` (submodule `herness.core.types.harness`, R-01); consumer of `result_hash`, `rows_equivalent`, `compute_metric` |
 | impl 07 | consumer of `metric_series`, `peer_group` |
-| impl 08 | `herness.core.jobs.JobContext`; `herness.store.ops.record_metric_samples` |
-| impl 09 | consumer of `run_scoring`, `optimize_portfolio`, `describe()`, `SCORE_UNITS` |
-| impl 10 | `herness.core.config.get_config`, `config_hash`, `ConfigIssue`, loader calling `validate_catalog` and `check_weight_confirmations` |
+| impl 08 | `herness.core.jobs.JobContext` (R-02); `herness.core.jobs.run_inline` and `herness.core.jobs.worker_alive` (used by the CLI path of F04-14, R-44, R-45); `herness.store.ops.metrics.record_metric_samples` (R-12) |
+| impl 09 | consumer of `run_scoring` (through the `build_pipeline` job, R-45), `optimize_portfolio`, `describe()`, `SCORE_UNITS`; owns the CLI command table (R-47); calls `validate_catalog` at start-up and in `config validate` and `doctor` (DD04-20) |
+| impl 10 | `herness.core.config.get_config`, `config_hash`, `ConfigIssue`; loader calling `check_weight_confirmations` and converting `WeightIssue` (R-03, DD04-20) |
 | impl 11 | `tools/synth_data.py` for planted truths and benchmarks |
