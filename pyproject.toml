@@ -218,6 +218,8 @@ include_external_packages = false
 name = "herness layers"
 type = "layers"
 layers = [
+    "herness.model",
+    "herness.store",
     "herness.core",
 ]
 ignore_imports = [
@@ -250,3 +252,57 @@ type = "forbidden"
 source_modules = ["herness.core.types"]
 forbidden_modules = ["herness.core.time", "herness.core.logging", "herness.core._log_pipeline"]
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "core base is closed"
+type = "forbidden"
+source_modules = [
+    "herness.core.logging",
+    "herness.core._log_pipeline",
+    "herness.core.types",
+    "herness.core.ids",
+    "herness.core.time",
+    "herness.core.numbers",
+    "herness.core.errors",
+]
+forbidden_modules = ["herness.store", "herness.model"]
+
+[[tool.importlinter.contracts]]
+name = "settings modules are leaves"
+type = "forbidden"
+source_modules = ["herness.model.settings"]
+forbidden_modules = [
+    "herness.core.logging",
+    "herness.core._log_pipeline",
+    "herness.core.ids",
+    "herness.core.time",
+    "herness.core.numbers",
+    "herness.store",
+    "herness.model.errors",
+]
+# settings reach core.ids and core.time only through core.types (R-03 restricts direct imports)
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "model-settings-light"
+type = "forbidden"
+# impl 02 §2.2: herness.model.settings imports only stdlib, pydantic, herness.core.types and
+# herness.core.errors (R-03); the third-party part is checked by tools.check_type_ownership.
+source_modules = ["herness.model.settings"]
+forbidden_modules = [
+    "herness.core.logging",
+    "herness.core._log_pipeline",
+    "herness.core.ids",
+    "herness.core.time",
+    "herness.core.numbers",
+    "herness.store",
+    "herness.model.errors",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "store-no-upward"
+type = "forbidden"
+# impl 02 §2.2: herness.store imports nothing from L2 and above; later cards append packages.
+source_modules = ["herness.store"]
+forbidden_modules = ["herness.model"]
