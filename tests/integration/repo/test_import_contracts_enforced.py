@@ -24,13 +24,24 @@ def test_st00_10_upward_import_rejected(tmp_path: Path) -> None:
         errors.read_text(encoding="utf-8") + "\nimport herness.harness\n", encoding="utf-8"
     )
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    marker = 'name = "herness layers"\ntype = "layers"\nlayers = [\n'
-    assert marker in text
-    text = text.replace(marker, marker + '    "herness.harness",\n', 1)
+    layers_marker = 'name = "herness layers"\ntype = "layers"\nlayers = [\n'
+    assert layers_marker in text
+    text = text.replace(layers_marker, layers_marker + '    "herness.harness",\n', 1)
     config = tomllib.loads(text)["tool"]["importlinter"]
     base = next(c for c in config["contracts"] if c["name"] == "core base order")["layers"]
     sources = [name.strip() for layer in base for name in layer.split("|")]
-    if not any(c["name"] == "core base is closed" for c in config["contracts"]):
+    if any(c["name"] == "core base is closed" for c in config["contracts"]):
+        # C4 forbids every existing top-level package of C1 other than herness.core
+        # (impl 00 §2 row C4); the plant adds one, so extend the existing contract's
+        # forbidden_modules rather than leave it unaware of the plant (it would
+        # otherwise report KEPT, since "herness.harness" is not the real herness.eval).
+        closed_marker = 'name = "core base is closed"'
+        closed_start = text.index(closed_marker)
+        forbidden_marker = "forbidden_modules = ["
+        fm_start = text.index(forbidden_marker, closed_start)
+        fm_end = text.index("]", fm_start)
+        text = text[:fm_end].rstrip().rstrip(",") + ', "herness.harness"' + text[fm_end:]
+    else:
         text += (
             '\n[[tool.importlinter.contracts]]\nname = "core base is closed"\n'
             'type = "forbidden"\n'
@@ -50,5 +61,5 @@ def test_st00_10_upward_import_rejected(tmp_path: Path) -> None:
         env={**os.environ, "PYTHONPATH": str(tmp_path)},
     )
     assert result.returncode != 0
-    assert "herness layers" in result.stdout
-    assert "core base is closed" in result.stdout
+    assert "herness layers BROKEN" in result.stdout
+    assert "core base is closed BROKEN" in result.stdout
