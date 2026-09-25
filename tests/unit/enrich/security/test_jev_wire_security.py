@@ -42,8 +42,16 @@ def test_st03_08_oversized_response_rejected() -> None:
 
 @pytest.mark.parametrize(
     "body",
-    [b"\xff\xfe", b"{not json", b"[1, 2]", b"[" * 100_000, b'{"answers": {"a": NaN}}'],
-    ids=["bad_utf8", "bad_json", "not_object", "deep_nesting", "nan_constant"],
+    [
+        b"\xff\xfe",
+        b"{not json",
+        b"[1, 2]",
+        b"[" * 100_000,
+        b'{"answers": {"a": NaN}}',
+        b'{"answers": {"a": -Infinity}}',
+        b'{"answers": {"a": 1e999}}',
+    ],
+    ids=["bad_utf8", "bad_json", "not_object", "deep_nesting", "nan", "neg_inf", "overflow"],
 )
 def test_st03_08_malformed_body_rejected(body: bytes) -> None:
     """ST03-08 undecodable, non-object, deeply nested or NaN-bearing bodies are rejected."""

@@ -87,13 +87,13 @@ def to_wire_questions(questions: Sequence[Question]) -> dict[str, dict[str, obje
 def load_wire_body(body: bytes) -> dict[str, object]:
     """Decode a Jev-shape response body (≤ 1 MB, a JSON object). Raises OutputValidationError.
 
-    Rejects oversized bodies before parsing, and NaN/Infinity constants, invalid UTF-8,
-    invalid or too deeply nested JSON and non-object documents (TH03-06).
+    Rejects oversized bodies before parsing, non-finite numbers (incl. overflowing floats),
+    invalid UTF-8, invalid or too deeply nested JSON and non-object documents (TH03-06).
     """
     if len(body) > MAX_BODY_BYTES:
         _fail("body", "response exceeds 1 MB")
     try:
-        data = json.loads(body, parse_constant=_reject_constant)
+        data = json.loads(body, parse_float=_finite, parse_constant=_finite)
     except (ValueError, RecursionError):
         _fail("body", "not valid JSON")
     if not isinstance(data, dict):
@@ -101,9 +101,12 @@ def load_wire_body(body: bytes) -> dict[str, object]:
     return cast("dict[str, object]", data)
 
 
-def _reject_constant(_name: str) -> NoReturn:
-    msg = "non-finite constant"
-    raise ValueError(msg)
+def _finite(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        msg = "non-finite number"
+        raise ValueError(msg)
+    return value
 
 
 def _unit_number(qid: str, value: object, field: str) -> float:
@@ -224,7 +227,8 @@ class AdaptiveLimiter:
     """Async concurrency limit that halves for 60 s after a 429 (U03-51, design 03 §6).
 
     At most `current_capacity` slots are held at once; new acquisitions also wait until
-    the clock reaches the last Retry-After pause. Single event loop only.
+    the clock reaches the last Retry-After pause. Single event loop only. Wait timeouts
+    (<= 1 s) run in real event-loop time; `reduced_until`/`pause_until` follow `clock`.
     """
 
     def __init__(self, capacity: int, *, clock: Callable[[], float] = clock.monotonic) -> None:
@@ -270,6 +274,7 @@ class AdaptiveLimiter:
         try:
             yield
         finally:
+            # Sync release: a cancel awaiting the lock can't leak it (waiters re-poll <= 1 s).
+            self._in_use -= 1
             async with self._cond:
-                self._in_use -= 1
                 self._cond.notify_all()

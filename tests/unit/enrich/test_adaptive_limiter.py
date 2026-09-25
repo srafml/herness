@@ -131,6 +131,45 @@ async def test_ut03_49_waiter_rechecks_after_pause_timeout() -> None:
     assert (holders.acquired, limiter.current_capacity) == (1, 1)
 
 
+@pytest.mark.asyncio
+async def test_ut03_49_cancel_while_waiting_never_takes_a_slot() -> None:
+    """UT03-49 a waiter cancelled before acquiring leaves the slot count unchanged."""
+    limiter = AdaptiveLimiter(1, clock=_FakeClock())
+    holders = _Holders(limiter)
+    holders.start(2)
+    await _spin()
+    assert (holders.active, holders.acquired) == (1, 1)
+    holders.tasks[1].cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await holders.tasks[1]
+    holders.releases[0].set()
+    await holders.tasks[0]
+    async with asyncio.timeout(0.5):  # a free slot is taken at once, no re-poll needed
+        async with limiter.slot():
+            pass
+
+
+@pytest.mark.asyncio
+async def test_ut03_49_cancel_during_release_does_not_leak_slot() -> None:
+    """UT03-49 a holder cancelled while waiting for the lock on release still frees its slot."""
+    limiter = AdaptiveLimiter(1, clock=_FakeClock())
+    holders = _Holders(limiter)
+    holders.start(1)
+    await _spin()
+    assert holders.active == 1
+    cond = limiter._cond  # force lock contention on the release path
+    await cond.acquire()
+    holders.releases[0].set()
+    await _spin()  # the holder left its body and now waits for the contended lock
+    holders.tasks[0].cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await holders.tasks[0]
+    cond.release()
+    async with asyncio.timeout(0.5):
+        async with limiter.slot():
+            pass
+
+
 def test_ut03_49_capacity_must_be_positive() -> None:
     """UT03-49 capacity < 1 is a precondition violation."""
     with pytest.raises(ConfigError):
