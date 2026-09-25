@@ -273,10 +273,27 @@ def test_ut06_02_to_budgets_and_scaled() -> None:
     assert (half.max_steps, half.max_tokens, half.wall_clock_s) == (6, 20_000, 150)
     assert half.max_cost_usd == Decimal("0.02")
     assert budget.scaled(1.0) == budget
-    tiny = TaskBudget(max_steps=1, max_tokens=1, wall_clock_s=1).scaled(0.1)
-    assert (tiny.max_steps, tiny.max_tokens, tiny.wall_clock_s) == (1, 1, 1)
+    tiny = TaskBudget(max_steps=1, max_tokens=1_000, wall_clock_s=1).scaled(0.1)
+    assert (tiny.max_steps, tiny.max_tokens, tiny.wall_clock_s) == (1, 1_000, 1)
+    assert tiny.to_budgets(_NOW).deadline == _NOW + timedelta(seconds=1)
+    small = TaskBudget(max_steps=3, max_tokens=1_500, wall_clock_s=10).scaled(0.25)
+    assert (small.max_steps, small.max_tokens, small.wall_clock_s) == (1, 1_000, 2)
+    assert small.to_budgets(_NOW).max_tokens == 1_000
+    widest = TaskBudget(max_steps=200, max_tokens=1_000, wall_clock_s=86_400)
+    assert widest.to_budgets(_NOW).wall_clock_s == 86_400
     with pytest.raises(SchemaViolation, match="naive datetime"):
         budget.to_budgets(_NOW.replace(tzinfo=None))
+
+
+@pytest.mark.parametrize(
+    "budget",
+    [_budget(max_tokens=999), _budget(max_steps=201), _budget(wall_clock_s=86_401)],
+    ids=["tokens_below_1000", "steps_above_200", "wall_clock_above_day"],
+)
+def test_ut06_02_task_budget_outside_budgets_bounds_rejected(budget: dict[str, Any]) -> None:
+    """UT06-02 TaskBudget rejects values spec 05 Budgets would reject, so to_budgets never fails."""
+    with pytest.raises(ValidationError):
+        TaskBudget.model_validate(budget)
 
 
 @pytest.mark.parametrize("factor", [0.0, -0.5, 1.5, float("nan")])
@@ -440,6 +457,9 @@ def test_ut06_07_cross_check_length_mismatch_rejected() -> None:
         CrossCheck(number_id="n1", query_ids=[_Q1, _Q1], values=[1.0, 1.0], agreed=True)
     with pytest.raises(ValidationError):
         CrossCheck(number_id="x1", query_ids=[_Q1], values=[1.0], agreed=True)
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValidationError):
+            CrossCheck(number_id="n1", query_ids=[_Q1], values=[bad], agreed=False)
     ok = CrossCheck(number_id="n1", query_ids=[_Q1, _Q2], values=[1.0, 1.01], agreed=True)
     assert ok.query_ids[0] == _Q1
 
@@ -491,6 +511,7 @@ def test_ut06_93_swarm_task_state_validation_and_round_trip() -> None:
 def test_ut06_93_read_back_invalid_raises_schema_violation() -> None:
     """UT06-93 a stored invalid state raises SchemaViolation; an absent key reads as None."""
     assert SwarmTaskState.from_envelope({"schema_version": 1, "loop": {}}, task_id=_TASK) is None
+    assert SwarmTaskState.from_envelope({"state": None}, task_id=_TASK) is None
     for stored in ("not an object", {"phase": 3}, {"phase": "x", "pending_findings": [_FND] * 2}):
         with pytest.raises(SchemaViolation, match=f"task state invalid: task_id={_TASK}"):
             SwarmTaskState.from_envelope({"state": stored}, task_id=_TASK)

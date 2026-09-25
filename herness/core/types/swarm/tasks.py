@@ -108,12 +108,12 @@ class TaskInputs(_Model):
 
 
 class TaskBudget(_Model):
-    """Per-task hard limits (U06-04); `to_budgets` is the only conversion to `Budgets` (R-23)."""
+    """Per-task limits (U06-04), within spec 05 `Budgets` bounds; sole conversion to it (R-23)."""
 
-    max_steps: int = Field(ge=1)
-    max_tokens: int = Field(ge=1)
+    max_steps: int = Field(ge=1, le=200)
+    max_tokens: int = Field(ge=1_000)
     max_cost_usd: Decimal = Field(default=Decimal("0"), ge=0, decimal_places=2)
-    wall_clock_s: int = Field(ge=1)
+    wall_clock_s: int = Field(ge=1, le=86_400)
 
     def to_budgets(self, now: datetime) -> Budgets:
         """Spec 05 `Budgets` with `deadline = now + wall_clock_s` (R-22); naive `now` fails."""
@@ -123,14 +123,14 @@ class TaskBudget(_Model):
         return Budgets(**self.model_dump(), deadline=now + timedelta(seconds=self.wall_clock_s))
 
     def scaled(self, factor: float) -> "TaskBudget":
-        """Limits scaled down by `factor` (0 < factor <= 1), each at least 1; cost rounds down."""
+        """Limits times `factor` (0 < factor <= 1), never below their minimums; cost rounds down."""
         if not 0 < factor <= 1:
             msg = "factor must be in (0, 1]"
             raise ValueError(msg)
         cost = self.max_cost_usd * Decimal(str(factor))
         return TaskBudget(
             max_steps=max(1, math.floor(self.max_steps * factor)),
-            max_tokens=max(1, math.floor(self.max_tokens * factor)),
+            max_tokens=max(1_000, math.floor(self.max_tokens * factor)),
             max_cost_usd=cost.quantize(Decimal("0.01"), ROUND_DOWN),
             wall_clock_s=max(1, math.floor(self.wall_clock_s * factor)),
         )
@@ -225,7 +225,7 @@ class CrossCheck(_Model):
 
     number_id: str = Field(pattern=_NUMBER_ID)
     query_ids: Annotated[list[_QueryId], _UNIQUE]
-    values: list[float]
+    values: list[Annotated[float, Field(allow_inf_nan=False)]]
     agreed: bool
 
     @model_validator(mode="after")
@@ -289,11 +289,12 @@ class SwarmTaskState(_Model):
 
     @classmethod
     def from_envelope(cls, checkpoint: Mapping[str, object], *, task_id: str) -> Self | None:
-        """The stored `state` key, or None when absent; invalid → `SchemaViolation`."""
-        if "state" not in checkpoint:
+        """The stored `state` key, or None when absent or null; invalid → `SchemaViolation`."""
+        state = checkpoint.get("state")
+        if state is None:
             return None
         try:
-            return cls.model_validate(checkpoint["state"])
+            return cls.model_validate(state)
         except ValidationError as exc:
             msg = f"task state invalid: task_id={task_id}"
             raise SchemaViolation(msg, task_id=task_id) from exc
