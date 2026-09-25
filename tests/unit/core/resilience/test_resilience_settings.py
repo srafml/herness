@@ -344,3 +344,28 @@ def test_ut08_05_chain_step_rules() -> None:
     _rejects(s.ChainStep, step | {"priority": 101})
     _rejects(s.ChainStep, step | {"skip_on": ["sun"]})
     assert s.ChainStep.model_validate(step | {"priority": 0}).priority == 0
+
+
+@pytest.mark.parametrize("value", ["99999999999999999999d", "6h\n", "٦h", "1w", "10081m", "169h"])
+def test_ut08_05_catch_up_max_rejected_as_validation_error(value: str) -> None:
+    """UT08-05 bad or huge catch_up_max raises ValidationError, never OverflowError."""
+    assert _locs(_rejects(s.MaintenanceSchedule, {"catch_up_max": value})) == [("catch_up_max",)]
+
+
+@pytest.mark.parametrize("value", ["10080m", "168h", "7d", "0m"])
+def test_ut08_05_catch_up_max_bounds_accepted(value: str) -> None:
+    """UT08-05 catch_up_max up to exactly 7 days is accepted."""
+    assert s.MaintenanceSchedule(catch_up_max=value).catch_up_max == value
+
+
+def test_ut08_05_ascii_only_times() -> None:
+    """UT08-05 window times and cron fields accept ASCII digits only."""
+    window = {"name": "w", "start": "0٦:00", "end": "08:00", "classes": ["decider"]}
+    assert _locs(_rejects(s.WindowSpec, window))[0] == ("start",)
+    _rejects(s.RekeySchedule, {"cron": "0 1٩ * * SAT"})
+
+
+def test_ut08_03_port_zero_rejected() -> None:
+    """UT08-03 port 0 is not an explicit service port."""
+    data = {"url": "http://127.0.0.1:0", "health": {"path": "/h"}, "start_timeout_s": 1}
+    assert _locs(_rejects(s.ServiceSettings, data)) == [("url",)]

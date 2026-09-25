@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
@@ -9,7 +10,9 @@ from structlog.typing import EventDict
 
 from herness.core import _log_pipeline as lp
 from herness.core.logging import configure_logging, reset_logging
-from herness.core.resilience.settings import ResilienceConfig
+
+if TYPE_CHECKING:
+    from herness.core.resilience.settings import ResilienceConfig
 
 SENTINEL = "SENTINEL-SECRET-9f3a"
 RESILIENCE_YAML = Path(__file__).parent / "fixtures" / "resilience.yaml"
@@ -51,9 +54,11 @@ def configured_logging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
 
 
 @pytest.fixture
-def cfg_default() -> ResilienceConfig:
+def cfg_default() -> "ResilienceConfig":
     """Design 08 §7 `config/resilience.yaml` (R-43, R-51, R-53 applied) as `ResilienceConfig`.
 
     Stands in for `cfg.resilience` until the spec 10 loader (T10-03) exists.
     """
+    from herness.core.resilience.settings import ResilienceConfig  # noqa: PLC0415 - lazy
+
     return ResilienceConfig.model_validate(yaml.safe_load(RESILIENCE_YAML.read_text("utf-8")))

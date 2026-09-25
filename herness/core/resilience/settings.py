@@ -11,7 +11,6 @@ service names come from the `ServiceName` allowlist (TH08-01).
 from __future__ import annotations
 
 import re
-from datetime import timedelta
 from typing import Annotated, Final, Literal, Self, get_args
 from urllib.parse import urlsplit
 
@@ -27,13 +26,13 @@ from pydantic import (
 from herness.core.types import GpuClass, JobKind, PolicyName, ServiceName
 
 _NAME_RE: Final = r"^[a-z][a-z0-9_]{0,31}$"
-_HHMM_RE: Final = r"^([01]\d|2[0-3]):[0-5]\d$"
+_HHMM_RE: Final = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
 _SECRET_REF_RE: Final = r"^secret:[A-Z][A-Z0-9_]{0,63}$"  # noqa: S105 - a pattern, not a secret
-_CRON_FIELD_RE: Final = re.compile(r"^[0-9A-Za-z*/,\-]+$")
-_CATCH_UP_RE: Final = re.compile(r"^(\d+)(m|h|d)$")
+_CRON_FIELD_RE: Final = re.compile(r"[0-9A-Za-z*/,\-]+")
+_CATCH_UP_RE: Final = re.compile(r"([0-9]{1,9})(m|h|d)")
 _CRON_FIELDS: Final = 5
 _LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "localhost", "::1"})
-_CATCH_UP_MAX: Final = timedelta(days=7)
+_CATCH_UP_MAX_S: Final = 7 * 86400
 _UNIT_SECONDS: Final = {"m": 60, "h": 3600, "d": 86400}
 _JOB_KINDS: Final = frozenset(get_args(JobKind.__value__))
 _RETRY_POLICIES: Final = frozenset(get_args(PolicyName.__value__)) - {"gpu_health"}
@@ -57,18 +56,18 @@ def _require(ok: bool, msg: str) -> None:
 
 def _cron_shape(value: str) -> str:
     fields = value.split()
-    ok = len(fields) == _CRON_FIELDS and all(_CRON_FIELD_RE.match(f) for f in fields)
+    ok = len(fields) == _CRON_FIELDS and all(_CRON_FIELD_RE.fullmatch(f) for f in fields)
     _require(ok, "cron must have five whitespace-separated fields of [0-9A-Za-z*/,-]")
     return value
 
 
 def _catch_up(value: str) -> str:
-    match = _CATCH_UP_RE.match(value)
+    match = _CATCH_UP_RE.fullmatch(value)
     if match is None:
         msg = "catch_up_max must look like <n>m, <n>h or <n>d"
         raise ValueError(msg)
-    span = timedelta(seconds=int(match[1]) * _UNIT_SECONDS[match[2]])
-    _require(span <= _CATCH_UP_MAX, "catch_up_max must be at most 7 days")
+    seconds = int(match[1]) * _UNIT_SECONDS[match[2]]  # plain int: no timedelta overflow
+    _require(seconds <= _CATCH_UP_MAX_S, "catch_up_max must be at most 7 days")
     return value
 
 
@@ -90,7 +89,7 @@ def _loopback_url(value: str) -> str:
         msg = "service url is malformed"
         raise ValueError(msg) from exc
     loopback = parts.hostname in _LOOPBACK_HOSTS and parts.username is None
-    ok = parts.scheme == "http" and loopback and port is not None
+    ok = parts.scheme == "http" and loopback and port is not None and port > 0
     _require(ok, "service url must be http on 127.0.0.1, localhost or ::1 with an explicit port")
     return value
 
