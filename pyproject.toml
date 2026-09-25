@@ -245,6 +245,7 @@ name = "herness layers"
 type = "layers"
 layers = [
     "herness.eval",
+    "herness.harness",
     "herness.metrics",
     "herness.connectors | herness.model",
     "herness.store",
@@ -296,6 +297,7 @@ forbidden_modules = [
     "herness.connectors",
     "herness.eval",
     "herness.metrics",
+    "herness.harness",
 ]
 
 [[tool.importlinter.contracts]]
@@ -368,10 +370,10 @@ forbidden_modules = ["herness.model"]
 [[tool.importlinter.contracts]]
 name = "herness.core must not import herness.store or herness.harness"
 type = "forbidden"
-# R-04: L0 reaches the ops store only through ports bound at the composition root; impl 05
-# appends "herness.harness" when it creates that package (UT00-58 lists existing modules only).
+# R-04: L0 reaches the ops store and the harness only through ports bound at the composition
+# root (UT00-58 lists existing modules only).
 source_modules = ["herness.core"]
-forbidden_modules = ["herness.store"]
+forbidden_modules = ["herness.store", "herness.harness"]
 
 [[tool.importlinter.contracts]]
 name = "resilience-settings-light"
