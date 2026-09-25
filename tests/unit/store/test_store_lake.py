@@ -213,12 +213,28 @@ def test_ut02_05_column_name_and_duplicate(writer: LakeWriter) -> None:
 
 
 def test_ut02_05_timestamp_overflow_is_type_error(writer: LakeWriter) -> None:
-    """UT02-05 a time value outside the microsecond range fails the type rule."""
-    batch = make_batch(1)
-    far = pa.array([2**62], pa.int64()).cast(pa.timestamp("s", "UTC"))
+    """UT02-05 time values outside the microsecond range fail type with a count, no values."""
+    batch = make_batch(3)
+    far = pa.array([2**62, 0, -(2**62)], pa.int64()).cast(pa.timestamp("s", "UTC"))
     with pytest.raises(LakeContractError) as info:
         writer.write(with_column(batch, "_source_updated_at", far))
-    assert (info.value.rule, info.value.column) == ("type", "_source_updated_at")
+    assert (info.value.rule, info.value.column, info.value.bad_rows) == (
+        "type",
+        "_source_updated_at",
+        2,
+    )
+    assert info.value.__cause__ is None
+    assert info.value.__context__ is None
+    assert str(2**62) not in str(info.value)
+
+
+def test_ut02_05_timestamp_overflow_checked_after_value_rules(writer: LakeWriter) -> None:
+    """UT02-05 the time cast runs after rules 4-8, so an earlier rule wins."""
+    batch = make_batch(1, source="servicenow")
+    far = pa.array([2**62], pa.int64()).cast(pa.timestamp("ms", "UTC"))
+    with pytest.raises(LakeContractError) as info:
+        writer.write(with_column(batch, "_fetched_at", far))
+    assert info.value.rule == "source_mismatch"
 
 
 def _random_payloads(n: int) -> list[str | None]:
@@ -316,14 +332,17 @@ def test_ut02_10_abort_then_write(lake_root: Path, monkeypatch: pytest.MonkeyPat
         w.commit()
 
 
-def test_ut02_10_abort_leftover_logged(lake_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT02-10 a temp that cannot be unlinked is counted and logged, never raised."""
+@pytest.mark.parametrize("error", [PermissionError(13, "locked"), OSError(5, "I/O error")])
+def test_ut02_10_abort_leftover_logged(
+    lake_root: Path, monkeypatch: pytest.MonkeyPatch, error: OSError
+) -> None:
+    """UT02-10 a temp that cannot be unlinked (any OSError) is counted and logged, never raised."""
     monkeypatch.setattr(lake, "BUFFER_ROWS", 1)
     w = LakeWriter("jira", "issue", root=lake_root)
     w.write(make_batch(1))
 
     def locked(self: Path, missing_ok: bool = False) -> None:
-        raise PermissionError(13, "locked")
+        raise error
 
     monkeypatch.setattr(Path, "unlink", locked)
     with capture_logs() as logs:
@@ -333,6 +352,53 @@ def test_ut02_10_abort_leftover_logged(lake_root: Path, monkeypatch: pytest.Monk
     monkeypatch.undo()
     for temp in temp_files(lake_root):
         temp.unlink()
+
+
+class _FailingParquetWriter:
+    """Creates the temp file, then fails like a ParquetWriter constructor error."""
+
+    def __init__(self, path: Path, *args: object, **kwargs: object) -> None:
+        Path(path).write_bytes(b"PAR1")
+        raise OSError(28, "No space left on device")
+
+
+def test_ut02_10_parquet_writer_failure_leaves_no_temp(
+    lake_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT02-10 a ParquetWriter constructor failure removes its temp; a retry commits cleanly."""
+    monkeypatch.setattr(lake, "BUFFER_ROWS", 1)
+    w = LakeWriter("jira", "issue", root=lake_root)
+    with monkeypatch.context() as mp:
+        mp.setattr(lake.pq, "ParquetWriter", _FailingParquetWriter)
+        with pytest.raises(SchemaViolation):
+            w.write(make_batch(1))
+    assert temp_files(lake_root) == []
+    result = w.commit()
+    assert result.rows == 1
+    assert len(result.files) == 1
+    assert temp_files(lake_root) == []
+
+
+def test_ut02_10_parquet_writer_failure_abort_unlinks_temp(
+    lake_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT02-10 if the failed temp cannot be removed at once, abort still deletes it."""
+    monkeypatch.setattr(lake, "BUFFER_ROWS", 1)
+    w = LakeWriter("jira", "issue", root=lake_root)
+    real_unlink = Path.unlink
+
+    def locked(self: Path, missing_ok: bool = False) -> None:
+        raise PermissionError(13, "locked")
+
+    with monkeypatch.context() as mp:
+        mp.setattr(lake.pq, "ParquetWriter", _FailingParquetWriter)
+        mp.setattr(Path, "unlink", locked)
+        with pytest.raises(SchemaViolation):
+            w.write(make_batch(1))
+    assert Path.unlink is real_unlink
+    assert len(temp_files(lake_root)) == 1
+    w.abort()
+    assert temp_files(lake_root) == []
 
 
 def test_ut02_10_commit_after_commit(writer: LakeWriter) -> None:

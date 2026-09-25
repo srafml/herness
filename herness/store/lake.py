@@ -42,7 +42,7 @@ META_COLUMNS: Final[tuple[tuple[str, pa.DataType, bool], ...]] = (
     ("_deleted", pa.bool_(), False),
     ("_payload", pa.string(), True),
 )
-_TIME_COLUMNS: Final = frozenset({"_source_updated_at", "_fetched_at"})
+_TIME_COLUMNS: Final = ("_source_updated_at", "_fetched_at")
 _META_NAMES: Final = frozenset(name for name, _, _ in META_COLUMNS)
 _TARGET_RANGE: Final = (2**20, 2**30)
 _MAX_OPEN_RANGE: Final = (1, 86_400)
@@ -110,16 +110,15 @@ def _type_ok(name: str, dtype: pa.DataType) -> bool:
     return bool(pa.types.is_string(dtype) or pa.types.is_large_string(dtype))
 
 
-def _normalise(name: str, array: pa.Array, where: tuple[str, str]) -> pa.Array:
-    if name in _TIME_COLUMNS:
-        opts = pc.CastOptions(_UTC_US, allow_time_truncate=True)
-        try:
-            return pc.cast(array, options=opts)
-        except pa.ArrowInvalid:
-            _fail(*where, "type", name)
-    if name == "_deleted":
-        return array
-    return pc.cast(array, pa.string())
+def _cast_time(name: str, array: pa.Array, where: tuple[str, str]) -> pa.Array:
+    """Cast to ``timestamp[us, UTC]``; out-of-range values fail ``type`` with a row count."""
+    factor = {"s": 10**6, "ms": 10**3}.get(array.type.unit)
+    if factor is not None:
+        ints, limit = pc.cast(array, pa.int64()), (2**63 - 1) // factor
+        bad = _count_true(pc.or_(pc.greater(ints, limit), pc.less(ints, -limit)))
+        if bad:
+            _fail(*where, "type", name, bad)
+    return pc.cast(array, options=pc.CastOptions(_UTC_US, allow_time_truncate=True))
 
 
 def _meta_arrays(batch: pa.RecordBatch, source: str, entity: str) -> dict[str, pa.Array]:
@@ -135,7 +134,8 @@ def _meta_arrays(batch: pa.RecordBatch, source: str, entity: str) -> dict[str, p
     for name, _, nullable in META_COLUMNS:
         if not nullable and raw[name].null_count:
             _fail(source, entity, "null", name, raw[name].null_count)
-    return {name: _normalise(name, raw[name], (source, entity)) for name in raw}
+    strings = {n for n, dtype, _ in META_COLUMNS if dtype == pa.string()}
+    return {n: pc.cast(a, pa.string()) if n in strings else a for n, a in raw.items()}
 
 
 def _check_values(meta: dict[str, pa.Array], source: str, entity: str) -> None:
@@ -172,6 +172,8 @@ def _validate_batch(batch: pa.RecordBatch, source: str, entity: str) -> pa.Recor
     _check_values(meta, source, entity)
     names: list[str] = batch.schema.names
     _check_names(names, source, entity)
+    for name in _TIME_COLUMNS:
+        meta[name] = _cast_time(name, meta[name], (source, entity))
     fields = [pa.field(name, dtype, nullable) for name, dtype, nullable in META_COLUMNS]
     arrays = [meta[name] for name, _, _ in META_COLUMNS]
     for index, name in enumerate(names):
@@ -190,10 +192,7 @@ def _fsync(path: Path, flags: int) -> None:
 
 
 class LakeWriter:
-    """Buffer, validate and write one source entity's batches; commit renames atomically.
-
-    Not thread-safe; any number of writers may target one entity (file names are ULIDs).
-    """
+    """Buffer, validate and write one entity's batches; commit renames. Not thread-safe."""
 
     def __init__(
         self,
@@ -270,12 +269,6 @@ class LakeWriter:
         for day in pc.unique(dates).to_pylist():
             group = norm.filter(pc.equal(dates, pa.scalar(day, pa.date32())))
             self._append(day, group)
-        self.rows += norm.num_rows
-        batch_max = pc.max(norm.column(4)).as_py()
-        if batch_max is not None:
-            batch_max = batch_max.astimezone(datetime.UTC)
-            current = self.max_source_updated_at
-            self.max_source_updated_at = batch_max if current is None else max(current, batch_max)
 
     def _append(self, day: datetime.date, group: pa.RecordBatch) -> None:
         key = self._key
@@ -286,6 +279,10 @@ class LakeWriter:
         self._key = (day, group.schema)
         self._buffer.append(group)
         self._buffer_rows += group.num_rows
+        self.rows += group.num_rows  # counted once buffered, so a failed flush stays consistent
+        group_max = pc.max(group.column(4)).as_py().astimezone(datetime.UTC)
+        current = self.max_source_updated_at
+        self.max_source_updated_at = group_max if current is None else max(current, group_max)
         self._buffer_bytes += int(group.nbytes)
         if self._buffer_rows >= BUFFER_ROWS or self._buffer_bytes >= BUFFER_BYTES:
             self._flush()
@@ -295,8 +292,14 @@ class LakeWriter:
         directory.mkdir(parents=True, exist_ok=True)
         name = f"part-{new_ulid()}.parquet"
         temp = directory / f".{name}.tmp-{new_ulid()}"
-        writer = pq.ParquetWriter(temp, schema, **_PARQUET_OPTIONS)
-        self._temp_files.append((temp, directory / name))
+        self._temp_files.append((temp, directory / name))  # recorded first: abort can unlink it
+        try:
+            writer = pq.ParquetWriter(temp, schema, **_PARQUET_OPTIONS)
+        except BaseException:
+            with contextlib.suppress(OSError):  # a kept entry lets abort retry the unlink
+                temp.unlink(missing_ok=True)
+                self._temp_files.pop()
+            raise
         self._opened_at, self._file_rows = self._clock(), 0
         return writer
 
@@ -319,14 +322,8 @@ class LakeWriter:
         self._pq.close()
         self._pq, self._opened_at = None, None
         temp = self._temp_files[-1][0]
-        _log.debug(
-            "store.lake.file_rotated",
-            **self._ids,
-            dt=temp.parent.name.removeprefix("dt="),
-            rows=self._file_rows,
-            bytes=temp.stat().st_size,
-            reason=reason,
-        )
+        fields = {"dt": temp.parent.name[3:], "rows": self._file_rows, "reason": reason}
+        _log.debug("store.lake.file_rotated", **self._ids, **fields, bytes=temp.stat().st_size)
 
     def commit(self) -> LakeFileSet:
         """Flush, close and rename every temp file to its final name; return the file set."""
@@ -372,7 +369,7 @@ class LakeWriter:
         for temp, _ in self._temp_files:
             try:
                 temp.unlink(missing_ok=True)
-            except PermissionError:
+            except OSError:  # abort never raises (U02-17); spec 01 sweeps old temps
                 leftover += 1
         if leftover:
             _log.warning("store.lake.abort_leftover", **self._ids, count=leftover)
