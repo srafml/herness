@@ -1,8 +1,6 @@
-"""Safe YAML reading, config layer sources, ``--set`` parsing and bootstrap (U10-15 … U10-21).
+"""Safe YAML, config layer sources, ``--set`` parsing and bootstrap (U10-15 … U10-21).
 
-Sources emit plain YAML types; list-to-tuple conversion for strict models is the models' job
-(``herness.core.settings`` section base). ``herness.core.config`` (U10-09) uses them.
-"""
+Sources emit plain YAML types; strict models convert lists to tuples themselves."""
 
 from __future__ import annotations
 
@@ -10,7 +8,7 @@ import os
 import re
 import urllib.parse
 from collections.abc import Hashable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,40 +24,41 @@ from herness.core.settings import SecurityConfig
 
 type ProfileName = Literal["local", "hybrid", "premium", "synth"]
 PROFILES: Final[tuple[ProfileName, ...]] = ("local", "hybrid", "premium", "synth")
-# Sources whose vendor SDK builds its own client: nothing is derived from base_url (R-06).
-SDK_SOURCE_KINDS: Final = frozenset({"snowflake", "mongodb"})
+SDK_SOURCE_KINDS: Final = frozenset({"snowflake", "mongodb"})  # SDK clients: no base_url (R-06)
 ROOT_SECTIONS: Final = ("paths", "security", "logging", "retention", "backup", "deploy")
 _STEMS: Final = "sources mappings decisions metrics weights models pipelines memory resilience app"
 FILE_STEMS: Final = tuple(_STEMS.split())
 SECTION_NAMES: Final = frozenset({*ROOT_SECTIONS, *FILE_STEMS, "eval"})
 MAX_YAML_BYTES: Final = 5_242_880
-_MAX_PATTERNS_BYTES: Final = 1_048_576
-_MAX_DOTENV_BYTES: Final = 65_536
-_MAX_OVERRIDES: Final = 100
-_MAX_SEGMENTS: Final = 12
-_MAX_VALUE_CHARS: Final = 4096
-_MAX_ENV_VARS: Final = 500
+_MAX_PATTERNS_BYTES, _MAX_DOTENV_BYTES, _MAX_DEPTH, _MAX_KEY_CHARS = 1_048_576, 65_536, 64, 100
+_MAX_OVERRIDES, _MAX_SEGMENTS, _MAX_VALUE_CHARS, _MAX_ENV_VARS = 100, 12, 4096, 500  # U10-18/19
 _SEGMENT: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
-_DOTENV_LINE: Final = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)")
+_DOTENV_LINE: Final = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)=[ \t]*(?:"(.*)"|(.*?))[ \t]*')
 _ENV_SKIP: Final = {"HERNESS_" + n for n in ["PROFILE", "ENV", "SYNTH_CONFIG", "FAULTS", "WORKER"]}
-_PROFILE_BY_NAME: Final[dict[str, ProfileName]] = {name: name for name in PROFILES}
 
 
 def _fail(msg: str) -> NoReturn:
-    raise ConfigError(msg)
+    raise ConfigError(msg) from None
 
 
 class _StrictLoader(yaml.SafeLoader):
-    """SafeLoader that rejects anchors, aliases and duplicate keys (U10-15 step 4)."""
+    """SafeLoader rejecting anchors, aliases, duplicate keys and deep nesting (U10-15 step 4)."""
 
     source_name: str = "<yaml>"
+    depth: int = 0
 
     def compose_node(self, parent: yaml.Node | None, index: int) -> yaml.Node | None:
         event = self.peek_event()  # type: ignore[no-untyped-call]  # untyped in the PyYAML stubs
+        line = event.start_mark.line + 1
         if getattr(event, "anchor", None) is not None:
-            line = event.start_mark.line + 1
             _fail(f"YAML anchors and aliases are not allowed: {self.source_name}:{line}")
-        return super().compose_node(parent, index)
+        if self.depth >= _MAX_DEPTH:
+            _fail(f"{self.source_name}:{line}: invalid YAML (nested deeper than {_MAX_DEPTH})")
+        self.depth += 1
+        try:
+            return super().compose_node(parent, index)
+        finally:
+            self.depth -= 1
 
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Hashable, Any]:
         seen: set[Hashable] = set()
@@ -78,25 +77,24 @@ def _parse(text: str, name: str) -> Any:  # noqa: ANN401 - any YAML value
     loader.source_name = name
     try:
         return loader.get_single_data()
-    except yaml.YAMLError as exc:
+    except (yaml.YAMLError, RecursionError) as exc:
         mark = getattr(exc, "problem_mark", None)
-        msg = f"{name}:{mark.line + 1 if mark is not None else 0}: invalid YAML"
-        raise ConfigError(msg) from None
+        _fail(f"{name}:{mark.line + 1 if mark is not None else 0}: invalid YAML")
 
 
 def _read_text(path: Path, max_bytes: int) -> str:
     try:
-        size = path.stat().st_size
-    except FileNotFoundError:
-        msg = f"config file missing: {path.name}"
-        raise ConfigError(msg) from None
-    if size > max_bytes:
+        with path.open("rb") as handle:  # read at most max_bytes + 1: never unbounded
+            data = handle.read(max_bytes + 1)
+    except OSError as exc:
+        missing = isinstance(exc, FileNotFoundError)
+        _fail(f"config file missing: {path.name}" if missing else f"{path.name}: unreadable")
+    if len(data) > max_bytes:
         _fail(f"config file too large: {path.name}")
     try:
-        return path.read_bytes().decode("utf-8-sig")
-    except (OSError, UnicodeDecodeError):
-        msg = f"{path.name}: unreadable or not UTF-8"
-        raise ConfigError(msg) from None
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        _fail(f"{path.name}: not valid UTF-8")
 
 
 def load_yaml_file(path: Path, *, max_bytes: int = MAX_YAML_BYTES) -> dict[str, Any]:
@@ -125,8 +123,7 @@ def _parse_value(text: str, label: str) -> Any:  # noqa: ANN401 - any YAML value
     try:
         return _parse(text, label)
     except ConfigError:
-        msg = f"{label}: invalid YAML value"
-        raise ConfigError(msg) from None
+        _fail(f"{label}: invalid YAML value")
 
 
 def _assign(tree: dict[str, Any], segments: Sequence[str], text: str, label: str) -> None:
@@ -137,7 +134,9 @@ def _assign(tree: dict[str, Any], segments: Sequence[str], text: str, label: str
     for depth, seg in enumerate(segments[:-1]):
         node = node.setdefault(seg, {})
         if not isinstance(node, dict):
-            _fail(f"{label}: {'.'.join(segments[: depth + 1])} is already set to a scalar")
+            _fail(
+                f"{label}: {'.'.join(segments[: depth + 1])} is already set to a non-mapping value"
+            )
     node[segments[-1]] = value
 
 
@@ -149,8 +148,9 @@ def parse_overrides(overrides: Sequence[str]) -> dict[str, Any]:
     for item in overrides:
         key, sep, text = item.partition("=")
         if not sep:
-            _fail(f"--set needs key=value: {key}")
-        _assign(out, key.split("."), text, f"--set {key}")
+            _fail(f"--set needs key=value: {key[:_MAX_KEY_CHARS]}")
+        shown = key if len(key) <= _MAX_KEY_CHARS else key[:_MAX_KEY_CHARS] + "..."
+        _assign(out, key.split("."), text, f"--set {shown}")
     return out
 
 
@@ -187,10 +187,9 @@ def current_load_context() -> LoadContext | None:
 def resolve_profile(profile: str | None, env: Mapping[str, str]) -> ProfileName:
     """Argument, else ``HERNESS_PROFILE``, else ``local`` (U10-09 step 1)."""
     value = profile if profile is not None else env.get("HERNESS_PROFILE", "local")
-    resolved = _PROFILE_BY_NAME.get(value)
-    if resolved is None:
-        _fail(f"unknown profile: {value}")
-    return resolved
+    if value not in PROFILES:
+        _fail(f"unknown profile: {value[:_MAX_KEY_CHARS]}")
+    return value
 
 
 def check_profile_egress(profile: ProfileName, security: SecurityConfig) -> None:
@@ -208,8 +207,7 @@ def _subtree(data: Mapping[str, Any], key: str, label: str) -> dict[str, Any]:
 
 
 def _check_version(data: dict[str, Any], name: str, *, keep: bool = False) -> None:
-    version = data.get("version")
-    if type(version) is not int or version != 1:
+    if type(data.get("version")) is not int or data["version"] != 1:
         _fail(f"{name}: version must be 1")
     if not keep:
         del data["version"]
@@ -221,8 +219,8 @@ def check_overlay_security(overlay: Mapping[str, Any], profile: ProfileName, lab
     if "data_policy" in security:
         _fail("profiles may not set security.data_policy")
     egress = security.get("egress")
-    keys = ("enabled", "destinations", "purposes")
-    if profile == "synth" and isinstance(egress, dict) and any(egress.get(k) for k in keys):
+    on = isinstance(egress, dict) and any(map(egress.get, ("enabled", "destinations", "purposes")))
+    if profile == "synth" and on:
         _fail("profile synth cannot enable egress")
 
 
@@ -247,9 +245,8 @@ class FilesYamlSource(_ContextSource):
         cdir = ctx.config_dir
         out = load_yaml_file(cdir / "herness.yaml")
         _check_version(out, "herness.yaml")
-        for key in out:
-            if key not in ROOT_SECTIONS:
-                _fail(f"herness.yaml: unknown root key {key}")
+        if unknown := sorted(map(str, set(out) - set(ROOT_SECTIONS))):
+            _fail(f"herness.yaml: unknown root key {unknown[0][:_MAX_KEY_CHARS]}")
         names = [*FILE_STEMS, "eval"] if (cdir / "eval.yaml").exists() else FILE_STEMS
         for stem in names:
             out[stem] = load_yaml_file(cdir / f"{stem}.yaml")
@@ -258,8 +255,7 @@ class FilesYamlSource(_ContextSource):
         lines = (line.strip() for line in text.splitlines())
         out["memory"]["injection_patterns"] = [s for s in lines if s and not s.startswith("#")]
         allowed = {"herness.yaml", "eval.yaml", *(f"{stem}.yaml" for stem in FILE_STEMS)}
-        extra = sorted(p.name for p in cdir.glob("*.yaml") if p.name not in allowed)
-        if extra:
+        if extra := sorted(p.name for p in cdir.glob("*.yaml") if p.name not in allowed):
             _fail(f"unexpected config file {extra[0]}")
         return out
 
@@ -268,15 +264,13 @@ class ProfileYamlSource(_ContextSource):
     """Profile overlay plus the ``HERNESS_SYNTH_CONFIG`` fragment (U10-17)."""
 
     def _load(self, ctx: LoadContext) -> dict[str, Any]:
-        path = ctx.config_dir / "profiles" / f"{ctx.profile}.yaml"
-        overlay = load_yaml_file(path)
-        _check_version(overlay, path.name)
-        for key in overlay:
-            if key not in SECTION_NAMES:
-                _fail(f"profiles/{path.name}: unknown section {key}")
-        check_overlay_security(overlay, ctx.profile, f"profiles/{path.name}")
-        synth = ctx.env.get("HERNESS_SYNTH_CONFIG")
-        if not synth:
+        label = f"profiles/{ctx.profile}.yaml"
+        overlay = load_yaml_file(ctx.config_dir / label)
+        _check_version(overlay, label)
+        if unknown := sorted(map(str, set(overlay) - SECTION_NAMES)):
+            _fail(f"{label}: unknown section {unknown[0][:_MAX_KEY_CHARS]}")
+        check_overlay_security(overlay, ctx.profile, label)
+        if not (synth := ctx.env.get("HERNESS_SYNTH_CONFIG")):
             return overlay
         if ctx.profile != "synth":
             _fail("HERNESS_SYNTH_CONFIG requires profile synth")
@@ -295,19 +289,15 @@ class GuardedEnvSource(_ContextSource):
     @staticmethod
     def _layer(items: Iterable[tuple[str, str]]) -> dict[str, Any]:
         out: dict[str, Any] = {}
-        count = 0
-        for name, value in items:
-            upper = name.upper()
-            skip = upper in _ENV_SKIP or upper.startswith("HERNESS_SECRET__")
-            if skip or not upper.startswith("HERNESS_"):
-                continue
-            count += 1
-            if count > _MAX_ENV_VARS:
-                _fail(f"more than {_MAX_ENV_VARS} HERNESS_ variables")
+        env = [(n.upper(), n, v) for n, v in items if n.upper().startswith("HERNESS_")]
+        env = [e for e in env if e[0] not in _ENV_SKIP and not e[0].startswith("HERNESS_SECRET__")]
+        if len(env) > _MAX_ENV_VARS:
+            _fail(f"more than {_MAX_ENV_VARS} HERNESS_ variables")
+        for upper, name, value in env:
             segments = upper.removeprefix("HERNESS_").lower().split("__")
             if segments[0] in {"security", "profile"}:
-                what = "security.*" if segments[0] == "security" else "profile"
-                _fail(f"{what} is file-only; remove {name}")
+                what = {"security": "security.*"}.get(segments[0], segments[0])
+                _fail(f"{what} is file-only; remove {name[:_MAX_KEY_CHARS]}")
             _assign(out, segments, value, name)
         return out
 
@@ -328,9 +318,8 @@ class FilteredDotEnvSource(GuardedEnvSource):
             match = _DOTENV_LINE.fullmatch(line)
             if match is None:
                 _fail(f".env line {number}: malformed")
-            value = match.group(2).strip()
-            quoted = len(value) >= 2 and value[0] == value[-1] == '"'  # noqa: PLR2004 - quotes
-            items.append((match.group(1), value[1:-1] if quoted else value))
+            quoted, plain = match.group(2, 3)
+            items.append((match.group(1), plain if quoted is None else quoted))
         return self._layer(items)
 
 
@@ -343,34 +332,38 @@ class BootstrapConfig:
     source_hosts: tuple[str, ...]
 
 
-def _base_url_hosts(node: object) -> Iterator[str]:
+def _enabled(node: Mapping[str, Any], label: str) -> bool:
+    flag = node.get("enabled", True)
+    if not isinstance(flag, bool):  # never guess: "false" or 0 must not read as enabled
+        _fail(f"sources.yaml: {label}.enabled must be true or false")
+    return flag
+
+
+def _base_url_hosts(node: object, label: str) -> Iterator[str]:
     if isinstance(node, list):
         for item in node:
-            yield from _base_url_hosts(item)
-    elif isinstance(node, dict) and node.get("enabled") is not False:
+            yield from _base_url_hosts(item, label)
+    elif isinstance(node, dict) and _enabled(node, label):
         url = node.get("base_url")
-        try:
-            host = urllib.parse.urlsplit(url).hostname if isinstance(url, str) else None
-        except ValueError:
-            host = None
-        if host:
-            yield host
-        for value in node.values():
-            yield from _base_url_hosts(value)
+        with suppress(ValueError):  # a malformed URL allows nothing
+            if isinstance(url, str) and (host := urllib.parse.urlsplit(url).hostname):
+                yield host
+        for key, value in node.items():
+            yield from _base_url_hosts(value, f"{label}.{key}")
 
 
 def _source_hosts(sources_file: Mapping[str, Any]) -> tuple[str, ...]:
     """U10-58 step 1 over raw ``sources.yaml`` (R-06): listed hosts plus non-SDK base_urls."""
     hosts: set[str] = set()
     for name, src in _subtree(sources_file, "sources", "sources.yaml").items():
-        if not isinstance(src, dict) or src.get("enabled") is False:
+        if not isinstance(src, dict) or not _enabled(src, f"sources.{name}"):
             continue
         listed = src.get("hosts") or []
         if not isinstance(listed, list) or not all(isinstance(h, str) for h in listed):
             _fail(f"sources.yaml: sources.{name}.hosts must be a list of hostnames")
         hosts.update(h.lower() for h in listed)
         if name not in SDK_SOURCE_KINDS:
-            hosts.update(_base_url_hosts(src))
+            hosts.update(_base_url_hosts(src, f"sources.{name}"))
     return tuple(sorted(hosts))
 
 
@@ -391,8 +384,7 @@ def load_bootstrap(
     except ValidationError as exc:
         errors = exc.errors(include_input=False, include_url=False)[:20]
         issues = "; ".join(f"security.{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in errors)
-        msg = f"invalid security config: {issues}"
-        raise ConfigError(msg) from None
+        _fail(f"invalid security config: {issues}")
     hosts = _source_hosts(load_yaml_file(config_dir / "sources.yaml"))
     check_profile_egress(name, security)
     return BootstrapConfig(name, security, hosts)

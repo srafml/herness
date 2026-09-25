@@ -53,9 +53,9 @@ def test_st10_03_profile_cannot_self_approve(cfg: Path) -> None:
         cs.load_bootstrap("hybrid", cfg, {})
 
 
-def _timed_reject(path: Path) -> float:
+def _timed_reject(path: Path, pattern: str) -> float:
     start = time.perf_counter()
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError, match=pattern):
         cs.load_yaml_file(path)
     return time.perf_counter() - start
 
@@ -64,14 +64,14 @@ def test_st10_05_billion_laughs(tmp_path: Path) -> None:
     """ST10-05 a billion-laughs document is rejected within 1 s."""
     path = tmp_path / "metrics.yaml"
     path.write_text(BILLION_LAUGHS, encoding="utf-8")
-    assert _timed_reject(path) < 1.0
+    assert _timed_reject(path, r"^YAML anchors and aliases are not allowed: metrics\.yaml:1$") < 1.0
 
 
 def test_st10_05_six_mib_file(tmp_path: Path) -> None:
     """ST10-05 a 6 MiB file is rejected within 1 s."""
     path = tmp_path / "metrics.yaml"
     path.write_bytes(b"a: 1\n" + b"#" * (6 * 1024 * 1024))
-    assert _timed_reject(path) < 1.0
+    assert _timed_reject(path, r"^config file too large: metrics\.yaml$") < 1.0
 
 
 def test_st10_05_duplicate_enabled_key(tmp_path: Path) -> None:
@@ -81,4 +81,20 @@ def test_st10_05_duplicate_enabled_key(tmp_path: Path) -> None:
         "version: 1\nsources:\n  jira:\n    enabled: false\n    enabled: true\n",
         encoding="utf-8",
     )
-    assert _timed_reject(path) < 1.0
+    assert _timed_reject(path, r"^duplicate key 'enabled' at sources\.yaml:5$") < 1.0
+
+
+@pytest.mark.parametrize(
+    ("text", "pattern"),
+    [
+        ("a: " + "[" * 50_000 + "]" * 50_000 + "\n", "invalid YAML"),
+        ("a: " + "{b: " * 20_000 + "1" + "}" * 20_000 + "\n", "invalid YAML"),
+        ("a:\n" + "".join("  " * i + f"k{i}:\n" for i in range(1, 80)) + "\n", "invalid YAML"),
+    ],
+    ids=["flow-sequences", "flow-mappings", "block-mappings"],
+)
+def test_st10_05_deep_nesting(tmp_path: Path, text: str, pattern: str) -> None:
+    """ST10-05 deeply nested YAML is a ConfigError (no RecursionError) within 1 s."""
+    path = tmp_path / "metrics.yaml"
+    path.write_text(text, encoding="utf-8")
+    assert _timed_reject(path, pattern) < 1.0

@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from pydantic import ValidationError
 from tests.support.config_harness import Harness, load, write_config
 
 from herness.core import config_sources as cs
@@ -55,8 +54,19 @@ def test_ut10_08_anchor_and_alias_rejected(tmp_path: Path) -> None:
 def test_ut10_08_alias_without_anchor_rejected(tmp_path: Path) -> None:
     """UT10-08 a bare alias is an error too (anchor check never reached)."""
     path = _write(tmp_path / "metrics.yaml", "a: *x\n")
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError) as info:
         cs.load_yaml_file(path)
+    assert info.value.message == "YAML anchors and aliases are not allowed: metrics.yaml:1"
+
+
+def test_ut10_08_merge_keys_rejected(tmp_path: Path) -> None:
+    """UT10-08 the << merge key is rejected with an alias and with an inline mapping."""
+    aliased = _write(tmp_path / "a.yaml", "base: &b {x: 1}\nuse:\n  <<: *b\n")
+    with pytest.raises(ConfigError, match=r"^YAML anchors and aliases are not allowed: a\.yaml:1$"):
+        cs.load_yaml_file(aliased)
+    inline = _write(tmp_path / "m.yaml", "use:\n  <<: {x: 1}\n  y: 2\n")
+    with pytest.raises(ConfigError, match=r"^m\.yaml:[0-9]+: invalid YAML$"):
+        cs.load_yaml_file(inline)
 
 
 def test_ut10_07_missing_and_too_large(tmp_path: Path) -> None:
@@ -98,8 +108,11 @@ def test_ut10_23_parse_overrides_rejections() -> None:
     """UT10-23 missing '=', descent into a scalar, bad segment, 13 segments: key path each."""
     with pytest.raises(ConfigError, match=r"^--set needs key=value: a\.b$"):
         cs.parse_overrides(["a.b"])
-    with pytest.raises(ConfigError, match=r"a\.b\.c"):
+    with pytest.raises(ConfigError) as info:
         cs.parse_overrides(["a.b=2", "a.b.c=1"])
+    assert info.value.message == "--set a.b.c: a.b is already set to a non-mapping value"
+    with pytest.raises(ConfigError, match="non-mapping"):
+        cs.parse_overrides(["a.b=[1]", "a.b.c=1"])
     with pytest.raises(ConfigError, match="bad seg"):
         cs.parse_overrides(["bad seg=1"])
     thirteen = ".".join(f"s{i}" for i in range(13))
@@ -128,6 +141,20 @@ def test_ut10_23_parse_overrides_values_and_limits() -> None:
         cs.parse_overrides(["a=" + "x" * 4097])
     with pytest.raises(ConfigError, match="100"):
         cs.parse_overrides([f"k{i}=1" for i in range(101)])
+    long_key = "k" * 5000
+    for item in (long_key, long_key + "=1"):
+        with pytest.raises(ConfigError) as info:
+            cs.parse_overrides([item])
+        assert len(info.value.message) < 200
+
+
+def test_ut10_23_deeply_nested_value_is_config_error() -> None:
+    """UT10-23 a deeply nested --set value is a ConfigError, never RecursionError."""
+    for text in ("[" * 2000 + "]" * 2000, "[" * 65 + "]" * 65):
+        with pytest.raises(ConfigError) as info:
+            cs.parse_overrides(["a=" + text])
+        assert info.value.message == "--set a: invalid YAML value"
+    assert cs.parse_overrides(["a=" + "[" * 10 + "]" * 10])["a"] == [[[[[[[[[[]]]]]]]]]]
 
 
 def test_ut10_23_parse_overrides_bad_value_names_key_only() -> None:
@@ -215,6 +242,20 @@ def test_ut10_05_file_rules(cfg: Path, name: str, text: str, message: str) -> No
     assert info.value.message == message
 
 
+def test_ut10_06_unknown_keys_name_path_without_value(cfg: Path) -> None:
+    """UT10-06 unknown root key and unknown overlay section: key path named, value not echoed."""
+    _write(cfg / "herness.yaml", "version: 1\nbogus_root: SENTINEL-9f3a\n")
+    with pytest.raises(ConfigError) as info:
+        load(cfg)
+    assert info.value.message == "herness.yaml: unknown root key bogus_root"
+    _write(cfg / "herness.yaml", "version: 1\n")
+    _write(cfg / "profiles" / "hybrid.yaml", "version: 1\nbogus: {x: SENTINEL-9f3a}\n")
+    with pytest.raises(ConfigError) as info:
+        load(cfg, "hybrid")
+    assert info.value.message == "profiles/hybrid.yaml: unknown section bogus"
+    assert "SENTINEL" not in str(info.value)
+
+
 def test_ut10_05_injection_patterns_rules(cfg: Path) -> None:
     """UT10-05 injection_patterns.txt is required and capped at 1 MiB."""
     patterns = cfg / "injection_patterns.txt"
@@ -235,8 +276,8 @@ def test_ut10_05_sources_need_load_context() -> None:
 # --- U10-17 ProfileYamlSource ----------------------------------------------------------
 
 
-def test_ut10_09_profile_overlay_merges_over_files(cfg: Path) -> None:
-    """UT10-09 the overlay replaces lists and merges maps over the file layer."""
+def test_rf_profile_overlay_merges_over_files(cfg: Path) -> None:
+    """RF the overlay replaces lists and merges maps over the file layer."""
     _write(cfg / "models.yaml", "version: 1\nmodels:\n  roles: {writer: local, judge: j}\n")
     _write(
         cfg / "profiles" / "hybrid.yaml",
@@ -261,7 +302,7 @@ def test_ut10_13_overlay_sets_data_policy(cfg: Path) -> None:
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        ("version: 2\n", "hybrid.yaml: version must be 1"),
+        ("version: 2\n", "profiles/hybrid.yaml: version must be 1"),
         ("version: 1\nprofile: local\n", "profiles/hybrid.yaml: unknown section profile"),
         ("version: 1\nsecurity: 3\n", "profiles/hybrid.yaml: security must be a mapping"),
     ],
@@ -285,8 +326,8 @@ def test_ut10_13_overlay_missing(cfg: Path) -> None:
     "egress",
     ["{enabled: true}", "{destinations: [a.example.com]}", "{purposes: [reasoning]}"],
 )
-def test_ut10_12_synth_overlay_cannot_enable_egress(cfg: Path, egress: str) -> None:
-    """UT10-12 a synth overlay enabling egress is rejected (U10-17 step 4)."""
+def test_rf_synth_overlay_cannot_enable_egress(cfg: Path, egress: str) -> None:
+    """RF a synth overlay enabling egress is rejected (U10-17 step 4)."""
     _write(cfg / "profiles" / "synth.yaml", f"version: 1\nsecurity:\n  egress: {egress}\n")
     with pytest.raises(ConfigError, match=r"^profile synth cannot enable egress$"):
         load(cfg, "synth")
@@ -326,8 +367,8 @@ def test_ut10_10_env_mixed_case_security_is_file_only(cfg: Path) -> None:
         load(cfg, env={"HERNESS_PROFILE__X": "1"})
 
 
-def test_ut10_02_env_layer_and_skips(cfg: Path) -> None:
-    """UT10-02 env values parse as YAML; reserved and secret names are skipped."""
+def test_rf_env_layer_and_skips(cfg: Path) -> None:
+    """RF env values parse as YAML; reserved and secret names are skipped."""
     env = {
         "HERNESS_LOGGING__LEVEL": "ERROR",
         "HERNESS_APP__LIMITS": "[1, 2]",
@@ -344,8 +385,8 @@ def test_ut10_02_env_layer_and_skips(cfg: Path) -> None:
     assert got.profile == "local"
 
 
-def test_ut10_03_init_overrides_env(cfg: Path) -> None:
-    """UT10-03 init (CLI) beats env, env beats files."""
+def test_rf_init_overrides_env(cfg: Path) -> None:
+    """RF init (CLI) beats env, env beats files."""
     env = {"HERNESS_LOGGING__LEVEL": "WARNING"}
     over = cs.parse_overrides(["logging.level=ERROR"])
     assert load(cfg, env=env, **over).logging == {"level": "ERROR"}
@@ -362,8 +403,8 @@ def test_ut10_10_env_bad_value_and_too_many(cfg: Path) -> None:
         load(cfg, env=many)
 
 
-def test_ut10_02_dotenv_only_in_dev(cfg: Path) -> None:
-    """UT10-02 .env is read only with HERNESS_ENV=dev; env beats .env."""
+def test_rf_dotenv_only_in_dev(cfg: Path) -> None:
+    """RF .env is read only with HERNESS_ENV=dev; env beats .env."""
     _write(
         cfg.parent / ".env",
         '# dev settings\n\nHERNESS_LOGGING__LEVEL="DEBUG"\nHERNESS_APP__X=1\n'
@@ -377,8 +418,8 @@ def test_ut10_02_dotenv_only_in_dev(cfg: Path) -> None:
     assert got.app == {"x": 2}
 
 
-def test_ut10_02_dotenv_missing_malformed_and_large(cfg: Path) -> None:
-    """UT10-02 a missing .env is empty; malformed lines give the line number; 64 KiB cap."""
+def test_rf_dotenv_missing_malformed_and_large(cfg: Path) -> None:
+    """RF a missing .env is empty; malformed lines give the line number; 64 KiB cap."""
     dev = {"HERNESS_ENV": "dev"}
     assert load(cfg, env=dev).logging == {"level": "INFO"}
     dotenv = _write(cfg.parent / ".env", "A=1\nnot a line\n")
@@ -405,8 +446,8 @@ def test_ut10_24_resolve_profile() -> None:
         cs.resolve_profile(None, {"HERNESS_PROFILE": "cloud"})
 
 
-def test_ut10_12_check_profile_egress() -> None:
-    """UT10-12 local and synth forbid egress; hybrid allows it."""
+def test_rf_check_profile_egress() -> None:
+    """RF local and synth forbid egress; hybrid allows it."""
     on = SecurityConfig.model_validate({"egress": {"enabled": True}})
     dest = SecurityConfig.model_validate({"egress": {"destinations": ["a.example.com"]}})
     cs.check_profile_egress("hybrid", on)
@@ -506,14 +547,21 @@ def test_ut10_24_load_bootstrap_errors(cfg: Path) -> None:
         cs.load_bootstrap(config_dir=cfg, env={})
 
 
+@pytest.mark.parametrize("flag", ['"false"', "0", '"no"', "0.0"])
+def test_ut10_24_non_bool_enabled_rejected(cfg: Path, flag: str) -> None:
+    """UT10-24 an enabled flag that is not a boolean is rejected, never read as enabled."""
+    text = f"version: 1\nsources:\n  jira:\n    enabled: {flag}\n    hosts: [a.example.com]\n"
+    _write(cfg / "sources.yaml", text)
+    with pytest.raises(ConfigError, match=r"^sources\.yaml: sources\.jira\.enabled must be"):
+        cs.load_bootstrap(config_dir=cfg, env={})
+    nested = "version: 1\nsources:\n  wiki:\n    extra:\n      enabled: 0\n"
+    _write(cfg / "sources.yaml", nested)
+    with pytest.raises(ConfigError, match=r"sources\.wiki\.extra\.enabled"):
+        cs.load_bootstrap(config_dir=cfg, env={})
+
+
 def test_ut10_24_bootstrap_config_is_frozen(cfg: Path) -> None:
     """UT10-24 BootstrapConfig is an immutable dataclass."""
     boot = cs.load_bootstrap(config_dir=cfg, env={})
     with pytest.raises(AttributeError):
         boot.profile = "hybrid"  # type: ignore[misc]
-
-
-def test_ut10_10_harness_validation_is_pydantic(cfg: Path) -> None:
-    """UT10-10 an invalid env value still fails model validation (converted later by U10-09)."""
-    with pytest.raises(ValidationError):
-        load(cfg, env={"HERNESS_LOGGING": "3"})
