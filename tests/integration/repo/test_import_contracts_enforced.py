@@ -24,11 +24,9 @@ def test_st00_10_upward_import_rejected(tmp_path: Path) -> None:
         errors.read_text(encoding="utf-8") + "\nimport herness.harness\n", encoding="utf-8"
     )
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    text = text.replace(
-        'layers = [\n    "herness.core",\n]',
-        'layers = [\n    "herness.harness",\n    "herness.core",\n]',
-        1,
-    )
+    marker = 'name = "herness layers"\ntype = "layers"\nlayers = [\n'
+    assert marker in text
+    text = text.replace(marker, marker + '    "herness.harness",\n', 1)
     config = tomllib.loads(text)["tool"]["importlinter"]
     base = next(c for c in config["contracts"] if c["name"] == "core base order")["layers"]
     sources = [name.strip() for layer in base for name in layer.split("|")]
