@@ -1,6 +1,7 @@
 """ST00-10: a planted upward import from the core base breaks C1 and C4."""
 
 import os
+import re
 import shutil
 import subprocess
 import tomllib
@@ -24,15 +25,28 @@ def test_st00_10_upward_import_rejected(tmp_path: Path) -> None:
         errors.read_text(encoding="utf-8") + "\nimport herness.harness\n", encoding="utf-8"
     )
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    # Put herness.harness on top of C1 and into C4, whatever packages later cards added.
     text = text.replace(
-        'layers = [\n    "herness.core",\n]',
-        'layers = [\n    "herness.harness",\n    "herness.core",\n]',
+        'name = "herness layers"\ntype = "layers"\nlayers = [\n',
+        'name = "herness layers"\ntype = "layers"\nlayers = [\n    "herness.harness",\n',
         1,
     )
+    text = re.sub(
+        r'(name = "core base is closed"[^\[]*?\nsource_modules = \[[^\]]*\]\s*'
+        r"forbidden_modules = \[)",
+        r'\1"herness.harness", ',
+        text,
+        count=1,
+    )
     config = tomllib.loads(text)["tool"]["importlinter"]
+    layers = next(c for c in config["contracts"] if c["name"] == "herness layers")["layers"]
+    assert layers[0] == "herness.harness"
     base = next(c for c in config["contracts"] if c["name"] == "core base order")["layers"]
     sources = [name.strip() for layer in base for name in layer.split("|")]
-    if not any(c["name"] == "core base is closed" for c in config["contracts"]):
+    closed = [c for c in config["contracts"] if c["name"] == "core base is closed"]
+    if closed:
+        assert "herness.harness" in closed[0]["forbidden_modules"]
+    else:
         text += (
             '\n[[tool.importlinter.contracts]]\nname = "core base is closed"\n'
             'type = "forbidden"\n'
