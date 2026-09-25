@@ -322,9 +322,12 @@ forbidden_modules = [
     "herness.core.numbers",
     "herness.store",
     "herness.model.errors",
+    "herness.metrics._binds",
     "herness.metrics._encode",
     "herness.metrics._encode_nested",
     "herness.metrics.evidence",
+    "herness.metrics.render",
+    "herness.metrics.windows",
 ]
 # settings reach core.ids and core.time only through core.types (R-03 restricts direct imports)
 allow_indirect_imports = true

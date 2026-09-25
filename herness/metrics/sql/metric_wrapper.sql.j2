@@ -1,0 +1,35 @@
+{#- Metric wrapper (impl 04 U04-40): min-sample rule, flags, identity columns and order.
+    Context: inner_sql, optional (present optional columns), is_custom, period, macros. -#}
+SELECT
+  {{ p('metric') }} AS metric,
+  {{ p('entity_type') }} AS entity_type,
+  CAST(q.entity_id AS VARCHAR) AS entity_id,
+  {{ p('period') }} AS period,
+  CAST(q.period_start AS DATE) AS period_start,
+  CAST(CASE WHEN coalesce(q.sample_size, 0) >= {{ p('min_n') }} THEN q.value END AS DOUBLE) AS value,
+  CAST(q.numerator AS DOUBLE) AS numerator,
+  CAST(q.denominator AS DOUBLE) AS denominator,
+  CAST(coalesce(q.sample_size, 0) AS BIGINT) AS sample_size,
+  {{ p('unit') }} AS unit,
+  list_sort(list_distinct(list_concat({{ p('static_flags') }}, [
+    CASE WHEN coalesce(q.sample_size, 0) < {{ p('min_n') }} THEN 'insufficient_sample' END
+{%- if 'coverage' in optional %},
+    CASE WHEN q.coverage < 0.8 THEN 'low_coverage' END
+{%- endif %}
+{%- if 'estimated_count' in optional %},
+    CASE WHEN q.estimated_count > 0 THEN 'estimate' END
+{%- endif %}
+{%- if 'unweighted' in optional %},
+    CASE WHEN q.unweighted THEN 'unweighted' END
+{%- endif %}
+{%- if is_custom and period in ('week', 'month', 'quarter') %},
+    CASE WHEN q.period_start < {{ p('window_start_date') }}
+      OR CAST(q.period_start + INTERVAL 1 {{ period }} AS DATE) > {{ p('window_end_date') }}
+      THEN 'partial_period' END
+{%- endif %}
+  ]))) AS flags
+FROM (
+{{ inner_sql }}
+) q
+WHERE q.entity_id IS NOT NULL
+ORDER BY entity_id, period_start

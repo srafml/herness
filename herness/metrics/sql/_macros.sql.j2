@@ -1,0 +1,132 @@
+{#- Metric template macros (impl 04 U04-35, design 04 §4.1).
+    Context: entity_type, period, filters (key -> bind name, never values), rs (RenderState).
+    Every runtime value is a p() placeholder; macros emit identifiers, aliases and keywords only.
+    '@' in the tables below stands for the validated source alias. -#}
+{%- set GRAIN = {
+  'incident': {'service': ['@.service_id', ''], 'team': ['@.team_id', ''],
+               'org': ['oc_@.ancestor_org_id', 'CLOSURE'], 'cluster': ['@.cluster_id', '']},
+  'change': {'service': ['@.service_id', ''], 'team': ['@.team_id', ''],
+             'org': ['oc_@.ancestor_org_id', 'CLOSURE']},
+  'event': {'service': ['@.service_id', ''], 'team': ['ow_@.team_id', 'OWNER'],
+            'org': ['oc_@.ancestor_org_id', 'SVC_CLOSURE']},
+  'work_item': {'service': ['@.service_id', ''], 'team': ['@.team_id', ''],
+                'org': ['oc_@.ancestor_org_id', 'CLOSURE'],
+                'work_item': ['wc_@.ancestor_record_id', 'WI_CLOSURE']},
+  'metric_daily': {'service': ['@.service_id', ''], 'team': ['ow_@.team_id', 'OWNER'],
+                   'org': ['oc_@.ancestor_org_id', 'SVC_CLOSURE']},
+} -%}
+{#- Filter key -> column; ORG_OWN = own org_id column, ORG_SVC = org of the service,
+    TEAM_OWNER = owner team of the service (U04-28 table). -#}
+{%- set FILTER = {
+  'incident': {'priority': '@.priority', 'service_id': '@.service_id', 'team_id': '@.team_id',
+               'org_id': 'ORG_OWN', 'cluster_id': '@.cluster_id'},
+  'change': {'service_id': '@.service_id', 'team_id': '@.team_id', 'org_id': 'ORG_OWN',
+             'change_type': '@.type'},
+  'event': {'service_id': '@.service_id', 'team_id': 'TEAM_OWNER', 'org_id': 'ORG_SVC',
+            'severity': '@.severity'},
+  'work_item': {'service_id': '@.service_id', 'team_id': '@.team_id', 'org_id': 'ORG_OWN',
+                'work_item_type': '@.type'},
+  'metric_daily': {'service_id': '@.service_id', 'team_id': 'TEAM_OWNER', 'org_id': 'ORG_SVC'},
+} -%}
+
+{%- macro p(name) -%}{{ rs.p(name) }}{%- endmacro -%}
+
+{%- macro _owner_rows() -%}
+(SELECT service_id, team_id FROM core.service_map WHERE role = 'owner' QUALIFY row_number() OVER (PARTITION BY service_id ORDER BY confidence DESC NULLS LAST, team_id) = 1)
+{%- endmacro -%}
+
+{%- macro owner_team(service_expr, alias) -%}
+{%- set a = rs.alias(alias) -%}
+LEFT JOIN {{ _owner_rows() }} {{ a }} ON {{ a }}.service_id = {{ service_expr }}
+{%- endmacro -%}
+
+{%- macro _grain(source, alias) -%}
+{{- rs.use_source(source) -}}
+{%- if entity_type not in GRAIN[source] -%}
+{{- rs.fail('grain ' ~ entity_type ~ ' not supported by source ' ~ source) -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro entity_col(source, alias) -%}
+{{- _grain(source, alias) -}}
+{%- set expr = GRAIN[source][entity_type][0].replace('@', rs.alias(alias)) -%}
+{{- rs.set_entity(expr) -}}{{ expr }}
+{%- endmacro -%}
+
+{%- macro entity_join(source, alias) -%}
+{{- _grain(source, alias) -}}
+{%- set a = rs.alias(alias) -%}
+{%- set kind = GRAIN[source][entity_type][1] -%}
+{%- if kind == 'CLOSURE' -%}
+JOIN metrics.org_closure oc_{{ a }} ON oc_{{ a }}.org_id = {{ a }}.org_id
+{%- elif kind == 'SVC_CLOSURE' -%}
+LEFT JOIN core.service sv_{{ a }} ON sv_{{ a }}.service_id = {{ a }}.service_id JOIN metrics.org_closure oc_{{ a }} ON oc_{{ a }}.org_id = sv_{{ a }}.org_id
+{%- elif kind == 'OWNER' -%}
+LEFT JOIN {{ _owner_rows() }} ow_{{ a }} ON ow_{{ a }}.service_id = {{ a }}.service_id
+{%- elif kind == 'WI_CLOSURE' -%}
+JOIN metrics.work_item_closure wc_{{ a }} ON wc_{{ a }}.record_id = {{ a }}.record_id
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro period_start(ts_expr) -%}
+{%- if period in ('t12w', 't12m') -%}{{ p('window_start_date') }}
+{%- else -%}CAST(date_trunc('{{ period }}', {{ ts_expr }} AT TIME ZONE {{ p('tz') }}) AS DATE)
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro period_start_date(date_expr) -%}
+{%- if period in ('t12w', 't12m') -%}{{ p('window_start_date') }}
+{%- else -%}CAST(date_trunc('{{ period }}', {{ date_expr }}) AS DATE)
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro _local(date_expr) -%}
+timezone({{ p('tz') }}, CAST({{ date_expr }} AS TIMESTAMP))
+{%- endmacro -%}
+
+{%- macro period_spine() -%}
+(SELECT s.period_start, s.period_end, {{ _local('s.period_start') }} AS start_ts, {{ _local('s.period_end') }} AS end_ts, {{ _local('least(s.period_end, ' ~ p('as_of') ~ ')') }} AS snap_ts FROM
+{%- if period in ('t12w', 't12m') %}
+ (SELECT {{ p('window_start_date') }} AS period_start, {{ p('window_end_date') }} AS period_end) s) spine
+{%- else %}
+{%- set step = 'INTERVAL 1 ' ~ period %}
+ (SELECT CAST(r AS DATE) AS period_start, CAST(r + {{ step }} AS DATE) AS period_end FROM (SELECT unnest(range(CAST(date_trunc('{{ period }}', {{ p('window_start_date') }}) AS TIMESTAMP), CAST({{ p('window_end_date') }} AS TIMESTAMP), {{ step }})) AS r) g) s) spine
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro filter_clause(source, alias) -%}
+{{- rs.use_source(source) -}}
+{%- set a = rs.alias(alias) -%}
+{%- for key in filters | sort -%}
+{%- set col = FILTER[source].get(key) -%}
+{%- if col is none -%}{{- rs.fail('filter ' ~ key ~ ' not supported by source ' ~ source) -}}{%- endif -%}
+{%- set bind = p(filters[key]) -%}
+{{ ' ' }}
+{%- if col == 'ORG_OWN' -%}
+AND EXISTS (SELECT 1 FROM metrics.org_closure ocf WHERE ocf.org_id = {{ a }}.org_id AND list_contains({{ bind }}, ocf.ancestor_org_id))
+{%- elif col == 'ORG_SVC' -%}
+AND EXISTS (SELECT 1 FROM core.service svf JOIN metrics.org_closure ocf ON ocf.org_id = svf.org_id WHERE svf.service_id = {{ a }}.service_id AND list_contains({{ bind }}, ocf.ancestor_org_id))
+{%- elif col == 'TEAM_OWNER' -%}
+AND EXISTS (SELECT 1 FROM {{ _owner_rows() }} otf WHERE otf.service_id = {{ a }}.service_id AND list_contains({{ bind }}, otf.team_id))
+{%- else -%}
+AND list_contains({{ bind }}, {{ col.replace('@', a) }})
+{%- endif -%}
+{%- endfor -%}
+{%- endmacro -%}
+
+{%- macro entity_filter() -%}
+AND ({{ p('entity_ids') }} IS NULL OR list_contains({{ p('entity_ids') }}, {{ rs.entity() }}))
+{%- endmacro -%}
+
+{%- macro cat_at_join(ts_expr, item_alias, name) -%}
+{%- set w = rs.alias(item_alias) -%}{%- set n = rs.alias(name) -%}
+ASOF LEFT JOIN (SELECT record_id, at, arg_max(to_category, CASE to_category WHEN 'done' THEN 3 WHEN 'in_progress' THEN 2 ELSE 1 END) AS to_category FROM core.work_item_transition GROUP BY record_id, at) {{ n }} ON {{ n }}.record_id = {{ w }}.record_id AND {{ ts_expr }} >= {{ n }}.at
+{%- endmacro -%}
+
+{%- macro cat_at(ts_expr, item_alias, name) -%}
+coalesce({{ rs.alias(name) }}.to_category, CASE WHEN {{ rs.alias(item_alias) }}.created_at <= {{ ts_expr }} THEN 'todo' END)
+{%- endmacro -%}
+
+{%- macro lkp(keys, vals, key_expr, default_expr) -%}
+coalesce(list_extract({{ vals }}, list_position({{ keys }}, {{ key_expr }})), {{ default_expr }})
+{%- endmacro -%}
