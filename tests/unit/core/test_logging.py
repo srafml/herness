@@ -184,6 +184,7 @@ def test_ut00_44_exception_without_locals(configured_logging: Path) -> None:
     line = _event(_file_lines(configured_logging), "core.test.failed")
     assert "exception" in line
     frames = line["exception"][0]["frames"]
+    assert frames
     assert all("locals" not in frame for frame in frames)
     for path in configured_logging.glob("*.jsonl"):
         assert SENTINEL not in path.read_text(encoding="utf-8")
@@ -222,6 +223,41 @@ def test_st00_01_sentinel_never_written(
     assert SENTINEL not in text
     assert SENTINEL not in capsys.readouterr().err
     assert "***" in text
+
+
+def _raising_scrubber(logger: object, method_name: str, event_dict: Any) -> Any:
+    msg = "scrubber boom"
+    raise RuntimeError(msg)
+
+
+def test_cv_2_scrubber_failure_never_leaks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CV-2 a scrubber that raises never echoes the record; log.info does not raise either."""
+    configure_logging("INFO", log_dir=tmp_path, scrubber=_raising_scrubber)
+    get_logger("core.test").info("core.test.value", value=SENTINEL)
+    err = capsys.readouterr().err
+    assert SENTINEL not in err
+    err_lines = [json.loads(text) for text in err.splitlines() if text.strip()]
+    failed = [line for line in err_lines if line.get("event") == "core.logging.emit_failed"]
+    assert failed
+    assert failed[0]["component"] == "core.logging"
+    for path in tmp_path.glob("*.jsonl"):
+        assert SENTINEL not in path.read_text(encoding="utf-8")
+
+
+def test_cv_3_no_handlers_avoids_last_resort(capsys: pytest.CaptureFixture[str]) -> None:
+    """CV-3 stderr=False with no log_dir installs a NullHandler, so lastResort can't fire.
+
+    pytest attaches its own root handler for log capture, which already hides lastResort's
+    fallback text from stderr; the direct, deterministic check is that Herness's own
+    NullHandler is present on root (found > 0 in Logger.callHandlers keeps lastResort unused).
+    """
+    configure_logging("WARNING", stderr=False)
+    root = logging.getLogger()
+    assert any(isinstance(h, logging.NullHandler) for h in root.handlers)
+    get_logger("core.test").warning("core.test.warn", value=SENTINEL)
+    assert SENTINEL not in capsys.readouterr().err
 
 
 def test_rf_logger_created_before_configure(capsys: pytest.CaptureFixture[str]) -> None:

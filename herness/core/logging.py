@@ -10,7 +10,6 @@ import contextlib
 import logging
 import pathlib
 import re
-import sys
 import threading
 import types
 from collections.abc import Callable, Iterator, Mapping
@@ -34,6 +33,7 @@ from herness.core._log_pipeline import (
     SECRET_KEYS,
     TEXT_KEYS,
     DailyJsonlHandler,
+    SafeStreamHandler,
     add_component,
     add_timestamp,
     check_event_name,
@@ -101,21 +101,6 @@ class _State:
 
 _STATE: Final = _State()
 _CONFIG_LOCK: Final = threading.Lock()
-
-
-class _LiveStderr:
-    """Writes to the current ``sys.stderr``, never a reference captured at construction time.
-
-    A plain ``logging.StreamHandler(sys.stderr)`` binds that object once; if the process later
-    swaps ``sys.stderr`` (as test harnesses routinely do), the handler keeps writing to the old,
-    possibly closed stream, and its failure path echoes the unscrubbed record to the new stream.
-    """
-
-    def write(self, text: str) -> int:
-        return sys.stderr.write(text)
-
-    def flush(self) -> None:
-        sys.stderr.flush()
 
 
 def _formatter(scrubber: Processor | None) -> logging.Formatter:
@@ -195,9 +180,9 @@ def configure_logging(
     with _CONFIG_LOCK:
         _remove_handlers()
         formatter = _formatter(scrubber)
-        handlers: list[logging.Handler] = []
+        handlers: list[logging.Handler] = [logging.NullHandler()]
         if stderr:
-            handlers.append(logging.StreamHandler(_LiveStderr()))
+            handlers.append(SafeStreamHandler())
         if log_dir is not None:
             handlers.append(DailyJsonlHandler(log_dir))
         for handler in handlers:
@@ -245,7 +230,11 @@ def get_logger(component: str) -> structlog.stdlib.BoundLogger:
 
 
 def reset_logging() -> None:
-    """Undo configure_logging: remove and close handlers, restore defaults, clear context."""
+    """Undo configure_logging: remove and close handlers, restore defaults, clear context.
+
+    After this call structlog's own defaults apply (not Herness's) until configure_logging
+    runs again.
+    """
     with _CONFIG_LOCK:
         _remove_handlers()
         structlog.reset_defaults()

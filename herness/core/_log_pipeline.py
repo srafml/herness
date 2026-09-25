@@ -1,7 +1,4 @@
-"""Private structlog processors and the daily JSONL file handler (impl 00 §3.4).
-
-Import the public names from herness.core.logging, which re-exports them.
-"""
+"""Private structlog processors and daily JSONL handler (impl 00 §3.4); see herness.core.logging."""
 
 from __future__ import annotations
 
@@ -156,10 +153,7 @@ def guard_sensitive(logger: object, method_name: str, event_dict: EventDict) -> 
 
 
 def check_event_name(strict: bool) -> Processor:
-    """Return a processor enforcing ``component.object.action`` event names.
-
-    In strict mode a bad name raises SchemaViolation (event) in the caller's thread.
-    """
+    """Return a processor enforcing component.object.action names; strict raises SchemaViolation."""
 
     def _check(logger: object, method_name: str, event_dict: EventDict) -> EventDict:
         event = event_dict.get("event")
@@ -242,11 +236,31 @@ def _status_line(level: str, event: str, path: pathlib.Path, **fields: object) -
     return json.dumps(body, ensure_ascii=False, separators=(",", ":"))
 
 
-class DailyJsonlHandler(logging.Handler):
-    """Append lines to ``<log_dir>/herness-<UTC date>.jsonl``; survive disk errors.
+class _SafeHandleErrorMixin:
+    """Safe handleError: reports core.logging.emit_failed only, never msg/args/traceback."""
 
-    emit never raises: an OSError drops lines for FILE_RETRY_S seconds, reported on stderr.
-    """
+    def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802 - overrides Handler
+        with contextlib.suppress(Exception):
+            exc_type = sys.exc_info()[0]
+            body = {
+                "event": "core.logging.emit_failed",
+                "component": "core.logging",
+                "logger": record.name[:64],
+                "error_type": "Unknown" if exc_type is None else exc_type.__name__,
+            }
+            sys.stderr.write(json.dumps(body, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+class SafeStreamHandler(_SafeHandleErrorMixin, logging.StreamHandler[TextIO]):
+    """StreamHandler to the live stderr; re-reads sys.stderr on every emit (TH00-01)."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stderr
+        super().emit(record)
+
+
+class DailyJsonlHandler(_SafeHandleErrorMixin, logging.Handler):
+    """Append lines to herness-<UTC date>.jsonl; format/disk failures drop the line (TH00-01)."""
 
     def __init__(self, log_dir: pathlib.Path) -> None:
         super().__init__()
@@ -256,12 +270,9 @@ class DailyJsonlHandler(logging.Handler):
         self._failed_at: float | None = None
         self._dropped = 0
 
-    def _path(self, day: str) -> pathlib.Path:
-        return self._log_dir / (LOG_FILE_PREFIX + day + ".jsonl")
-
     def _ensure_stream(self) -> tuple[pathlib.Path, TextIO]:
         day = clock.utc_day(clock.now())
-        path = self._path(day)
+        path = self._log_dir / (LOG_FILE_PREFIX + day + ".jsonl")
         if day != self._day or self._stream is None:
             self._close_stream()
             self._stream = _open_append(path)
@@ -276,11 +287,16 @@ class DailyJsonlHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         """Write one formatted record; see the class docstring for failure handling."""
-        line = self.format(record)
+        try:
+            line = self.format(record)
+        except Exception:  # noqa: BLE001 - a formatter failure must never raise or echo raw fields
+            self.handleError(record)
+            return
         if self._failed_at is not None and clock.monotonic() - self._failed_at < FILE_RETRY_S:
             self._dropped += 1
             return
-        path = self._path(self._day or clock.utc_day(clock.now()))
+        day = self._day or clock.utc_day(clock.now())
+        path = self._log_dir / (LOG_FILE_PREFIX + day + ".jsonl")
         try:
             path, stream = self._ensure_stream()
             if self._failed_at is not None:
