@@ -302,3 +302,36 @@ def test_rf_logger_created_before_configure(capsys: pytest.CaptureFixture[str]) 
     _EARLY.info("core.early.ready")
     line = _event(_err_lines(capsys), "core.early.ready")
     assert line["component"] == "core.early"
+
+
+_XYZ = "synthetic_secret_XYZ"
+
+
+def _xyz_scrubber(logger: object, method_name: str, event_dict: Any) -> Any:
+    return json.loads(json.dumps(event_dict, default=str).replace(_XYZ, "***"))
+
+
+def test_rf_exception_does_not_reach_foreign_handlers(tmp_path: Path) -> None:
+    """RF log.exception never sets record.exc_info, so a foreign handler prints no traceback."""
+    configure_logging("INFO", log_dir=tmp_path, scrubber=_xyz_scrubber, stderr=False)
+    stream = io.StringIO()
+    foreign = logging.StreamHandler(stream)
+    logging.getLogger().addHandler(foreign)
+    try:
+        try:
+            raise ValueError("token=" + _XYZ)  # noqa: TRY301 - needs a real traceback frame
+        except ValueError:
+            get_logger("core.test").exception("boom")
+    finally:
+        logging.getLogger().removeHandler(foreign)
+    seen = stream.getvalue()
+    assert "boom" in seen
+    assert _XYZ not in seen
+    assert "Traceback (most recent call last)" not in seen
+    assert "ValueError: token" not in seen
+    text = "".join(p.read_text(encoding="utf-8") for p in tmp_path.glob("*.jsonl"))
+    assert _XYZ not in text
+    line = _event([json.loads(row) for row in text.splitlines()], "boom")
+    assert line["level"] == "error"
+    assert line["exception"][0]["exc_type"] == "ValueError"
+    assert line["exception"][0]["exc_value"] == "token=***"

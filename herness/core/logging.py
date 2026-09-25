@@ -99,6 +99,17 @@ class _State:
         self.handlers: list[logging.Handler] = []
 
 
+class _BoundLogger(structlog.stdlib.BoundLogger):
+    """``exception()`` goes out as ``error`` so stdlib never sets ``record.exc_info`` (TH00-01).
+
+    clean_early renders and scrubs the exception; a foreign handler prints no raw traceback.
+    """
+
+    def exception(self, event: str | None = None, *args: str, **kw: object) -> object:
+        kw.setdefault("exc_info", True)
+        return self._proxy_to_logger("error", event, *args, **kw)
+
+
 _STATE: Final = _State()
 _CONFIG_LOCK: Final = threading.Lock()
 
@@ -148,7 +159,7 @@ def _install(
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
+        wrapper_class=_BoundLogger,
         cache_logger_on_first_use=False,
     )
     _STATE.handlers = handlers
