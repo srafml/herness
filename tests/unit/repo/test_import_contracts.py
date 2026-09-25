@@ -57,10 +57,21 @@ def test_ut00_58_contracts_match_repository() -> None:
         assert set(contracts["core base is closed"]["forbidden_modules"]) == forbidden
     else:
         assert "core base is closed" not in contracts
-    settings = sorted((ROOT / "herness").rglob("settings.py"))
+    settings = sorted(
+        ".".join(p.relative_to(ROOT).with_suffix("").parts)
+        for p in (ROOT / "herness").rglob("*settings*")
+        if (p.name == "settings.py" or p.name.endswith("_settings.py"))
+        or (
+            (p.name == "settings" or p.name.endswith("_settings")) and (p / "__init__.py").is_file()
+        )
+    )
     assert ("settings modules are leaves" in contracts) == bool(settings)
-    if settings and _exists("herness.core.ids"):
-        assert "herness.core.ids" in contracts["settings modules are leaves"]["forbidden_modules"]
+    if settings:
+        c6 = contracts["settings modules are leaves"]
+        assert sorted(c6["source_modules"]) == settings
+        assert not set(settings) & set(c6["forbidden_modules"])
+        if _exists("herness.core.ids"):
+            assert "herness.core.ids" in c6["forbidden_modules"]
     for contract in config["contracts"]:
         names = _flatten(contract.get("layers", []))
         names += contract.get("source_modules", []) + contract.get("forbidden_modules", [])

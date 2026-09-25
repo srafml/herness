@@ -195,6 +195,11 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 module = ["app.*", "tools.*"]
 disallow_untyped_decorators = false
 
+[[tool.mypy.overrides]]
+# pyarrow ships no type information and the lock has no stubs package.
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true
@@ -240,6 +245,7 @@ name = "herness layers"
 type = "layers"
 layers = [
     "herness.eval",
+    "herness.metrics",
     "herness.connectors | herness.model",
     "herness.store",
     "herness.core",
@@ -287,6 +293,7 @@ forbidden_modules = [
     "herness.model",
     "herness.connectors",
     "herness.eval",
+    "herness.metrics",
 ]
 
 [[tool.importlinter.contracts]]
@@ -297,9 +304,16 @@ forbidden_modules = ["herness.core.time", "herness.core.logging", "herness.core.
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
+# C6 (U00-52, R-03): settings modules import only herness.core.types and herness.core.errors
+# from Herness; the third-party part (stdlib and pydantic only) is OWN050 in check_type_ownership.
 name = "settings modules are leaves"
 type = "forbidden"
-source_modules = ["herness.core.settings", "herness.model.settings"]
+source_modules = [
+    "herness.core.settings",
+    "herness.metrics._weights_settings",
+    "herness.metrics.settings",
+    "herness.model.settings",
+]
 forbidden_modules = [
     "herness.core.logging",
     "herness.core._log_pipeline",
@@ -308,6 +322,9 @@ forbidden_modules = [
     "herness.core.numbers",
     "herness.store",
     "herness.model.errors",
+    "herness.metrics._encode",
+    "herness.metrics._encode_nested",
+    "herness.metrics.evidence",
 ]
 # settings reach core.ids and core.time only through core.types (R-03 restricts direct imports)
 allow_indirect_imports = true
