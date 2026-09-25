@@ -303,8 +303,14 @@ class DepthVotes(_Model):
 
 
 def _url_host(value: str, key: str, schemes: frozenset[str]) -> str:
+    clean = all(ch.isprintable() and not ch.isspace() for ch in value)
+    _require(clean, f"{key} must not contain whitespace or control characters")
     parts = urlsplit(value)
-    _ = parts.port  # raises ValueError on a malformed port
+    try:
+        _ = parts.port
+    except ValueError:
+        msg = f"{key} has a malformed port"
+        raise ValueError(msg) from None
     ok = parts.scheme in schemes and bool(parts.hostname)
     _require(ok, f"{key} needs scheme {' or '.join(sorted(schemes))} and a host")
     no_userinfo = parts.username is None and parts.password is None
@@ -386,7 +392,7 @@ def check_decider_refs(
         {
             "severity": disabled[name],
             "path": path,
-            "message": f"{path} names {name} but deciders.{name}.enabled is false",
+            "message": f"{path} requires deciders.{name}.enabled",
         }
         for path, name in positions
         if name in disabled

@@ -208,7 +208,7 @@ def test_ut03_09_jev_in_chain_while_disabled_is_one_error() -> None:
         {
             "severity": "error",
             "path": "decisions.escalation_chain",
-            "message": "decisions.escalation_chain names jev but deciders.jev.enabled is false",
+            "message": "decisions.escalation_chain requires deciders.jev.enabled",
         }
     ]
     enabled = s.DecidersSettings.model_validate(_deciders("jev", enabled=True))
