@@ -1,0 +1,3 @@
+# Time-boxed audit exceptions for tools/check_audit.py (U00-57, ENG §5.5).
+# Each entry: [[ignore]] with id, package, reason and expires = "YYYY-MM-DD".
+ignore = []

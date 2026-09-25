@@ -92,6 +92,27 @@ explicit = true
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
 
+[tool.herness.module_budgets]
+default = 400
+overrides = { "herness/harness/loop.py" = { limit = 220, reason = "design 05 §5.2" } }
+
+[tool.herness.licences]
+allowed = ["MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "PSF-2.0", "Python-2.0", "ISC", "MPL-2.0"]
+approved = []
+report_only = ["nvidia-*"]  # open item O-03
+
+[tool.herness.licences.aliases]
+"MIT License" = "MIT"
+"BSD License" = "BSD-3-Clause"
+"BSD" = "BSD-3-Clause"
+"Apache Software License" = "Apache-2.0"
+"Apache 2.0" = "Apache-2.0"
+"Apache License 2.0" = "Apache-2.0"
+"Apache License, Version 2.0" = "Apache-2.0"
+"Python Software Foundation License" = "PSF-2.0"
+"ISC License (ISCL)" = "ISC"
+"Mozilla Public License 2.0 (MPL 2.0)" = "MPL-2.0"
+
 [tool.hatch.build.targets.wheel]
 packages = ["herness"]
 

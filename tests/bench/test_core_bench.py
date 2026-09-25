@@ -1,12 +1,14 @@
 """Foundation benchmarks (impl 00 §10, §11.6). Run: pytest -m "integration and slow" tests/bench."""
 
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from herness.core import ids, numbers
 from herness.core.logging import configure_logging, get_logger, reset_logging
+from tools import check_traceability
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -78,3 +80,15 @@ def test_bt00_05_find_uncited_median(benchmark: Any) -> None:
     text = _bench_text()
     benchmark.pedantic(numbers.find_uncited, args=(text, allowed), rounds=100, iterations=1)
     assert benchmark.stats.stats.median < 0.1
+
+
+def test_bt00_04_traceability_on_repo(capsys: pytest.CaptureFixture[str]) -> None:
+    """BT00-04 check_traceability.main on the repository finishes in under 5 s."""
+    root = Path(__file__).resolve().parents[2]
+    start = time.perf_counter()
+    # The exit code is deliberately ignored: BT00-04 measures run time only, and the repo still
+    # carries doc defects from specs 01-11 (IT00-02 tracks the result).
+    check_traceability.main(["--root", str(root)])
+    elapsed = time.perf_counter() - start
+    assert "defined=" in capsys.readouterr().out
+    assert elapsed < 5.0
