@@ -1,8 +1,8 @@
 """Root conftest (U11-35): plugins, Hypothesis profiles, ignore list, state reset.
 
-The remaining `tests.support` plugins of U11-35 (`fake_clock`, `builds`, `bench`,
-`truth`, `ops_store`) are appended here by the cards that create them (T11-03,
-T11-40 and later). `pytester` is loaded for the plugin's own tests (UT11-31..UT11-37).
+The remaining `tests.support` plugins of U11-35 (`builds`, `bench`, `truth`, `ops_store`)
+are appended here by the cards that create them (T11-40 and later). `pytester` is loaded
+for the plugin's own tests (UT11-31..UT11-37).
 """
 
 from datetime import timedelta
@@ -10,7 +10,7 @@ from datetime import timedelta
 import pytest
 from hypothesis import settings
 
-pytest_plugins = ["pytester", "tests.support.plugin"]
+pytest_plugins = ["pytester", "tests.support.plugin", "tests.support.fake_clock"]
 
 collect_ignore = ["support", "fixtures"]
 
