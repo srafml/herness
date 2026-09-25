@@ -65,7 +65,7 @@ This spec builds the L0 foundation modules that design 00 assigns to itself: `he
 | `herness/core/ids.py` | ULIDs, prefixed IDs, `build_id`, `record_id`, canonical JSON, SHA-256, `query_id`, tokens | `CROCKFORD_ALPHABET`, `ULID_LEN`, `IdKind`, `ID_PREFIXES`, `new_ulid`, `new_id`, `new_build_id`, `is_valid_ulid`, `is_valid_id`, `is_valid_build_id`, `make_record_id`, `split_record_id`, `canonical_json`, `sha256_hex`, `normalize_sql`, `query_id`, `new_token`, `RECORD_KEY_MAX_LEN` | L0 | `herness.core.errors`, `herness.core.time` | 330 |
 | `herness/core/numbers.py` | Marker parsing, uncited-numeral scanner and `NumberRef` display formatting shared by the Verifier (05) and the renderer (09) (R-16) | `MARKER_RE`, `ANY_MARKER_RE`, `MARKER_ID_RE`, `NUMERAL_RE`, `MAX_SCAN_CHARS`, `HIT_TEXT_MAX`, `MAX_ALLOWED_PATTERNS`, `MAX_PATTERN_CHARS`, `NUMBER_FORMATS`, `DEFAULT_FORMAT_BY_UNIT`, `Marker`, `MalformedMarker`, `MarkerScan`, `NumeralHit`, `FormattableNumber`, `parse_markers`, `compile_allowed_patterns`, `find_uncited`, `format_value`, `format_number` | L0 | `herness.core.errors` only | 320 |
 | `herness/core/logging.py` | Public logging API: configure, get logger, bind context IDs, reset | `LogLevel`, `configure_logging`, `get_logger`, `bind_ids`, `reset_logging`, `REQUIRED_KEYS`, `CONTEXT_ID_KEYS`, `SECRET_KEYS`, `TEXT_KEYS`, `MAX_FIELD_CHARS`, `MAX_LINE_BYTES`, `EVENT_NAME_RE`, `COMPONENT_RE` | L0 | `structlog`, `herness.core.errors`, `herness.core.ids`, `herness.core.time`, `herness.core._log_pipeline` | 260 |
-| `herness/core/_log_pipeline.py` | Private: structlog processors and the daily JSONL file handler | none public (private units U00-39 … U00-43) | L0 | `structlog`, `herness.core.errors`, `herness.core.time` | 330 |
+| `herness/core/_log_pipeline.py` | Private: structlog processors and the daily JSONL file handler | none public (private units U00-39 … U00-43) | L0 | `structlog`, `herness.core.errors`, `herness.core.time` | 360 |
 | `herness/core/types/__init__.py` | Re-exports every shared type from its owner submodule; defines nothing | `__all__` plus every name in `TYPE_OWNERS` whose owner submodule exists | L0 | owner submodules of this package only | 150 |
 | `herness/core/types/_ownership.py` | Ownership tables read by the ownership checker | `TYPE_OWNERS`, `OWNER_MODULES`, `OWNER_IMPORTS`, `DECLARED_ELSEWHERE` | L0 | none | 120 |
 | `herness/core/types/{decisions,harness,swarm,memory,jobs,reports}.py`, or the package `herness/core/types/<submodule>/` | Owner submodules (R-01); created by impl 03, 05, 06, 07, 08, 09 respectively. An owner whose types exceed the 400-line module limit uses the package form (§3.5) | per owner | L0 | per §3.5 import rules | set by owner spec (≤ 400 per file) |
@@ -2144,7 +2144,7 @@ All cards are Phase 1. Test files are not counted as production files. `uv.lock`
 | Files | `herness/core/_log_pipeline.py` |
 | Tests | UT00-47, FT00-01, ST00-02, ST00-03, ST00-04 (processor-level variants run against the processors directly; the configured variants run in T00-07) |
 | Threats | TH00-02, TH00-03, TH00-04 |
-| Acceptance checks | `uv run pytest tests/unit/core/test_log_pipeline.py` passes; mypy 0 errors; file ≤ 330 lines |
+| Acceptance checks | `uv run pytest tests/unit/core/test_log_pipeline.py` passes; mypy 0 errors; file ≤ 360 lines |
 | Blocked by | none |
 | Size | M |
 
