@@ -114,7 +114,7 @@ Each implementation spec replaces every `X:<NN>/<symbol>` with `T<NN>-<nn> (<sym
 | ID | Ruling |
 |----|--------|
 | R-67 | Synthetic credentials and tokens in fixtures and generated data start with `synthetic` so secret scanners and the log scrubber can tell them apart (impl 10 D10-15). |
-| R-68 | `herness.store.ops` is one flat re-exported namespace, so function and type names are unique across areas. Reads of `run` and `task` belong to impl 06 (`get_run`, `select_runs`, `select_tasks`). UI-only projections in impl 09's `ui_reads.py` take a `ui_` prefix. `deleted_record_ids` belongs to impl 10's `privacy.py`. |
+| R-68 | `herness.store.ops` is one flat re-exported namespace, so function and type names are unique across areas. Reads of `run` and `task` belong to impl 06 (`get_run`, `select_runs`, `get_task`, `select_tasks`, `count_tasks`). UI-only projections in impl 09's `ui_reads.py` take a `ui_` prefix. `deleted_record_ids` belongs to impl 10's `privacy.py`. |
 | R-69 | `sources.yaml` has sibling sections: impl 01's `herness.connectors.settings` owns the connector sections, and impl 02's `herness.model.settings` owns `dq` and `build`. The impl 10 root config composes them, and neither settings module imports the other. |
 | R-70 | Impl 08 owns the single `parse_retry_after`. It accepts RFC 9110 delay-seconds and HTTP-date, clamps to a configured maximum, and returns None on invalid input. Impl 01 uses it. |
 | R-71 | Owner validators that need layers above L0 (for example impl 04 `validate_catalog`) register with impl 10's start-up validation hook. The composition root (impl 09 CLI and `app/common`) runs them after `load_config`. `config validate` and `doctor` also run them. Their issues become `ConfigIssue` rows. |
@@ -122,6 +122,7 @@ Each implementation spec replaces every `X:<NN>/<symbol>` with `T<NN>-<nn> (<sym
 | R-74 | `HernessError.details` values are strings. A caller with a list joins it with `, ` or passes a JSON string. |
 | R-75 | `herness.core.types` holds no functions. Computed helpers such as `impact_usd` live in the owner package (impl 06: `herness.harness`). |
 | R-76 | The `models.yaml` sections `deciders` (impl 03 `herness.enrich.settings`) and `models`/`roles` (impl 05 `herness.harness.llm.settings`) are sibling sections, composed by the impl 10 root config like R-69. |
+| R-77 | Privacy deletion of findings: impl 06 owns the `finding` table, so it owns the store op `scrub_record_from_findings(record_id, *, conn)`. Impl 10's privacy deletion calls it and does not define it. `scrub_record_from_evidence` stays with impl 05 (U05-75). Resolves impl 10 D10-27. |
 | R-72 | Settings models hold secret references as strings that match the `secret:` pattern. They are resolved later by `herness.core.secrets`, which settings modules never import. |
 
 ## 9. Design spec changes pending

@@ -2,11 +2,11 @@
 
 Status: Draft v1 · 2026-09-24 · Design spec: [`docs/specs/02-data-model.md`](../specs/02-data-model.md) (Draft v2) · Phase: 1 · Standards: [`ENG-STANDARDS.md`](ENG-STANDARDS.md)
 
-Implementation specs this one depends on (interfaces only): impl 00 (errors, ids, time, logging), impl 01 (ops functions for `watermark` and `deletion_request` reads, Jira raw column contract, `SourcesConfig`), impl 03 (`run_enrichment`, `LlmFactory`), impl 04 (`materialize_facts`, `run_scoring`, content of `400_facts.sql`), impl 05 (`harness.sql.blocked_columns` default), impl 06 (`run` statuses), impl 08 (`JobContext`, retry policies, fault points, `metric_sample` writer), impl 10 (config loader, `config_hash`, audit, deletion procedure), impl 11 (fixtures `lake_small`, synthetic generator).
+Implementation specs this one depends on (interfaces only): impl 00 (errors, ids, time, logging), impl 01 (`watermark` reads, Jira raw column contract, `SourcesConfig`), impl 03 (`run_enrichment`, `LlmFactory`), impl 04 (`materialize_facts`, `run_scoring`, content of `400_facts.sql`), impl 05 (`harness.sql.blocked_columns` default), impl 06 (`run` statuses), impl 08 (`JobContext`, retry policies, fault points, `metric_sample` writer), impl 10 (config loader, `config_hash`, audit, deletion procedure, `deleted_record_ids` in area `privacy`, R-68), impl 11 (fixtures `lake_small`, synthetic generator).
 
 Consistency rulings: this spec applies the binding rulings of [`DECISIONS.md`](DECISIONS.md) and cites each one where it applies as `R-nn`. Spec 02 owns the ops store core, the area table (§2.3, R-08, R-09), the core API names (R-10), the migration runner and its owner ranges (R-11) and migration 006 `metric_sample` (R-12).
 
-Cross-spec references to units whose task IDs are not yet known are written `X:<NN>/<qualified symbol or artifact>`.
+Cross-spec references are written `T<NN>-<nn> (<qualified symbol or artifact>)`, naming the task card of impl NN whose Units list defines the symbol (DECISIONS §8).
 
 ## 1. Scope and traceability
 
@@ -30,7 +30,7 @@ This spec builds everything the design spec assigns to `herness/store/` and `her
 | 4.1 | Stage order, lexical SQL execution, Jinja for config values only, Python hooks, nightly pipeline, failure leaves `CURRENT` | 3.9, 5 | U02-82…U02-86, U02-95…U02-105 | T02-11, T02-18, T02-19, T02-21 | UT02-56…UT02-58, IT02-22, IT02-25…IT02-27, FT02-03, FT02-04 |
 | 4.2 | Staging glob, dedupe, tombstones, deletion requests, `TRY_CAST` with counts, enum macros | 3.10 | U02-106…U02-115, U02-87 | T02-12…T02-14 | IT02-02…IT02-08, ST02-16 |
 | 4.3 | Canonical `core.*` tables | 3.10 | U02-116…U02-123 | T02-15…T02-17 | IT02-09…IT02-20, IT02-21 |
-| 4.4 | `enrich.*` tables (owner 03); enrichment hook with `stages` (R-48) and `decider` GPU scope (R-43) | 3.9, 3.10, 4.2 | U02-100, U02-107, U02-124, U02-125 | T02-12, T02-19 | IT02-23…IT02-25 |
+| 4.4 | `enrich.*` tables (owner 03); enrichment hook with `stages` (R-48); impl 03 takes the `decider` GPU scope itself (R-43) | 3.9, 3.10, 4.2 | U02-100, U02-107, U02-124, U02-125 | T02-12, T02-19 | IT02-23…IT02-25 |
 | 4.5 | `metrics.*` tables (owner 04) | 3.10 | U02-126 | T02-19 | IT02-26 |
 | 4.6 | `score.*` tables (owner 04) | 3.9 | U02-101 | T02-19 | IT02-26 |
 | 4.7 | `meta.build`, `meta.evidence`, `meta.dq_result`, `dataset_kind` | 3.9, 3.10 | U02-88…U02-92, U02-107 | T02-12, T02-18 | UT02-69, UT02-67, IT02-21 |
@@ -66,7 +66,7 @@ This spec builds everything the design spec assigns to `herness/store/` and `her
 | `herness/store/ops/__init__.py` | Public `herness.store.ops` namespace: re-exports of every area's public functions (§2.3, R-08) | re-exports only (§2.3) | L1 | — | 160 |
 | `herness/store/ops/core.py` | Per-thread SQLite connections, write transactions with retry, JSON helpers (core API names of R-10) | `OPS_JSON_MAX_BYTES`, `connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`, `reset_connections` | L1 | `sqlite3` | 260 |
 | `herness/store/ops/migrate.py` | Forward-only migration runner over all owner ranges (R-11) and ops health | `MIGRATION_RANGES`, `MigrationReport`, `migrate`, `pending_migrations`, `schema_version`, `ops_health` | L1 | `importlib.resources` | 260 |
-| `herness/store/ops/shared.py` | Ops functions owned by spec 02: every `review_item` function (R-08) and build-retention reads | `ReviewItem`, `create_review_item`, `create_review_item_if_absent`, `get_review_item`, `list_review_items`, `count_review_items`, `decide_review_item`, `update_review_payload`, `approved_mapping_suggestions`, `builds_in_use` | L1 | — | 390 |
+| `herness/store/ops/shared.py` | Ops functions owned by spec 02: every `review_item` function (R-08) | `ReviewItem`, `create_review_item`, `create_review_item_if_absent`, `get_review_item`, `list_review_items`, `count_review_items`, `decide_review_item`, `update_review_payload`, `approved_mapping_suggestions` | L1 | — | 390 |
 | `herness/store/migrations/001_ingestion_health.sql` | `watermark`, `sync_slice`, `file_ingest`, `source_health` | SQL | L1 | — | 90 |
 | `herness/store/migrations/002_jobs.sql` | `job`, `worker`, `resilience_event` | SQL | L1 | — | 110 |
 | `herness/store/migrations/003_runs_evidence.sql` | `run`, `task`, `finding`, `evidence`, `evidence_use` | SQL | L1 | — | 140 |
@@ -107,8 +107,8 @@ This spec builds everything the design spec assigns to `herness/store/` and `her
 |---|---|---|---|
 | `herness/store/ops/core.py` | 02 (this spec) | none (transactions for every area) | — |
 | `herness/store/ops/migrate.py` | 02 (this spec) | `schema_migration`; DDL of every migration file | — |
-| `herness/store/ops/shared.py` | 02 (this spec) | `review_item` (every `review_item` function lives here); reads `run` for `builds_in_use` | — |
-| `herness/store/ops/ingest.py` | 01 | `watermark` (monitoring watermarks kept per tool, R-62), `sync_slice`, `file_ingest`; reads `deletion_request` | — |
+| `herness/store/ops/shared.py` | 02 (this spec) | `review_item` (every `review_item` function lives here). It reads no `run` or `task` rows: those reads belong to impl 06 (R-68) | — |
+| `herness/store/ops/ingest.py` | 01 | `watermark` (monitoring watermarks kept per tool, R-62), `sync_slice`, `file_ingest` | — |
 | `herness/store/ops/evidence.py` | 05 | `evidence`, `evidence_use` (writer `record_evidence`, R-13) | — |
 | `herness/store/ops/runs.py` | 06 | `run`, `task` (insert, `spec`) | — |
 | `herness/store/ops/findings.py` | 06 | `finding` | — |
@@ -121,7 +121,7 @@ This spec builds everything the design spec assigns to `herness/store/` and `her
 | `herness/store/ops/metrics.py` | 08 | `metric_sample` (writer `record_metric_samples`, R-12) | metric recording port |
 | `herness/store/ops/chat.py` | 09 | `chat_session`, `chat_message` | — |
 | `herness/store/ops/ui_reads.py` | 09 | none (read-only queries for the dashboard and CLI) | — |
-| `herness/store/ops/privacy.py` | 10 | `deletion_request`; JSON rewrites in `evidence.result_sample` and `finding.numbers` | — |
+| `herness/store/ops/privacy.py` | 10 | `deletion_request` (including the read `deleted_record_ids`, R-68); JSON rewrites in `evidence.result_sample` and `finding.numbers` | — |
 
 The owner spec decides which of its functions go in which of its own areas, within the tables listed for each area. The "Port" column names the `herness.core` Protocol an area implements under R-04; `herness.core` never imports `herness.store`.
 
@@ -130,7 +130,7 @@ Rules for every area submodule:
 1. It obtains connections only through `herness.store.ops.core.connection()` and performs every write through `herness.store.ops.core.run_write()`, or on the connection that a caller's `run_write` callback received (the `conn` parameter pattern of U02-56). The names `write_tx`, `write_transaction`, `transaction`, `connect`, `read_connection`, `open_ops_store`, `OpsStore` and `migration_status` do not exist (R-10); §13.4 maps each one to its replacement.
 2. It never issues DDL at run time. A table or column that exists only in an implementation spec is created by a migration file in the owner's range (U02-129), listed as a unit in the owner spec (R-11). Tables named in the design specs are created only by migrations 001–006 of this spec (R-11); an owner migration never re-creates them.
 3. A function in an area is specified only in the owner's implementation spec (R-09). Another spec that needs it references the owner's unit. This spec adds a unit for every function in `core`, `migrate` and `shared` that another spec references (§13.4 lists the references and the aliases).
-4. Re-exports: each owner adds `from .<area> import <names>` lines and the same names to `__all__` of `herness/store/ops/__init__.py`, in one block per area headed by a comment with the owning spec number and area name. Every public function and type of every area is re-exported. Callers import `herness.store.ops.<name>`; specs name the canonical area path `herness.store.ops.<area>.<name>` (for example `herness.store.ops.metrics.record_metric_samples`, R-12). Both paths are the same object (the package attribute `migrate` is the function, so the `migrate` area is imported by its dotted path; U02-62). A name defined in two areas fails UT02-68; in particular no area other than `shared` defines a `review_item` function (R-08).
+4. Re-exports: each owner adds `from .<area> import <names>` lines and the same names to `__all__` of `herness/store/ops/__init__.py`, in one block per area headed by a comment with the owning spec number and area name. Every public function and type of every area is re-exported. Callers import `herness.store.ops.<name>`; specs name the canonical area path `herness.store.ops.<area>.<name>` (for example `herness.store.ops.metrics.record_metric_samples`, R-12). Both paths are the same object (the package attribute `migrate` is the function, so the `migrate` area is imported by its dotted path; U02-62). A name defined in two areas fails UT02-68; in particular no area other than `shared` defines a `review_item` function (R-08). The namespace is flat (R-68): reads of `run` and `task` belong to impl 06 (`get_run`, `select_runs`, `select_tasks`), UI-only projections in impl 09's `ui_reads` carry a `ui_` prefix, and `deleted_record_ids` belongs to impl 10's `privacy` area.
 5. Import order: `__init__.py` imports `core` first, then `migrate`, `shared`, then the other areas in the row order of the table. An area imports `herness.store.ops.core`, never the package `herness.store.ops` or another area (contract `ops-areas-acyclic`, §2.2). Importing the package opens no connection.
 6. Each area module stays within the 400-line limit (ENG §2.4).
 
@@ -139,8 +139,8 @@ Rules for every area submodule:
 Conventions for every unit below:
 
 - "Now" is never read inside calculation code. Units that need time take `now: datetime` (timezone-aware UTC) or read the clock at the I/O edge named in the unit.
-- Fixed-width timestamp text (`YYYY-MM-DDTHH:MM:SS.ffffffZ`, 27 characters, spec 00 §8) is produced and parsed only by `X:00/herness.core.time` (formatter and parser for fixed-width UTC text). This spec calls them "ts-text" and "parse-ts".
-- Logging uses `X:00/herness.core.logging` with `component` = `store` or `model`. Events are listed in §8.
+- Fixed-width timestamp text (`YYYY-MM-DDTHH:MM:SS.ffffffZ`, 27 characters, spec 00 §8) is produced and parsed only by `T00-04 (herness.core.time.format_utc)` and `T00-04 (herness.core.time.parse_utc)`. This spec calls them "ts-text" and "parse-ts".
+- Logging uses `T00-07 (herness.core.logging)` with `component` = `store` or `model`. Events are listed in §8.
 - Error messages name only identifiers (`build_id`, file names, table names, `item_id`, counts), never row values, payloads or ticket text.
 - Units whose field would be empty show "—".
 
@@ -150,8 +150,8 @@ Conventions for every unit below:
 
 | Field | Content |
 |---|---|
-| Kind | class (subclass of `X:00/herness.core.errors.NotFound`, which is a `RecoverableError`; R-19) |
-| Purpose | A requested ops row, build or pointer does not exist. CLI exit code 1 (operation failed, R-46). |
+| Kind | class (subclass of `T00-03 (herness.core.errors.NotFound)`, which is a `RecoverableError`; R-19) |
+| Purpose | A requested ops row, build or pointer does not exist. CLI exit code 7 (not found, R-46). |
 | Signature | Constructor `(message: str, *, kind: str, key: str)`; attributes `kind` (`review_item`, `build`, `current`, `vector_table`) and `key` (the identifier). |
 | Preconditions | `kind` non-empty. |
 | Postconditions | `str(err)` = message; the message contains `kind` and `key`; the inherited `details` (R-19) equals `{"kind": kind, "key": key}`; `hint` is `None`. |
@@ -186,7 +186,7 @@ Conventions for every unit below:
 
 | Field | Content |
 |---|---|
-| Kind | class (subclass of `X:00/herness.core.errors.SchemaViolation`) |
+| Kind | class (subclass of `T00-03 (herness.core.errors.SchemaViolation)`) |
 | Purpose | A batch handed to `LakeWriter.write` violates the design 02 §3.1 contract. |
 | Signature | Constructor `(source: str, entity: str, rule: str, column: str, bad_rows: int)`. |
 | Preconditions | `bad_rows ≥ 0`. |
@@ -204,7 +204,7 @@ Conventions for every unit below:
 
 | Field | Content |
 |---|---|
-| Kind | class (subclass of `X:00/herness.core.errors.FatalError`) |
+| Kind | class (subclass of `T00-03 (herness.core.errors.FatalError)`) |
 | Purpose | A `LakeWriter` method was called after `commit()` or `abort()`. |
 | Signature | Constructor `(source: str, entity: str, state: Literal["committed", "aborted"], method: str)`. |
 | Preconditions | — |
@@ -258,7 +258,7 @@ Conventions for every unit below:
 
 | Param | Type | Default | Kind | Constraints |
 |---|---|---|---|---|
-| `cfg` | `HernessConfig \| None` | `None` | keyword-only | `None` = `X:10/herness.core.config.get_config()` |
+| `cfg` | `HernessConfig \| None` | `None` | keyword-only | `None` = `T10-03 (herness.core.config.get_config)()` |
 | `root` | `Path \| None` | `None` | keyword-only | overrides `cfg.paths.data` (spec 11 generator, tests) |
 
 Returns `DataLayout`.
@@ -318,7 +318,7 @@ Returns `str` (the value unchanged).
 | Invariants | — |
 | Algorithm | (1) Full-match `NAME_RE`. (2) On mismatch raise. (3) Return the value. |
 | Side effects | None. |
-| Errors | `X:00/herness.core.errors.ConfigError`: `invalid lake <kind> name (length <n>)`; the value is not echoed. |
+| Errors | `T00-03 (herness.core.errors.ConfigError)`: `invalid lake <kind> name (length <n>)`; the value is not echoed. |
 | Concurrency | Pure. |
 | Complexity and limits | O(len). |
 | Security notes | Blocks `..`, separators, drive letters, uppercase and Unicode look-alikes (TH02-01). |
@@ -454,7 +454,7 @@ Returns `None`.
 | Preconditions | State `open`, else `LakeStateError`. |
 | Postconditions | Every row is buffered or written to a temp file; `rows` and `max_source_updated_at` include the batch. |
 | Invariants | U02-13 (a)–(e). |
-| Algorithm | (1) If `batch.num_rows == 0`, return. (2) If a file is open and `clock() − opened_at ≥ max_open_s`, flush the buffer (step 7) and close the file (reason `age`). (3) Normalise with `_validate_batch` (U02-19). (4) Compute `dt` per row = UTC date of `_fetched_at`. (5) Split rows into groups by `dt`, keeping the order of first appearance. (6) For each group: if the buffer is non-empty and the group's `dt` or schema differs from the buffer's, flush and close the open file (reason `dt_change` or `schema_change`); append the group to the buffer; if buffer rows ≥ `BUFFER_ROWS` or bytes ≥ `BUFFER_BYTES`, flush. (7) Flush: when no file is open, create the partition directory (`parents=True, exist_ok=True`) and open a `pyarrow.parquet.ParquetWriter` at `partition_dir(...)/.part-<ulidA>.parquet.tmp-<ulidB>` with compression `zstd`, level `ZSTD_LEVEL`, `version=PARQUET_VERSION`, `use_dictionary=True`, `write_statistics=True`; record (temp, final `part-<ulidA>.parquet`) and `opened_at = clock()`. Write the buffer as one table with `row_group_size` = its row count; clear the buffer. After the write, close the file if its on-disk size ≥ `target_bytes` (reason `size`). (8) Add the batch's row count to `rows`; update `max_source_updated_at` with the batch maximum. ULIDs come from `X:00/herness.core.ids.new_ulid()`. |
+| Algorithm | (1) If `batch.num_rows == 0`, return. (2) If a file is open and `clock() − opened_at ≥ max_open_s`, flush the buffer (step 7) and close the file (reason `age`). (3) Normalise with `_validate_batch` (U02-19). (4) Compute `dt` per row = UTC date of `_fetched_at`. (5) Split rows into groups by `dt`, keeping the order of first appearance. (6) For each group: if the buffer is non-empty and the group's `dt` or schema differs from the buffer's, flush and close the open file (reason `dt_change` or `schema_change`); append the group to the buffer; if buffer rows ≥ `BUFFER_ROWS` or bytes ≥ `BUFFER_BYTES`, flush. (7) Flush: when no file is open, create the partition directory (`parents=True, exist_ok=True`) and open a `pyarrow.parquet.ParquetWriter` at `partition_dir(...)/.part-<ulidA>.parquet.tmp-<ulidB>` with compression `zstd`, level `ZSTD_LEVEL`, `version=PARQUET_VERSION`, `use_dictionary=True`, `write_statistics=True`; record (temp, final `part-<ulidA>.parquet`) and `opened_at = clock()`. Write the buffer as one table with `row_group_size` = its row count; clear the buffer. After the write, close the file if its on-disk size ≥ `target_bytes` (reason `size`). (8) Add the batch's row count to `rows`; update `max_source_updated_at` with the batch maximum. ULIDs come from `T00-05 (herness.core.ids.new_ulid)()`. |
 | Side effects | Creates directories and temp files under `root`; `store.lake.file_rotated` (DEBUG) on each close with `source`, `entity`, `dt`, `rows`, `bytes`, `reason`. |
 | Errors | `LakeContractError` (U02-19); `LakeStateError`; `StoreBusy` for `OSError` with errno `EACCES` or `EBUSY` or Windows `winerror` 32 or 33; any other `OSError` → `SchemaViolation("lake write failed for <source>/<entity>: <errno name>")`. |
 | Concurrency | Not thread-safe. |
@@ -636,7 +636,7 @@ Returns `LakeRetentionResult`.
 
 Files: `data/warehouse/wh-<build_id>.duckdb` (+ DuckDB's `wh-<build_id>.duckdb.wal` while open), pointer `data/warehouse/CURRENT` (one line: the build ID and `\n`), spill directory `data/warehouse/tmp/<build_id>/` (build only).
 
-Health results use `X:00/herness.core.types.HealthStatus` (fields `status: Literal["ok", "degraded", "down"]`, `reason: str`).
+Health results follow the ENG §4 convention used by impl 03 and impl 09 (`herness.reports.render.health`): a plain tuple `tuple[Literal["ok", "degraded", "down"], str]` of status and reason. This spec calls that tuple a "health result"; no shared `HealthStatus` type exists in `herness.core.types` (OI-15 closed).
 
 #### U02-24 `herness.store.warehouse.BUILD_ID_RE`
 
@@ -671,7 +671,7 @@ Returns `str`.
 | Preconditions | `now.tzinfo` is UTC, else `ConfigError`. |
 | Postconditions | Result matches `BUILD_ID_RE`. |
 | Invariants | — |
-| Algorithm | `now.strftime("%Y%m%d-%H%M%S")` + `-` + the last 6 characters of `X:00/herness.core.ids.new_ulid()` (the random part, so two IDs in the same second differ; OI-10). |
+| Algorithm | `now.strftime("%Y%m%d-%H%M%S")` + `-` + the last 6 characters of `T00-05 (herness.core.ids.new_ulid)()` (the random part, so two IDs in the same second differ; OI-10). |
 | Side effects | None. |
 | Errors | `ConfigError`. |
 | Concurrency | Thread-safe. |
@@ -722,7 +722,7 @@ Returns `bool`.
 | Algorithm | (1) If `BUILD_ID_RE` does not full-match, return `False` (no path is built from an invalid ID). (2) Return `build_path(build_id, layout=layout).is_file()`. |
 | Side effects | One `stat` call. |
 | Errors | None raised; an `OSError` from `stat` returns `False`. |
-| Concurrency | Thread-safe. The answer can change right after the call (retention may delete a file); callers pin builds through non-terminal runs (U02-61). |
+| Concurrency | Thread-safe. The answer can change right after the call (retention may delete a file); callers pin builds through non-terminal runs (U02-105 step 1). |
 | Complexity and limits | O(1). |
 | Security notes | TH02-03 (ID gate before any path). |
 | Tests | UT02-77 |
@@ -874,7 +874,7 @@ Returns `Literal["deleted", "deferred", "absent"]`.
 | `stale_after_h` | `float` | `48.0` | keyword-only | > 0 |
 | `layout` | `DataLayout \| None` | `None` | keyword-only | |
 
-Returns `HealthStatus`.
+Returns a health result `tuple[Literal["ok", "degraded", "down"], str]` (status, reason; §3.4).
 
 | Field | Content |
 |---|---|
@@ -1000,7 +1000,7 @@ Returns `T`.
 | Preconditions | The thread's connection is not already in a transaction (nested calls raise `ConfigError("nested run_write in <op>")`). To combine writes of several areas in one transaction (for example R-33: a memory approval and its `review_item` decision; R-21: a checkpoint key), `fn` calls the area functions that accept a `conn` keyword with the connection it received, instead of nesting `run_write`. |
 | Postconditions | On return, the transaction committed. On exception, it rolled back. |
 | Invariants | — |
-| Algorithm | (1) Define `attempt()`: call `X:08/herness.core.resilience.fault_point("sqlite.write", kind=op)` (point named in impl 08's registry, R-40); `conn = connection()`; execute `BEGIN IMMEDIATE`; call `fn(conn)`; execute `COMMIT`; return the result. On any exception: if `conn.in_transaction`, execute `ROLLBACK`; then map the exception: `sqlite3.OperationalError` whose lower-cased message contains `locked` or `busy` → `StoreBusy(op)`; `sqlite3.IntegrityError` → `SchemaViolation("ops constraint failed in <op>: <sqlite message>")` (SQLite constraint messages name table and column, not values); other `sqlite3.Error` → `SchemaViolation("ops write failed in <op>: <class name>")`; `HernessError` passes unchanged. (2) Return `X:08/herness.core.resilience.retry_call("sqlite_write", attempt)`. (3) Measure the transaction time; above 1 s log `store.ops.slow_write` (WARNING, `op`, `duration_ms`). |
+| Algorithm | (1) Define `attempt()`: call `T08-08 (herness.core.resilience.fault_point)("sqlite.write", kind=op)` (point named in impl 08's registry, R-40); `conn = connection()`; execute `BEGIN IMMEDIATE`; call `fn(conn)`; execute `COMMIT`; return the result. On any exception: if `conn.in_transaction`, execute `ROLLBACK`; then map the exception: `sqlite3.OperationalError` whose lower-cased message contains `locked` or `busy` → `StoreBusy(op)`; `sqlite3.IntegrityError` → `SchemaViolation("ops constraint failed in <op>: <sqlite message>")` (SQLite constraint messages name table and column, not values); other `sqlite3.Error` → `SchemaViolation("ops write failed in <op>: <class name>")`; `HernessError` passes unchanged. (2) Return `T08-07 (herness.core.resilience.retry_call)("sqlite_write", attempt)`. (3) Measure the transaction time; above 1 s log `store.ops.slow_write` (WARNING, `op`, `duration_ms`). |
 | Side effects | Writes via `fn`. |
 | Errors | `StoreBusy` after the policy's 6 attempts; `SchemaViolation`; `ConfigError`; any `HernessError` raised by `fn`. |
 | Concurrency | Per-thread connection; SQLite serialises writers across threads and processes. |
@@ -1221,7 +1221,7 @@ Returns `int` (highest applied version; 0 when none).
 
 #### U02-48 `herness.store.ops.migrate.ops_health`
 
-Returns `HealthStatus`.
+Returns a health result `tuple[Literal["ok", "degraded", "down"], str]` (status, reason; §3.4).
 
 | Field | Content |
 |---|---|
@@ -1298,7 +1298,7 @@ Returns `HealthStatus`.
 |---|---|
 | Kind | SQL file |
 | Purpose | Tables of design 02 §5.3. |
-| Signature | Creates `run`, `task`, `finding`, `evidence`, `evidence_use` (§4.3.3); indexes `task_dedup` = `UNIQUE task(run_id, json_extract(spec, '$.dedup_key'))`, `task_run_status` on `task(run_id, status)`, `finding_run_status` on `finding(run_id, status)`, plus `evidence_run` on `evidence(run_id)` and `run_status` on `run(status)` (active-build lookup, U02-61). |
+| Signature | Creates `run`, `task`, `finding`, `evidence`, `evidence_use` (§4.3.3); indexes `task_dedup` = `UNIQUE task(run_id, json_extract(spec, '$.dedup_key'))`, `task_run_status` on `task(run_id, status)`, `finding_run_status` on `finding(run_id, status)`, plus `evidence_run` on `evidence(run_id)` and `run_status` on `run(status)` (active-build lookup, U02-105). |
 | Preconditions | Version 2. |
 | Postconditions | Five tables, five indexes. |
 | Invariants | — |
@@ -1473,7 +1473,7 @@ Returns `list[ReviewItem]`. Order: by `created_at`, then `item_id`, ascending; w
 | `decided_by` | `str` | — | keyword-only | `^[0-9a-f]{32}$` (spec 09 `user_ref`) or `system` |
 | `note` | `str \| None` | `None` | keyword-only | ≤ 2,000 characters; for `label_check` a JSON object string per spec 03 §4.6 |
 | `now` | `datetime` | — | keyword-only | UTC |
-| `conn` | `sqlite3.Connection \| None` | `None` | keyword-only | when given, the caller is inside its own `run_write` callback (impl 07 `MemoryStore.decide`, R-33) |
+| `conn` | `sqlite3.Connection \| None` | `None` | keyword-only | when given, the caller is inside its own `run_write` callback (impl 07 `MemoryStore.approve` / `MemoryStore.reject`, R-33; unblocks T07-09) |
 
 Returns `ReviewItem` (after the update).
 
@@ -1481,10 +1481,10 @@ Returns `ReviewItem` (after the update).
 |---|---|
 | Kind | function |
 | Purpose | Record a human decision on a review item and audit it (spec 10 §4.6 `review_decision`). This is the only function that decides a `review_item` (R-33). Role checks are the caller's (impl 09). |
-| Preconditions | Arguments valid, else `ConfigError`. An item of kind `memory_write` is decided only with `conn` given, from inside impl 07's `MemoryStore.decide` transaction, so the memory item and its review item change together (R-33); without `conn` it raises `ConfigError("memory_write items are decided through MemoryStore.decide")` before any write. |
+| Preconditions | Arguments valid, else `ConfigError`. An item of kind `memory_write` is decided with `conn` given, from inside the transaction of impl 07's `MemoryStore.approve` or `MemoryStore.reject`, so the memory item and its review item change together (R-33). The one exception is the privacy purge (R-54): impl 07 `MemoryStore.purge` rejects a pending `memory_write` item with `decided_by="system"` and `status="rejected"` without `conn`, because the memory item is being deleted anyway (C15). Any other `memory_write` decision without `conn` raises `ConfigError("memory_write items are decided through MemoryStore.approve or MemoryStore.reject")` before any write. |
 | Postconditions | Row has the new status, `decided_by`, `decided_at = now`, `note`; one audit line exists. With `conn`, both become durable when the caller's transaction commits. |
 | Invariants | A decided item is never decided again. |
-| Algorithm | Run the steps on `conn` if given, else inside `run_write(op="review_item_decide")`: (1) `SELECT kind, status FROM review_item WHERE item_id = ?`; missing → `NotFoundError`. (2) `kind = 'memory_write'` and `conn is None` → `ConfigError` (precondition). (3) `status ≠ 'pending'` → `ReviewItemConflict`. (4) `UPDATE review_item SET status = ?, decided_by = ?, decided_at = ?, note = ? WHERE item_id = ? AND status = 'pending'`. (5) Call `X:10/herness.core.audit.audit("review_decision", decided_by, item_id=…, kind=…, status=…, decided_by=…, note_len=len(note or ""))` before the transaction commits; if it raises, the transaction rolls back (spec 10 §6: an action that cannot be audited does not happen; with `conn`, the error propagates and the caller's `run_write` rolls back). (6) Re-read and return. Log `store.ops.review_item_decided` (INFO, `item_id`, `kind`, `status`). |
+| Algorithm | Run the steps on `conn` if given, else inside `run_write(op="review_item_decide")`: (1) `SELECT kind, status FROM review_item WHERE item_id = ?`; missing → `NotFoundError`. (2) `kind = 'memory_write'`, `conn is None`, and not (`status == "rejected"` and `decided_by == "system"`) → `ConfigError` (precondition). (3) `status ≠ 'pending'` → `ReviewItemConflict`. (4) `UPDATE review_item SET status = ?, decided_by = ?, decided_at = ?, note = ? WHERE item_id = ? AND status = 'pending'`. (5) Call `T10-05 (herness.core.audit.audit)("review_decision", decided_by, item_id=…, kind=…, status=…, decided_by=…, note_len=len(note or ""))` before the transaction commits; if it raises, the transaction rolls back (spec 10 §6: an action that cannot be audited does not happen; with `conn`, the error propagates and the caller's `run_write` rolls back). (6) Re-read and return. Log `store.ops.review_item_decided` (INFO, `item_id`, `kind`, `status`). |
 | Side effects | One update; one audit line. |
 | Errors | `NotFoundError`, `ReviewItemConflict`, `ConfigError`, `StoreBusy`, errors from `audit`. Callers that need a status value instead of an exception (impl 09 `decided` / `not_pending` / `not_found`) map `ReviewItemConflict` and `NotFoundError` themselves (§13.4). |
 | Concurrency | Two concurrent deciders: the second sees `status ≠ 'pending'` after the first commits and gets `ReviewItemConflict`. |
@@ -1513,22 +1513,7 @@ Returns `list[ReviewItem]` of kind `mapping_suggestion` with status `approved`, 
 
 #### U02-61 `herness.store.ops.shared.builds_in_use`
 
-Returns `frozenset[str]`.
-
-| Field | Content |
-|---|---|
-| Kind | function |
-| Purpose | Build IDs pinned by non-terminal runs, which retention must not delete. |
-| Preconditions | — |
-| Postconditions | Contains every non-NULL `run.build_id` whose `status` is not `done`, `partial`, `failed` or `canceled` (terminal set, spec 06 §5.1). |
-| Invariants | — |
-| Algorithm | `SELECT DISTINCT build_id FROM run WHERE build_id IS NOT NULL AND status NOT IN ('done','partial','failed','canceled')`. |
-| Side effects | None. |
-| Errors | `StoreBusy`, `SchemaViolation`. |
-| Concurrency | Read. |
-| Complexity and limits | Uses `run_status`. |
-| Security notes | — |
-| Tests | UT02-48, IT02-32 |
+Removed (R-68): reads of `run` belong to impl 06. Retention reads pinned builds through `T06-05 (herness.store.ops.runs.select_runs)` inside `cleanup_builds` (U02-105 step 1).
 
 #### U02-130 `herness.store.ops.shared.create_review_item_if_absent`
 
@@ -1613,7 +1598,7 @@ Returns `None`.
 |---|---|
 | Kind | module |
 | Purpose | Public namespace for all ops functions of every area (§2.3, R-08). |
-| Signature | Spec 02 blocks of `__all__`, in this order. Block "02 core": `connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`, `reset_connections`, `OPS_JSON_MAX_BYTES`. Block "02 migrate": `MIGRATION_RANGES`, `migrate`, `pending_migrations`, `schema_version`, `ops_health`, `MigrationReport`. Block "02 shared": `ReviewItem`, `ReviewKind`, `ReviewStatus`, `create_review_item`, `create_review_item_if_absent`, `get_review_item`, `list_review_items`, `count_review_items`, `decide_review_item`, `update_review_payload`, `approved_mapping_suggestions`, `builds_in_use`. Other owners append one block per area in the row order of the §2.3 table (01 `ingest`; 05 `evidence`; 06 `runs`, `findings`; 07 `memory`, `closed_loop`; 08 `jobs`, `tasks`, `worker`, `resilience`, `metrics`; 09 `chat`, `ui_reads`; 10 `privacy`). |
+| Signature | Spec 02 blocks of `__all__`, in this order. Block "02 core": `connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`, `reset_connections`, `OPS_JSON_MAX_BYTES`. Block "02 migrate": `MIGRATION_RANGES`, `migrate`, `pending_migrations`, `schema_version`, `ops_health`, `MigrationReport`. Block "02 shared": `ReviewItem`, `ReviewKind`, `ReviewStatus`, `create_review_item`, `create_review_item_if_absent`, `get_review_item`, `list_review_items`, `count_review_items`, `decide_review_item`, `update_review_payload`, `approved_mapping_suggestions`. Other owners append one block per area in the row order of the §2.3 table (01 `ingest`; 05 `evidence`; 06 `runs`, `findings`; 07 `memory`, `closed_loop`; 08 `jobs`, `tasks`, `worker`, `resilience`, `metrics`; 09 `chat`, `ui_reads`; 10 `privacy`). |
 | Preconditions | — |
 | Postconditions | Importing the package does not open a connection. `herness.store.ops.<name>` and `herness.store.ops.<area>.<name>` are the same object. |
 | Invariants | No duplicate names across blocks; every name in `__all__` resolves to an attribute of the area named in its block header. The re-exported function `migrate` (R-10) shadows the package attribute of the area module `migrate` (R-08); the area stays importable by its dotted path (`from herness.store.ops.migrate import …`). No other re-exported name may equal an area name. |
@@ -1782,7 +1767,7 @@ Returns `int`.
 
 #### U02-70 `herness.store.vectors.VectorStore.health`
 
-Returns `HealthStatus`.
+Returns a health result `tuple[Literal["ok", "degraded", "down"], str]` (status, reason; §3.4).
 
 | Field | Content |
 |---|---|
@@ -1891,7 +1876,7 @@ Returns `HealthStatus`.
 | Security notes | `service_ci_classes` reach SQL as Arrow data only. |
 | Tests | UT02-54 |
 
-Wiring (R-03, agreed with impl 01): `sources.yaml` has sibling top-level sections. `X:01/herness.connectors.settings` owns the connector sections; `herness.model.settings` owns the `dq` and `build` sections (`DqSettings`, `BuildSettings`). Neither settings module imports the other. The root config of `X:10/herness.core.config`, which may import every package's `settings.py`, composes the `sources.yaml` model from both (fields `dq: DqSettings = DqSettings()` and `build: BuildSettings = BuildSettings()` next to the connector sections, read as `cfg.sources.dq` and `cfg.sources.build`), and sets `X:10/herness.core.config.HernessConfig.mappings` to `MappingsConfig`.
+Wiring (R-03, R-69, agreed with impl 01): `sources.yaml` has sibling top-level sections. `T01-02 (herness.connectors.settings)` owns the connector sections; `herness.model.settings` owns the `dq` and `build` sections (`DqSettings`, `BuildSettings`). Neither settings module imports the other. The root config of `T10-03 (herness.core.config)`, which may import every package's `settings.py`, composes the `sources.yaml` model from both (fields `dq: DqSettings = DqSettings()` and `build: BuildSettings = BuildSettings()` next to the connector sections, read as `cfg.sources.dq` and `cfg.sources.build`), and types the field `T10-03 (herness.core.config.HernessConfig.mappings)` as `MappingsConfig`.
 
 #### U02-76 `herness.model.errors.BuildSqlError`
 
@@ -1915,7 +1900,7 @@ Wiring (R-03, agreed with impl 01): `sources.yaml` has sibling top-level section
 
 | Field | Content |
 |---|---|
-| Kind | class (subclass of `SchemaViolation`; CLI exit code 1, operation failed, R-46) |
+| Kind | class (subclass of `SchemaViolation`; CLI exit code 5, build blocked, R-46) |
 | Purpose | Promotion blocked by `error`-severity DQ failures. |
 | Signature | Constructor `(build_id: str, failed_checks: tuple[str, ...])`. |
 | Postconditions | Message = `build <build_id> blocked by DQ: <comma-joined check names, first 20>`. |
@@ -1928,7 +1913,7 @@ Wiring (R-03, agreed with impl 01): `sources.yaml` has sibling top-level section
 |---|---|
 | Kind | constant |
 | Purpose | Fixed raw entities the staging files read (design 02 §3.1). |
-| Signature | `EXPECTED_ENTITIES: Final[tuple[tuple[str, str], ...]]` = `servicenow`/{`incident`, `change_request`, `problem`, `cmdb_ci`, `cmdb_ci_service`, `cmdb_rel_ci`, `sys_user_group`, `cmn_department`, `task_sla`}, `jira`/`issue`, `monitoring`/{`event`, `metric_daily`}. Config-defined entities of `files`, `mongodb`, `snowflake`, `dataverse` come from `X:01/herness.connectors.settings.SourcesConfig` entity names at build time. |
+| Signature | `EXPECTED_ENTITIES: Final[tuple[tuple[str, str], ...]]` = `servicenow`/{`incident`, `change_request`, `problem`, `cmdb_ci`, `cmdb_ci_service`, `cmdb_rel_ci`, `sys_user_group`, `cmn_department`, `task_sla`}, `jira`/`issue`, `monitoring`/{`event`, `metric_daily`}. Config-defined entities of `files`, `mongodb`, `snowflake`, `dataverse` come from `T01-02 (herness.connectors.settings.SourcesConfig)` entity names at build time. |
 | Other fields | Immutable. |
 | Tests | UT02-55 |
 
@@ -2310,7 +2295,7 @@ Returns `SqlRangeResult` (frozen `dataclass`: `status: Literal["done", "yield"]`
 | Preconditions | `0 ≤ lo ≤ hi ≤ 999`; the range excludes 400–499 (facts run through the spec 04 hook), else `ConfigError`. |
 | Postconditions | `done`: every file in range ran successfully. `yield`: files before the yield point ran. |
 | Invariants | — |
-| Algorithm | For each file in range: (1) If `should_yield()`, return `yield`. (2) `render_sql`. (3) `statements = con.extract_statements(sql)`. (4) Execute each statement's `query` text with `con.execute`; a `duckdb.Error` → `BuildSqlError(build_id, file.name, index, sanitised error)`. (5) Record duration; log `model.build.sql_file_done` (INFO: `build_id`, `file`, `statements`, `duration_ms`); `heartbeat(f"sql {file.name}")`. (6) `X:08/herness.core.resilience.fault_point("build.mid_sql")` (impl 08 registry point, R-40). |
+| Algorithm | For each file in range: (1) If `should_yield()`, return `yield`. (2) `render_sql`. (3) `statements = con.extract_statements(sql)`. (4) Execute each statement's `query` text with `con.execute`; a `duckdb.Error` → `BuildSqlError(build_id, file.name, index, sanitised error)`. (5) Record duration; log `model.build.sql_file_done` (INFO: `build_id`, `file`, `statements`, `duration_ms`); `heartbeat(f"sql {file.name}")`. (6) `T08-08 (herness.core.resilience.fault_point)("build.mid_sql")` (impl 08 registry point, R-40). |
 | Side effects | Warehouse DDL/DML. |
 | Errors | `BuildSqlError`, `ConfigError`. |
 | Concurrency | Build connection, single thread (DuckDB parallelises inside statements). |
@@ -2322,19 +2307,19 @@ Returns `SqlRangeResult` (frozen `dataclass`: `status: Literal["done", "yield"]`
 
 | Param | Type | Default | Kind | Constraints |
 |---|---|---|---|---|
-| `ctx` | `JobContext` | — | positional | `X:08/herness.core.jobs.JobContext` (R-02); kind `build_pipeline` |
+| `ctx` | `JobContext` | — | positional | `T08-03 (herness.core.jobs.JobContext)` (R-02); kind `build_pipeline` |
 | `llm_factory` | `LlmFactory \| None` | `None` | keyword-only | impl 03 `LlmFactory`, passed to `run_enrichment` (R-05); bound by U02-134 |
 
-Returns `JobOutcome` (`X:08/herness.core.types.JobOutcome`).
+Returns `JobOutcome` (`T08-01 (herness.core.types.JobOutcome)`).
 
 | Field | Content |
 |---|---|
 | Kind | function (job body; the registered one-argument handler is built by U02-134, R-42) |
 | Purpose | Run the requested stages on a new or existing unpromoted build (design 02 §4.1, §7). |
-| Preconditions | Runs in the leased, exclusive `build_pipeline` job (spec 08 §5.1). The job starts with no GPU class; only the enrichment stage takes the `decider` class (R-43, U02-100). |
+| Preconditions | Runs in the leased, exclusive `build_pipeline` job (spec 08 §5.1). The job starts with no GPU class; only impl 03's enrichment stages take the `decider` class, through their own `ctx.gpu_scope("decider")` (R-43); U02-100 enters no GPU scope. |
 | Postconditions | `done`: every requested stage finished; when `promote` ran, `CURRENT` names this build. On error: `meta.build.status = 'failed'` when the build file is writable, `CURRENT` untouched, the error propagates to the job layer. |
 | Invariants | `CURRENT` changes only inside `promote_build`. |
-| Algorithm | Flow F02-02 (§5) step by step: (1) Validate the payload read from `ctx.job.payload` (R-42) with `BuildPipelinePayload`; `ValidationError` → `ConfigError`. (2) Load config, layout, `now`. (3) Resolve the build: payload `build_id` → must exist with `list_builds` status `building` (else `NotFoundError` or `ConfigError("build <id> is <status>")`); else if `ctx.load_state()` holds `build_id` with `"build"` in `stages_done` and that build is `building`, resume it with the payload stages not yet done; else create a new ID with `new_build_id(now)`. (4) `cleanup_builds(mode="pre", …)` protecting this build and `CURRENT`. (5) For each remaining stage: if `ctx.should_yield()`, save state and return `JobOutcome(status="yield")`; call the stage unit (U02-99…U02-103); append to `stages_done`; `ctx.save_state({"build_id": …, "stages_done": […]})`; `ctx.heartbeat(f"stage {name} done")`; log `model.build.stage_done` (INFO: `build_id`, `stage`, `duration_ms`). (6) If `promote` was not requested, set `finished_at = now` (status stays `building`: a completed, unpromoted build). (7) Write metrics (§8.2) through `X:08/herness.store.ops.metrics.record_metric_samples` (R-12). (8) Return `JobOutcome(status="done", result={"build_id", "stages", "promoted", "dq": {checks, failed_errors, failed_warnings}, "durations_ms", "row_counts", "enrich": <EnrichReport JSON or null>, "scoring": <ScoringReport JSON or null>, "rekey_night"})`. On a `HernessError` in step 5: open the build writable if closed, `update_build_row(status="failed", finished_at=now)` (errors here are logged `model.build.mark_failed_error` and suppressed so the original error propagates), log `model.build.failed` (ERROR: `build_id`, `stage`, error class), write metrics, re-raise. |
+| Algorithm | Flow F02-02 (§5) step by step: (1) Validate the payload read from `ctx.job.payload` (R-42) with `BuildPipelinePayload`; `ValidationError` → `ConfigError`. (2) Load config, layout, `now`. (3) Resolve the build: payload `build_id` → must exist with `list_builds` status `building` (else `NotFoundError` or `ConfigError("build <id> is <status>")`); else if `ctx.load_state()` holds `build_id` with `"build"` in `stages_done` and that build is `building`, resume it with the payload stages not yet done; else create a new ID with `new_build_id(now)`. (4) `cleanup_builds(mode="pre", …)` protecting this build and `CURRENT`. (5) For each remaining stage: if `ctx.should_yield()`, save state and return `JobOutcome(status="yield")`; call the stage unit (U02-99…U02-103); append to `stages_done`; `ctx.save_state({"build_id": …, "stages_done": […]})`; `ctx.heartbeat(f"stage {name} done")`; log `model.build.stage_done` (INFO: `build_id`, `stage`, `duration_ms`). (6) If `promote` was not requested, set `finished_at = now` (status stays `building`: a completed, unpromoted build). (7) Write metrics (§8.2) through `T08-05 (herness.store.ops.metrics.record_metric_samples)` (R-12). (8) Return `JobOutcome(status="done", result={"build_id", "stages", "promoted", "dq": {checks, failed_errors, failed_warnings}, "durations_ms", "row_counts", "enrich": <EnrichReport JSON or null>, "scoring": <ScoringReport JSON or null>, "rekey_night"})`. On a `HernessError` in step 5: open the build writable if closed, `update_build_row(status="failed", finished_at=now)` (errors here are logged `model.build.mark_failed_error` and suppressed so the original error propagates), log `model.build.failed` (ERROR: `build_id`, `stage`, error class), write metrics, re-raise. |
 | Side effects | Warehouse file, `CURRENT` (via promote), ops `job` state (via `ctx`), `metric_sample` rows, logs. |
 | Errors | `ConfigError`, `NotFoundError`, `BuildSqlError`, `DqGateFailed`, `StoreBusy`, and errors from spec 03/04 hooks. |
 | Concurrency | One build job at a time (`exclusive_kinds`). |
@@ -2355,7 +2340,7 @@ Returns `Callable[[JobContext], JobOutcome]`.
 | Kind | function |
 | Purpose | Build the one-argument `build_pipeline` job handler (R-42) that carries the model client factory, so `herness.model` and `herness.enrich` never import `herness.harness` (R-05). Same pattern as impl 03 `make_distill_handler`. |
 | Preconditions | — |
-| Postconditions | The returned handler calls `run_build_pipeline(ctx, llm_factory=llm_factory)` and returns its result. The composition root (`herness.cli`) registers it with `X:08/herness.core.jobs.register_handler("build_pipeline", handler)`. |
+| Postconditions | The returned handler calls `run_build_pipeline(ctx, llm_factory=llm_factory)` and returns its result. The composition root (`herness.cli`) registers it with `T08-12 (herness.core.jobs.register_handler)("build_pipeline", handler)`. |
 | Invariants | The handler holds no other state. |
 | Algorithm | Return a closure over `llm_factory` (or `functools.partial(run_build_pipeline, llm_factory=llm_factory)`, which has the same one-argument call shape). |
 | Side effects | None. |
@@ -2373,7 +2358,7 @@ Returns `Callable[[JobContext], JobOutcome]`.
 | Purpose | Stage `build`: create the file and run 000–299. |
 | Preconditions | The build file does not exist. |
 | Postconditions | `core.*` tables and `meta.build` exist; `row_counts` holds `core` counts. |
-| Algorithm | (1) `open_for_build(build_id, create=True)`. (2) `inventory = scan_lake(layout, extra_entities=<configured entities>)`; `context = build_render_context(cfg, inventory, build_id)`. (3) `run_sql_range(0, 99)`. (4) `insert_build_row(started_at=now, git_sha=git_sha(...), config_hash=X:10/herness.core.config.config_hash(cfg), dataset_kind=dataset_kind(cfg.profile, inventory), source_watermarks={f"{r.source}/{r.entity}": r.value for r in X:01/herness.store.ops.ingest.list_watermarks()})`. (5) Deleted IDs = union of `X:01/herness.store.ops.ingest.deleted_record_ids(source, entity)` over present entities; `register_reference_tables(...)` with `approved_mapping_suggestions()`. (6) `run_sql_range(100, 299)`. (7) `update_build_row(row_counts=collect_row_counts(con, ["core"]))`. (8) `CHECKPOINT`. A `yield` from `run_sql_range` returns `yield` up to U02-98, which saves state without `"build"` in `stages_done` (the partial file becomes an orphan). |
+| Algorithm | (1) `open_for_build(build_id, create=True)`. (2) `inventory = scan_lake(layout, extra_entities=<configured entities>)`; `context = build_render_context(cfg, inventory, build_id)`. (3) `run_sql_range(0, 99)`. (4) `insert_build_row(started_at=now, git_sha=git_sha(...), config_hash=T10-03 (herness.core.config.config_hash)(cfg), dataset_kind=dataset_kind(cfg.profile, inventory), source_watermarks={f"{r.source}/{r.entity}": r.value for r in T01-04 (herness.store.ops.ingest.list_watermarks)()})`. (5) Deleted IDs = union of `T10-32 (herness.store.ops.privacy.deleted_record_ids)(source, entity)` over present entities; `register_reference_tables(...)` with `approved_mapping_suggestions()`. (6) `run_sql_range(100, 299)`. (7) `update_build_row(row_counts=collect_row_counts(con, ["core"]))`. (8) `CHECKPOINT`. A `yield` from `run_sql_range` returns `yield` up to U02-98, which saves state without `"build"` in `stages_done` (the partial file becomes an orphan). |
 | Side effects | Creates the warehouse file. |
 | Errors | As U02-98. |
 | Tests | IT02-21, IT02-22 |
@@ -2386,7 +2371,7 @@ Returns `Callable[[JobContext], JobOutcome]`.
 | Purpose | Stage `enrich`: spec 03 enrichment, then 300–399. |
 | Preconditions | `build` stage done for this build. |
 | Postconditions | `enrich.*` filled by spec 03; `core.incident.content_hash` set; enrich rows of deleted records removed. |
-| Algorithm | (1) Ensure the connection (`open_for_build(create=False)` if closed; `update_build_row(clear_finished=True)` when resuming a completed unpromoted build). (2) `prev = build_path(current)` when `read_current()` returns an ID ≠ this build, else `None`. (3) Import `herness.enrich.pipeline.run_enrichment` lazily. (4) Inside `with ctx.gpu_scope("decider"):` (R-43: the build job starts without a GPU class and only enrichment takes `decider`; the scope restores the previous class on exit, including on error), call `report = X:03/herness.enrich.pipeline.run_enrichment(con, build_id, depth=payload.depth, ctx=ctx, prev_warehouse=prev, stages=[payload.enrich_stage] if payload.enrich_stage else None, llm_factory=run.llm_factory)` (R-48, R-05). (5) Impl 03's yield signal (`_YieldRequested`, raised when `ctx.should_yield()` is true inside enrichment) is caught here and turned into a `yield` result: `enrich` is not added to `stages_done`, so the next run resumes at `enrich` and impl 03 resumes from its own checkpoint key. (6) Store `report.model_dump(mode="json")` in the result. (7) `run_sql_range(300, 399)`. (8) `CHECKPOINT`. |
+| Algorithm | (1) Ensure the connection (`open_for_build(create=False)` if closed; `update_build_row(clear_finished=True)` when resuming a completed unpromoted build). (2) `prev = build_path(current)` when `read_current()` returns an ID ≠ this build, else `None`. (3) Import `herness.enrich.pipeline.run_enrichment` lazily. (4) Without entering any GPU scope (R-43: the build job starts with no GPU class and impl 03's enrichment stages take `decider` themselves through `ctx.gpu_scope("decider")`, so no class is held during this unit's CPU-only SQL), call `report = T03-28 (herness.enrich.pipeline.run_enrichment)(con, build_id, depth=payload.depth, ctx=ctx, prev_warehouse=prev, stages=[payload.enrich_stage] if payload.enrich_stage else None, llm_factory=run.llm_factory)` (R-48, R-05). (5) Yield: `T03-04 (herness.enrich.pipeline.YieldRequested)` (impl 03's public yield signal, U03-152, raised when `ctx.should_yield()` is true inside enrichment after its checkpoint is flushed) is caught here, through the same lazy import, and turned into a `yield` result; any other exception propagates. On yield, `enrich` is not added to `stages_done`, so the next run resumes at `enrich` and impl 03 resumes from its own checkpoint key. (6) Store `report.model_dump(mode="json")` in the result. (7) `run_sql_range(300, 399)`. (8) `CHECKPOINT`. |
 | Errors | Errors from spec 03 propagate; `ConfigError` from `run_enrichment` for an unknown `enrich_stage`. |
 | Tests | IT02-23, IT02-25 |
 
@@ -2398,7 +2383,7 @@ Returns `Callable[[JobContext], JobOutcome]`.
 | Purpose | Stage `score`: facts (400–499 via the spec 04 hook), then scoring. |
 | Preconditions | `build` done. |
 | Postconditions | `metrics.*`, `score.*`, `meta.evidence` written by spec 04. |
-| Algorithm | (1) Ensure the connection. (2) `query_ids = X:04/herness.metrics.facts.materialize_facts(con, build_id)`; the runner never renders 400–499 files itself. (3) `CHECKPOINT`. (4) `report = X:04/herness.metrics.scoring.run_scoring(build_id, steps=payload.score_steps, con=con, ctx=ctx)`: the build connection is passed in (impl 04 DD04-02), so the file is never opened twice and no close and reopen happens (OI-07 closed). `run_scoring` does not close `con`. (5) Store `len(query_ids)` and `report` JSON in the result. (6) `CHECKPOINT`. |
+| Algorithm | (1) Ensure the connection. (2) `query_ids = T04-06 (herness.metrics.facts.materialize_facts)(con, build_id)`; the runner never renders 400–499 files itself. (3) `CHECKPOINT`. (4) `report = T04-13 (herness.metrics.scoring.run_scoring)(build_id, steps=payload.score_steps, con=con, ctx=ctx)`: the build connection is passed in (impl 04 DD04-02), so the file is never opened twice and no close and reopen happens (OI-07 closed). `run_scoring` does not close `con`. (5) Store `len(query_ids)` and `report` JSON in the result. (6) `CHECKPOINT`. |
 | Errors | Spec 04 errors propagate (`SchemaViolation` blocks the build). |
 | Tests | IT02-26 |
 
@@ -2466,15 +2451,15 @@ Returns `CleanupReport` (frozen `dataclass`: `deleted: tuple[str, ...]`, `deferr
 | Field | Content |
 |---|---|
 | Kind | function |
-| Purpose | Orphan removal before a build and retention after promotion (design 02 §7; spec 00 §4 "last 3 builds are kept"). Also used by spec 10 deletion step 5 (`X:10`, `mode="post"`, `keep_last=1`). |
+| Purpose | Orphan removal before a build and retention after promotion (design 02 §7; spec 00 §4 "last 3 builds are kept"). Also used by spec 10 deletion step 5 (`T10-29 (herness.admin.privacy.run_privacy_delete)`, `mode="post"`, `keep_last=1`). |
 | Preconditions | Exclusive job. |
-| Postconditions | Rules below applied; `CURRENT`, `protect` and `builds_in_use()` never deleted. |
-| Algorithm | (1) `builds = list_builds()`; `keep = protect ∪ {CURRENT} ∪ builds_in_use()`. (2) Both modes delete, unless in `keep`: status `building` with `finished_at` NULL (crashed or killed build: the orphan); status `unreadable` whose file mtime is older than 1 hour (`ORPHAN_UNREADABLE_AGE_S = 3600`); status `failed` except the newest failed build. `locked` files are never deleted. (3) `post` also deletes, unless in `keep`: `promoted` or `retired` builds that are not current beyond the newest `keep_last − 1` of them (by `build_id`); `building` builds with `finished_at` set whose `build_id` < the current build's. (4) `post`: for each remaining non-current `promoted` build, try the retire update of U02-104 step 4 and record successes in `retired`. (5) Each deletion goes through `delete_build_files`; `deferred` results are collected. (6) Log `model.build.cleanup` (INFO: counts). |
+| Postconditions | Rules below applied; `CURRENT`, `protect` and every build pinned by a non-terminal run are never deleted. |
+| Algorithm | (1) `builds = list_builds()`; `pinned` = the non-empty `build_id` values of `T06-05 (herness.store.ops.runs.select_runs)(statuses=NON_TERMINAL_RUN_STATUSES)`, where the module constant `NON_TERMINAL_RUN_STATUSES = ("created", "planning", "running", "challenging", "verifying", "writing", "recording")` is the `run.status` CHECK list of §4.3 minus the terminal set `done`, `partial`, `failed`, `canceled` (spec 06 §5.1; reads of `run` belong to impl 06, R-68); `keep = protect ∪ {CURRENT} ∪ pinned`. (2) Both modes delete, unless in `keep`: status `building` with `finished_at` NULL (crashed or killed build: the orphan); status `unreadable` whose file mtime is older than 1 hour (`ORPHAN_UNREADABLE_AGE_S = 3600`); status `failed` except the newest failed build. `locked` files are never deleted. (3) `post` also deletes, unless in `keep`: `promoted` or `retired` builds that are not current beyond the newest `keep_last − 1` of them (by `build_id`); `building` builds with `finished_at` set whose `build_id` < the current build's. (4) `post`: for each remaining non-current `promoted` build, try the retire update of U02-104 step 4 and record successes in `retired`. (5) Each deletion goes through `delete_build_files`; `deferred` results are collected. (6) Log `model.build.cleanup` (INFO: counts). |
 | Side effects | Deletes files; may update `meta.build.status` in old files. |
-| Errors | `StoreBusy` from `builds_in_use()` propagates; per-file errors are handled by `delete_build_files`. |
+| Errors | `StoreBusy` from `select_runs` propagates; per-file errors are handled by `delete_build_files`. |
 | Concurrency | Exclusive job. |
 | Security notes | — |
-| Tests | IT02-32, FT02-03, FT02-05 |
+| Tests | UT02-48, IT02-32, FT02-03, FT02-05 |
 
 ### 3.10 Build SQL files (`herness/model/sql/`)
 
@@ -2611,7 +2596,7 @@ Rules for every file:
 |---|---|
 | Kind | SQL file (stage staging) |
 | Purpose | Jira issue staging plus unnested transitions and links. |
-| Inputs | Raw `jira/issue`. Raw column names follow impl 01's Jira raw column contract (`X:01/herness.connectors.jira.JIRA_ISSUE_COLUMNS` plus the configured custom field columns), which impl 01 owns (R-59); §4.1.2 lists the columns this file reads. |
+| Inputs | Raw `jira/issue`. Raw column names follow impl 01's Jira raw column contract (`T01-17 (herness.connectors.jira.JIRA_ISSUE_COLUMNS)` plus the configured custom field columns), which impl 01 owns (R-59); §4.1.2 lists the columns this file reads. |
 | Outputs | `stg.jira_issue`, `stg.jira_transition`, `stg.jira_link`; `stg.cast_stats` rows. |
 | Tests | IT02-18…IT02-20 |
 
@@ -2872,7 +2857,7 @@ Rules for every file:
 
 | Field | Content |
 |---|---|
-| Kind | SQL file (stage facts), content owned by spec 04 (`X:04/herness/model/sql/400_facts.sql`) |
+| Kind | SQL file (stage facts), content owned by spec 04 (`T04-06 (herness/model/sql/400_facts.sql)`, with the change and work-item facts added by T04-07) |
 | Purpose | `metrics.incident_fact`, `metrics.change_fact`, `metrics.work_item_fact`, `metrics.org_closure`, `metrics.work_item_closure` (design 02 §4.5; types in spec 04 §4.2). |
 | Algorithm | Never rendered by `run_sql_range`; executed by `materialize_facts(con, build_id)` (U02-101). This spec only reserves the file number range 400–499 and checks the tables exist before DQ (`collect_row_counts`). |
 | Tests | IT02-26 |
@@ -2928,7 +2913,7 @@ Impl 01 owns the raw column-name contract that connectors write to the lake (R-5
 | Source | Columns the staging SQL reads |
 |---|---|
 | ServiceNow (every entity) | Each field `f` of the Table API response as `f` (value: sys_id for references, internal UTC text for dates) and `f_display` (display value) when present (spec 01 §5.7). `busines_criticality` is read from `cmdb_ci_service` only; `cmdb_ci_service`, `cmn_department` and `task_sla` may be absent (R-60). |
-| Jira `issue` | `X:01/herness.connectors.jira.JIRA_ISSUE_COLUMNS` = `id`, `key`, the `fields` keys `issuetype`, `parent`, `project`, `components`, `labels`, `status`, `created`, `resolutiondate`, `summary`, `description`, `updated`, `issuelinks` (objects and arrays as JSON text), plus `changelog` and `remotelinks` as JSON text; plus each configured custom field id (`customfield_NNNNN`) as its own column. `changelog` is either a JSON array of histories or an object whose `histories` key holds it; staging accepts both. |
+| Jira `issue` | `T01-17 (herness.connectors.jira.JIRA_ISSUE_COLUMNS)` = `id`, `key`, the `fields` keys `issuetype`, `parent`, `project`, `components`, `labels`, `status`, `created`, `resolutiondate`, `summary`, `description`, `updated`, `issuelinks` (objects and arrays as JSON text), plus `changelog` and `remotelinks` as JSON text; plus each configured custom field id (`customfield_NNNNN`) as its own column. `changelog` is either a JSON array of histories or an object whose `histories` key holds it; staging accepts both. |
 | Monitoring | Columns listed in spec 01 §4.2 (`source_tool`, `event_key`, `ts`, `service`, `host`, `severity_raw`, `title`, `status`, `dedup_key`, `end_ts`, `incident_ref`; `date`, `metric_name`, `value`, `unit`). Watermarks are kept per tool (`watermark.source = monitoring:<tool>`, R-62). |
 | Config-defined | Whatever the connector writes; staged generically |
 
@@ -3187,9 +3172,9 @@ Rowid primary key. Writer `herness.store.ops.metrics.record_metric_samples` (imp
 | 3 | `cleanup_builds(mode="pre")` | orphan files deleted | locked files skipped; `StoreBusy` from ops → job retried |
 | 4 | `_stage_build`: `open_for_build(create)`, `scan_lake`, `run_sql_range(0,99)`, `insert_build_row`, `register_reference_tables`, `run_sql_range(100,299)`, row counts, `CHECKPOINT` | new file, `meta.build` `building` | `BuildSqlError` → status `failed`, job `failed` (no retry, `SchemaViolation`); kill → file stays `building`/`finished_at` NULL → orphan at next run (FT02-03) |
 | 5 | `ctx.save_state` | job `result.state` | ops busy retried |
-| 6 | `_stage_enrich`: inside `ctx.gpu_scope("decider")` (R-43), `run_enrichment(..., stages, llm_factory)` (spec 03, R-48, R-05); then `run_sql_range(300,399)` | `enrich.*`, `core.incident.content_hash`; GPU class restored on exit | spec 03 errors per spec 08 class rules; the retry resumes at `enrich` (state has `build`); impl 03 yield → handler returns `yield` |
+| 6 | `_stage_enrich`: `run_enrichment(..., stages, llm_factory)` (spec 03, R-48, R-05), which enters `ctx.gpu_scope("decider")` itself for its GPU stages (R-43); then `run_sql_range(300,399)` with no GPU class held | `enrich.*`, `core.incident.content_hash`; GPU class back to its entry value (none) after enrichment | spec 03 errors per spec 08 class rules; the retry resumes at `enrich` (state has `build`); impl 03 `YieldRequested` → handler returns `yield` |
 | 7 | `_stage_score`: `materialize_facts`, `run_scoring(build_id, steps, con=con, ctx=ctx)` on the same connection | `metrics.*`, `score.*`, `meta.evidence` | `SchemaViolation` → `failed`; retryable errors → resume at `score` (impl 04 resumes from its checkpoint) |
-| 8 | `_stage_dq`: prev row counts, `run_sql_range(900,999)`, counts, `evaluate_gate` | `meta.dq_result`, `row_counts` | `DqGateFailed` → status `failed`, `CURRENT` untouched, CLI exit code 1 (R-46) |
+| 8 | `_stage_dq`: prev row counts, `run_sql_range(900,999)`, counts, `evaluate_gate` | `meta.dq_result`, `row_counts` | `DqGateFailed` → status `failed`, `CURRENT` untouched, CLI exit code 5 (build blocked, R-46) |
 | 9 | `_stage_promote` → `promote_build`: fault point, status `promoted`, close, `write_current`, retire previous, `cleanup_builds(post)` | `CURRENT`, old files | kill before step `write_current` → `CURRENT` unchanged, rerun resumes at `promote` and re-runs DQ (FT02-04); `StoreBusy` on `CURRENT` → job retried |
 | 10 | metrics and `JobOutcome` | `metric_sample`, `job.result` | metric write failure logged `model.build.metrics_write_failed` (WARNING), outcome still returned |
 
@@ -3215,7 +3200,7 @@ Yield (`ctx.should_yield()`) is checked before each SQL file and each stage; the
 | Step | Unit | On failure |
 |---|---|---|
 | 1 | `migrate()` bootstrap `schema_migration` | busy retried |
-| 2 | discover every owner's files, check each number against `MIGRATION_RANGES` (R-11), verify checksums | `MigrationError(out_of_range, duplicate_version, checksum_mismatch, unknown_applied)` → process exits (CLI code 1, doctor FAIL, R-46) |
+| 2 | discover every owner's files, check each number against `MIGRATION_RANGES` (R-11), verify checksums | `MigrationError(out_of_range, duplicate_version, checksum_mismatch, unknown_applied)` → process exits (CLI code 5, doctor FAIL, R-46) |
 | 3 | apply each pending file in ascending numeric order, each in its own transaction, including pending files numbered below the highest applied one | `MigrationError(apply_failed)`, earlier migrations stay applied, the failed one rolled back |
 
 ### F02-06 Review decision (dashboard, spec 09)
@@ -3223,7 +3208,7 @@ Yield (`ctx.should_yield()`) is checked before each SQL file and each stage; the
 | Step | Unit | On failure |
 |---|---|---|
 | 1 | role check (spec 09) | `PermissionDenied` |
-| 2 | kind `memory_write`: impl 07 `MemoryStore.decide` runs its memory update and calls `decide_review_item(..., conn=conn)` in one transaction (R-33). Other kinds: `decide_review_item` in its own transaction with audit | `NotFoundError` (CLI exit 1), `ReviewItemConflict` (UI shows "already decided"), audit failure → nothing committed; a `memory_write` item decided without `conn` → `ConfigError` |
+| 2 | kind `memory_write`: impl 07 `MemoryStore.approve` or `MemoryStore.reject` runs its memory update and calls `decide_review_item(..., conn=conn)` in one transaction (R-33). Other kinds: `decide_review_item` in its own transaction with audit | `NotFoundError` (CLI exit 7), `ReviewItemConflict` (UI shows "already decided"), audit failure → nothing committed; a `memory_write` item decided without `conn` (other than the system rejection of a purge, R-54) → `ConfigError` |
 | 3 | owner acts on approved items at its next step (for `mapping_suggestion`: next build via U02-60) | — |
 
 ### F02-07 Privacy deletion (driven by spec 10; the parts this spec provides)
@@ -3240,41 +3225,41 @@ Yield (`ctx.should_yield()`) is checked before each SQL file and each stage; the
 
 ## 6. Error handling
 
-CLI exit codes follow R-46: `0` success, `1` operation failed, `2` usage error, `3` validation found problems (`config validate --strict`, `doctor` FAIL), `4` eval gate failed. Every failure below that reaches the CLI exits `1`; the earlier codes 5, 7 and 8 are gone.
+CLI exit codes follow R-46 (corrected), which is design 09 §5.8; the CLI (impl 09) maps the class that reaches it. For this spec's failures: `ConfigError` → 3; `SchemaViolation` and its subclasses (`LakeContractError`, `MigrationError`, `BuildSqlError`, `DqGateFailed`) → 5 (build blocked); `NotFound` and its subclass `NotFoundError` → 7; `StoreBusy` left after retries → 8; `PermissionDenied` → 11; any other `HernessError` (for example `LakeStateError`, `ReviewItemConflict`) → 1; `herness doctor` FAIL → 1; usage errors → 2 (Typer only). A failed job is reported by the CLI's job follower with the code of its recorded error class. The "Exit" column below gives the code.
 
 | Failure condition | Class raised | Caught where | Retry / fallback | User-visible effect | Log event |
 |---|---|---|---|---|---|
-| Invalid source/entity name | `ConfigError` | connector job top level | none | job failed, exit 1 | `jobs.job_failed` (spec 08) |
-| Batch violates lake contract | `LakeContractError` | spec 01 runner (aborts writer) | none | sync job failed, exit 1 | `store.lake.contract_violation` (ERROR) |
-| Lake file locked on create/rename | `StoreBusy` | spec 01 runner / spec 08 | job retry policy | none unless exhausted (exit 1) | `store.lake.busy` (WARNING) |
+| Invalid source/entity name | `ConfigError` | connector job top level | none | job failed, exit 3 | `jobs.job_failed` (spec 08) |
+| Batch violates lake contract | `LakeContractError` | spec 01 runner (aborts writer) | none | sync job failed, exit 5 | `store.lake.contract_violation` (ERROR) |
+| Lake file locked on create/rename | `StoreBusy` | spec 01 runner / spec 08 | job retry policy | none unless exhausted (exit 8) | `store.lake.busy` (WARNING) |
 | Writer used after commit/abort | `LakeStateError` | none (programming error) | none | job failed | `jobs.job_failed` |
 | Purge hits locked file | `StoreBusy` | spec 10 deletion job | job retry | deletion stays `running` | `store.lake.busy` |
 | `CURRENT` invalid content | `SchemaViolation` | reader's page wrapper / CLI | none | "No promoted build" message with fix `herness pipeline` | `store.warehouse.current_invalid` (ERROR) |
-| `CURRENT` points to missing file | `NotFoundError` | same | none | exit 1 | `store.warehouse.current_missing_file` (ERROR) |
-| Warehouse lock on open | `StoreBusy` | caller policy `warehouse_read` | 3 attempts | exit 1 when exhausted | `store.warehouse.busy` (WARNING) |
+| `CURRENT` points to missing file | `NotFoundError` | same | none | exit 7 | `store.warehouse.current_missing_file` (ERROR) |
+| Warehouse lock on open | `StoreBusy` | caller policy `warehouse_read` | 3 attempts | exit 8 when exhausted | `store.warehouse.busy` (WARNING) |
 | Retired file still open on delete | none (returns `deferred`) | `cleanup_builds` | next pipeline run | none | `store.warehouse.delete_deferred` (WARNING) |
-| SQLite busy/locked | `StoreBusy` | `run_write` via `retry_call("sqlite_write")` | 6 attempts, 30 s | exit 1 when exhausted | `resilience.retry` (spec 08), `store.ops.busy_exhausted` (ERROR) |
+| SQLite busy/locked | `StoreBusy` | `run_write` via `retry_call("sqlite_write")` | 6 attempts, 30 s | exit 8 when exhausted | `resilience.retry` (spec 08), `store.ops.busy_exhausted` (ERROR) |
 | SQLite constraint failure | `SchemaViolation` | owner / job top level | none | operation fails | `store.ops.constraint_failed` (ERROR, `op`) |
 | Nested `run_write` | `ConfigError` | none (programming error) | none | — | — |
 | JSON too large / not serialisable | `SchemaViolation` | owner | none | operation fails | `store.ops.json_rejected` (WARNING, `field`) |
-| Migration checksum mismatch / out of range / duplicate / unknown | `MigrationError` | CLI entry, worker start | none | exit 1, doctor FAIL with fix "restore the migration file or upgrade the code" | `store.ops.migration_failed` (CRITICAL) |
-| Migration statement fails | `MigrationError(apply_failed)` | same | none (rolled back) | exit 1 | `store.ops.migration_failed` |
-| SQLite too old / no FTS5 | `ConfigError` | CLI entry | none | exit 1; `herness doctor` FAIL (exit 3) | `store.ops.sqlite_unsupported` (CRITICAL) |
-| Review item missing | `NotFoundError` | spec 09 | none | "not found" | — |
-| Review item already decided | `ReviewItemConflict` | spec 09 | none | "already decided" | `store.ops.review_conflict` (INFO) |
-| `memory_write` item decided outside `MemoryStore.decide` (R-33) | `ConfigError` | none (programming error) | none | decision not saved | — |
+| Migration checksum mismatch / out of range / duplicate / unknown | `MigrationError` | CLI entry, worker start | none | exit 5, doctor FAIL with fix "restore the migration file or upgrade the code" | `store.ops.migration_failed` (CRITICAL) |
+| Migration statement fails | `MigrationError(apply_failed)` | same | none (rolled back) | exit 5 | `store.ops.migration_failed` |
+| SQLite too old / no FTS5 | `ConfigError` | CLI entry | none | exit 3; `herness doctor` FAIL (exit 1) | `store.ops.sqlite_unsupported` (CRITICAL) |
+| Review item missing | `NotFoundError` | spec 09 | none | "not found", exit 7 | — |
+| Review item already decided | `ReviewItemConflict` | spec 09 | none | "already decided", exit 1 | `store.ops.review_conflict` (INFO) |
+| `memory_write` item decided outside `MemoryStore.approve` / `reject` (R-33), other than the purge's system rejection (R-54) | `ConfigError` | none (programming error) | none | decision not saved | — |
 | Invalid review-item arguments (match key, group key, payload field name, limit, cursor) | `ConfigError` | caller (impl 03, 07, 09) | none | operation fails | — |
-| Migration file number outside every owner range, or duplicate | `MigrationError(out_of_range / duplicate_version)` | CLI entry, worker start | none | exit 1, doctor FAIL with fix "rename the migration into its owner's range" | `store.ops.migration_failed` (CRITICAL) |
-| Impl 03 yield inside enrichment | none (impl 03 `_YieldRequested` caught in U02-100) | `_stage_enrich` | resume at `enrich` next run | none | `model.build.stage_done` not emitted for `enrich` |
+| Migration file number outside every owner range, or duplicate | `MigrationError(out_of_range / duplicate_version)` | CLI entry, worker start | none | exit 5, doctor FAIL with fix "rename the migration into its owner's range" | `store.ops.migration_failed` (CRITICAL) |
+| Impl 03 yield inside enrichment | `YieldRequested` (impl 03 U03-152), caught in U02-100 | `_stage_enrich` | resume at `enrich` next run | none | `model.build.stage_done` not emitted for `enrich` |
 | Audit write fails | error from `audit` (spec 10: `FatalError` after 3 `StoreBusy`) | spec 09 | none | decision not saved | spec 10 events |
 | Vector filter id invalid | `ConfigError` | spec 03/07 | none | step fails | `store.vectors.invalid_id` (ERROR, count) |
 | LanceDB commit conflict | `StoreBusy` | spec 03/07 policy | per caller | — | `store.vectors.busy` (WARNING) |
 | Vector schema mismatch | `SchemaViolation` | job top level | none | job failed | `store.vectors.schema_mismatch` (ERROR) |
-| Invalid payload | `ConfigError` | job worker | none | exit 1 | `model.build.payload_invalid` (ERROR) |
-| Build SQL file fails | `BuildSqlError` | job worker | none; status `failed` | exit 1 | `model.build.failed` (ERROR) |
-| Template render failure | `ConfigError` | job worker | none | exit 1 | `model.build.render_failed` (ERROR) |
-| Unreadable lake file | `SchemaViolation` | job worker | none | exit 1 | `model.build.failed` |
-| DQ error check fails | `DqGateFailed` | job worker | none | exit 1; dashboard shows failed checks | `model.dq.check_failed` (ERROR), `model.build.failed` |
+| Invalid payload | `ConfigError` | job worker | none | exit 3 | `model.build.payload_invalid` (ERROR) |
+| Build SQL file fails | `BuildSqlError` | job worker | none; status `failed` | exit 5 | `model.build.failed` (ERROR) |
+| Template render failure | `ConfigError` | job worker | none | exit 3 | `model.build.render_failed` (ERROR) |
+| Unreadable lake file | `SchemaViolation` | job worker | none | exit 5 | `model.build.failed` |
+| DQ error check fails | `DqGateFailed` | job worker | none | exit 5; dashboard shows failed checks | `model.dq.check_failed` (ERROR), `model.build.failed` |
 | Kill mid-stage | none | next run | resume or orphan cleanup | `CURRENT` unchanged | `model.build.orphan_deleted` (INFO) at next run |
 | Spec 03/04 hook error | per their taxonomy | job worker | spec 08 class rules; resume at that stage | per class | `model.build.failed` |
 
@@ -3434,7 +3419,7 @@ None. This component reads no `secret:` reference. The audit call (spec 10) hand
 
 All events carry `component` (`store` or `model`) and `job_id`/`build_id` when in scope.
 
-### 8.2 Metrics (`metric_sample`, written once per build job through `X:08/herness.store.ops.metrics.record_metric_samples`, R-12)
+### 8.2 Metrics (`metric_sample`, written once per build job through `T08-05 (herness.store.ops.metrics.record_metric_samples)`, R-12)
 
 | Name | Kind | Labels | Meaning |
 |---|---|---|---|
@@ -3460,7 +3445,7 @@ Not applicable: no unit in this spec runs inside an agent run, and spec 05's `Tr
 | Warehouse | `warehouse_health` (U02-33) | per U02-33; stale after 48 h |
 | Vectors | `VectorStore.health` (U02-70) | per U02-70 |
 
-`herness doctor` (spec 10, `X:10/herness doctor checks`) calls all three.
+`herness doctor` is `T09-22 (herness._cli.doctor.run_doctor)`, which appends impl 10's host checks from `T10-27 (herness.admin.doctor_host.doctor_checks)`. Its own `ops_migrations` and `current_build` rows read `pending_migrations` (U02-47) and `CURRENT` directly; it does not yet call these three health functions (C14, §13.3).
 
 ## 9. Configuration
 
@@ -3536,7 +3521,7 @@ Hardware for BT02-01…BT02-04: reference PC of design 02 §9 (16 cores, 64 GB R
 
 ## 11. Test specification
 
-Fixtures (spec 11 layout): `ops_store` (temp `ops.sqlite`, `reset_connections`), `lake_root` (temp raw root), `lake_small` (`tests/fixtures/lake_small/`, X:11), `build_harness` (`tests/support/build_harness.py`, added in T02-12: renders and runs a range of build files on a temp DuckDB file with a given inventory and reference data), `fake_job_context` (X:08 fake `JobContext` with in-memory state), `frozen_time` (freezegun), `fault_plan` (writes a `HERNESS_FAULTS` file). Record IDs, ULIDs and clocks are fixed.
+Fixtures (spec 11 layout): `ops_store` (temp `ops.sqlite`, `reset_connections`), `lake_root` (temp raw root), `lake_small` (`T11-16 (tests/fixtures/lake_small)`), `build_harness` (`tests/support/build_harness.py`, added in T02-12: renders and runs a range of build files on a temp DuckDB file with a given inventory and reference data), `fake_job_context` (a test fake of the `T08-03 (herness.core.jobs.JobContext)` protocol with in-memory state, defined in `tests/support/build_harness.py` of T02-12), `frozen_time` (freezegun), `fault_plan` (writes a JSON `HERNESS_FAULTS` plan, honoured only with `HERNESS_ENV=test`, R-40). Record IDs, ULIDs and clocks are fixed.
 
 ### 11.1 Unit tests (`unit`)
 
@@ -3589,7 +3574,7 @@ Fixtures (spec 11 layout): `ops_store` (temp `ops.sqlite`, `reset_connections`),
 | UT02-45 | U02-57, U02-59 | decided item; unknown ID | decide; get | `ReviewItemConflict`; `NotFoundError` |
 | UT02-46 | U02-58 | 5 items mixed | list with filters and paging | order and filters correct; `limit=5001` → `ConfigError`; `status` and `statuses` together → `ConfigError` |
 | UT02-47 | U02-60 | approved and pending suggestions | call | only approved, ordered |
-| UT02-48 | U02-61 | runs in `running`, `done`, `partial` | call | only the running run's build |
+| UT02-48 | U02-105 | ops store with runs in `running`, `done`, `partial`, each on its own build; four unprotected promoted builds | `cleanup_builds(mode="post", keep_last=1)` | only the running run's build survives besides `CURRENT` (it is read through impl 06 `select_runs`, R-68) |
 | UT02-49 | U02-63…U02-66, U02-69 | temp vectors dir | ensure twice; table; count | tables exist with schemas; idempotent; unknown name → `ConfigError` |
 | UT02-50 | U02-67 | 3 rows | delete 2 IDs | returns 2; 1 row left |
 | UT02-51 | U02-68 | delete then purge | checkout previous version | deleted rows not retrievable |
@@ -3617,7 +3602,7 @@ Fixtures (spec 11 layout): `ops_store` (temp `ops.sqlite`, `reset_connections`),
 | UT02-73 | U02-131 | 3 pending `label_check` items for question `q1`, 1 for `q2`, 1 approved | count ungrouped; grouped by `question`; group key `x'` | `{"": 4}`; `{"q1": 3, "q2": 1}`; `ConfigError` |
 | UT02-74 | U02-132 | pending and approved `memory_write` items | replace `content` with `""` on both; unknown ID; key `bad-key` | payload `content` blank, other keys and decision fields unchanged; `NotFoundError`; `ConfigError`; log has key names only |
 | UT02-75 | U02-58 | 6 decided items with equal and different `decided_at`, 2 pending | page with `statuses=("approved","rejected")`, `decided_after` cursor, `limit=2` until empty | every decided item exactly once in (`decided_at`, `item_id`) order; pending never returned; `offset` with a cursor → `ConfigError`; a plain `datetime` equal to one item's `decided_at` returns only later items (RQ-01) |
-| UT02-76 | U02-59 | pending `memory_write` and `label_check` items; audit capture fixture | decide `memory_write` without `conn`; decide it with `conn` inside a `run_write` callback that then raises; decide it with `conn` and commit | `ConfigError`, nothing written; after the raising callback the status is still `pending`; after the committing callback the status is `approved` and exactly one audit call was made (R-33) |
+| UT02-76 | U02-59 | pending `memory_write` and `label_check` items; audit capture fixture | decide `memory_write` as `approved` by a user without `conn`; decide it with `conn` inside a `run_write` callback that then raises; decide it with `conn` and commit; on a second pending `memory_write` item, decide `rejected` by `system` without `conn` | `ConfigError`, nothing written; after the raising callback the status is still `pending`; after the committing callback the status is `approved` and exactly one audit call was made (R-33); the system rejection succeeds with one audit call (R-54, C15) |
 | UT02-77 | U02-133 | existing build file; valid ID without file; `../x` | call | `True`; `False`; `False` without any path built |
 | UT02-78 | U02-134, U02-98 | `fake_job_context` whose `job.payload` holds `{"stages": ["build"]}`; recording `run_build_pipeline` stub | build the handler with a fake `llm_factory`, call it with `ctx` | the handler takes one argument; payload read from `ctx.job.payload` (R-42); `llm_factory` reaches `run_build_pipeline` |
 | UT02-79 | U02-58 | `label_check` items with payload `question` `q1`/`q2` and `purpose` `spot_check`/`gold` | list with `payload_match={"question": "q1", "purpose": "gold"}`; with a value containing `'` and `%`; with key `a.b`; with 9 keys | only items matching both keys; the quoted value matches literally; `ConfigError` for the bad key and for 9 keys (RQ-02) |
@@ -3657,13 +3642,13 @@ Fixtures (spec 11 layout): `ops_store` (temp `ops.sqlite`, `reset_connections`),
 | IT02-22 | U02-97, U02-76 | SQL dir copy with a broken file 230 | pipeline | `BuildSqlError` naming `230_incident.sql`; status `failed`; `CURRENT` unchanged; message has no literal values |
 | IT02-23 | 300 | enrich rows for a live and a deleted record | stage enrich (fake `run_enrichment` writing rows) | `content_hash` set; deleted record's rows gone |
 | IT02-24 | 310 | member of a missing cluster | stage enrich | member deleted; count recorded |
-| IT02-25 | U02-100 | CURRENT exists; `fake_job_context` recording GPU requests; payload `enrich_stage="link"`; a fake `llm_factory` | stage enrich with a recording fake `run_enrichment`; then a fake that raises impl 03's yield signal | called with (con, build_id, depth, ctx, prev path, `stages=["link"]`, the same `llm_factory`) inside `gpu_scope("decider")`, class restored after; on the yield signal the handler returns `yield` and `enrich` is not in `stages_done` |
+| IT02-25 | U02-100 | CURRENT exists; `fake_job_context` recording GPU requests; payload `enrich_stage="link"`; a fake `llm_factory` | stage enrich with a recording fake `run_enrichment`; then a fake that raises `YieldRequested` | called with (con, build_id, depth, ctx, prev path, `stages=["link"]`, the same `llm_factory`); U02-100 itself makes no GPU request (the recording context sees none from the handler, R-43) and the class during `run_sql_range(300, 399)` is `none`; on the yield signal the handler returns `yield` and `enrich` is not in `stages_done` |
 | IT02-26 | U02-101 | fakes for 04 hooks | stage score | `materialize_facts` then `run_scoring(build_id, steps=..., con=<the build connection>, ctx=ctx)`; runner did not render 400 files; the build connection stays open and is never reopened |
 | IT02-27 | U02-97, U02-98 | `fake_job_context` requesting yield after 3 SQL files; then no yield | run twice | first `yield`, no `build` in state → second run creates a new build and deletes the orphan |
 | IT02-28 | U02-127, U02-94 | crafted core tables per check | stage dq | each row's value, threshold, severity, passed as in U02-127 |
 | IT02-29 | F02-02 | previous promoted build; new lake with 10 % fewer incidents | pipeline to promote | `DqGateFailed` with `row_count_drop:core.incident`; status `failed`; `CURRENT` unchanged |
 | IT02-30 | U02-94 | warn failures only | pipeline | promoted; warnings logged |
-| IT02-31 | spec 11 `test_build_dirty` (X:11) | synthetic `small`, dirty `default` | pipeline | DQ counts within ±1 of truth; promoted |
+| IT02-31 | `T11-19 (tests/integration/test_build_dirty.py)` | synthetic `small`, dirty `default` | pipeline | DQ counts within ±1 of truth; promoted |
 | IT02-32 | U02-104, U02-105 | 5 promoted builds, one pinned by a running run | promote a new build with `keep_last=3` | CURRENT new; newest 2 others kept plus the pinned one; rest deleted; previous marked `retired` |
 | IT02-33 | 140 | configured `files/service_costs` entity | build | `stg.files_service_costs` with latest rows and no `_payload` |
 
@@ -3694,7 +3679,7 @@ Fixtures (spec 11 layout): `ops_store` (temp `ops.sqlite`, `reset_connections`),
 | ST02-10 | TH02-10 | custom field `x" ; DROP TABLE core.incident; --`; enum value with quotes | config rejects the field; enum value stored as data and matched literally | integration |
 | ST02-11 | TH02-11 | template with `{{ ''.__class__.__mro__ }}` | `ConfigError` (SecurityError) | unit |
 | ST02-12 | TH02-12 | run the `lake_small` build with the spec 10 socket guard in strict mode and a recording audit hook | no network attempt; `autoinstall_known_extensions`/`autoload_known_extensions` false on every connection | integration |
-| ST02-13 | TH02-13 | inspect built warehouse | no `stg` table has `_payload`; every `core` VARCHAR column classified as raw text in §7.6 is in `X:05/harness.sql.blocked_columns` default | integration |
+| ST02-13 | TH02-13 | inspect built warehouse | no `stg` table has `_payload`; every `core` VARCHAR column classified as raw text in §7.6 is in `T05-04 (config/models.yaml harness.sql.blocked_columns)` default | integration |
 | ST02-14 | TH02-14 | build `lake_small` with sentinel strings in descriptions and a failing cast literal; capture logs and error text | no sentinel or literal in logs, `meta.*` or `BuildSqlError` | integration |
 | ST02-15 | TH02-15 | edit an applied migration | startup refuses with `MigrationError` | unit |
 | ST02-16 | TH02-16 | deletion request `done` for a record with lake rows, enrich rows (from previous build) and a vector | next build | record absent from `stg`, `core`, `enrich` | integration |
@@ -3714,7 +3699,7 @@ All cards are Phase 1.
 | Field | Content |
 |---|---|
 | Goal | Error classes, data layout and config section models exist and validate. |
-| Depends on | `X:00/herness.core.errors`, `X:10/herness.core.config.HernessConfig` |
+| Depends on | `T00-03 (herness.core.errors)`, `T10-03 (herness.core.config.HernessConfig)` |
 | Units | U02-01…U02-07, U02-71…U02-77 |
 | Files | `herness/store/errors.py`, `herness/store/layout.py`, `herness/model/settings.py`, `herness/model/errors.py` |
 | Tests | UT02-53, UT02-54, UT02-66 |
@@ -3728,12 +3713,12 @@ All cards are Phase 1.
 | Field | Content |
 |---|---|
 | Goal | `LakeWriter` writes, rotates, commits and aborts per design 02 §3.2. |
-| Depends on | T02-01, `X:00/herness.core.ids.new_ulid` |
+| Depends on | T02-01, `T00-05 (herness.core.ids.new_ulid)` |
 | Units | U02-08…U02-19 |
 | Files | `herness/store/lake.py` |
 | Tests | UT02-01…UT02-13, PT02-01, ST02-01, ST02-02 |
 | Threats | TH02-01, TH02-02 |
-| Acceptance checks | listed tests pass; module ≤ 380 lines; spec 11 generator smoke (`X:11/tools/synth_data.py --scale tiny`) writes a readable lake |
+| Acceptance checks | listed tests pass; module ≤ 380 lines; spec 11 generator smoke (`T11-14 (tools/synth_data.py) --scale tiny`) writes a readable lake |
 | Blocked by | OI-06 (glob check inside ST02-02 decides `LAKE_FILE_PATTERN`) |
 | Size | M |
 
@@ -3756,7 +3741,7 @@ All cards are Phase 1.
 | Field | Content |
 |---|---|
 | Goal | Per-thread connections, `run_write` with retry and fault point, JSON helpers, package namespace. |
-| Depends on | T02-01, `X:08/herness.core.resilience.retry_call`, `X:08/herness.core.resilience.fault_point` |
+| Depends on | T02-01, `T08-07 (herness.core.resilience.retry_call)`, `T08-08 (herness.core.resilience.fault_point)` |
 | Units | U02-36…U02-43, U02-62 (spec 02 blocks and the block layout of §2.3 rule 4) |
 | Files | `herness/store/ops/__init__.py`, `herness/store/ops/core.py` |
 | Tests | UT02-25…UT02-31, UT02-68, FT02-02, ST02-18, BT02-06 |
@@ -3775,7 +3760,7 @@ All cards are Phase 1.
 | Files | `herness/store/ops/migrate.py`, `herness/store/migrations/001_ingestion_health.sql`, `herness/store/migrations/002_jobs.sql`, `herness/store/errors.py` |
 | Tests | UT02-33…UT02-35, UT02-40…UT02-42, UT02-70, UT02-71, ST02-15, BT02-07 |
 | Threats | TH02-15 |
-| Acceptance checks | listed tests pass; `herness init` (X:09) creates `ops.sqlite` with 2 migrations recorded |
+| Acceptance checks | listed tests pass; `herness init` (`T09-22 (herness._cli.cmd_system)`) creates `ops.sqlite` with 2 migrations recorded |
 | Blocked by | none |
 | Size | M |
 
@@ -3793,15 +3778,15 @@ All cards are Phase 1.
 | Blocked by | none (DD02-04 resolved by R-12) |
 | Size | M |
 
-#### T02-07 Review items and build-retention reads
+#### T02-07 Review items
 
 | Field | Content |
 |---|---|
-| Goal | `review_item` functions with audit (including decisions inside a caller's transaction, R-33), keyset listing, `approved_mapping_suggestions`, `builds_in_use`. |
-| Depends on | T02-06, `X:10/herness.core.audit.audit` |
-| Units | U02-55…U02-61 |
+| Goal | `review_item` functions with audit (including decisions inside a caller's transaction, R-33), keyset listing, `approved_mapping_suggestions`. `builds_in_use` is removed (R-68; U02-61). |
+| Depends on | T02-06, `T10-05 (herness.core.audit.audit)` |
+| Units | U02-55…U02-60 |
 | Files | `herness/store/ops/shared.py`, `herness/store/ops/__init__.py` |
-| Tests | UT02-43…UT02-48, UT02-75, UT02-76, UT02-79, ST02-06, ST02-07 |
+| Tests | UT02-43…UT02-47, UT02-75, UT02-76, UT02-79, ST02-06, ST02-07 |
 | Threats | TH02-06, TH02-07 |
 | Acceptance checks | listed tests pass |
 | Blocked by | none |
@@ -3966,21 +3951,21 @@ All cards are Phase 1.
 | Field | Content |
 |---|---|
 | Goal | `run_build_pipeline` runs stage `build` end to end on `lake_small`. |
-| Depends on | T02-16, T02-17, T02-10, `X:08/herness.core.jobs.JobContext`, `X:08/herness.core.jobs.register_handler`, `X:01/herness.store.ops.ingest.deleted_record_ids`, `X:01/herness.store.ops.ingest.list_watermarks`, `X:10/herness.core.config.config_hash`, `X:08/herness.store.ops.metrics.record_metric_samples` |
+| Depends on | T02-16, T02-17, T02-10, `T08-03 (herness.core.jobs.JobContext)`, `T08-12 (herness.core.jobs.register_handler)`, `T10-32 (herness.store.ops.privacy.deleted_record_ids)`, `T01-04 (herness.store.ops.ingest.list_watermarks)`, `T10-03 (herness.core.config.config_hash)`, `T08-05 (herness.store.ops.metrics.record_metric_samples)` |
 | Units | U02-88…U02-92, U02-95…U02-99 |
 | Files | `herness/model/meta.py`, `herness/model/build.py` |
 | Tests | UT02-65, UT02-67, UT02-69, IT02-21, IT02-22, IT02-27, ST02-12, ST02-14 |
 | Threats | TH02-12, TH02-14 |
-| Acceptance checks | listed tests pass; `herness build` (X:09) on `lake_small` produces a `building` file with `finished_at` set |
-| Blocked by | `X:11/tests/fixtures/lake_small` exists |
+| Acceptance checks | listed tests pass; `herness build` (`T09-23 (herness._cli.cmd_data)`) on `lake_small` produces a `building` file with `finished_at` set |
+| Blocked by | `T11-16 (tests/fixtures/lake_small)` exists |
 | Size | M |
 
 #### T02-19 Enrich and score stages, attach SQL
 
 | Field | Content |
 |---|---|
-| Goal | Stages `enrich` (in the `decider` GPU scope, with `stages` and `llm_factory`) and `score` (on the build connection) call spec 03/04 hooks; `300`, `310` attach and prune; the one-argument handler factory exists. |
-| Depends on | T02-18, `X:03/herness.enrich.pipeline.run_enrichment`, `X:04/herness.metrics.facts.materialize_facts`, `X:04/herness.metrics.scoring.run_scoring` (fakes suffice for tests), `X:08/herness.core.jobs.JobContext.gpu_scope` |
+| Goal | Stages `enrich` (with `stages` and `llm_factory`; impl 03 takes the `decider` GPU scope itself, R-43; `YieldRequested` → `yield`) and `score` (on the build connection) call spec 03/04 hooks; `300`, `310` attach and prune; the one-argument handler factory exists. |
+| Depends on | T02-18, `T03-28 (herness.enrich.pipeline.run_enrichment)`, `T04-06 (herness.metrics.facts.materialize_facts)`, `T04-13 (herness.metrics.scoring.run_scoring)` (fakes suffice for tests), `T03-04 (herness.enrich.pipeline.YieldRequested)` |
 | Units | U02-100, U02-101, U02-124, U02-125, U02-126, U02-134 |
 | Files | `herness/model/build.py`, `herness/model/sql/300_attach_decisions.sql`, `herness/model/sql/310_attach_clusters.sql` |
 | Tests | IT02-23…IT02-26, UT02-78, ST02-16 |
@@ -4008,12 +3993,12 @@ All cards are Phase 1.
 | Field | Content |
 |---|---|
 | Goal | Stage `promote`, retention and orphan cleanup. |
-| Depends on | T02-20 |
+| Depends on | T02-20, `T06-05 (herness.store.ops.runs.select_runs)` (a fake suffices for tests) |
 | Units | U02-103…U02-105 |
 | Files | `herness/model/promote.py`, `herness/model/build.py` |
-| Tests | IT02-32, FT02-03, FT02-04, FT02-05, ST02-17 |
+| Tests | UT02-48, IT02-32, FT02-03, FT02-04, FT02-05, ST02-17 |
 | Threats | TH02-03, TH02-17 |
-| Acceptance checks | listed tests pass; `herness pipeline` (X:09) on `lake_small` promotes and `herness status` shows the build |
+| Acceptance checks | listed tests pass; `herness pipeline` (`T09-23 (herness._cli.cmd_data)`) on `lake_small` promotes and `herness status` shows the build |
 | Blocked by | none |
 | Size | M |
 
@@ -4028,7 +4013,7 @@ All cards are Phase 1.
 | Tests | IT02-31, FT02-06, ST02-13, BT02-05 |
 | Threats | TH02-13 |
 | Acceptance checks | listed tests pass; coverage of `herness/store` and `herness/model` at or above spec 11 §4.3 targets |
-| Blocked by | `X:11/tools/synth_data.py` `small` scale with `--dirty default`; `X:05/harness.sql.blocked_columns` default published |
+| Blocked by | `T11-14 (tools/synth_data.py)` `small` scale with `--dirty default`; `T05-04 (config/models.yaml harness.sql.blocked_columns)` default published |
 | Size | S |
 
 #### T02-23 Scale benchmarks
@@ -4042,12 +4027,12 @@ All cards are Phase 1.
 | Tests | BT02-01…BT02-04 |
 | Threats | — |
 | Acceptance checks | results written to `data/bench/`; all four pass their thresholds |
-| Blocked by | `X:11/tools/synth_data.py` `full` scale; reference hardware |
+| Blocked by | `T11-14 (tools/synth_data.py)` `full` scale; reference hardware |
 | Size | S |
 
 ## 13. Design deltas and open items
 
-Rulings: the consistency pass rulings in [`DECISIONS.md`](DECISIONS.md) (R-01…R-66) bind this spec. Each item below is marked "Resolved by R-nn" (a ruling settled it and this spec follows the ruling), "Accepted (R-nn)" (a ruling accepted this spec's proposal; the design spec edit is pending per `DECISIONS.md` §9), or "Still open" (no ruling; the default stated here is implemented).
+Rulings: the consistency pass rulings in [`DECISIONS.md`](DECISIONS.md) (R-01…R-76, with R-46 as corrected) bind this spec. Each item below is marked "Resolved by R-nn" (a ruling settled it and this spec follows the ruling), "Accepted (R-nn)" (a ruling accepted this spec's proposal; the design spec edit is pending per `DECISIONS.md` §9), or "Still open" (no ruling; the default stated here is implemented).
 
 ### 13.1 Design deltas
 
@@ -4064,7 +4049,7 @@ Rulings: the consistency pass rulings in [`DECISIONS.md`](DECISIONS.md) (R-01…
 | DD02-09 | 02 §4.7, §7 | `finished_at IS NULL` with `status = 'building'` defines an orphan; a completed unpromoted build keeps `status = 'building'` with `finished_at` set; `retired` is written best-effort when the old file is not held open. | Still open |
 | DD02-10 | 02 §3.1, 01 §4.2 | Jira flattening contract: each key of `fields` becomes its own column (JSON text for objects), plus `changelog`, `issuelinks`, `remotelinks`. | Resolved by R-59: impl 01 owns the contract (`JIRA_ISSUE_COLUMNS`); §4.1.2 now only lists what staging reads. |
 | DD02-11 | 02 §5, 00 §3 | Migration numbering: migrations 001–006 create every design table; implementation-only tables and columns use owner ranges (`MIGRATION_RANGES`, U02-129) and the runner applies all files in numeric order, allowing gaps and late lower-numbered files. | Accepted (R-11) |
-| DD02-12 | 02 §5.5 | `review_item` API: `decide_review_item` takes an optional caller connection and refuses `memory_write` items outside `MemoryStore.decide`; new `create_review_item_if_absent`, `count_review_items`, `update_review_payload`; `list_review_items` gains `statuses`, `decided_after` and `payload_match`. | Accepted (R-08, R-09, R-33; impl 03 RQ-01, RQ-02) |
+| DD02-12 | 02 §5.5 | `review_item` API: `decide_review_item` takes an optional caller connection and refuses `memory_write` items outside `MemoryStore.approve` / `MemoryStore.reject` (except the system rejection of a purge, R-54); new `create_review_item_if_absent`, `count_review_items`, `update_review_payload`; `list_review_items` gains `statuses`, `decided_after` and `payload_match`. | Accepted (R-08, R-09, R-33; impl 03 RQ-01, RQ-02) |
 
 ### 13.2 Open items (with the default this spec implements)
 
@@ -4084,9 +4069,9 @@ Rulings: the consistency pass rulings in [`DECISIONS.md`](DECISIONS.md) (R-01…
 | OI-12 | LanceDB version-cleanup API names on the pinned version | `compact_files` + `cleanup_old_versions`, else `optimize(cleanup_older_than=…)` | T02-08 | Still open |
 | OI-13 | open-questions (b) 26: a restored tombstone with an older `sys_updated_on` stays deleted | dedupe as designed (latest `_source_updated_at` wins); spec 01 reconciliation decides whether to bump the timestamp | none | Still open |
 | OI-14 | ENG §2.3 module-state exception: per-thread ops connections and path override | allowed and reset by the `ops_store` fixture | T02-04 | Still open |
-| OI-15 | `HealthStatus` type location: no spec defines it yet (R-01 lists no generic submodule of `herness.core.types`) | `X:00/herness.core.types.HealthStatus` (fields `status`, `reason`) | T02-05, T02-08, T02-09 | Still open |
-| OI-16 | Impl 03's yield signal `_YieldRequested` is private but must be caught by the `build_pipeline` handler (U02-100) | `_stage_enrich` catches it through a lazy import; impl 03 is asked to make it public or return a yield status | T02-19 | Still open |
-| OI-17 | `X:01/herness.store.ops.ingest.list_watermarks` (used by U02-99 for `meta.build.source_watermarks`) is not defined by impl 01 | impl 01 adds it (R-09: the owner adds units other specs reference); until then U02-99 cannot fill `source_watermarks` | T02-18 | Still open |
+| OI-15 | `HealthStatus` type location: no spec defines it (R-01 lists no generic submodule of `herness.core.types`) | no shared type: U02-33, U02-48 and U02-70 return the ENG §4 tuple `(status, reason)` that impl 03 and impl 09 health functions also return (§3.4) | none | Closed (no ruling needed) |
+| OI-16 | Impl 03's yield signal was private but the `build_pipeline` handler (U02-100) must catch it | impl 03 published `T03-04 (herness.enrich.pipeline.YieldRequested)` (U03-152); U02-100 catches it by that name | none | Resolved (impl 03 U03-152) |
+| OI-17 | `T01-04 (herness.store.ops.ingest.list_watermarks)` (used by U02-99 for `meta.build.source_watermarks`) was not defined by impl 01 | impl 01 added it as U01-92 on T01-04 (R-09) | none | Closed |
 
 ### 13.3 Contradictions noticed between specs (for the consistency pass)
 
@@ -4103,12 +4088,16 @@ Rulings: the consistency pass rulings in [`DECISIONS.md`](DECISIONS.md) (R-01…
 | C9 | impl 09 U09-51, U09-52 vs R-08 | impl 09 defines `herness.store.ops.review.decide_review_item` and `ui_reads.list_review_items`, `ui_reads.get_review_item` with different return shapes | U02-57, U02-58, U02-59 are the only definitions; §13.4 gives the mapping; a duplicate name fails UT02-68 | Resolved by R-08, R-09 (impl 09 to reference) |
 | C10 | impl 01 §2 vs R-03 | `herness.connectors.settings` imported `herness.model.settings` to nest `dq` and `build` inside `SourcesConfig`, and this spec's earlier wiring asked for that | `dq` and `build` are top-level sibling sections of `sources.yaml`; `herness.connectors.settings` owns the connector sections, `herness.model.settings` owns `DqSettings` and `BuildSettings`; impl 10's root config composes both; neither settings module imports the other (§3.9 wiring, §9) | Resolved by R-03 (agreed with impl 01; impl 10 composes) |
 | C11 | impl 09 `pipeline_payload` vs U02-96 | impl 09 puts scoring steps under payload key `steps`; `BuildPipelinePayload` (`extra="forbid"`) names it `score_steps` | `score_steps` stays; a payload with `steps` fails validation with `ConfigError` | Still open (impl 09 to use `score_steps`) |
-| C12 | impl 04 U04-56 vs §2.2 `store-rw-restricted` | `run_scoring` falls back to `X:02/herness.store.warehouse.open_build(build_id, read_only=False)` when `con` is `None`; no such public writable opener exists, and `_warehouse_rw` may be imported only by `herness.model.build` and `herness.model.promote` | the pipeline always passes `con`; impl 04 must make `con` required for writes (or raise `ConfigError` without it) | Still open (impl 04) |
-| C13 | impl 03 U03-144 vs R-43 | impl 03's precondition says the job already holds `decider` | U02-100 enters `ctx.gpu_scope("decider")` around `run_enrichment`, so the precondition holds; impl 03 must not switch to `decider` again itself | Resolved by R-43 |
+| C12 | impl 04 U04-56 vs §2.2 `store-rw-restricted` | `run_scoring` falls back to a writable `herness.store.warehouse.open_build(build_id, read_only=False)` when `con` is `None`; no such public writable opener exists (the only writable opener is the restricted `herness.store._warehouse_rw.open_for_build`, U02-34, on T02-10), and `_warehouse_rw` may be imported only by `herness.model.build` and `herness.model.promote` | the pipeline always passes `con`; impl 04 must make `con` required for writes (or raise `ConfigError` without it) | Still open (impl 04) |
+| C13 | impl 03 U03-144 vs R-43 | impl 03's precondition says the job already holds `decider` | impl 03 enters `ctx.gpu_scope("decider")` itself for its GPU stages; U02-100 enters no GPU scope, so no class is held during CPU-only stages | Resolved by R-43 |
+| C14 | impl 09 U09-94 vs ENG §4 | `herness doctor` (`T09-22 (herness._cli.doctor.run_doctor)`) does not call `ops_health`, `warehouse_health` or `VectorStore.health`; its `ops_migrations` and `current_build` rows read the stores directly. The earlier reference to an impl 10 doctor card was wrong: impl 10's doctor checks (`T10-27`, `T10-28`) are host and GPU checks only | the three health functions stay (ENG §4) and return the `(status, reason)` tuple | Still open (impl 09 to call them or state why not) |
+| C15 | impl 07 U07-100 (purge) vs U02-59 | `MemoryStore.purge` rejects pending `memory_write` review items with `decide_review_item(..., decided_by="system")` without `conn`, which the earlier U02-59 refused | U02-59 accepts a `memory_write` decision without `conn` only as a `system` rejection (R-54); every other `memory_write` decision needs `conn` from `MemoryStore.approve` / `reject` (R-33) | Resolved here (UT02-76) |
+| C16 | impl 01 U01-29 vs R-68 | impl 01 still defines `herness.store.ops.deleted_record_ids` in area `ingest`; R-68 places it in impl 10's `privacy` area (U10-111) | this spec calls `T10-32 (herness.store.ops.privacy.deleted_record_ids)`; §2.3 no longer lists the read under `ingest` | Resolved by R-68 (impl 01 to remove U01-29) |
+| C17 | impl 09 U09-87 vs R-46 (corrected) | impl 09 still maps every failure to exit 1 and lists codes 0–4 | §6 uses the corrected design 09 §5.8 codes (3, 5, 7, 8, 11) | Resolved by R-46 (impl 09 to apply) |
 
 ### 13.4 Names other specs use for spec 02 units (R-09, R-10)
 
-Every function of the `core`, `migrate` and `shared` areas that another implementation spec references has a unit here. Earlier names map as follows; the other specs replace them (R-10), and this table is the lookup for the `X:02/...` resolution pass.
+Every function of the `core`, `migrate` and `shared` areas that another implementation spec references has a unit here. Earlier names map as follows; the other specs replace them (R-10), and this table is the lookup other specs use to resolve a reference to a spec 02 unit into `T02-nn (<canonical name>)`.
 
 | Name used elsewhere (spec) | Canonical unit | Note |
 |---|---|---|
@@ -4129,13 +4118,15 @@ Every function of the `core`, `migrate` and `shared` areas that another implemen
 | `herness.store.warehouse.connect_build_readonly(build_id)` (07) | `open_readonly(build_id)` (U02-29) | |
 | `herness.store.warehouse.current_build_id` (06, 07) | `read_current()` (U02-27), or `CurrentPointer.get()` (U02-28) for long-running readers | |
 | `herness.store.warehouse.build_exists` (06) | U02-133 | Same name. |
-| `herness.store.warehouse.open_build(build_id, read_only=False)` (04) | none public | See C12: writable connections come only from the build job. |
+| `herness.store.warehouse.open_build(build_id, read_only=False)` (04) | none public; the build job's own opener is `herness.store._warehouse_rw.open_for_build` (U02-34, T02-10), importable only by `herness.model.build` and `herness.model.promote` | See C12: writable connections come only from the build job. |
 | `herness.store.vectors.connect` (07) | `VectorStore(path)` (U02-64) | |
 | `herness.store.vectors.open_table` (03) | `VectorStore.table` (U02-66) | |
 | `herness.model.build.render_sql` (01) | `herness.model.sqlfiles.render_sql` (U02-85) | Takes a `SqlFile` and a `RenderContext`. |
 | `DqConfig`, `BuildConfig` (earlier drafts of this spec) | `herness.model.settings.DqSettings` (U02-74), `BuildSettings` (U02-75) | Renamed to the names impl 01 uses; composed into the root by impl 10 (R-03). |
 | `write_metric_samples`, `record_metric_sample` (any) | `herness.store.ops.metrics.record_metric_samples` (impl 08) | R-12; not a spec 02 unit. |
 | `insert_evidence` (any) | `herness.store.ops.evidence.record_evidence` (impl 05) | R-13; not a spec 02 unit. |
+| `builds_in_use` (earlier drafts of this spec) | none: removed (R-68, U02-61) | `cleanup_builds` reads pinned builds through impl 06 `select_runs`. |
+| `herness.store.ops.ingest.deleted_record_ids` (01, earlier drafts of this spec) | `T10-32 (herness.store.ops.privacy.deleted_record_ids)` (impl 10) | R-68; not a spec 02 unit. |
 
 ## 14. Dependencies
 
@@ -4157,14 +4148,14 @@ No new dependency beyond spec 00 §9; the DuckDB `sqlite` extension is removed (
 
 | Spec | Units used |
 |---|---|
-| 00 | `X:00/herness.core.errors` (taxonomy), `X:00/herness.core.ids.new_ulid`, `X:00/herness.core.time` (fixed-width UTC text), `X:00/herness.core.logging`, `X:00/herness.core.types.HealthStatus` |
-| 01 | `X:01/herness.store.ops.ingest.deleted_record_ids`, `X:01/herness.store.ops.ingest.list_watermarks` (OI-17), `X:01/herness.connectors.jira.JIRA_ISSUE_COLUMNS` (Jira raw column contract, R-59), connector sections of `sources.yaml` (siblings of `dq` and `build`, R-03); consumer of `LakeWriter` |
-| 03 | `X:03/herness.enrich.pipeline.run_enrichment` (with `stages`, `llm_factory`; R-48, R-05), `LlmFactory`, `_YieldRequested` (OI-16); consumer of `VectorStore`, enrich placeholder tables, `create_review_item_if_absent`, `list_review_items`, `count_review_items` |
-| 04 | `X:04/herness.metrics.facts.materialize_facts`, `X:04/herness.metrics.scoring.run_scoring` (keyword-only `con`, `ctx`), `X:04/herness/model/sql/400_facts.sql` |
-| 05 | `X:05/harness.sql.blocked_columns` default (ST02-13); consumer of `open_readonly`, `CurrentPointer` |
-| 06 | `run.status` terminal set (read by `builds_in_use`); consumer of `build_exists`, `read_current`, `run_write` |
-| 07 | `MemoryStore.decide` and `MemoryStore.purge` call this spec's review functions (R-33, R-54); consumer of `VectorStore`, `memory_*` tables, `create_review_item`, `decide_review_item`, `update_review_payload` |
-| 08 | `X:08/herness.core.resilience.retry_call`, `X:08/herness.core.resilience.fault_point`, `X:08/herness.core.jobs.JobContext` (including `gpu_scope`, R-43), `X:08/herness.core.types.JobOutcome`, `X:08/herness.core.jobs.register_handler`, `X:08/herness.store.ops.metrics.record_metric_samples` (R-12); owner areas `jobs`, `tasks`, `worker`, `resilience`, `metrics` (§2.3) |
-| 09 | CLI wiring of `herness init` (`migrate`), `build`, `pipeline`, `enrich --stage`, `status`, review queue (`list_review_items`, `get_review_item`, `decide_review_item`); exit codes of R-46 |
-| 10 | `X:10/herness.core.config.get_config` (composes `sources.yaml` from impl 01 and this spec's sections, R-03), `X:10/herness.core.config.config_hash`, `X:10/herness.core.audit.audit`, `X:10/herness doctor checks`; consumer of `purge_record_ids`, `purge_partitions_before`, `cleanup_builds` |
-| 11 | `X:11/tests/fixtures/lake_small`, `X:11/tools/synth_data.py`, `X:11/tests/integration/test_build_dirty.py` |
+| 00 | `T00-03 (herness.core.errors)` (taxonomy: `ConfigError`, `NotFound`, `SchemaViolation`, `FatalError`, `StoreBusy`), `T00-05 (herness.core.ids.new_ulid)`, `T00-04 (herness.core.time.format_utc)` and `T00-04 (herness.core.time.parse_utc)` (fixed-width UTC text), `T00-07 (herness.core.logging)` |
+| 01 | `T01-04 (herness.store.ops.ingest.list_watermarks)` (OI-17), `T01-17 (herness.connectors.jira.JIRA_ISSUE_COLUMNS)` (Jira raw column contract, R-59), connector sections of `sources.yaml` (siblings of `dq` and `build`, R-03); consumer of `LakeWriter` |
+| 03 | `T03-28 (herness.enrich.pipeline.run_enrichment)` (with `stages`, `llm_factory`; R-48, R-05), `LlmFactory`, `T03-04 (herness.enrich.pipeline.YieldRequested)` (OI-16); consumer of `VectorStore`, enrich placeholder tables, `create_review_item_if_absent`, `list_review_items`, `count_review_items` |
+| 04 | `T04-06 (herness.metrics.facts.materialize_facts)`, `T04-13 (herness.metrics.scoring.run_scoring)` (keyword-only `con`, `ctx`), `T04-06 (herness/model/sql/400_facts.sql)` |
+| 05 | `T05-04 (config/models.yaml harness.sql.blocked_columns)` default (ST02-13); consumer of `open_readonly`, `CurrentPointer` |
+| 06 | `T06-05 (herness.store.ops.runs.select_runs)` and the `run.status` terminal set (read by `cleanup_builds`, R-68); consumer of `build_exists`, `read_current`, `run_write` |
+| 07 | `MemoryStore.approve`, `MemoryStore.reject` (T07-09) and `MemoryStore.purge` (T07-26) call this spec's review functions (R-33, R-54); consumer of `VectorStore`, `memory_*` tables, `create_review_item`, `decide_review_item`, `update_review_payload` |
+| 08 | `T08-07 (herness.core.resilience.retry_call)`, `T08-08 (herness.core.resilience.fault_point)`, `T08-03 (herness.core.jobs.JobContext)` (`should_yield`, `save_state`; `gpu_scope` is used by impl 03, not here, R-43), `T08-01 (herness.core.types.JobOutcome)`, `T08-12 (herness.core.jobs.register_handler)`, `T08-05 (herness.store.ops.metrics.record_metric_samples)` (R-12); owner areas `jobs`, `tasks`, `worker`, `resilience`, `metrics` (§2.3) |
+| 09 | CLI wiring of `herness init` and `status` (`T09-22 (herness._cli.cmd_system)`), `build`, `pipeline`, `enrich --stage` (`T09-23 (herness._cli.cmd_data)`), review queue (`list_review_items`, `get_review_item`, `decide_review_item`); `herness doctor` (`T09-22 (herness._cli.doctor.run_doctor)`, C14); exit codes of R-46 (corrected) |
+| 10 | `T10-03 (herness.core.config.get_config)` (composes `sources.yaml` from impl 01 and this spec's sections, R-03), `T10-03 (herness.core.config.config_hash)`, `T10-05 (herness.core.audit.audit)`, `T10-32 (herness.store.ops.privacy.deleted_record_ids)` (R-68); `T10-29 (herness.admin.privacy.run_privacy_delete)` is a consumer of `purge_record_ids`, `purge_partitions_before`, `cleanup_builds` |
+| 11 | `T11-16 (tests/fixtures/lake_small)`, `T11-14 (tools/synth_data.py)`, `T11-19 (tests/integration/test_build_dirty.py)` |

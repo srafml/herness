@@ -6,7 +6,7 @@ Depends on implementation specs: 00 (ids, `canonical_json`, errors, `herness.cor
 
 The rulings in `DECISIONS.md` are binding on this spec. Where this spec applies one, it cites the ruling ID (`R-nn`).
 
-Cross-spec dependencies are written `X:<NN>/<symbol or artifact>` and are resolved by the consistency pass.
+Cross-spec dependencies are written `T<NN>-<nn> (<symbol or artifact>)`, naming the task card of spec NN that builds the symbol (DECISIONS.md §8).
 
 ---
 
@@ -46,15 +46,15 @@ This spec implements package `herness/enrich/` and the five shared types owned b
 | 5.2 | Embeddings: dedupe, sort, OOM halving, upsert, flush, index | 3.4, 3.6 | U03-21–U03-23, U03-32–U03-35 | T03-04, T03-07 | UT03-19–UT03-21, UT03-29–UT03-32 |
 | 5.3 | Full recluster steps 1–9 | 3.14–3.16 | U03-90–U03-103, U03-105, U03-106 | T03-23–T03-25 | UT03-85–UT03-98, UT03-100, UT03-101, IT03-11, IT03-12 |
 | 5.4 | Clustering cadence, drift, triggers | 3.16 | U03-104, U03-105 | T03-25 | UT03-99, UT03-100, IT03-10 |
-| 5.5 | Question set YAML and loader rules | 3.2, 3.3 | U03-09–U03-20 | T03-02, T03-03 | UT03-08–UT03-18, PT03-02, IT03-08 |
+| 5.5 | Question set YAML and loader rules | 3.2, 3.3 | U03-09–U03-20, U03-150, U03-151 | T03-02, T03-03 | UT03-08–UT03-18, PT03-02, IT03-08 |
 | 5.6 | Calibration: T fit, cross-fit ECE, uncalibrated | 3.8 | U03-42–U03-47 | T03-10 | UT03-39–UT03-44, PT03-04 |
 | 5.7 | Resolve, primary, gate, escalation, spot-checks, write | 3.10, 3.12, 3.13 | U03-70–U03-74, U03-78–U03-87 | T03-17, T03-19–T03-21 | UT03-68–UT03-71, UT03-76–UT03-82, PT03-08, PT03-10, IT03-04, IT03-06 |
 | 5.8 | Distillation steps 1–7; fallback teacher D7 | 3.19–3.23, 5 F03-13 | U03-115–U03-140 | T03-29–T03-33 | UT03-111–UT03-131, IT03-15, FT03-05 |
 | 5.9 | Self-consistency, ensemble voting, active learning | 3.9, 3.13, 3.20, 5 F03-08/F03-14 | U03-65–U03-67, U03-88, U03-89, U03-123, U03-128, U03-136 | T03-16, T03-22, T03-29, T03-32 | UT03-63–UT03-65, UT03-83, UT03-84, UT03-118, UT03-124, IT03-07 |
 | 5.10 | Incident↔change linking | 3.17 | U03-27, U03-107–U03-110 | T03-26 | UT03-102–UT03-105, PT03-13, IT03-09, IT03-13 |
 | 5.11 | Mapping suggestions | 3.18 | U03-111–U03-114 | T03-27 | UT03-106–UT03-110, PT03-14, IT03-14, ST03-12 |
-| 6 | Errors, resumability, degraded modes | 6, 5 | U03-21, U03-22, U03-53, U03-85–U03-87, U03-144 | T03-04, T03-12, T03-21, T03-28 | FT03-01–FT03-06 |
-| 7 | Configuration | 9 | U03-09–U03-13 | T03-02, T03-03 | UT03-08–UT03-11 |
+| 6 | Errors, resumability, degraded modes | 6, 5 | U03-21, U03-22, U03-152, U03-53, U03-85–U03-87, U03-144 | T03-04, T03-12, T03-21, T03-28 | UT03-140, FT03-01–FT03-06 |
+| 7 | Configuration (`deciders` in `models.yaml`, R-76) | 9 | U03-09–U03-13, U03-150, U03-151 | T03-02, T03-03 | UT03-08–UT03-11 |
 | 8 | Performance targets | 10 | — | T03-36 | BT03-01–BT03-12 |
 | 9 | Security | 7 | U03-28, U03-33, U03-55, U03-118, U03-145 | T03-05, T03-07, T03-13, T03-14, T03-34, T03-35 | ST03-01–ST03-19 |
 | 10 | Tests and acceptance criteria | 11 | — | T03-35, T03-36 | all §11 |
@@ -73,10 +73,10 @@ Line budgets follow ENG §2.4 (400 lines per module). The design spec's module t
 |------|---------|----------------|-------|---------------|-------------|
 | `herness/core/types/decisions.py` | Shared decision types owned by 03 (submodule of the `herness.core.types` package, re-exported from it; R-01, ENG §14 E6) | `QuestionType`, `Entity`, `Question`, `QuestionSet`, `DecisionInput`, `Answer`, `DecisionOutput` | L0 | none (only `herness.core.errors`, `herness.core.ids`) | 130 |
 | `herness/enrich/__init__.py` | Package facade | `purge_record`, `embed_query`, `health` | L3 | — | 20 |
-| `herness/enrich/settings.py` | pydantic model of `config/decisions.yaml` | `DecisionsConfig` and section models (U03-09) | L3 | only the standard library, `pydantic`, `herness.core.types` and `herness.core.errors` (settings exception, R-03; imported by `herness.core.config`) | 320 |
+| `herness/enrich/settings.py` | pydantic models of `config/decisions.yaml` and of the `deciders` section of `config/models.yaml` (R-76) | `DecisionsConfig` and section models (U03-09), `DecidersSettings` (U03-150), `check_decider_refs` (U03-151) | L3 | only the standard library, `pydantic`, `herness.core.types` and `herness.core.errors` (settings exception, R-03; imported by `herness.core.config`) | 320 |
 | `herness/enrich/questions.py` | Question set loading, fingerprints, dynamic options, acceptance lookup | `question_fingerprint`, `load_question_set`, `check_fingerprint_registry`, `resolve_dynamic_options`, `shortlist_options`, `acceptance_for`, `PAIR_QUESTIONS` | L3 | `duckdb`, `numpy` | 300 |
 | `herness/enrich/layout.py` | Data path resolution and on-disk layout | `resolve_data_path`, `EnrichPaths` | L3 | — | 150 |
-| `herness/enrich/gpu.py` | CUDA OOM handling and release | `CudaOutOfMemory`, `run_batches_with_oom_backoff`, `release_cuda` | L3 | `torch` | 120 |
+| `herness/enrich/gpu.py` | CUDA OOM handling and release; the stage yield signal | `CudaOutOfMemory`, `run_batches_with_oom_backoff`, `release_cuda`, `YieldRequested` (U03-152) | L3 | `torch` | 120 |
 | `herness/enrich/text.py` | Text composition, redaction call, `content_hash`, `text` stage | `normalize_text`, `compose_text`, `content_hash`, `pair_text`, `build_text_redacted` | L3 | `duckdb`, `pyarrow` | 260 |
 | `herness/enrich/embed.py` | bge-m3 encoder, `embed_query` | `Encoder`, `get_encoder`, `embed_query`, `embed_texts` | L3 | `sentence_transformers`, `torch`, `numpy` | 230 |
 | `herness/enrich/embed_stage.py` | `embed` stage: anti-join, upsert, orphan delete, index | `run_embed_stage`, `maintain_index`, `lance_filter_in` | L3 | `lancedb`, `pyarrow` | 320 |
@@ -113,14 +113,14 @@ Line budgets follow ENG §2.4 (400 lines per module). The design spec's module t
 | `herness/enrich/laya_trainer.py` | Training adapter: vendored RLCD or soft-label SFT | `LayaTrainer`, `TrainingSet`, `SoftLabelSftTrainer`, `RlcdTrainer`, `select_trainer` | L3 | `torch`, `laya` | 390 |
 | `herness/enrich/distill.py` | `distill` job | `DistillReport`, `run_distill`, `make_distill_handler`, `accept_model`, `rollback_model` (re-exported from `laya_admin`) | L3 | — | 390 |
 | `herness/enrich/laya_admin.py` | Human promotion, rollback, status | `accept_model`, `rollback_model`, `laya_status` | L3 | — | 220 |
-| `herness/enrich/pipeline.py` | `run_enrichment`, stage order, report | `StageName`, `StageReport`, `EnrichReport`, `run_enrichment` | L3 | `duckdb` | 390 |
+| `herness/enrich/pipeline.py` | `run_enrichment`, stage order, report | `StageName`, `StageReport`, `EnrichReport`, `run_enrichment`, `YieldRequested` (re-export of U03-152) | L3 | `duckdb` | 390 |
 | `herness/enrich/purge.py` | Privacy deletion step | `purge_record` | L3 | `lancedb`, `pyarrow` | 260 |
 | `herness/enrich/health.py` | Component health for `herness doctor` | `health` | L3 | — | 100 |
 
 Layering notes:
 
 - `herness.enrich` is L3 and MUST NOT import `herness.harness` (L4). The LLM decider and cluster naming receive a client object from the composition root (`herness.cli`), typed by the local structural protocol `CompletionClient` (U03-60), which `herness.harness.llm.base.LLMClient` satisfies. `LLMRequest` and `LLMResponse` are imported from `herness.core.types` (owner 05). This is ruling R-05 (delta DD-02 accepted).
-- `herness.enrich.settings` imports only the standard library, `pydantic`, `herness.core.types` and `herness.core.errors`, because `herness.core.config` imports `DecisionsConfig` from it (X:10/herness.core.config.HernessConfig). This is the named settings exception of ENG §2.1 (R-03).
+- `herness.enrich.settings` imports only the standard library, `pydantic`, `herness.core.types` and `herness.core.errors`, because `herness.core.config` imports `DecisionsConfig` and `DecidersSettings` from it (T10-03 (herness.core.config.HernessConfig); R-76 composes `DecidersSettings` as the sibling `deciders` section of `models.yaml`). This is the named settings exception of ENG §2.1 (R-03).
 - Shared types are imported only as `from herness.core.types import …`; importing a submodule such as `herness.core.types.decisions` from outside the package fails impl 00's ownership check (rule `OWN041`).
 - No module of this package constructs an `httpx` client or transport. OpenJev uses `herness.core.egress.loopback_http_client`; hosted Jev uses the guarded clients of `herness.core.egress.get_guard()` (R-06, ENG §2.1 "Network egress").
 - Ops-store access goes only through `herness.store.ops` functions; the `review_item` functions are impl 02's (`herness.store.ops.shared`, R-08). The package attaches no ops database to DuckDB.
@@ -131,9 +131,9 @@ Layering notes:
 
 Conventions for all units in this section:
 
-- "Config" means the validated `DecisionsConfig` instance reached through X:10/herness.core.config.get_config (`.decisions`). "Data root" means `cfg.paths.data`.
-- "Now" means X:00/herness.core.time.now (timezone-aware UTC). No unit reads the wall clock directly.
-- Hashes are lowercase hex SHA-256 from `hashlib`. "Canonical JSON" means X:00/herness.core.ids.canonical_json, the single implementation (R-14).
+- "Config" means the validated `DecisionsConfig` instance reached through T10-03 (herness.core.config.get_config) (`.decisions`). "Data root" means `cfg.paths.data`.
+- "Now" means T00-04 (herness.core.time.now) (timezone-aware UTC). No unit reads the wall clock directly.
+- Hashes are lowercase hex SHA-256 from `hashlib`. "Canonical JSON" means T00-05 (herness.core.ids.canonical_json), the single implementation (R-14).
 - Untrusted text placed in a prompt is wrapped as `<untrusted_data source="<source>" record_id="<id or empty>">…</untrusted_data>`, and every literal `</untrusted_data` inside the content is first replaced by `&lt;/untrusted_data` (R-20).
 - Every Parquet or JSON file write in this package uses the atomic pattern of ENG §3.5: write `.<name>.tmp` in the same directory, `fsync`, `os.replace`. Readers skip names starting with `.` or `_`.
 - "Log" means the structlog logger bound with `component="enrich"`; event names, levels and fields are listed in §8.1.
@@ -295,16 +295,16 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 |-------|---------|
 | Kind | class (pydantic model; root of `config/decisions.yaml`) |
 | Purpose | Validated enrichment configuration. |
-| Signature | Fields: `question_set_version: str`; `primary_decider: Literal["laya","openjev","jev","llm"] = "laya"`; `escalation_chain: tuple[Literal["openjev","jev","llm"], ...] = ("openjev","llm")`; `questions: tuple[QuestionConfig, ...]`; `acceptance: AcceptanceDefaults`; `embedding: EmbeddingSettings`; `deciders: DecidersSettings`; `escalation: EscalationSettings`; `spot_check: SpotCheckSettings`; `ensemble: EnsembleSettings`; `distill: DistillSettings`; `clustering: ClusteringSettings`; `change_link: ChangeLinkSettings`; `mapping_suggest: MappingSuggestSettings`. Section models and every key, type, default and rule: §9. All section models use `extra="forbid"`, `strict=True`, `frozen=True`. |
+| Signature | Fields: `question_set_version: str`; `primary_decider: Literal["laya","openjev","jev","llm"] = "laya"`; `escalation_chain: tuple[Literal["openjev","jev","llm"], ...] = ("openjev","llm")`; `questions: tuple[QuestionConfig, ...]`; `acceptance: AcceptanceDefaults`; `embedding: EmbeddingSettings`; `escalation: EscalationSettings`; `spot_check: SpotCheckSettings`; `ensemble: EnsembleSettings`; `distill: DistillSettings`; `clustering: ClusteringSettings`; `change_link: ChangeLinkSettings`; `mapping_suggest: MappingSuggestSettings`. Section models and every key, type, default and rule: §9. All section models use `extra="forbid"`, `strict=True`, `frozen=True`. There is no `deciders` field: the decider backends are configured in the `deciders` section of `config/models.yaml` (U03-150, R-76). |
 | Preconditions | Loaded by spec 10's loader. |
-| Postconditions | Cross-field validators: `question_set_version` matches the `QuestionSet.version` pattern; `escalation_chain` has no duplicates and does not contain `primary_decider`; `jev` in `escalation_chain` requires `deciders.jev.enabled`; `change_link.decider_band[0] < decider_band[1]`; `mapping_suggest.weights` sum to 1 ± 1e-6; `clustering.k_min ≤ clustering.k_max`; `deciders.openjev.base_url` host is `127.0.0.1` or `localhost`; `deciders.jev.base_url` scheme is `https`. |
+| Postconditions | Cross-field validators: `question_set_version` matches the `QuestionSet.version` pattern; `escalation_chain` has no duplicates and does not contain `primary_decider`; `change_link.decider_band[0] < decider_band[1]`; `mapping_suggest.weights` sum to 1 ± 1e-6; `clustering.k_min ≤ clustering.k_max`. Rules that also read the `deciders` section are checked by U03-151. |
 | Invariants | Frozen. |
 | Algorithm | Declarative. |
 | Side effects | none |
 | Errors | pydantic `ValidationError`; spec 10 converts it to `ConfigError`. |
 | Concurrency | immutable |
 | Complexity and limits | — |
-| Security notes | Loopback-only OpenJev URL (TH03-15); `api_key_secret` holds a secret name only (TH03-14). The OpenJev default `OPENJEV_API_KEY` names the same secret that is referenced as `secret:OPENJEV_API_KEY` elsewhere (R-53). |
+| Security notes | No secret or decider endpoint is configured here (see U03-150). |
 | Tests | UT03-08, UT03-09 |
 
 #### U03-10 herness.enrich.settings.QuestionConfig
@@ -343,6 +343,42 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Security notes | Gate thresholds are the LLM04/LLM09 control (TH03-04, TH03-17). |
 | Tests | UT03-09 |
 
+#### U03-150 herness.enrich.settings.DecidersSettings
+
+| Field | Content |
+|-------|---------|
+| Kind | class (pydantic model; the top-level `deciders` section of `config/models.yaml`, R-76) |
+| Purpose | Validated decider backend configuration, kept beside impl 05's `models` and `harness` sections of the same file and composed by impl 10's root config into `cfg.models.deciders`. |
+| Signature | Fields: `laya: LayaSettings`, `openjev: OpenJevSettings`, `jev: JevSettings`, `llm: LlmDeciderSettings`; every key, type, default and rule of `deciders.*` in §9. All models use `extra="forbid"`, `strict=True`, `frozen=True`. Secret references (`openjev.api_key`, `jev.api_key`) are strings matching `^secret:[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$`, declared locally because settings modules cannot import `herness.core.secrets` (R-03, R-72). |
+| Preconditions | Loaded by spec 10's loader from `models.yaml` (R-76). |
+| Postconditions | Validators: `openjev.base_url` host is `127.0.0.1` or `localhost`; `jev.base_url` scheme is `https`; a secret field holds a `secret:` reference, never a bare name or a value. |
+| Invariants | Frozen; holds no resolved secret. |
+| Algorithm | Declarative. |
+| Side effects | none |
+| Errors | pydantic `ValidationError`; spec 10 converts it to `ConfigError`. |
+| Concurrency | immutable |
+| Complexity and limits | — |
+| Security notes | Loopback-only OpenJev URL (TH03-15); secret references only, resolved later by `build_decider` through `herness.core.secrets` (TH03-14, R-72). The default `secret:OPENJEV_API_KEY` is the reference impls 08 and 10 use (R-53). |
+| Tests | UT03-08, UT03-09, ST03-17 |
+
+#### U03-151 herness.enrich.settings.check_decider_refs
+
+| Field | Content |
+|-------|---------|
+| Kind | function (pure; owner validator) |
+| Purpose | Check the rules that read both `DecisionsConfig` and `DecidersSettings`, which no single section model can check after the R-76 split. |
+| Signature | `decisions: DecisionsConfig`; `deciders: DecidersSettings` (positional) → `list[dict[str, str]]` (issues with keys `severity`, `path`, `message`) |
+| Preconditions | Both models validated. |
+| Postconditions | One `error` issue per broken rule: `jev` in `escalation_chain`, as `primary_decider` or as a question's `primary_decider` while `deciders.jev.enabled` is false (path `decisions.escalation_chain`, `decisions.primary_decider` or `decisions.questions[i].primary_decider`). `openjev` in the same positions while `deciders.openjev.enabled` is false gives a `warn` issue (OpenJev is then skipped at run time with degraded note `openjev_unavailable`). Messages name keys, never values. |
+| Invariants | — |
+| Algorithm | As postconditions. The composition root registers `lambda cfg, *, offline: check_decider_refs(cfg.decisions, cfg.models.deciders)` as owner validator `enrich.deciders` with T10-12 (herness.core.config_validate.register_owner_validator) (R-71); `run_enrichment` and `run_distill` call it again at their step 1 and raise `ConfigError` on an `error` issue. |
+| Side effects | none |
+| Errors | none raised |
+| Concurrency | pure |
+| Complexity and limits | O(questions) |
+| Security notes | — |
+| Tests | UT03-09 |
+
 #### U03-12 herness.enrich.layout.resolve_data_path
 
 | Field | Content |
@@ -371,7 +407,7 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Preconditions | `cfg.paths.data` exists. |
 | Postconditions | Every returned path is under the data root. |
 | Invariants | Identifiers are validated before joining: `qsv` by the `QuestionSet.version` pattern; `version` by `^laya-\d{8}-\d+$`; `decider` by the `DecisionOutput.decider` set; `decider_version` by `^[A-Za-z0-9._:/@+-]{1,128}$` and encoded for the directory name with `urllib.parse.quote(v, safe="")`; `algorithm_version` and `snapshot_id` by `^[A-Za-z0-9._-]{1,96}$`. |
-| Algorithm | Validate, then join per §4.2–§4.7. `embedding_model_dir()` returns `resolve_data_path(cfg.decisions.embedding.path)`. `laya_current()` returns `resolve_data_path(cfg.decisions.deciders.laya.current_file)`. |
+| Algorithm | Validate, then join per §4.2–§4.7. `embedding_model_dir()` returns `resolve_data_path(cfg.decisions.embedding.path)`. `laya_current()` returns `resolve_data_path(cfg.models.deciders.laya.current_file)` (R-76). |
 | Side effects | none |
 | Errors | invalid identifier → `ConfigError` naming the argument. |
 | Concurrency | immutable |
@@ -448,7 +484,7 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Algorithm | 1. Read `questions.json` if present (JSON object `{qid: fingerprint}`; reject files > 64 KB). 2. For every id present in both, if the fingerprints differ, log `enrich.config.fingerprint_drift` and raise `ConfigError`. 3. Add new ids and write atomically. |
 | Side effects | writes `questions.json` |
 | Errors | drift → `ConfigError("question <qid> changed without a new question_set_version")`; unreadable or oversized file → `ConfigError`. |
-| Concurrency | single writer (exclusive job kinds, X:08/herness.core.jobs exclusive_kinds) |
+| Concurrency | single writer (exclusive job kinds, T08-26 (herness.core.resilience.settings.ResilienceSection, key `resilience.jobs.exclusive_kinds`)) |
 | Complexity and limits | file ≤ 64 KB |
 | Security notes | — |
 | Tests | UT03-15 |
@@ -463,7 +499,7 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Preconditions | `core.team` and `core.service` exist in `wh`. |
 | Postconditions | Every dynamic choice question has `options` = label → description; fingerprints unchanged. |
 | Invariants | — |
-| Algorithm | 1. `core.team`: `SELECT team_id, name FROM core.team WHERE active ORDER BY team_id`; `core.service`: `SELECT service_id, name FROM core.service ORDER BY service_id`. 2. Label = id; description = X:10/herness.core.redact.redact_text(name) truncated to 500 chars, or the id when the name is NULL or empty. 3. Ids that fail the option-key pattern (U03-02 rule e) are skipped; log `enrich.questions.option_skipped` (WARNING, `question`, `count`). 4. Fewer than 2 options → `ConfigError`. 5. Return a new `QuestionSet` with `model_copy(update={"options": ...})` for each changed question. |
+| Algorithm | 1. `core.team`: `SELECT team_id, name FROM core.team WHERE active ORDER BY team_id`; `core.service`: `SELECT service_id, name FROM core.service ORDER BY service_id`. 2. Label = id; description = T10-10 (herness.core.redact.redact_text)(name) truncated to 500 chars, or the id when the name is NULL or empty. 3. Ids that fail the option-key pattern (U03-02 rule e) are skipped; log `enrich.questions.option_skipped` (WARNING, `question`, `count`). 4. Fewer than 2 options → `ConfigError`. 5. Return a new `QuestionSet` with `model_copy(update={"options": ...})` for each changed question. |
 | Side effects | reads warehouse |
 | Errors | < 2 options → `ConfigError("dynamic options < 2 for <qid>")`. |
 | Concurrency | build connection, single thread |
@@ -537,7 +573,7 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Preconditions | `start_batch ≥ min_batch ≥ 1`. |
 | Postconditions | Returns `fn` results for all items in input order. |
 | Invariants | The batch size never grows within one call. |
-| Algorithm | 1. `size = start_batch`, `i = 0`, `retried = False`. 2. While `i < len(items)`: a. `chunk = items[i:i+size]`; b. X:08/herness.core.resilience.fault_point(fault_name); c. call `fn(chunk)`; on `torch.cuda.OutOfMemoryError` convert to `CudaOutOfMemory(size)`, call `release_cuda()`, log `enrich.gpu.oom_retried`; if not `retried`, set `retried = True` and retry the same chunk at the same size; else set `size //= 2`, `retried = False`; if `size < min_batch` raise `FatalError("cuda oom at batch <min_batch>")`; d. on success append results, call `on_batch(batch_index, results)`, `i += len(chunk)`, `retried = False`. |
+| Algorithm | 1. `size = start_batch`, `i = 0`, `retried = False`. 2. While `i < len(items)`: a. `chunk = items[i:i+size]`; b. T08-08 (herness.core.resilience.fault_point)(fault_name); c. call `fn(chunk)`; on `torch.cuda.OutOfMemoryError` convert to `CudaOutOfMemory(size)`, call `release_cuda()`, log `enrich.gpu.oom_retried`; if not `retried`, set `retried = True` and retry the same chunk at the same size; else set `size //= 2`, `retried = False`; if `size < min_batch` raise `FatalError("cuda oom at batch <min_batch>")`; d. on success append results, call `on_batch(batch_index, results)`, `i += len(chunk)`, `retried = False`. |
 | Side effects | GPU memory release; fault point; log |
 | Errors | OOM below `min_batch` → `FatalError`; other exceptions propagate unchanged. |
 | Concurrency | single thread (GPU owner) |
@@ -550,7 +586,7 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Free CUDA memory before a GPU class or service switch (precondition of X:08/herness.core.jobs.JobContext.gpu_scope, `require_gpu_class` and `services.start`). |
+| Purpose | Free CUDA memory before a GPU class or service switch (precondition of T08-03 (herness.core.jobs.JobContext.gpu_scope), `require_gpu_class` and `services.start`). |
 | Signature | none → `None` |
 | Preconditions | Callers dropped their model references. |
 | Postconditions | `gc.collect()` ran; when `torch.cuda.is_available()`, `torch.cuda.synchronize()`, `torch.cuda.empty_cache()` and `torch.cuda.ipc_collect()` ran. |
@@ -562,6 +598,24 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Complexity and limits | — |
 | Security notes | — |
 | Tests | UT03-21 |
+
+#### U03-152 herness.enrich.gpu.YieldRequested
+
+| Field | Content |
+|-------|---------|
+| Kind | class (control-flow exception; public, re-exported as `herness.enrich.pipeline.YieldRequested` and `herness.enrich.distill.YieldRequested`) |
+| Purpose | Signal that a stage stopped at a chunk boundary because `ctx.should_yield()` became true (cancel, preempt, shutdown), so the job handler returns `JobOutcome(status="yield")`. Public so that impl 02's `build_pipeline` handler (U02-100, impl 02 OI-16) can catch it by name. |
+| Signature | `class YieldRequested(Exception)`; `__init__(self, stage: str)`; attribute `stage: str` (a `StageName` or a distillation step name). It is not a `HernessError`, so impl 08 never classifies it as a failure. |
+| Preconditions | Raised only after the stage flushed its buffers and saved its checkpoint (`ctx.save_state`). |
+| Postconditions | — |
+| Invariants | Never carries record text; `str(exc)` is `yield requested at <stage>`. |
+| Algorithm | Declaration. Callers that catch it: impl 02 `_stage_enrich` (import `herness.enrich.pipeline.YieldRequested`) and `make_distill_handler` (U03-137). |
+| Side effects | none |
+| Errors | — |
+| Concurrency | — |
+| Complexity and limits | — |
+| Security notes | — |
+| Tests | UT03-140 |
 
 ### 3.5 Text (`herness/enrich/text.py`)
 
@@ -644,10 +698,10 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Kind | function (stage `text`) |
 | Purpose | Fill `enrich.text_redacted` in the new warehouse, copying unchanged rows from the previous one (design 03 §4.2). |
 | Signature | `wh: duckdb.DuckDBPyConnection`; keyword-only: `prev_warehouse: Path \| None`, `report: StageReport` (mutated) → `None` |
-| Preconditions | SQL 000–299 ran; `enrich.text_redacted` exists (X:02/enrich schema DDL) and is empty. |
+| Preconditions | SQL 000–299 ran; `enrich.text_redacted` exists (created empty by T02-12 (herness/model/sql/000_settings.sql)) and is empty. |
 | Postconditions | One row per incident, change and problem with non-empty composed text; `content_hash` = `content_hash(text)`; records whose redaction failed have no row and are counted in `report.failed`. |
 | Invariants | Raw text is never written to the `enrich` schema. |
-| Algorithm | 1. If `prev_warehouse` is set, run `ATTACH ? AS prev (READ_ONLY)` with the path as a parameter; if it fails, log `enrich.text.prev_unavailable` (WARNING) and continue without it. 2. For each entity (`incident` → `core.incident`, `change` → `core.change`, `problem` → `core.problem`): a. Copy: insert rows of `prev.enrich.text_redacted` for this entity whose `record_id` exists in both `core.<t>` and `prev.core.<t>` with equal `source_updated_at`. b. Select the other records (`record_id` not in the inserted set) with their raw fields in Arrow chunks of 20,000 rows. c. Compose (U03-25); drop empty texts. d. Call X:10/herness.core.redact.redact_table(tbl, ["text"], "record_id"); a NULL `text` counts as failed. e. Add `entity` and `content_hash`; insert through a registered Arrow view, then unregister it. 3. `DETACH prev`. 4. Update `report.rows`, `report.cache_hits` (copied rows) and `report.failed`. |
+| Algorithm | 1. If `prev_warehouse` is set, run `ATTACH ? AS prev (READ_ONLY)` with the path as a parameter; if it fails, log `enrich.text.prev_unavailable` (WARNING) and continue without it. 2. For each entity (`incident` → `core.incident`, `change` → `core.change`, `problem` → `core.problem`): a. Copy: insert rows of `prev.enrich.text_redacted` for this entity whose `record_id` exists in both `core.<t>` and `prev.core.<t>` with equal `source_updated_at`. b. Select the other records (`record_id` not in the inserted set) with their raw fields in Arrow chunks of 20,000 rows. c. Compose (U03-25); drop empty texts. d. Call T10-11 (herness.core.redact.redact_table)(tbl, ["text"], "record_id"); a NULL `text` counts as failed. e. Add `entity` and `content_hash`; insert through a registered Arrow view, then unregister it. 3. `DETACH prev`. 4. Update `report.rows`, `report.cache_hits` (copied rows) and `report.failed`. |
 | Side effects | writes `enrich.text_redacted`; log `enrich.text.redacted` |
 | Errors | DuckDB error → `SchemaViolation("text stage <entity>: <duckdb message>")`. Redaction errors never raise (spec 10 writes NULL). |
 | Concurrency | build connection, single thread; redaction uses spec 10's process pool |
@@ -703,7 +757,7 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Preconditions | Caller passes redacted text (spec 05 does). |
 | Postconditions | Unit-norm float32 vector. |
 | Invariants | Model id equals the `ticket_embedding.model` value. |
-| Algorithm | 1. `t = normalize_text(text)`; empty → `ToolInputError("empty query")`. 2. Under a module `threading.Lock`: a. On the first call in the process, read one `model` value from `ticket_embedding` (X:02/herness.store.vectors.open_table, read-only); if the table has rows and the value differs from `get_encoder().model_id`, raise `ConfigError("embedding model mismatch")`; cache the check result. b. Device: `cuda` when `torch.cuda.is_available()`, X:08/herness.core.jobs.gpu_state().loaded_class() is `none` or `decider`, and `service_healthy("openjev")` is false; otherwise `cpu`. c. `load(device)` (a device change reloads). d. `encode([t], batch_size=1)[0]`. |
+| Algorithm | 1. `t = normalize_text(text)`; empty → `ToolInputError("empty query")`. 2. Under a module `threading.Lock`: a. On the first call in the process, read one `model` value from `ticket_embedding` (`VectorStore().table("ticket_embedding")`, T02-08 (herness.store.vectors.VectorStore.table), read-only; a missing table (`NotFoundError`) counts as no rows); if the table has rows and the value differs from `get_encoder().model_id`, raise `ConfigError("embedding model mismatch")`; cache the check result. b. Device: `cuda` when `torch.cuda.is_available()`, T08-18 (herness.core.jobs.gpu_state)().loaded_class() is `none` or `decider`, and `service_healthy("openjev")` is false; otherwise `cpu`. c. `load(device)` (a device change reloads). d. `encode([t], batch_size=1)[0]`. |
 | Side effects | may load the model (≈ 2.3 GB) |
 | Errors | empty text → `ToolInputError`; model mismatch → `ConfigError`; load failure → `ModelUnavailable`. |
 | Concurrency | serialized by the module lock |
@@ -759,9 +813,9 @@ Delta DD-05 is resolved by R-18: the return type is a 1-D float32 `np.ndarray`, 
 | Preconditions | `enrich.text_redacted` filled; the caller is inside `ctx.gpu_scope("decider")` (R-43) with `openjev` stopped; encoder loaded on `cuda` (or `cpu` in tests). |
 | Postconditions | Every `enrich.text_redacted` record has a `ticket_embedding` row with its current `content_hash` and the encoder's `model_id`; rows of records absent from `core.incident`, `core.change` and `core.problem` are deleted; index maintained (U03-35). |
 | Invariants | Each distinct hash is encoded at most once per model. |
-| Algorithm | 1. Open `ticket_embedding` (X:02/herness.store.vectors.open_table). 2. Read columns `record_id`, `content_hash`, `model` as Arrow. Hashes with `model == encoder.model_id` form `have`. 3. Register `have` and query `wh`: records `r` from `enrich.text_redacted` joined to `core.<entity>` for `service_id` and `opened_at` (`core.change` uses `coalesce(opened_at, planned_start, actual_start)`), keeping rows whose `(record_id, content_hash, model)` is not already in the table. 4. Split into `reuse` (hash in `have`) and `new` (hash not in `have`); dedupe `new` by hash. 5. For `reuse`: read vectors for those hashes from the table (filter via U03-33 in chunks of 1,000 hashes), attach them to rows. 6. For `new`: `embed_texts(..., batch_size=cfg.embedding.batch_size, on_batch=...)`; the callback appends rows (all records sharing each hash) to a buffer and, every 20 batches, calls `table.merge_insert("record_id").when_matched_update_all().when_not_matched_insert_all().execute(buffer)`, calls `ctx.heartbeat("embed")`, and returns a yield request when `ctx.should_yield()` (the stage then stops after the flush and the pipeline returns `yield`). 7. Flush the rest, then upsert `reuse` rows the same way. 8. Orphans: `record_id`s in the table not present in `core.incident ∪ core.change ∪ core.problem`; delete in chunks of 1,000 with `table.delete(lance_filter_in("record_id", chunk))`. 9. `maintain_index(table)`. 10. Report: `embedded` = new hashes encoded, `cache_hits` = records reusing a vector, `rows` = records upserted. |
+| Algorithm | 1. `store = VectorStore()`; `store.ensure_tables()` (T02-08 (herness.store.vectors.VectorStore.ensure_tables)); open `ticket_embedding` with T02-08 (herness.store.vectors.VectorStore.table). 2. Read columns `record_id`, `content_hash`, `model` as Arrow. Hashes with `model == encoder.model_id` form `have`. 3. Register `have` and query `wh`: records `r` from `enrich.text_redacted` joined to `core.<entity>` for `service_id` and `opened_at` (`core.change` uses `coalesce(opened_at, planned_start, actual_start)`), keeping rows whose `(record_id, content_hash, model)` is not already in the table. 4. Split into `reuse` (hash in `have`) and `new` (hash not in `have`); dedupe `new` by hash. 5. For `reuse`: read vectors for those hashes from the table (filter via U03-33 in chunks of 1,000 hashes), attach them to rows. 6. For `new`: `embed_texts(..., batch_size=cfg.embedding.batch_size, on_batch=...)`; the callback appends rows (all records sharing each hash) to a buffer and, every 20 batches, calls `table.merge_insert("record_id").when_matched_update_all().when_not_matched_insert_all().execute(buffer)`, calls `ctx.heartbeat("embed")`, and, when `ctx.should_yield()` is true, raises `YieldRequested("embed")` (U03-152) after the flush. 7. Flush the rest, then upsert `reuse` rows the same way. 8. Orphans: `record_id`s in the table not present in `core.incident ∪ core.change ∪ core.problem`; delete in chunks of 1,000 with `table.delete(lance_filter_in("record_id", chunk))`. 9. `maintain_index(table)`. 10. Report: `embedded` = new hashes encoded, `cache_hits` = records reusing a vector, `rows` = records upserted. |
 | Side effects | LanceDB writes; GPU; logs `enrich.embed.batch_flushed`, `enrich.embed.completed`; metric `herness_enrich_embeddings_total` |
-| Errors | LanceDB commit conflict or lock → `StoreBusy` (retried by the caller with X:08 policy `embed_batch`); encoder errors from U03-32. |
+| Errors | LanceDB commit conflict or lock → `StoreBusy` (retried by the caller with T08-04 (herness.core.resilience.policy) policy `embed_batch`); encoder errors from U03-32. |
 | Concurrency | single writer (exclusive job kinds) |
 | Complexity and limits | flush every 20 batches (≈ 2,560 texts); ≤ 2,560 × 4 KB vectors buffered |
 | Security notes | Only `enrich.text_redacted.text` is embedded (TH03-13). |
@@ -833,7 +887,7 @@ Delta DD-05 is resolved by R-18: the return type is a 1-D float32 `np.ndarray`, 
 | Preconditions | Every output's `decider`/`decider_version` equal the writer's. |
 | Postconditions | After `flush`, all buffered rows are in one new part file `part-<ulid>.parquet`. |
 | Invariants | A writer never writes the same (`content_hash`, `question`, `question_fingerprint`) twice (in-memory key set). |
-| Algorithm | `add`: for each output without `error`, for each (qid, answer): look up the question's fingerprint in `questions`; skip qids not in the set; build a row with `decided_at = now()`; skip keys already written. When the buffer reaches `flush_rows`, call `flush`. `flush`: build an Arrow table with `CACHE_SCHEMA`; write `.part-<ulid>.parquet.tmp` (zstd) in `cache_partition(...)`; `fsync`; `os.replace` to `part-<ulid>.parquet`; call X:08/herness.core.resilience.fault_point("enrich.after_batch_write"); log `enrich.cache.flushed` (DEBUG, `decider`, `rows`); clear the buffer. |
+| Algorithm | `add`: for each output without `error`, for each (qid, answer): look up the question's fingerprint in `questions`; skip qids not in the set; build a row with `decided_at = now()`; skip keys already written. When the buffer reaches `flush_rows`, call `flush`. `flush`: build an Arrow table with `CACHE_SCHEMA`; write `.part-<ulid>.parquet.tmp` (zstd) in `cache_partition(...)`; `fsync`; `os.replace` to `part-<ulid>.parquet`; call T08-08 (herness.core.resilience.fault_point)("enrich.after_batch_write"); log `enrich.cache.flushed` (DEBUG, `decider`, `rows`); clear the buffer. |
 | Side effects | writes part files |
 | Errors | decider mismatch → `SchemaViolation`; OS error on write → `StoreBusy` when `errno` is `EACCES`/`EBUSY` (Windows lock), else `FatalError`. |
 | Concurrency | one writer per partition per process; not thread-safe |
@@ -890,7 +944,7 @@ Delta DD-05 is resolved by R-18: the return type is a 1-D float32 `np.ndarray`, 
 | Algorithm | For every part file under every version: read column `content_hash`; if none match, skip; else read the file, filter, write a replacement atomically (delete the file when no row remains). |
 | Side effects | rewrites parts; log `enrich.cache.purged` (INFO, `rows`, `files`) |
 | Errors | as U03-38 |
-| Concurrency | must run inside the exclusive `maintenance` job (X:10 deletion flow) |
+| Concurrency | must run inside the exclusive `maintenance` job (T10-29 (herness.admin.privacy.run_privacy_delete)) |
 | Complexity and limits | reads one column of every part; O(cache size) |
 | Security notes | Privacy deletion (TH03-12). |
 | Tests | UT03-38 |
@@ -1013,7 +1067,7 @@ Shared rules for every backend:
 
 - `decide(items, questions)` returns exactly one `DecisionOutput` per input, in input order. The questions asked for an item are `item.question_ids` when set, else `questions.for_entity(item.entity)` minus `PAIR_QUESTIONS`.
 - Backends never calibrate, never gate and never write the cache.
-- An item-level failure yields `DecisionOutput(answers={}, error=<class name>)`. A backend-level failure (`ModelUnavailable` after retries, `CircuitOpen`, `AuthError`, `EgressBlocked`) raises, so X:08/herness.core.resilience.DeciderChain moves the batch to the next member.
+- An item-level failure yields `DecisionOutput(answers={}, error=<class name>)`. A backend-level failure (`ModelUnavailable` after retries, `CircuitOpen`, `AuthError`, `EgressBlocked`) raises, so T08-10 (herness.core.resilience.DeciderChain) moves the batch to the next member.
 - Callers pass at most 2,000 items per `decide` call (the checkpoint size), so a backend-level failure loses at most one chunk.
 
 #### U03-48 herness.enrich.decide.Decider
@@ -1095,9 +1149,9 @@ Shared rules for every backend:
 | Kind | class (registered as `("decider", "openjev")`) |
 | Purpose | OpenJev adapter over loopback HTTP (design 03 §3.3). |
 | Signature | `OpenJevDecider(settings: OpenJevSettings, *, api_key: SecretStr \| None, image_tag: str, samples: int \| None, client_factory: Callable[[], httpx.Client] \| None = None)`. Attributes `name = "openjev"`, `version = f"openjev-{image_tag}/{settings.model}"`. `client_factory` is for tests only; production passes `None`. |
-| Preconditions | `settings.base_url` is loopback (U03-09); the default is `http://127.0.0.1:8100`, the host port that maps to container port 8080 (R-51). `image_tag` comes from the pinned image reference in X:10/herness.core.config.DeployConfig (the text between `:` and `@` of the `openjev` image). |
+| Preconditions | `settings.base_url` is loopback (U03-09); the default is `http://127.0.0.1:8100`, the host port that maps to container port 8080 (R-51). `image_tag` comes from the pinned image reference in T10-01 (herness.core.settings.DeployConfig) (the text between `:` and `@` of the `openjev` image). |
 | Postconditions | — |
-| Invariants | `samples` is `None` (omit the field), 1, 3 or 5; `steps = 1`, `think = 0` always. The package never constructs an `httpx` client itself: with `client_factory is None` the client is X:10/herness.core.egress.loopback_http_client(settings.base_url, timeout_s=settings.timeout_s) (R-06). |
+| Invariants | `samples` is `None` (omit the field), 1, 3 or 5; `steps = 1`, `think = 0` always. The package never constructs an `httpx` client itself: with `client_factory is None` the client is T10-17 (herness.core.egress.loopback_http_client)(settings.base_url, timeout_s=settings.timeout_s) (R-06). |
 | Algorithm | Shared private base `_JevHttpBackend` (also used by U03-55) holds the request logic of U03-53. The constructor builds nothing; one client is obtained per `decide` call and closed at its end. |
 | Side effects | none at construction |
 | Errors | — |
@@ -1116,7 +1170,7 @@ Shared rules for every backend:
 | Preconditions | No running event loop in the calling thread. |
 | Postconditions | Shared rules. |
 | Invariants | — |
-| Algorithm | 1. `asyncio.run(self._adecide(items, questions))`. 2. `_adecide`: `client = client_factory() if client_factory else X:10/herness.core.egress.loopback_http_client(settings.base_url, timeout_s=settings.timeout_s)` (sync, thread-safe, loopback-only transport; R-06); `pool = concurrent.futures.ThreadPoolExecutor(max_workers=settings.concurrency)`; `limiter = AdaptiveLimiter(settings.concurrency)`; request headers `{"Authorization": f"Bearer {key}"}` when a key is set, else `{}`, passed on each request. 3. Per item (gathered): body `{"model": settings.model, "state": item.text, "questions": to_wire_questions(asked), "steps": 1, "think": 0}` plus `"samples": samples` when not None. 4. Send with X:08/herness.core.resilience.aretry_call("decider_local", send, breaker_key="decider:openjev") inside `limiter.slot()`; the coroutine `send` checks X:08 fault point `decider.batch` (a name from impl 08's fault-point registry, R-40) once per call, runs the blocking `client.post("/v1/systemone", json=body, headers=headers)` through `loop.run_in_executor(pool, …)`, rejects responses > 1 MB, and maps status: 200 → parse; 400/422 → `OutputValidationError`; 401/403 → `AuthError`; 429 → `limiter.on_rate_limited(retry_after)` then `RateLimited(retry_after)`; other statuses and transport errors → X:08/herness.core.resilience.classify(exc, family="decider"). 5. Parse: `json.loads` then `parse_wire_answers(body["answers"], asked)`. 6. On `OutputValidationError` for an item: send once more; if it fails again, emit `DecisionOutput(error="OutputValidationError")` and log `enrich.decide.item_failed` (WARNING, `decider`, `error_class`). 7. `AuthError`, `CircuitOpen` and `ModelUnavailable` (after retries) cancel the gather and propagate. 8. Record `herness_enrich_decider_latency_seconds{decider}` per request and `herness_enrich_decider_errors_total{decider,error_class}`. 9. On exit (normal or exception): `pool.shutdown(wait=True)`, then `client.close()`. |
+| Algorithm | 1. `asyncio.run(self._adecide(items, questions))`. 2. `_adecide`: `client = client_factory() if client_factory else T10-17 (herness.core.egress.loopback_http_client)(settings.base_url, timeout_s=settings.timeout_s, bearer=key)` (sync, thread-safe, loopback-only transport; R-06; the optional `bearer` of U10-59 adds `Authorization: Bearer` when a key is set); `pool = concurrent.futures.ThreadPoolExecutor(max_workers=settings.concurrency)`; `limiter = AdaptiveLimiter(settings.concurrency)`. 3. Per item (gathered): body `{"model": settings.model, "state": item.text, "questions": to_wire_questions(asked), "steps": 1, "think": 0}` plus `"samples": samples` when not None. 4. Send with T08-07 (herness.core.resilience.aretry_call)("decider_local", send, breaker_key="decider:openjev") inside `limiter.slot()`; the coroutine `send` checks T08-08 (herness.core.resilience.fault_point) point `decider.batch` (a name from impl 08's fault-point registry, R-40) once per call, runs the blocking `client.post("/v1/systemone", json=body, headers=headers)` through `loop.run_in_executor(pool, …)`, rejects responses > 1 MB, and maps status: 200 → parse; 400/422 → `OutputValidationError`; 401/403 → `AuthError`; 429 → `limiter.on_rate_limited(retry_after)` then `RateLimited(retry_after)`; other statuses and transport errors → T08-04 (herness.core.resilience.classify)(exc, family="decider"). 5. Parse: `json.loads` then `parse_wire_answers(body["answers"], asked)`. 6. On `OutputValidationError` for an item: send once more; if it fails again, emit `DecisionOutput(error="OutputValidationError")` and log `enrich.decide.item_failed` (WARNING, `decider`, `error_class`). 7. `AuthError`, `CircuitOpen` and `ModelUnavailable` (after retries) cancel the gather and propagate. 8. Record `herness_enrich_decider_latency_seconds{decider}` per request and `herness_enrich_decider_errors_total{decider,error_class}`. 9. On exit (normal or exception): `pool.shutdown(wait=True)`, then `client.close()`. |
 | Side effects | HTTP to loopback; logs; metrics |
 | Errors | `AuthError`, `ModelUnavailable`, `CircuitOpen`, `RateLimited` (when the retry-after exceeds the policy cap) propagate. `EgressBlocked` from the loopback-only transport (a non-loopback `base_url` that bypassed U03-09) propagates. |
 | Concurrency | async orchestration on one event loop; blocking HTTP calls run in a thread pool of `settings.concurrency` workers on one shared thread-safe client; ≤ `settings.concurrency` requests in flight (64) |
@@ -1134,7 +1188,7 @@ Shared rules for every backend:
 | Preconditions | — |
 | Postconditions | Returns only when `GET /v1/models` answered 200 with a JSON list (`data[*].id`) containing `settings.model`. |
 | Invariants | — |
-| Algorithm | Client from X:10/herness.core.egress.loopback_http_client(settings.base_url, timeout_s=5) (R-06), or `client_factory()` in tests; the bearer header is set on the request; parse at most 64 KB; close the client. |
+| Algorithm | Client from T10-17 (herness.core.egress.loopback_http_client)(settings.base_url, timeout_s=5, bearer=key) (R-06, U10-59), or `client_factory()` in tests; parse at most 64 KB; close the client. |
 | Side effects | one HTTP request |
 | Errors | any failure → `ModelUnavailable("openjev health: <status or error class>")`. |
 | Concurrency | thread-safe |
@@ -1148,11 +1202,11 @@ Shared rules for every backend:
 |-------|---------|
 | Kind | class (registered as `("decider", "jev")`) |
 | Purpose | Hosted Jev adapter; every request passes the spec 10 egress guard (design 03 §3.3). |
-| Signature | `JevHostedDecider(settings: JevSettings, *, api_key: SecretStr, samples: int \| None, client_factory: Callable[[], httpx.Client] \| None = None)`. `name = "jev"`. `decide` as U03-53 with these differences: the client is the guarded sync client `X:10/herness.core.egress.get_guard().http_client("bulk_classification", "redacted_text", timeout=30.0)` (R-06; or `client_factory()` in tests), shared by the thread pool; requests use absolute URLs under `settings.base_url`; retry policy `decider_cloud`; breaker `decider:jev`; `EgressBlocked` propagates at once and is never retried. |
+| Signature | `JevHostedDecider(settings: JevSettings, *, api_key: SecretStr, samples: int \| None, client_factory: Callable[[], httpx.Client] \| None = None)`. `name = "jev"`. `decide` as U03-53 with these differences: the client is the guarded sync client `T10-16 (herness.core.egress.get_guard)().http_client("bulk_classification", "redacted_text", timeout=30.0)` (R-06; or `client_factory()` in tests), shared by the thread pool; requests use absolute URLs under `settings.base_url`; retry policy `decider_cloud`; breaker `decider:jev`; `EgressBlocked` propagates at once and is never retried. |
 | Preconditions | `settings.enabled`; the active profile allows `bulk_classification` with `redacted_text` (spec 10 §4.3), else every call raises `EgressBlocked`. |
 | Postconditions | Responses whose `model` differs from `version` are recorded with `decider_version = <returned model>`. |
 | Invariants | No request is sent without passing `EgressGuard.check` (enforced by the guard's transport). |
-| Algorithm | As U03-53 via `_JevHttpBackend`. The API key comes from X:10/herness.core.secrets.resolve(settings.api_key_secret) at construction by the composition root. |
+| Algorithm | As U03-53 via `_JevHttpBackend`. The API key comes from T10-06 (herness.core.secrets.resolve)(settings.api_key) (a `secret:` reference, R-72) at construction by `build_decider` (U03-69). |
 | Side effects | off-network HTTP through the guard; egress audit line per request (written by spec 10) |
 | Errors | `EgressBlocked`, `AuthError`, `ModelUnavailable`, `CircuitOpen` propagate; item errors as U03-53. |
 | Concurrency | ≤ `settings.concurrency` (16) in flight |
@@ -1206,7 +1260,7 @@ Shared rules for every backend:
 | Preconditions | `load()` done. |
 | Postconditions | Shared rules. |
 | Invariants | Deterministic for fixed weights and inputs. |
-| Algorithm | 1. Group item indices by the tuple of asked question ids. 2. Per group: `wire = to_wire_questions(asked)`, excluding choice questions with > 20 options. 3. `run_batches_with_oom_backoff(states, fn, start_batch=settings.call_batch, fault_name="decider.batch")` where `fn(batch)` = X:08/herness.core.resilience.call_with_timeout(lambda: agent.predict_batch(batch_states, wire, batch_size=settings.batch_size, sort_by_length=True), 30.0) (timeout → `ModelUnavailable`). 4. Choice questions with > 20 options: per state, `laya.predict_shortlist(agent, state, [q_wire], embed_fn=embed_fn, k=16)` (V-11); requires `embed_fn` else `ConfigError`. 5. Parse each result's `answers` with `parse_wire_answers`; an `OutputValidationError` makes that item an error output. A choice answer without `probabilities` is an `OutputValidationError` (V-11 decides the hook path). 6. Build outputs in input order. |
+| Algorithm | 1. Group item indices by the tuple of asked question ids. 2. Per group: `wire = to_wire_questions(asked)`, excluding choice questions with > 20 options. 3. `run_batches_with_oom_backoff(states, fn, start_batch=settings.call_batch, fault_name="decider.batch")` where `fn(batch)` = T08-07 (herness.core.resilience.call_with_timeout)(lambda: agent.predict_batch(batch_states, wire, batch_size=settings.batch_size, sort_by_length=True), 30.0) (timeout → `ModelUnavailable`). 4. Choice questions with > 20 options: per state, `laya.predict_shortlist(agent, state, [q_wire], embed_fn=embed_fn, k=16)` (V-11); requires `embed_fn` else `ConfigError`. 5. Parse each result's `answers` with `parse_wire_answers`; an `OutputValidationError` makes that item an error output. A choice answer without `probabilities` is an `OutputValidationError` (V-11 decides the hook path). 6. Build outputs in input order. |
 | Side effects | GPU compute |
 | Errors | `FatalError` from OOM at batch 1; `ModelUnavailable` on timeout. |
 | Concurrency | GPU owner thread |
@@ -1292,11 +1346,11 @@ Shared rules for every backend:
 |-------|---------|
 | Kind | class (registered as `("decider", "llm")`) |
 | Purpose | k-vote structured-output classifier; fallback teacher (D7), escalation fallback and ensemble member. |
-| Signature | `LlmDecider(client: CompletionClient, *, version: str, votes: int, temperature: float, max_concurrency: int, prompt_path: Path = <package>/prompts/enrich_decider.md)`. `name = "llm"`; `version` = `<profile name>/<model>` supplied by the composition root from X:05/herness.harness.llm.registry.client_for("enrich_decider", profile=…, depth=…). Methods `decide`, `health`. |
+| Signature | `LlmDecider(client: CompletionClient, *, version: str, votes: int, temperature: float, max_concurrency: int, prompt_path: Path = <package>/prompts/enrich_decider.md)`. `name = "llm"`; `version` = `<profile name>/<model>` supplied by the composition root from T05-10 (herness.harness.llm.registry.client_for)("enrich_decider", profile=…, depth=…). Methods `decide`, `health`. |
 | Preconditions | `votes` ∈ {1, 3, 5} (config `deciders.llm.votes[depth]`). |
 | Postconditions | Shared rules; `Answer.backend_confidence = None`; outputs record `samples = votes`. |
 | Invariants | — |
-| Algorithm | `decide`: 1. `asyncio.run` over items with an `asyncio.Semaphore(max_concurrency)`. 2. Per item and vote index `i` in `0..votes−1`: build `LLMRequest(client=client.name, system=[SystemBlock(prompt_header)], messages=[user message], response_schema=vote_schema(asked), response_schema_name="enrich_votes", temperature=temperature, seed=i, thinking="off", metadata=RequestMeta(run_id=None, task_id=None, role="enrich_decider", model_role="enrich_decider", step=i, request_key=f"{item.content_hash}:{i}"))`. The user message is paraphrase `i mod 5` of the prompt file, the question list (id, type, instructions, labels with descriptions or levels), then `<untrusted_data source="enrich.text_redacted" record_id="<record_id>">text</untrusted_data>` (spec 10 §9.1, R-20), where every literal `</untrusted_data` inside `text` was first replaced by `&lt;/untrusted_data`. 3. Call X:08/herness.core.resilience.aretry_call("llm_local", X:08/herness.core.resilience.complete_validated, client, req, max_repairs=2, breaker_key="decider:llm"). 4. Collect the vote per question from `response.parsed`. A vote that failed validation after repairs is dropped. 5. With ≥ 1 valid vote: `distribution = vote_distribution(valid_votes, labels)`, `answer` = argmax (ties → first label), `probability = distribution[answer]`. With 0 valid votes: item error `OutputValidationError`. |
+| Algorithm | `decide`: 1. `asyncio.run` over items with an `asyncio.Semaphore(max_concurrency)`. 2. Per item and vote index `i` in `0..votes−1`: build `LLMRequest(client=client.name, system=[SystemBlock(prompt_header)], messages=[user message], response_schema=vote_schema(asked), response_schema_name="enrich_votes", temperature=temperature, seed=i, thinking="off", metadata=RequestMeta(run_id=None, task_id=None, role="enrich_decider", model_role="enrich_decider", step=i, request_key=f"{item.content_hash}:{i}"))`. The user message is paraphrase `i mod 5` of the prompt file, the question list (id, type, instructions, labels with descriptions or levels), then `<untrusted_data source="enrich.text_redacted" record_id="<record_id>">text</untrusted_data>` (spec 10 §9.1, R-20), where every literal `</untrusted_data` inside `text` was first replaced by `&lt;/untrusted_data`. 3. Call T08-07 (herness.core.resilience.aretry_call)("llm_local", T08-09 (herness.core.resilience.complete_validated), client, req, max_repairs=2, breaker_key="decider:llm"). 4. Collect the vote per question from `response.parsed`. A vote that failed validation after repairs is dropped. 5. With ≥ 1 valid vote: `distribution = vote_distribution(valid_votes, labels)`, `answer` = argmax (ties → first label), `probability = distribution[answer]`. With 0 valid votes: item error `OutputValidationError`. |
 | Side effects | model calls (local GPU or, in premium, off-network through spec 05's guarded client) |
 | Errors | `ModelUnavailable`, `CircuitOpen`, `AuthError`, `EgressBlocked` propagate; item errors as above. |
 | Concurrency | async; ≤ `max_concurrency` items in flight (the client's `max_concurrency`, spec 05) |
@@ -1381,7 +1435,7 @@ Shared rules for every backend:
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Register the five decider classes with X:10/herness.core.registry. |
+| Purpose | Register the five decider classes with T10-04 (herness.core.registry). |
 | Signature | none → `None` |
 | Preconditions | — |
 | Postconditions | `registry.get("decider", n)` returns the class for `n` in `laya, openjev, jev, llm, ensemble`. |
@@ -1402,7 +1456,7 @@ Shared rules for every backend:
 | Purpose | Construct a configured decider from injected dependencies (called by `run_enrichment` and `run_distill`). |
 | Signature | `name: Literal["laya","openjev","jev","llm"]`; keyword-only: `cfg: HernessConfig`, `depth: Literal["fast","standard","deep"]`, `paths: EnrichPaths`, `llm: tuple[CompletionClient, str, int] \| None` (client, version, max_concurrency), `samples_override: int \| None = None`, `embed_fn: Callable \| None = None` → `Decider` |
 | Preconditions | `llm` is set when `name == "llm"`. |
-| Postconditions | OpenJev: `samples = samples_override or settings.samples[depth]`; key from X:10/herness.core.secrets.resolve(settings.api_key_secret) when the secret exists (X:10 `exists`), else `None`; the default name `OPENJEV_API_KEY` is the secret referenced as `secret:OPENJEV_API_KEY` by impls 08 and 10 (R-53). Jev: same with `TYPESAFE_API_KEY`. LLM: `votes = settings.llm.votes[depth]`, `temperature = settings.llm.temperature`. |
+| Postconditions | OpenJev: `samples = samples_override or settings.samples[depth]`; `settings` is `cfg.models.deciders` (the `deciders` section of `models.yaml`, U03-150, R-76). OpenJev: `samples = samples_override or settings.openjev.samples[depth]`; key from T10-06 (herness.core.secrets.resolve)(settings.openjev.api_key) when T10-06 (herness.core.secrets.exists) reports the referenced secret, else `None`; the default reference is `secret:OPENJEV_API_KEY`, the one impls 08 and 10 use (R-53, R-72). Jev: same with `settings.jev.api_key` (default `secret:TYPESAFE_API_KEY`). LLM: `votes = settings.llm.votes[depth]`, `temperature = settings.llm.temperature`. |
 | Invariants | — |
 | Algorithm | Look up the class in the registry, build arguments as postconditions. |
 | Side effects | secret lookup |
@@ -1534,11 +1588,11 @@ Shared rules for every backend:
 | Preconditions | Ops store migrated. |
 | Postconditions | Every approved `label_check` item for `qs.version` decided before the call is represented exactly once. |
 | Invariants | Idempotent: rows are deduplicated by `item_id` against `store.item_ids(kind)`. |
-| Algorithm | 1. Under `data/locks/labels.lock`: read the watermark `data/labels/<qsv>/_sync.json` (`last_decided_at`, `last_item_id`; default epoch). 2. Read decided items with `iter_review_items("label_check", "approved")` and `iter_review_items("label_check", "rejected")` (U03-147, over impl 02's `list_review_items`), keep those with (`decided_at`, `item_id`) greater than the watermark, and sort them by (`decided_at`, `item_id`). Impl 02's `list_review_items` has no `decided_after` filter, so the read is a full scan of decided `label_check` items; request RQ-01 (§13.6) asks for the filter. 3. For each item with `payload.question_set_version == qs.version`: rejected → count `skipped`; approved → `answer` = `note.answer` when `note` parses as JSON with a string `answer`, else `payload.answer`; the answer must be a valid label of the question (U03-50 label sets) else `skipped` and log `enrich.labels.invalid_answer` (WARNING, `item_id`); `labeled_by = decided_by`, `labeled_at = decided_at`. `purpose` `spot_check` or `ensemble_disagreement` → `human`; `gold` → `gold_reviews`. 4. Append per kind (skipping known `item_id`s). 5. Advance the watermark to the last processed item and write it atomically. |
+| Algorithm | 1. Under `data/locks/labels.lock`: read the watermark `data/labels/<qsv>/_sync.json` (`last_decided_at`, `last_item_id`; default epoch). 2. Read the newly decided items in (`decided_at`, `item_id`) order with T02-07 (herness.store.ops.list_review_items)(kind="label_check", statuses=("approved", "rejected"), decided_after=(last_decided_at, last_item_id), limit=500), repeating with the last row's (`decided_at`, `item_id`) as the next cursor until a page has fewer than 500 rows (keyset filter of impl 02 U02-58, request RQ-01). 3. For each item with `payload.question_set_version == qs.version`: rejected → count `skipped`; approved → `answer` = `note.answer` when `note` parses as JSON with a string `answer`, else `payload.answer`; the answer must be a valid label of the question (U03-50 label sets) else `skipped` and log `enrich.labels.invalid_answer` (WARNING, `item_id`); `labeled_by = decided_by`, `labeled_at = decided_at`. `purpose` `spot_check` or `ensemble_disagreement` → `human`; `gold` → `gold_reviews`. 4. Append per kind (skipping known `item_id`s). 5. Advance the watermark to the last processed item and write it atomically. |
 | Side effects | label parts, watermark file; log `enrich.labels.synced` (INFO, counts) |
 | Errors | ops read `StoreBusy` propagates (policy `sqlite_write` does not apply to reads; caller retries next run) |
 | Concurrency | file lock |
-| Complexity and limits | 500 items per ops page (impl 02 maximum); O(decided `label_check` items) per call until RQ-01 is provided |
+| Complexity and limits | 500 items per ops page; O(newly decided `label_check` items) per call |
 | Security notes | Human decisions keep `decided_by` (a `user_ref` hash, spec 09) for repudiation (TH03-11). |
 | Tests | UT03-74, IT03-15 |
 
@@ -1562,7 +1616,7 @@ Shared rules for every backend:
 
 ### 3.11a Review-item helpers (`herness/enrich/review_items.py`)
 
-The `review_item` table and its functions belong to impl 02 (`herness.store.ops.shared`: `create_review_item`, `get_review_item`, `list_review_items`, `decide_review_item`; R-08, R-09). This spec defines no ops function. The three helpers below replace the functions that the earlier draft asked impl 02 for (`create_review_item_if_absent`, the extended `list_review_items`, `count_review_items`, delta DD-11) and use only impl 02's `list_review_items` and `create_review_item`, imported as `herness.store.ops.<function>`. Only the exclusive `build_pipeline` and `distill` jobs create `label_check` and `mapping_suggestion` items (X:08 `exclusive_kinds`), and the dashboard only decides items, so a read-then-create sequence has no concurrent creator.
+The `review_item` table and its functions belong to impl 02 (`herness.store.ops.shared`, R-08, R-09); this spec defines no ops function. The three helpers below wrap impl 02's `list_review_items` (with its `decided_after` and `payload_match` filters, requests RQ-01 and RQ-02) and `create_review_item_if_absent` (U02-130), imported as `herness.store.ops.<function>`. Only the exclusive `build_pipeline` and `distill` jobs create `label_check` and `mapping_suggestion` items (T08-26 (herness.core.resilience.settings.ResilienceSection, key `resilience.jobs.exclusive_kinds`)), and impl 02 runs each lookup-and-insert in one write transaction, so creation stays idempotent even with a concurrent creator.
 
 #### U03-147 herness.enrich.review_items.iter_review_items
 
@@ -1570,11 +1624,11 @@ The `review_item` table and its functions belong to impl 02 (`herness.store.ops.
 |-------|---------|
 | Kind | function (generator) |
 | Purpose | Iterate over every `review_item` of one kind and status in impl 02's order. |
-| Signature | `kind: Literal["label_check","mapping_suggestion"]` (positional); `status: Literal["pending","approved","rejected"]` (positional); keyword-only `page_size: int = 500` → `Iterator[ReviewItem]` (`ReviewItem` from impl 02) |
-| Preconditions | `1 ≤ page_size ≤ 500` (impl 02's limit). |
+| Signature | `kind: Literal["label_check","mapping_suggestion"]` (positional); `status: Literal["pending","approved","rejected"]` (positional); keyword-only `payload_match: Mapping[str, str] \| None = None`, `page_size: int = 500` → `Iterator[ReviewItem]` (`ReviewItem` from impl 02) |
+| Preconditions | `1 ≤ page_size ≤ 5,000` (impl 02's limit); `payload_match` follows impl 02's key and value rules (U02-58). |
 | Postconditions | Yields every matching item once, ordered by `created_at`, then `item_id`. |
 | Invariants | — |
-| Algorithm | 1. `offset = 0`. 2. Loop: `page = X:02/herness.store.ops.list_review_items(kind=kind, status=status, limit=page_size, offset=offset)`; yield each item; stop when `len(page) < page_size`; else `offset += page_size`. Items created during the iteration may be seen or missed; callers run inside exclusive jobs (section intro). |
+| Algorithm | 1. `offset = 0`. 2. Loop: `page = T02-07 (herness.store.ops.list_review_items)(kind=kind, status=status, payload_match=payload_match, limit=page_size, offset=offset)`; yield each item; stop when `len(page) < page_size`; else `offset += page_size`. Items created during the iteration may be seen or missed; callers run inside exclusive jobs (section intro). |
 | Side effects | ops reads |
 | Errors | `StoreBusy`, `ConfigError` from impl 02 propagate. |
 | Concurrency | caller's thread; read-only |
@@ -1589,14 +1643,14 @@ The `review_item` table and its functions belong to impl 02 (`herness.store.ops.
 | Kind | function |
 | Purpose | Create review items whose match key has no item in a blocking status (idempotent creation for spot-checks, gold requests, disagreement reviews and mapping suggestions). |
 | Signature | `kind: Literal["label_check","mapping_suggestion"]` (positional); `payloads: Sequence[Mapping[str, object]]` (positional); keyword-only: `match_keys: tuple[str, ...]` (non-empty), `blocking_statuses: tuple[Literal["pending","approved","rejected"], ...]` (non-empty), `scope: Mapping[str, str] \| None = None` (payload fields an existing item must equal to be considered, for example `{"question_set_version": qsv}`), `now: datetime` → `tuple[int, int]` (created, suppressed) |
-| Preconditions | Every payload has every `match_keys` field (value `None` allowed for absent subject fields); payloads carry no ticket text (TH03-03). |
+| Preconditions | Every payload has every `match_keys` field (value `None` allowed for absent subject fields) and every `scope` key with the scope's value, else `ConfigError`; at most 8 match and scope keys together (impl 02 limit); payloads carry no ticket text (TH03-03). |
 | Postconditions | For each payload, exactly one of: an item was created, or an item of `kind` with a status in `blocking_statuses`, equal `scope` fields and an equal match tuple existed before or was created earlier in the same call. |
 | Invariants | The match tuple is `tuple(payload.get(k) for k in match_keys)` with values compared as JSON scalars. |
-| Algorithm | 1. `existing = set()`; for each status in `blocking_statuses`, for each item of `iter_review_items(kind, status)` whose payload matches `scope`, add its match tuple. 2. For each payload in order: tuple in `existing` → count suppressed; else X:02/herness.store.ops.create_review_item(kind, payload, now=now), add the tuple, count created. 3. Record metric `herness_enrich_review_items_total{kind, purpose}` per created item (`purpose` = payload `purpose` or `"none"`). Each create runs in its own impl 02 write transaction; a crash between creates leaves a prefix created, and the rerun suppresses it through step 1. |
+| Algorithm | 1. `seen = set()`. 2. For each payload in order: `key` = its match tuple; `key in seen` → count suppressed and continue; else `item_id, created = T02-24 (herness.store.ops.create_review_item_if_absent)(kind, payload, match_keys=match_keys + tuple(scope or {}), blocking_statuses=blocking_statuses, now=now)` (request RQ-02); add `key` to `seen`; count created or suppressed. 3. Record metric `herness_enrich_review_items_total{kind, purpose}` per created item (`purpose` = payload `purpose` or `"none"`). Each call runs in its own impl 02 write transaction that holds the lookup and the insert; a crash between calls leaves a prefix created, and the rerun suppresses it. |
 | Side effects | ops reads and inserts; metric |
 | Errors | `SchemaViolation` (payload), `StoreBusy` from impl 02 propagate. |
 | Concurrency | single creator per kind (exclusive jobs, section intro) |
-| Complexity and limits | O(items of `kind` in `blocking_statuses`) reads per call; request RQ-02 (§13.6) asks impl 02 for a payload-match lookup that removes the scan |
+| Complexity and limits | one impl 02 lookup and at most one insert per payload (U02-130); no scan in this package |
 | Security notes | TH03-03 (no text), TH03-10 (items are created `pending`, never approved here). |
 | Tests | UT03-137 |
 
@@ -1610,11 +1664,11 @@ The `review_item` table and its functions belong to impl 02 (`herness.store.ops.
 | Preconditions | — |
 | Postconditions | Questions without a pending item are absent (callers read with default 0). |
 | Invariants | — |
-| Algorithm | Iterate `iter_review_items("label_check", "pending")`; keep items with `payload.question_set_version == qsv` and `payload.purpose ∈ purposes`; count by `payload.question`. |
+| Algorithm | For each purpose in `purposes`: iterate `iter_review_items("label_check", "pending", payload_match={"question_set_version": qsv, "purpose": purpose})` and count by `payload.question`. |
 | Side effects | ops reads |
 | Errors | as U03-147 |
 | Concurrency | read-only |
-| Complexity and limits | O(pending `label_check` items); bounded by `open_cap_per_question` × questions plus open gold items |
+| Complexity and limits | O(matching pending items); bounded by `open_cap_per_question` × questions plus open gold items |
 | Security notes | — |
 | Tests | UT03-138 |
 
@@ -1758,7 +1812,7 @@ The `review_item` table and its functions belong to impl 02 (`herness.store.ops.
 | Preconditions | Inside `ctx.gpu_scope("decider")` (R-43), `openjev` stopped, encoder unloaded. |
 | Postconditions | Every applicable (record, Laya-primary question) has a current Laya cache row or an item error was logged. |
 | Invariants | No inference for pairs already in the cache. |
-| Algorithm | 1. `laya is None` (degraded) or no Laya-primary question → report `skipped`, return. 2. `laya.load()`. 3. Writer with `flush_rows` = 20 × `call_batch` × questions. 4. For each chunk of `build_inputs(decider="laya", …)`: `outputs = laya.decide(chunk, qs)`; `writer.add(outputs, samples=None)`; count errors; `ctx.heartbeat("decide-primary")`; if `ctx.should_yield()`: flush and raise the pipeline's private `_YieldRequested`. 5. Flush, `laya.unload()`. |
+| Algorithm | 1. `laya is None` (degraded) or no Laya-primary question → report `skipped`, return. 2. `laya.load()`. 3. Writer with `flush_rows` = 20 × `call_batch` × questions. 4. For each chunk of `build_inputs(decider="laya", …)`: `outputs = laya.decide(chunk, qs)`; `writer.add(outputs, samples=None)`; count errors; `ctx.heartbeat("decide-primary")`; if `ctx.should_yield()`: flush and raise the pipeline's private `YieldRequested`. 5. Flush, `laya.unload()`. |
 | Side effects | cache parts; GPU |
 | Errors | `FatalError` (OOM at batch 1) fails the stage and the job; `ModelUnavailable` (timeout) → stage marked `degraded`, remaining Laya-primary work falls to escalation by resolution rules (§6). |
 | Concurrency | GPU owner |
@@ -1776,7 +1830,7 @@ The `review_item` table and its functions belong to impl 02 (`herness.store.ops.
 | Preconditions | `decide-primary` done. For OpenJev, the caller started the service (`ctx.services.start("openjev")`) after `release_cuda()`. |
 | Postconditions | Items the teacher answered are cached; the rest are returned as deferred. |
 | Invariants | At most `escalation.max_rows_per_night` records sent (pairs are counted separately under `change_link.decider_max_pairs`). |
-| Algorithm | 1. `resolve_frame(...)`; `queue = escalation_queue(max_records=cfg.escalation.max_rows_per_night)`. 2. `teacher is None` (disabled, service start failed, or breaker `decider:<name>` open per X:08 `guard`) → return `queue` plus pairs as `QueueItem`s (deferred). 3. Convert queue items to `DecisionInput(question_ids=…)`; append `pairs`. 4. Wrap the teacher in X:08/herness.core.resilience.DeciderChain([teacher.name], gpu=gpu_state()) and call `decide` per chunk of 2,000; `deferred` inputs from the chain and chunks lost to `ModelUnavailable`/`CircuitOpen` are collected; `AuthError`/`EgressBlocked` stop sending (all remaining become deferred) and log `enrich.decider.auth_failed` or `enrich.decider.egress_blocked` (ERROR). 5. Items with `error` set are retried once in the next chunk; still failing → deferred. 6. Cache writes every 2,000 answers; heartbeat and yield check per chunk. 7. Report `escalated` (records sent), `failed`, plus `enrich.decide.escalation_capped` when the queue hit the cap (INFO, `queued`, `cap`). |
+| Algorithm | 1. `resolve_frame(...)`; `queue = escalation_queue(max_records=cfg.escalation.max_rows_per_night)`. 2. `teacher is None` (disabled, service start failed, or breaker `decider:<name>` open per T08-06 (herness.core.resilience.guard)) → return `queue` plus pairs as `QueueItem`s (deferred). 3. Convert queue items to `DecisionInput(question_ids=…)`; append `pairs`. 4. Wrap the teacher in T08-10 (herness.core.resilience.DeciderChain)([teacher.name], gpu=gpu_state()) and call `decide` per chunk of 2,000; `deferred` inputs from the chain and chunks lost to `ModelUnavailable`/`CircuitOpen` are collected; `AuthError`/`EgressBlocked` stop sending (all remaining become deferred) and log `enrich.decider.auth_failed` or `enrich.decider.egress_blocked` (ERROR). 5. Items with `error` set are retried once in the next chunk; still failing → deferred. 6. Cache writes every 2,000 answers; heartbeat and yield check per chunk. 7. Report `escalated` (records sent), `failed`, plus `enrich.decide.escalation_capped` when the queue hit the cap (INFO, `queued`, `cap`). |
 | Side effects | HTTP; cache parts |
 | Errors | none propagate except `FatalError` |
 | Concurrency | single thread driving async batches |
@@ -2129,7 +2183,7 @@ All functions take `device: Literal["cuda","cpu"]` and a `seed: int`; with the s
 | Postconditions | `enrich.cluster` holds active clusters; `enrich.cluster_member` holds members (noise has no row); for a full run, a snapshot with `status = "assigned"` exists for `snapshot_id = build_id`. |
 | Invariants | Incremental runs change no IDs. |
 | Algorithm | 1. `prev = ClusterSnapshot.load_current`. If a snapshot with `snapshot_id == build_id` and status `assigned` exists (crash rerun), load it and skip to step 5 using its assignment file `members.parquet`. 2. Incremental path (prev exists and not forced): a. changed incidents = in-window incidents (`opened_at ≥ now − window_days`) whose (`record_id`, `content_hash`) is not in `prev.enrich.text_redacted`; b. stream their vectors from LanceDB, `project`, assign to the nearest stored prototype (chunked `x @ prototypes.T`), `assign_members` with `proto_cluster`; c. `drift_share` = share with `sim < assign_min_sim`; d. `is_full_recluster_due(...)`; when due, continue at step 3; e. copy `prev.enrich.cluster_member` rows for unchanged in-window records, add the new assignments, copy `prev.enrich.cluster` rows, recompute `size`, `first_seen`, `last_seen`, `service_ids` with `describe_clusters`; write tables; return kind `incremental` with no naming candidates. 3. Full path: a. PCA: reuse `prev.pca` when `prev.algorithm_version` starts with `ALGORITHM_BASE`, else `fit_pca` on a uniform sample of `pca_sample` in-window vectors (sample by lowest `sha256(record_id)`); b. stream all in-window vectors, `project`; c. `k = clamp(n // proto_per, k_min, k_max)` (and ≤ n); `spherical_kmeans`; d. `hdbscan_prototypes`; e. `assign_members`, `prune_clusters`; f. `compute_centroids` (second streaming pass); g. `match_cluster_ids` against `prev` active/retired centroids; h. write `members.parquet` (record_id, cluster_id, membership_prob) and the snapshot with inherited names (`named_centroid`, `named_size`, `label`, `root_cause_category` copied for inherited and revived ids) and `status = "assigned"`; i. heartbeat after every phase. 4. Descriptors and `top_terms_ctfidf` (texts sampled ≤ 2,000 per cluster by lowest `sha256(cluster_id + record_id)`), naming candidates = clusters where `needs_naming` is true, with `representative_texts`. 5. Write `enrich.cluster` (label = inherited label or `NULL` until `finalize_clusters`) and `enrich.cluster_member`. |
-| Side effects | GPU; snapshot files; warehouse writes; logs `enrich.cluster.incremental_completed`, `enrich.cluster.full_completed`, `enrich.cluster.drift_detected`; metrics `herness_enrich_clusters_total`, `herness_enrich_cluster_drift_ratio` |
+| Side effects | GPU; snapshot files; warehouse writes; logs `enrich.cluster.incremental_completed`, `enrich.cluster.full_completed`, `enrich.cluster.drift_detected`; metrics `herness_enrich_clusters_count`, `herness_enrich_cluster_drift_ratio` |
 | Errors | CUDA OOM at the minimum chunk → `FatalError`; LanceDB read → `StoreBusy`; missing or corrupt snapshot → full recluster. |
 | Concurrency | GPU owner; build connection |
 | Complexity and limits | streaming 262,144 vectors per chunk; 64-d projections held in memory (5M × 256 B ≈ 1.3 GB) |
@@ -2277,7 +2331,7 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Signature | `wh`; keyword-only: `encoder: Encoder`, `qs: QuestionSet` → `MappingVectors` (subjects table, service table, `subject_vecs`, `service_vecs`, `option_vecs: dict[str, dict[str, np.ndarray]]` per dynamic question) |
 | Preconditions | `enrich.text_redacted` filled. |
 | Postconditions | Texts: Jira subject `"<project> <component>: " + "; ".join(20 most recent redacted summaries)`; team subject `"<redacted team name>: " + "; ".join(first 200 chars of 20 most recent team incident texts)`; service `"<service name>: " + "; ".join(first 200 chars of 20 most recent service incident texts)` (core.service has no description column, open item OI-10); option description texts for dynamic questions `"<label>: <description>"`. Vectors are not persisted. |
-| Invariants | Every text passed to the encoder is redacted: summaries and names through X:10/herness.core.redact.get_redactor().redact_batch; incident texts come from `enrich.text_redacted`. |
+| Invariants | Every text passed to the encoder is redacted: summaries and names through T10-10 (herness.core.redact.get_redactor)().redact_batch; incident texts come from `enrich.text_redacted`. |
 | Algorithm | Queries: subjects = distinct (`project`, `component`) from `core.work_item` with `service_id IS NULL` and non-NULL `component`; teams = active `core.team` rows with no `core.service_map` row for their `team_id`. Encode with `embed_texts(batch_size=128)`. |
 | Side effects | GPU compute |
 | Errors | encoder errors |
@@ -2628,7 +2682,7 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Preconditions | Laya exposes per-question logits for a batch in training mode (verification item V-11; the call is frozen in the card's fixture). |
 | Postconditions | as protocol |
 | Invariants | Loss = weighted mean over (row, question) of `KL(target ‖ softmax(logits))`; bool targets are two-way distributions. |
-| Algorithm | Standard loop: shuffle with `seed`; AdamW with two parameter groups; linear warmup then linear decay; bf16 autocast; gradient accumulation; after each epoch compute validation NLL, save checkpoint, stop when it did not improve for 1 epoch; `ctx.heartbeat("train")` every 50 steps; `ctx.should_yield()` checked every 50 steps → save a mid-epoch checkpoint and raise `_YieldRequested`. |
+| Algorithm | Standard loop: shuffle with `seed`; AdamW with two parameter groups; linear warmup then linear decay; bf16 autocast; gradient accumulation; after each epoch compute validation NLL, save checkpoint, stop when it did not improve for 1 epoch; `ctx.heartbeat("train")` every 50 steps; `ctx.should_yield()` checked every 50 steps → save a mid-epoch checkpoint and raise `YieldRequested`. |
 | Side effects | GPU; files |
 | Errors | as protocol |
 | Concurrency | GPU owner |
@@ -2702,9 +2756,9 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Preconditions | The job runs on the GPU slot; a promoted warehouse exists. `run_distill` enters `ctx.gpu_scope("decider")` for its whole body (R-43), and the LLM-teacher path holds a nested `ctx.gpu_scope("reasoning")` from step 3 to step 8 (entered and left through one `contextlib.ExitStack`). |
 | Postconditions | A candidate version directory with weights, `manifest.json` (`status = "candidate"`), `calibration.json`, `eval.json`; or `stopped = True`. `CURRENT` is never changed. |
 | Invariants | Resumable: `ctx.save_state({"distill": {"version", "step", "teacher", "round"}})` after each step; a rerun continues at the saved step. |
-| Algorithm | Steps and failure handling are flow F03-13 (§5). Summary: 0. Load config, question set, `check_fingerprint_registry`; `sync_label_checks`; `consolidate_gold`. 1. Active round only: evaluate the stop rule from previous active-round `eval.json` files of the chain (`macro_metric` gains < `min_gain_pp` for `patience` rounds, or `round ≥ max_rounds`) → return `stopped`. 2. Version id and directory. 3. Teacher selection: OpenJev when `deciders.openjev.enabled`, `ctx.services.start("openjev")` succeeds and `health()` passes; else LLM (enter `ctx.gpu_scope("reasoning")` unless the LLM profile is off-network, `llm_factory("enrich_decider")`, votes 3), logged `enrich.distill.teacher_selected`. 4. Sample: initial → `stratified_sample(size = sample_size or sample_size_llm_teacher)`; active → Laya `CURRENT` scores a 500,000-record pool of records without teacher rows (hash order), `select_active(per_round or per_round_llm_teacher)`. Laya scoring happens before the teacher starts (OpenJev stopped) — the step order for active rounds is 4 then 3. 5. Teacher labeling over sample ∪ gold hashes lacking teacher rows, `samples = 3` (OpenJev) or 3 votes (LLM); cache writer flush every 2,000 answers; teacher rows appended to `teacher/` (gold hashes are cached but never appended to `teacher/`). 6. Spot-check items for teacher rows per question: `max(spot_check_min, min(spot_check_max, 1 %))`, half uniform, half with teacher probability < 0.7 (hash order), created through `create_if_absent("label_check", …)` (U03-148) with the match keys, blocking statuses and scope of U03-83; blocked questions = reviewed disagreement rate > `block_disagreement` with ≥ 100 reviews. 7. `request_gold` for unfrozen questions. 8. Stop the teacher (`ctx.services.stop("openjev")`, or leave the `reasoning` scope, which restores `decider`), `release_cuda()`. 9. `build_training_set`; train with `select_trainer()` from `base` (initial, `init_from`) or the previous accepted version (active). 10. Write manifest (`weights_sha256`, `status = "candidate"`). 11. Laya candidate inference on gold hashes (cache under the candidate version). 12. `evaluate_candidate`. 13. Report. |
+| Algorithm | Steps and failure handling are flow F03-13 (§5). Summary: 0. Load config, `check_decider_refs` (U03-151; an `error` issue → `ConfigError`), question set, `check_fingerprint_registry`; `sync_label_checks`; `consolidate_gold`. 1. Active round only: evaluate the stop rule from previous active-round `eval.json` files of the chain (`macro_metric` gains < `min_gain_pp` for `patience` rounds, or `round ≥ max_rounds`) → return `stopped`. 2. Version id and directory. 3. Teacher selection: OpenJev when `deciders.openjev.enabled`, `ctx.services.start("openjev")` succeeds and `health()` passes; else LLM (enter `ctx.gpu_scope("reasoning")` unless the LLM profile is off-network, `llm_factory("enrich_decider")`, votes 3), logged `enrich.distill.teacher_selected`. 4. Sample: initial → `stratified_sample(size = sample_size or sample_size_llm_teacher)`; active → Laya `CURRENT` scores a 500,000-record pool of records without teacher rows (hash order), `select_active(per_round or per_round_llm_teacher)`. Laya scoring happens before the teacher starts (OpenJev stopped) — the step order for active rounds is 4 then 3. 5. Teacher labeling over sample ∪ gold hashes lacking teacher rows, `samples = 3` (OpenJev) or 3 votes (LLM); cache writer flush every 2,000 answers; teacher rows appended to `teacher/` (gold hashes are cached but never appended to `teacher/`). 6. Spot-check items for teacher rows per question: `max(spot_check_min, min(spot_check_max, 1 %))`, half uniform, half with teacher probability < 0.7 (hash order), created through `create_if_absent("label_check", …)` (U03-148) with the match keys, blocking statuses and scope of U03-83; blocked questions = reviewed disagreement rate > `block_disagreement` with ≥ 100 reviews. 7. `request_gold` for unfrozen questions. 8. Stop the teacher (`ctx.services.stop("openjev")`, or leave the `reasoning` scope, which restores `decider`), `release_cuda()`. 9. `build_training_set`; train with `select_trainer()` from `base` (initial, `init_from`) or the previous accepted version (active). 10. Write manifest (`weights_sha256`, `status = "candidate"`). 11. Laya candidate inference on gold hashes (cache under the candidate version). 12. `evaluate_candidate`. 13. Report. |
 | Side effects | GPU; services; cache; labels; ops review items; model files; logs `enrich.distill.*` |
-| Errors | `ConfigError` before GPU work fails the job; `ModelUnavailable` from both teachers → job fails with retry per spec 08; `_YieldRequested` → caller returns `yield`. |
+| Errors | `ConfigError` before GPU work fails the job; `ModelUnavailable` from both teachers → job fails with retry per spec 08; `YieldRequested` → caller returns `yield`. |
 | Concurrency | exclusive job kind |
 | Complexity and limits | ≤ 6 h training; teacher ≈ 17 min (OpenJev) or ≈ 1.1 h (LLM) |
 | Security notes | TH03-04 (gold exclusion, spot-check blocking), TH03-05 (safetensors, hashes). |
@@ -2715,10 +2769,10 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Build the spec 08 job handler for kind `distill`; registered by the composition root with X:08/herness.core.jobs.register_handler. The CLI enqueues the job by default and runs it in-process only with the admin `--inline` flag through `herness.core.jobs.run_inline` (R-45). |
+| Purpose | Build the spec 08 job handler for kind `distill`; registered by the composition root with T08-12 (herness.core.jobs.register_handler). The CLI enqueues the job by default and runs it in-process only with the admin `--inline` flag through `herness.core.jobs.run_inline` (R-45). |
 | Signature | `llm_factory: LlmFactory \| None` → `Callable[[JobContext], JobOutcome]` (one argument, R-42) |
 | Preconditions | — |
-| Postconditions | The handler reads `ctx.job.payload["round_kind"]` (R-42; default `"initial"`; other values → `ConfigError`), calls `run_distill`, and returns `JobOutcome(status="done", result=report.model_dump(mode="json"))`, or `JobOutcome(status="yield")` on `_YieldRequested`. |
+| Postconditions | The handler reads `ctx.job.payload["round_kind"]` (R-42; default `"initial"`; other values → `ConfigError`), calls `run_distill`, and returns `JobOutcome(status="done", result=report.model_dump(mode="json"))`, or `JobOutcome(status="yield")` on `YieldRequested`. |
 | Invariants | — |
 | Algorithm | As postconditions. |
 | Side effects | as `run_distill` |
@@ -2738,7 +2792,7 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Preconditions | Caller is an OS admin (spec 09 CLI role check). |
 | Postconditions | Manifest `status = "accepted"`, `accepted_questions` = requested subset (default: all `accepted_proposed`), `accepted_by = "os:" + getpass.getuser()`, `accepted_at = now`; `CURRENT` = `version`; audit line written. |
 | Invariants | Only questions with `accepted_proposed = true` in `eval.json` can be accepted. |
-| Algorithm | 1. Validate `version` (pattern); `verify_model_dir(require_status={"candidate","accepted"})`. 2. Read `eval.json`; its `question_set_version` must equal the manifest's and the active config's; `gold_sha256` must equal `gold_digest` of the current gold. 3. Requested questions ⊆ proposed, else `ConfigError` listing the refused ids. 4. Write the manifest atomically, then `write_current`. 5. X:10/herness.core.audit.audit("admin_action", actor, action="laya_accept", version=…, questions=…). 6. Log `enrich.laya.accepted`. |
+| Algorithm | 1. Validate `version` (pattern); `verify_model_dir(require_status={"candidate","accepted"})`. 2. Read `eval.json`; its `question_set_version` must equal the manifest's and the active config's; `gold_sha256` must equal `gold_digest` of the current gold. 3. Requested questions ⊆ proposed, else `ConfigError` listing the refused ids. 4. Write the manifest atomically, then `write_current`. 5. T10-05 (herness.core.audit.audit)("admin_action", actor, action="laya_accept", version=…, questions=…). 6. Log `enrich.laya.accepted`. |
 | Side effects | files; audit |
 | Errors | invalid version, failed verification, stale eval, refused question → `ConfigError` |
 | Concurrency | single admin action; the file lock `data/locks/laya.lock` is held for steps 2–4 |
@@ -2848,7 +2902,7 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Preconditions | SQL 000–299 ran on `wh`. The `build_pipeline` job starts with no GPU class (R-43) and runs on the GPU slot. |
 | Postconditions | All `enrich.*` tables of design 03 §4.1 exist in `wh` (possibly empty for skipped stages). On return the job's GPU class equals its class on entry. |
 | Invariants | Stage order is fixed; `stages` selects a subset without reordering. Every value of `stages` must be a `StageName`; an unknown value raises `ConfigError("unknown enrichment stage <name>")` before any work. The function never touches `CURRENT` of the warehouse. |
-| Algorithm | Flow F03-01 (§5). GPU work runs inside `ctx.gpu_scope("decider")` (F03-01 steps 4–10), and the reasoning phase inside a nested `ctx.gpu_scope("reasoning")` (R-43); leaving a scope restores the previous class, also on an exception. Each stage is wrapped: start time, `enrich.stage.started`; on success `enrich.stage.completed` with counts; `ctx.save_state({"enrich": {"build_id", "stages_done"}})`; on a degraded condition the stage sets `status = "degraded"` and a `note`, and the pipeline continues; `_YieldRequested` propagates to the handler (which returns `JobOutcome(status="yield")`). A `FatalError` or `ConfigError` fails the pipeline (the build is not promoted). |
+| Algorithm | Flow F03-01 (§5). GPU work runs inside `ctx.gpu_scope("decider")` (F03-01 steps 4–10), and the reasoning phase inside a nested `ctx.gpu_scope("reasoning")` (R-43); leaving a scope restores the previous class, also on an exception. Each stage is wrapped: start time, `enrich.stage.started`; on success `enrich.stage.completed` with counts; `ctx.save_state({"enrich": {"build_id", "stages_done"}})`; on a degraded condition the stage sets `status = "degraded"` and a `note`, and the pipeline continues; `YieldRequested` (U03-152) propagates to the caller: impl 02's `_stage_enrich` (U02-100) catches `herness.enrich.pipeline.YieldRequested` and returns a `yield` result. A `FatalError` or `ConfigError` fails the pipeline (the build is not promoted). |
 | Side effects | all stage effects |
 | Errors | `ConfigError` (config, fingerprint drift), `FatalError` (OOM at batch 1), `SchemaViolation` (SQL) |
 | Concurrency | single thread driving the build connection and the GPU |
@@ -2868,7 +2922,7 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Preconditions | Runs inside the spec 10 `maintenance` job (exclusive kind). |
 | Postconditions | No `ticket_embedding` row has `record_id`; no cache or label row has an unshared hash of the record or a pair hash involving it; no label row has `record_id`; the pair index has no row with it. |
 | Invariants | Idempotent: a second call returns zeros. |
-| Algorithm | 1. Validate `record_id` with the `lance_filter_in` allowlist. 2. Hashes `H`: `content_hash` of the record's `ticket_embedding` rows, of its `enrich.text_redacted` row in the `CURRENT` warehouse (opened read-only via X:02/herness.store.warehouse.open_current), and of label rows with this `record_id`. 3. Pair hashes `P`: pair index rows with `incident_id` or `change_id` equal to `record_id`. 4. Delete the vector rows (`table.delete(lance_filter_in("record_id", [record_id]))`). 5. `shared` = hashes in `H` present in `ticket_embedding` or `CURRENT` `enrich.text_redacted` for another `record_id`. 6. `purge_hashes(paths, (H − shared) ∪ P)`. 7. Rewrite label parts of every version and kind (including `gold/_reviews`), dropping rows with `content_hash ∈ (H − shared) ∪ P` or `record_id` equal; when a gold row is removed, log `enrich.purge.gold_modified` (WARNING, `question`) because the gold digest changes. 8. Rewrite pair index parts without the record. 9. Log `enrich.purge.completed` (INFO, counts, no `record_id` above DEBUG). |
+| Algorithm | 1. Validate `record_id` with the `lance_filter_in` allowlist. 2. Hashes `H`: `content_hash` of the record's `ticket_embedding` rows, of its `enrich.text_redacted` row in the `CURRENT` warehouse (opened read-only via T02-09 (herness.store.warehouse.open_readonly) with `build_id=None`; no `CURRENT` (`NotFoundError`) → no warehouse hashes), and of label rows with this `record_id`. 3. Pair hashes `P`: pair index rows with `incident_id` or `change_id` equal to `record_id`. 4. Delete the vector rows (`table.delete(lance_filter_in("record_id", [record_id]))`). 5. `shared` = hashes in `H` present in `ticket_embedding` or `CURRENT` `enrich.text_redacted` for another `record_id`. 6. `purge_hashes(paths, (H − shared) ∪ P)`. 7. Rewrite label parts of every version and kind (including `gold/_reviews`), dropping rows with `content_hash ∈ (H − shared) ∪ P` or `record_id` equal; when a gold row is removed, log `enrich.purge.gold_modified` (WARNING, `question`) because the gold digest changes. 8. Rewrite pair index parts without the record. 9. Log `enrich.purge.completed` (INFO, counts, no `record_id` above DEBUG). |
 | Side effects | LanceDB, Parquet rewrites |
 | Errors | invalid `record_id` → `SchemaViolation`; IO → `StoreBusy` (spec 10 retries the step) |
 | Concurrency | exclusive maintenance job |
@@ -2901,10 +2955,10 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Range | Module |
 |-------|--------|
 | U03-01–U03-08 | `herness/core/types/decisions.py` |
-| U03-09–U03-11 | `settings.py` |
+| U03-09–U03-11, U03-150, U03-151 | `settings.py` |
 | U03-12–U03-13 | `layout.py` |
 | U03-14–U03-20 | `questions.py` |
-| U03-21–U03-23 | `gpu.py` |
+| U03-21–U03-23, U03-152 | `gpu.py` |
 | U03-24–U03-28 | `text.py` |
 | U03-29–U03-32 | `embed.py` |
 | U03-33–U03-35 | `embed_stage.py` |
@@ -2943,13 +2997,13 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | U03-145 | `purge.py` |
 | U03-146 | `health.py` |
 
-Private helpers with logic worth testing: `_JevHttpBackend` (U03-53), `build_training_set` (U03-130, UT03-126), `_YieldRequested` (control-flow exception raised when `ctx.should_yield()` is true; caught only by `run_enrichment`'s and `run_distill`'s job handlers), prompt files `herness/enrich/prompts/enrich_decider.md` (system header with the standing untrusted-data instruction of spec 10 §9.1, and five numbered instruction paraphrases) and `herness/enrich/prompts/cluster_namer.md`.
+Private helpers with logic worth testing: `_JevHttpBackend` (U03-53), `build_training_set` (U03-130, UT03-126), prompt files `herness/enrich/prompts/enrich_decider.md` (system header with the standing untrusted-data instruction of spec 10 §9.1, and five numbered instruction paraphrases) and `herness/enrich/prompts/cluster_namer.md`.
 
 ---
 
 ## 4. State and data
 
-### 4.1 Warehouse tables (new build file only; DDL owned by X:02/enrich schema)
+### 4.1 Warehouse tables (new build file only; placeholder DDL in T02-12 (herness/model/sql/000_settings.sql))
 
 | Table | Columns (spec 02 §4.4) | Written by | Write rule and idempotency key | Transaction |
 |-------|------------------------|-----------|--------------------------------|-------------|
@@ -2998,9 +3052,9 @@ Retention: this spec deletes no model version and no snapshot (design 03 §5.8 s
 
 Classification: `labeled_by` is a `user_ref` HMAC hash (spec 09) → `personal` (pseudonymous); other columns `internal`.
 
-### 4.5 Ops store (`review_item`, via X:02/herness.store.ops)
+### 4.5 Ops store (`review_item`, via T02-04 (herness.store.ops))
 
-No new tables, columns or migrations: `review_item` is created by impl 02's migration 005, and this spec's migration range 020–029 (R-11) is unused. Rows are written only through impl 02's `create_review_item`, called by `create_if_absent` (U03-148). Rows written:
+No new tables, columns or migrations: `review_item` is created by impl 02's migration 005, and this spec's migration range 020–029 (R-11) is unused. Rows are written only through impl 02's `create_review_item_if_absent`, called by `create_if_absent` (U03-148). Rows written:
 
 | Kind | Payload (design 03 §4.6) | Match keys for "if absent" | Blocking statuses |
 |------|--------------------------|----------------------------|-------------------|
@@ -3008,9 +3062,9 @@ No new tables, columns or migrations: `review_item` is created by impl 02's migr
 | `label_check` follow-up gold items | same | none (created by `consolidate_gold` when no gold item for the key is `pending`) | — |
 | `mapping_suggestion` | `subject_type, jira_project, jira_component, team_id, service_id, score, fuzzy, semantic, cooccurrence, evidence_counts, algorithm_version` | `subject_type, jira_project, jira_component, team_id, service_id` | `pending`, `rejected` |
 
-Ops functions used (all impl 02, `herness.store.ops.shared`, R-08): `list_review_items` (through U03-147) and `create_review_item` (through U03-148). `get_review_item` and `decide_review_item` are not called by this package; review decisions are made by the dashboard and CLI through `decide_review_item` (R-33). The "if absent" rule, the scope filter and the open counts are computed in this package (U03-147–U03-149), which replaces the functions requested by the earlier delta DD-11. Idempotency key of every write: the match tuple of the table above within the blocking statuses.
+Ops functions used (all impl 02, `herness.store.ops.shared`, R-08): `list_review_items` with its `decided_after` and `payload_match` filters (U03-76 and U03-147) and `create_review_item_if_absent` (through U03-148). `get_review_item` and `decide_review_item` are not called by this package; review decisions are made by the dashboard and CLI through `decide_review_item` (R-33). The scope rule and the open counts are applied in this package (U03-147–U03-149). Idempotency key of every write: the match tuple (plus scope keys) of the table above within the blocking statuses.
 
-### 4.6 Vectors (`data/vectors/ticket_embedding`, LanceDB; table owned by 03, created by X:02/herness.store.vectors)
+### 4.6 Vectors (`data/vectors/ticket_embedding`, LanceDB; table owned by 03, created by T02-08 (herness.store.vectors))
 
 | Column | Type | Rule |
 |--------|------|------|
@@ -3045,7 +3099,7 @@ Failure notation: "→ degraded(code)" sets the stage status to `degraded` with 
 
 | Step | Action | Unit | State changed | On failure |
 |------|--------|------|---------------|------------|
-| 1 | Load config; `load_question_set`; `check_fingerprint_registry`; `resolve_dynamic_options`; migrate cache and labels when the previous build's `question_set_version` differs (F03-16) | U03-16, U03-17, U03-18, U03-39 | `questions.json`, cache, labels | `ConfigError` → fail before GPU work |
+| 1 | Load config; `check_decider_refs` (U03-151; an `error` issue → `ConfigError`); `load_question_set`; `check_fingerprint_registry`; `resolve_dynamic_options`; migrate cache and labels when the previous build's `question_set_version` differs (F03-16) | U03-16, U03-17, U03-18, U03-39 | `questions.json`, cache, labels | `ConfigError` → fail before GPU work |
 | 2 | Laya state: `LayaDecider.health()`; degraded → `laya_accepted = None`, warning `laya_degraded`; compute `primaries` (U03-70) and current `versions` | U03-59, U03-70 | report | never fails |
 | 3 | `text` stage | U03-28 | `enrich.text_redacted` | `SchemaViolation` → fail |
 | 4 | Enter `ctx.gpu_scope("decider")` (R-43; held until the end of step 10). `embed` stage on CUDA: load encoder, `run_embed_stage`, `prepare_mapping_vectors`, option vectors for dynamic questions, then `encoder.unload()` | U03-34, U03-113 | LanceDB; GPU class `decider` | scope entry `ModelUnavailable` → fail (the job is retried per impl 08); `StoreBusy` retried (policy `embed_batch`), then fail; OOM at batch 1 → fail |
@@ -3060,7 +3114,7 @@ Failure notation: "→ degraded(code)" sets the stage status to `degraded` with 
 | 13 | `resolve` (F03-07) then `finalize_clusters`; `compact` the cache | U03-83, U03-106, U03-40 | `enrich.decision`, view, snapshot `CURRENT` | fail on `SchemaViolation` |
 | 14 | Build `EnrichReport`; metrics; return | U03-143 | — | — |
 
-After step 10 the job holds the GPU class it had on entry (R-43); steps 11–14 and the rest of the spec 02 pipeline are CPU-only SQL. When `stages` excludes every GPU stage, no scope is entered. Every stage calls `ctx.heartbeat(stage)` at least once per chunk and checks `ctx.should_yield()` at chunk boundaries.
+After step 10 the job holds the GPU class it had on entry (R-43); steps 11–14 and the rest of the spec 02 pipeline are CPU-only SQL. When `stages` excludes every GPU stage, no scope is entered. Impl 02's `_stage_enrich` (U02-100) currently also wraps the whole call in `ctx.gpu_scope("decider")`; the inner scope then asks for the class already loaded and restores nothing on exit (impl 08 U08-85 skips the restore when `previous_class` equals `cls`), so results are unchanged, but the job then holds `decider` during CPU-only stages and CPU-only stage selections (contradiction in §13.5). Every stage calls `ctx.heartbeat(stage)` at least once per chunk and checks `ctx.should_yield()` at chunk boundaries.
 
 ### F03-02 Text stage
 
@@ -3068,7 +3122,7 @@ After step 10 the job holds the GPU class it had on entry (R-43); steps 11–14 
 |------|--------|------|------------|
 | 1 | Attach previous warehouse read-only | U03-28 | log WARNING, redact all |
 | 2 | Copy unchanged rows per entity | U03-28 | fail (`SchemaViolation`) |
-| 3 | Compose, redact (spec 10), hash, insert per 20,000-row chunk | U03-25, U03-26, X:10 `redact_table` | redaction NULL → counted `failed`, record undecided |
+| 3 | Compose, redact (spec 10), hash, insert per 20,000-row chunk | U03-25, U03-26, T10-11 (herness.core.redact.redact_table) | redaction NULL → counted `failed`, record undecided |
 
 ### F03-03 Embed stage
 
@@ -3103,7 +3157,7 @@ After step 10 the job holds the GPU class it had on entry (R-43); steps 11–14 
 
 | Step | Action | Unit | On failure |
 |------|--------|------|------------|
-| 1 | Enter `ctx.gpu_scope("reasoning")` inside the `decider` scope (R-43) | X:08 `gpu_scope` | degraded(`reasoning_unavailable`) |
+| 1 | Enter `ctx.gpu_scope("reasoning")` inside the `decider` scope (R-43) | T08-03 (herness.core.jobs.JobContext.gpu_scope) | degraded(`reasoning_unavailable`) |
 | 2 | Name ≤ 500 largest naming candidates | U03-102 | per-cluster auto label |
 | 3 | LLM escalation of deferred items up to 20,000 records | U03-87 | stop on unavailability; rest stay cache misses |
 | 4 | Deep: LLM members for the ensemble band | U03-63 | as step 3 |
@@ -3139,7 +3193,7 @@ Specified in U03-108 to U03-110 and U03-111 to U03-114.
 
 | Step | Action | Unit | State | On failure |
 |------|--------|------|-------|------------|
-| 1 | Load config, questions; sync labels; consolidate gold; save state `step=prepared` | U03-16, U03-76, U03-126 | labels | `ConfigError` → fail |
+| 1 | Load config (`check_decider_refs`); questions; sync labels; consolidate gold; save state `step=prepared` | U03-151, U03-16, U03-76, U03-126 | labels | `ConfigError` → fail |
 | 2 | New version id and directory | U03-119 | directory | collision → `StoreBusy` |
 | 3 | Select teacher (OpenJev start + health, else LLM inside a nested `ctx.gpu_scope("reasoning")`, R-43) | U03-136 | services | both unavailable → `ModelUnavailable` (job retried by spec 08) |
 | 4 | Stratified sample (excluding gold hashes) | U03-122 | memory | — |
@@ -3182,22 +3236,22 @@ Specified in U03-76 and U03-126. Called by the resolve stage, by `run_distill`, 
 
 | Failure condition | Class raised | Caught where | Retry or fallback | User-visible effect | Log event |
 |-------------------|--------------|--------------|-------------------|---------------------|-----------|
-| OpenJev or Jev connect error, timeout (30 s), 5xx, 529 | `ModelUnavailable` | X:08 `aretry_call` inside U03-53; then U03-86 | policy `decider_local`/`decider_cloud`; breaker `decider:<name>`; after retries the chunk is deferred to the LLM phase | fewer escalations; `EnrichReport` note | `enrich.decider.unavailable` WARNING |
+| OpenJev or Jev connect error, timeout (30 s), 5xx, 529 | `ModelUnavailable` | T08-07 (herness.core.resilience.aretry_call) inside U03-53; then U03-86 | policy `decider_local`/`decider_cloud`; breaker `decider:<name>`; after retries the chunk is deferred to the LLM phase | fewer escalations; `EnrichReport` note | `enrich.decider.unavailable` WARNING |
 | Breaker open | `CircuitOpen` | U03-86, U03-87 | no call; defer | as above | `enrich.decider.unavailable` |
 | Hosted Jev refused by guard | `EgressBlocked` | U03-86 | `jev` unused for the rest of the run; next chain member | report note `jev_blocked` | `enrich.decider.egress_blocked` ERROR |
-| 429 | `RateLimited` | X:08 retry | honour `Retry-After`; halve concurrency 60 s (U03-51) | slower run | `enrich.decider.rate_limited` WARNING |
+| 429 | `RateLimited` | T08-07 (herness.core.resilience.aretry_call) | honour `Retry-After`; halve concurrency 60 s (U03-51) | slower run | `enrich.decider.rate_limited` WARNING |
 | 400/422, malformed JSON, unknown option, bad distribution | `OutputValidationError` | U03-53 | retry the item once; then item error; next chain member in a later chunk | item undecided or escalated | `enrich.decide.item_failed` WARNING |
 | 401/403, missing key | `AuthError` | U03-86 | backend dropped for the run | report note `<name>_auth` | `enrich.decider.auth_failed` ERROR |
 | Laya or bge-m3 CUDA OOM | `CudaOutOfMemory` → `FatalError` at batch 1 | U03-22 | halve batch, retry once per size | job fails at batch 1 | `enrich.gpu.oom_retried` WARNING; `enrich.stage.failed` ERROR |
 | Laya timeout (30 s per call) | `ModelUnavailable` | U03-85 | stage degraded; resolution escalates | report note | `enrich.stage.degraded` WARNING |
 | LLM naming schema failure after 2 repairs | `OutputValidationError` | U03-102 | auto label | label starts with `auto:` | `enrich.cluster.naming_fallback` WARNING |
-| `decisions.yaml` invalid; option limits; fingerprint drift | `ConfigError` | `run_enrichment` step 1 | none; job fails before GPU work | job failed with message | `enrich.config.invalid` / `enrich.config.fingerprint_drift` ERROR |
+| `decisions.yaml` or the `deciders` section of `models.yaml` invalid; `check_decider_refs` error; option limits; fingerprint drift | `ConfigError` | `run_enrichment` step 1 | none; job fails before GPU work | job failed with message | `enrich.config.invalid` / `enrich.config.fingerprint_drift` ERROR |
 | Laya `CURRENT` missing or hash mismatch | `ConfigError` → `ModelUnavailable` in `health` | F03-01 step 2 | teacher primary for all questions | report warning `laya_degraded` | `enrich.laya.degraded` WARNING |
-| LanceDB or Parquet write busy | `StoreBusy` | X:08 retry (`embed_batch`, `sqlite_write`) | retry | none | `enrich.store.busy` WARNING |
+| LanceDB or Parquet write busy | `StoreBusy` | T08-07 (herness.core.resilience.retry_call) (`embed_batch`, `sqlite_write`) | retry | none | `enrich.store.busy` WARNING |
 | Cache part schema mismatch | `SchemaViolation` | stage | none | job fails | `enrich.cache.schema_mismatch` ERROR |
 | Reasoning class switch fails | `ModelUnavailable` | F03-01 step 9 | degraded: auto labels, no LLM escalation | report note | `enrich.stage.degraded` WARNING |
 | `decider` class cannot be loaded when `ctx.gpu_scope("decider")` is entered (R-43) | `ModelUnavailable` | F03-01 step 4 | none in this attempt; the job is retried per impl 08 | build not promoted this attempt | `enrich.stage.failed` ERROR |
-| Yield requested (cancel, preempt, shutdown) | `_YieldRequested` (private) | job handler | checkpoint flushed; `JobOutcome(yield)` | job requeued | `enrich.stage.yielded` INFO |
+| Yield requested (cancel, preempt, shutdown) | `YieldRequested` (U03-152) | job handler | checkpoint flushed; `JobOutcome(yield)` | job requeued | `enrich.stage.yielded` INFO |
 | Decision coverage < 95 % | none | spec 02 DQ | none | DQ warning | — |
 | Invalid `record_id` or version string at a filter or path | `SchemaViolation` / `ConfigError` | caller | none | command fails | `enrich.input.rejected` WARNING |
 
@@ -3217,7 +3271,7 @@ Degraded modes never block promotion by themselves (design 03 §6).
 | TB6 | Hosted Jev and off-network LLM profiles (premium) send single redacted tickets |
 | TB8 | OpenJev container on loopback; model weights under `data/models/` |
 | TB9 | `laya`, `sentence-transformers`, bge-m3 and Laya weights, OpenJev image |
-| TB10 | `config/decisions.yaml`; CLI `laya accept|rollback`, `enrich`, `distill` arguments |
+| TB10 | `config/decisions.yaml` and the `deciders` section of `config/models.yaml`; CLI `laya accept|rollback`, `enrich`, `distill` arguments |
 
 ### 7.2 STRIDE threat table
 
@@ -3285,8 +3339,8 @@ AI RMF summary (ENG §5.4):
 
 | Secret name | Used by | Resolution | Handling |
 |-------------|---------|------------|----------|
-| `OPENJEV_API_KEY` (reference `secret:OPENJEV_API_KEY`, the same secret impl 08 health checks and impl 10 deploy use; R-53) | U03-52 | X:10/herness.core.secrets.resolve in `build_decider` (optional: absent → no header) | `SecretStr`; header only; never logged |
-| `TYPESAFE_API_KEY` | U03-55 | same (required when `jev` is enabled) | same |
+| `OPENJEV_API_KEY` (reference `secret:OPENJEV_API_KEY` in `deciders.openjev.api_key`, the same secret impl 08 health checks and impl 10 deploy use; R-53, R-72) | U03-52 | T10-06 (herness.core.secrets.resolve) in `build_decider` (optional: absent → no header) | `SecretStr`; header only; never logged |
+| `TYPESAFE_API_KEY` (reference `secret:TYPESAFE_API_KEY` in `deciders.jev.api_key`, R-72) | U03-55 | same (required when `jev` is enabled) | same |
 
 No other secret is read. LLM client credentials are resolved by spec 05.
 
@@ -3377,7 +3431,7 @@ All events carry `component="enrich"` and, when known, `job_id` and `build_id`.
 
 ### 8.2 Metrics (recorded to `metric_sample`)
 
-Counters and histograms are recorded with X:08/herness.core.resilience.metrics.record_counter and X:08/herness.core.resilience.metrics.record_histogram; impl 08 writes them to the `metric_sample` table (impl 02 migration 006) through `herness.store.ops.metrics.record_metric_samples` (R-12). Impl 08 has no gauge recorder, so the five gauges below (`herness_enrich_escalation_share_ratio`, `herness_enrich_coverage_ratio`, `herness_enrich_clusters_total`, `herness_enrich_cluster_drift_ratio`, `herness_enrich_gold_metric_ratio`) wait for request RQ-04 (§13.6); until then their values are carried only in `EnrichReport` and `eval.json`.
+Counters and histograms are recorded with T08-05 (herness.core.resilience.metrics.record_counter) and T08-05 (herness.core.resilience.metrics.record_histogram); impl 08 writes them to the `metric_sample` table (impl 02 migration 006) through `herness.store.ops.metrics.record_metric_samples` (R-12). Gauges are recorded with T08-05 (herness.core.resilience.metrics.record_gauge) (request RQ-04, impl 08 U08-103) with `component="enrich"`; gauge names end in `ratio` or `count`, never `total`. Their values are also carried in `EnrichReport` and `eval.json`.
 
 | Name | Type | Labels | Emitted by |
 |------|------|--------|-----------|
@@ -3390,7 +3444,7 @@ Counters and histograms are recorded with X:08/herness.core.resilience.metrics.r
 | `herness_enrich_coverage_ratio` | gauge | `entity` | U03-83 |
 | `herness_enrich_decider_latency_seconds` | histogram | `decider` | U03-53, U03-58, U03-63 |
 | `herness_enrich_decider_errors_total` | counter | `decider`, `error_class` | U03-53, U03-63 |
-| `herness_enrich_clusters_total` | gauge | — | U03-105 |
+| `herness_enrich_clusters_count` | gauge | — | U03-105 |
 | `herness_enrich_cluster_drift_ratio` | gauge | — | U03-105 |
 | `herness_enrich_links_total` | counter | `method` | U03-110 |
 | `herness_enrich_mapping_suggestions_total` | counter | — | U03-114 |
@@ -3409,13 +3463,13 @@ Not applicable: enrichment runs outside a review or chat run, so there is no `ru
 
 ## 9. Configuration
 
-All keys live in `config/decisions.yaml` (root `decisions` in `HernessConfig`). Every key is read at job start; a change takes effect at the next job. Processes that call `embed_query` (dashboard, chat) need a restart for `embedding.*` changes. No key is sensitive except that `*_secret` keys name secrets.
+All keys except `deciders.*` live in `config/decisions.yaml` (root `decisions` in `HernessConfig`, model U03-09). The `deciders.*` keys are the top-level `deciders` section of `config/models.yaml`, a sibling of impl 05's `models` and `harness` sections, validated by `DecidersSettings` (U03-150) and composed by impl 10's root config into `cfg.models.deciders` (R-76). Rules that read both files are checked by U03-151. Every key is read at job start; a change takes effect at the next job. Processes that call `embed_query` (dashboard, chat) need a restart for `embedding.*` changes. No key is sensitive except that `*_secret` keys name secrets.
 
 | Key | Type | Default | Validation | Sensitivity |
 |-----|------|---------|------------|-------------|
 | `question_set_version` | str | required | `^qs-\d{4}-\d{2}-\d{2}(\.\d+)?$` | internal |
 | `primary_decider` | enum `laya,openjev,jev,llm` | `laya` | enabled backend | internal |
-| `escalation_chain` | list of `openjev,jev,llm` | `[openjev, llm]` | no duplicates; `jev` needs `deciders.jev.enabled` | internal |
+| `escalation_chain` | list of `openjev,jev,llm` | `[openjev, llm]` | no duplicates; `jev` needs `deciders.jev.enabled` (U03-151) | internal |
 | `questions[]` | list of `QuestionConfig` | required | U03-02 rules; ≤ 64; unique ids | internal |
 | `questions[].acceptance` | `AcceptanceCriteria` | none | U03-11 | internal |
 | `questions[].primary_decider` | enum | none | as `primary_decider` | internal |
@@ -3439,12 +3493,12 @@ All keys live in `config/decisions.yaml` (root `decisions` in `HernessConfig`). 
 | `deciders.openjev.concurrency` | int | 64 | 1–256 | internal |
 | `deciders.openjev.timeout_s` | float | 30 | 1–300 | internal |
 | `deciders.openjev.samples` | map depth → int or null | `{fast: 1, standard: null, deep: 5}` | null or 1–32 | internal |
-| `deciders.openjev.api_key_secret` | str (`SecretNameStr`, impl 10) | `OPENJEV_API_KEY` (the secret referenced as `secret:OPENJEV_API_KEY`, R-53) | secret name pattern | secret name |
+| `deciders.openjev.api_key` | str, secret reference | `secret:OPENJEV_API_KEY` (R-53) | pattern `^secret:[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$` (the `SecretRefStr` pattern text of impl 10, declared locally because settings modules cannot import `herness.core.secrets`; R-03, R-72) | secret reference |
 | `deciders.jev.enabled` | bool | `false` | profile must allow egress (spec 10) | internal |
 | `deciders.jev.base_url` | str | `https://api.typesafe.ai` | https (V-18) | internal |
 | `deciders.jev.model` | str | `jev-latest` | non-empty | internal |
 | `deciders.jev.concurrency` | int | 16 | 1–64 | internal |
-| `deciders.jev.api_key_secret` | str | `TYPESAFE_API_KEY` | secret name pattern | secret name |
+| `deciders.jev.api_key` | str, secret reference | `secret:TYPESAFE_API_KEY` | as `deciders.openjev.api_key` (R-72) | secret reference |
 | `deciders.llm.role` | str | `enrich_decider` | spec 05 role exists | internal |
 | `deciders.llm.votes` | map depth → int | `{fast: 1, standard: 3, deep: 5}` | 1–9 | internal |
 | `deciders.llm.temperature` | float | 0.7 | 0–2 | internal |
@@ -3491,7 +3545,7 @@ All keys live in `config/decisions.yaml` (root `decisions` in `HernessConfig`). 
 | `mapping_suggest.weights` | {fuzzy, semantic, cooccurrence} | {0.35, 0.45, 0.20} | sum 1 | internal |
 | `mapping_suggest.abbreviations` | map str → str | `{pmt: payment, auth: authentication}` | keys `^[a-z0-9]{1,16}$`; no expansion equals a key | internal |
 
-Keys read from other files: `paths.data` (X:10), the pinned `openjev` image reference under `deploy` (X:10), `security.egress.*` (through the guard, X:10), `models.yaml` roles `enrich_decider` and `cluster_namer` (resolved by the composition root, X:05), retry policies and breakers in `resilience.yaml` (X:08).
+Keys read from other files: the `deciders` section of `models.yaml` (owned here, U03-150, R-76), `paths.data` (T10-01 (herness.core.settings.PathsConfig)), the pinned `openjev` image reference under `deploy` (T10-01 (herness.core.settings.OpenJevDeploy)), `security.egress.*` (T10-01 (herness.core.settings.EgressConfig), read through the guard T10-16 (herness.core.egress.EgressGuard)), `models.yaml` roles `enrich_decider` and `cluster_namer` (resolved by the composition root through T05-10 (herness.harness.llm.registry.client_for)), retry policies and breakers in `resilience.yaml` (T08-26 (herness.core.resilience.settings.ResilienceSection)).
 
 ---
 
@@ -3547,8 +3601,8 @@ Locations: unit `tests/unit/enrich/`, integration `tests/integration/enrich/`, f
 | UT03-05 | U03-06 | inputs built by `build_inputs`, `pair_inputs` on `tiny_build` | recompute hash | `content_hash == content_hash(text)` for all | unit |
 | UT03-06 | U03-07 | distributions summing to 0.99, 1.002, containing 1.1, answer not in keys | construct | error for 0.99, 1.1, missing key; 1.002 accepted | unit |
 | UT03-07 | U03-08 | `error` with answers; `error="bad message!"` | construct | `ValidationError` | unit |
-| UT03-08 | U03-09, U03-10 | the design 03 §5.5 and §7 YAML | load via spec 10 loader | parses; defaults equal §9 | unit |
-| UT03-09 | U03-09, U03-11 | jev in chain with `jev.enabled: false`; weights sum 0.9; band [0.7, 0.3]; empty acceptance | load | each `ConfigError` | unit |
+| UT03-08 | U03-09, U03-10, U03-150 | the design 03 §5.5 and §7 YAML, with `deciders` placed in `models.yaml` (R-76) | load via spec 10 loader | parses; defaults equal §9; `cfg.models.deciders.openjev.api_key == "secret:OPENJEV_API_KEY"`; a `deciders` key in `decisions.yaml` → `ConfigError` (`extra="forbid"`) | unit |
+| UT03-09 | U03-09, U03-11, U03-150, U03-151 | jev in chain with `jev.enabled: false`; weights sum 0.9; band [0.7, 0.3]; empty acceptance; `deciders.openjev.api_key: OPENJEV_API_KEY` (bare name); `deciders.jev.base_url: http://…` | load; `check_decider_refs` | `check_decider_refs` returns one `error` issue at path `decisions.escalation_chain` for the first case; each other case `ConfigError` | unit |
 | UT03-10 | U03-12 | data root tmp; inputs `data/models/x`, `../x`, `/etc/x`, symlink out | resolve | first OK; others `ConfigError` | unit |
 | UT03-11 | U03-13 | versions `laya-20261004-1`, `laya-../x`, decider `evil` | path methods | valid path; `ConfigError` | unit |
 | UT03-12 | U03-14, U03-84 | QS with `change_caused_pair` | `build_inputs` | pair question never asked | unit |
@@ -3619,7 +3673,7 @@ Locations: unit `tests/unit/enrich/`, integration `tests/integration/enrich/`, f
 | UT03-77 | U03-81 | 10,000 new rows, open count 290 | select | 10 wanted, capped to 10 by open cap; 5 uniform + 5 band; deterministic across runs | unit |
 | UT03-78 | U03-82 | QS of 2 questions | SQL | expected DDL; runs on DuckDB; wide row values | unit |
 | UT03-79 | U03-84 | cache containing some keys | iterate | only missing questions asked; chunk size respected | unit |
-| UT03-80 | U03-85 | Laya degraded; fake Laya with yield after chunk 1 | stage | skipped; `_YieldRequested` after a flush | unit |
+| UT03-80 | U03-85 | Laya degraded; fake Laya with yield after chunk 1 | stage | skipped; `YieldRequested` after a flush | unit |
 | UT03-81 | U03-86 | stub teacher raising `ModelUnavailable` on chunk 2; cap 3 | stage | chunk 1 cached, rest deferred; cap honored; capped event | unit |
 | UT03-82 | U03-87 | 30 deferred, cap 20, fake LLM | stage | 20 answered, order kept | unit |
 | UT03-83 | U03-88 | Laya calibrated rows around 0.9 | band | rows < 0.9 for scoring questions only | unit |
@@ -3679,6 +3733,7 @@ Locations: unit `tests/unit/enrich/`, integration `tests/integration/enrich/`, f
 | UT03-137 | U03-148 | `ops_db` with a pending item for key K1 (qsv A), a rejected item for K2 (qsv A), a pending item for K3 (qsv B); payloads K1, K2, K3, K4, K4 | `create_if_absent` with blocking `("pending","rejected")` and scope qsv A; run twice | first run: K3 and K4 created once (2 created, 3 suppressed); second run: 0 created; created items are `pending` | unit |
 | UT03-138 | U03-149 | pending `label_check` items: 3 `spot_check` for q1 (qsv A), 1 `gold` for q1, 2 `spot_check` for q2 (qsv B) | counts for qsv A, purposes `{spot_check}` | `{"q1": 3}` | unit |
 | UT03-139 | U03-144 | fake `JobContext` recording `gpu_scope` calls; stubbed stages | `run_enrichment(stages=["resolve","text"])`; `stages=["text","bogus"]`; `stages=None` | text then resolve in `STAGE_ORDER`, no GPU scope entered; `ConfigError` before any stage; all stages with `gpu_scope("decider")` entered once, `gpu_scope("reasoning")` nested inside it, both exited | unit |
+| UT03-140 | U03-152 | none | import `herness.enrich.pipeline.YieldRequested`, `herness.enrich.distill.YieldRequested`; raise `YieldRequested("embed")` | both names are the class of U03-152; not a `HernessError`; `stage == "embed"`; message has no record text | unit |
 
 ### 11.2 Property tests (hypothesis)
 
@@ -3757,8 +3812,8 @@ Marker `fault`.
 | ST03-13 | TH03-11 | accept a model | manifest `accepted_by`; audit `admin_action` line with version | unit |
 | ST03-14 | TH03-12 | purge a record present in vectors, cache, labels, pair index | none remain (except shared hash rows) | integration |
 | ST03-15 | TH03-13 | spy on encoder inputs during embed stage | inputs equal `enrich.text_redacted.text` | unit |
-| ST03-16 | TH03-14 | 401 from OpenJev with the key set; exception and logs captured | key value absent everywhere | unit |
-| ST03-17 | TH03-15 | `deciders.openjev.base_url: http://10.0.0.5:8100` | config `ValidationError` | unit |
+| ST03-16 | TH03-14 | 401 from OpenJev with the key set to the synthetic value `synthetic-openjev-key` (R-67); exception and logs captured | key value absent everywhere | unit |
+| ST03-17 | TH03-15 | `deciders.openjev.base_url: http://10.0.0.5:8100` in `models.yaml` (U03-150) | config `ValidationError` | unit |
 | ST03-18 | TH03-16 | pickled `pca.npz`; `model.pkl` in a version dir | refused | unit |
 | ST03-19 | TH03-19 | question id `a"; DROP` injected by bypassing the loader | `decision_wide_sql` raises `ConfigError` | unit |
 
@@ -3784,23 +3839,23 @@ All cards are Phase 4. Acceptance checks always include: `ruff check herness/enr
 | Field | Content |
 |-------|---------|
 | Goal | The 03-owned types exist in `herness/core/types/decisions.py` and are re-exported from `herness.core.types` (R-01). |
-| Depends on | X:00/herness.core.errors, X:00/herness.core.types (package skeleton, `_ownership.py` and ownership check) |
+| Depends on | T00-03 (herness.core.errors), T00-08 (herness.core.types) (package skeleton, `_ownership.py` and ownership check) |
 | Units | U03-01–U03-08 |
 | Files | `herness/core/types/decisions.py` |
 | Tests | UT03-01–UT03-07, PT03-01 |
 | Threats | TH03-06 |
 | Acceptance checks | tests UT03-01–UT03-07 and PT03-01 pass; `mypy --strict herness/core` 0 errors; impl 00's ownership check reports no `OWN0xx` violation for owner `"03"`; `herness.core.types.decisions` imports only `herness.core.errors`/`ids` (import-linter) |
-| Blocked by | RQ-03 (`QuestionType` and `Entity` in impl 00's `TYPE_OWNERS["03"]`) |
+| Blocked by | none (RQ-03 provided by T00-08) |
 | Size | S |
 
 ### T03-02 Settings model
 
 | Field | Content |
 |-------|---------|
-| Goal | `DecisionsConfig` validates `config/decisions.yaml` with every §9 key. |
-| Depends on | T03-01, X:10/herness.core.config.load_config |
-| Units | U03-09–U03-11 |
-| Files | `herness/enrich/settings.py`, `config/decisions.yaml` |
+| Goal | `DecisionsConfig` validates `config/decisions.yaml` and `DecidersSettings` the `deciders` section of `config/models.yaml` (R-76) with every §9 key; `check_decider_refs` is ready for owner-validator registration. |
+| Depends on | T03-01, T10-03 (herness.core.config.load_config), T10-12 (herness.core.config_validate.register_owner_validator) |
+| Units | U03-09–U03-11, U03-150, U03-151 |
+| Files | `herness/enrich/settings.py`, `config/decisions.yaml`, `config/models.yaml` (the `deciders` section only; the file's other sections belong to impl 05) |
 | Tests | UT03-08, UT03-09, ST03-17 |
 | Threats | TH03-14, TH03-15 |
 | Acceptance checks | `pytest -k "UT03-08 or UT03-09 or ST03-17"`; `herness config validate --offline` accepts the shipped file |
@@ -3825,11 +3880,11 @@ All cards are Phase 4. Acceptance checks always include: `ruff check herness/enr
 
 | Field | Content |
 |-------|---------|
-| Goal | OOM backoff and CUDA release. |
-| Depends on | T03-01, X:08/herness.core.resilience.fault_point |
-| Units | U03-21–U03-23 |
+| Goal | OOM backoff, CUDA release and the public yield signal. |
+| Depends on | T03-01, T08-08 (herness.core.resilience.fault_point) |
+| Units | U03-21–U03-23, U03-152 |
 | Files | `herness/enrich/gpu.py` |
-| Tests | UT03-19–UT03-21 |
+| Tests | UT03-19–UT03-21, UT03-140 |
 | Threats | TH03-09 |
 | Acceptance checks | tests pass on CPU-only CI |
 | Blocked by | none |
@@ -3840,7 +3895,7 @@ All cards are Phase 4. Acceptance checks always include: `ruff check herness/enr
 | Field | Content |
 |-------|---------|
 | Goal | `enrich.text_redacted` built incrementally. |
-| Depends on | T03-03, X:10/herness.core.redact.redact_table, X:02/enrich schema DDL |
+| Depends on | T03-03, T10-11 (herness.core.redact.redact_table), T02-12 (herness/model/sql/000_settings.sql) |
 | Units | U03-24–U03-28 |
 | Files | `herness/enrich/text.py` |
 | Tests | UT03-22–UT03-25, PT03-03, IT03-02, ST03-02 |
@@ -3854,7 +3909,7 @@ All cards are Phase 4. Acceptance checks always include: `ruff check herness/enr
 | Field | Content |
 |-------|---------|
 | Goal | bge-m3 encoder and the public `embed_query`. |
-| Depends on | T03-04, X:02/herness.store.vectors.open_table, X:08/herness.core.jobs.gpu_state |
+| Depends on | T03-04, T02-08 (herness.store.vectors.VectorStore), T08-18 (herness.core.jobs.gpu_state) |
 | Units | U03-29–U03-32 |
 | Files | `herness/enrich/embed.py`, `herness/enrich/__init__.py` |
 | Tests | UT03-26–UT03-29 |
@@ -3938,7 +3993,7 @@ All cards are Phase 4. Acceptance checks always include: `ruff check herness/enr
 | Field | Content |
 |-------|---------|
 | Goal | `OpenJevDecider` with retries, breaker and limits. |
-| Depends on | T03-11, X:08/herness.core.resilience.aretry_call, X:08/herness.core.resilience.classify, X:10/herness.core.secrets.resolve, X:10/herness.core.egress.loopback_http_client |
+| Depends on | T03-11, T08-07 (herness.core.resilience.aretry_call), T08-04 (herness.core.resilience.classify), T10-06 (herness.core.secrets.resolve), T10-17 (herness.core.egress.loopback_http_client) |
 | Units | U03-52–U03-54 |
 | Files | `herness/enrich/deciders/openjev.py` |
 | Tests | UT03-50–UT03-53, ST03-16, FT03-02 |
@@ -3952,7 +4007,7 @@ All cards are Phase 4. Acceptance checks always include: `ruff check herness/enr
 | Field | Content |
 |-------|---------|
 | Goal | `JevHostedDecider` through the egress guard. |
-| Depends on | T03-12, X:10/herness.core.egress.get_guard |
+| Depends on | T03-12, T10-16 (herness.core.egress.get_guard) |
 | Units | U03-55, U03-56 |
 | Files | `herness/enrich/deciders/jev_hosted.py` |
 | Tests | UT03-54, ST03-03 |
@@ -3980,7 +4035,7 @@ All cards are Phase 4. Acceptance checks always include: `ruff check herness/enr
 | Field | Content |
 |-------|---------|
 | Goal | `LlmDecider`, vote schema and distribution, prompt files. |
-| Depends on | T03-11, X:05/herness.core.types.LLMRequest, X:08/herness.core.resilience.complete_validated |
+| Depends on | T03-11, T05-01 (herness.core.types.LLMRequest), T08-09 (herness.core.resilience.complete_validated) |
 | Units | U03-60–U03-64 |
 | Files | `herness/enrich/deciders/llm.py`, `herness/enrich/prompts/enrich_decider.md`, `herness/enrich/prompts/cluster_namer.md` |
 | Tests | UT03-58–UT03-62, PT03-06, ST03-01 |
@@ -3994,7 +4049,7 @@ All cards are Phase 4. Acceptance checks always include: `ruff check herness/enr
 | Field | Content |
 |-------|---------|
 | Goal | Pooling, ensemble version, `EnsembleDecider`, registry wiring and factory. |
-| Depends on | T03-10, T03-12–T03-15, X:10/herness.core.registry.register |
+| Depends on | T03-10, T03-12–T03-15, T10-04 (herness.core.registry.register) |
 | Units | U03-65–U03-69 |
 | Files | `herness/enrich/deciders/ensemble.py`, `herness/enrich/deciders/__init__.py` |
 | Tests | UT03-63–UT03-67, PT03-07 |
@@ -4024,13 +4079,13 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | `iter_review_items`, `create_if_absent` and `open_label_counts` over impl 02's `review_item` functions (R-08, R-09; replaces the ops functions of DD-11). |
-| Depends on | T03-03, X:02/herness.store.ops.list_review_items, X:02/herness.store.ops.create_review_item |
+| Depends on | T03-03, T02-07 (herness.store.ops.list_review_items), T02-24 (herness.store.ops.create_review_item_if_absent) |
 | Units | U03-147–U03-149 |
 | Files | `herness/enrich/review_items.py` |
 | Tests | UT03-136–UT03-138 |
 | Threats | TH03-03, TH03-10 |
 | Acceptance checks | tests pass against a migrated `ops_db`; no SQL against `review_item` exists under `herness/enrich/` (ops access only through `herness.store.ops`) |
-| Blocked by | none (RQ-01 and RQ-02 are performance requests with working defaults) |
+| Blocked by | none (RQ-01 and RQ-02 provided by impl 02) |
 | Size | S |
 
 ### T03-18 Labels store and sync
@@ -4038,7 +4093,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | Label parts, migration, `label_check` sync, gold digest. |
-| Depends on | T03-03, T03-37 |
+| Depends on | T03-03, T03-37, T02-07 (herness.store.ops.list_review_items) |
 | Units | U03-75–U03-77 |
 | Files | `herness/enrich/labels.py` |
 | Tests | UT03-72–UT03-75, PT03-09 |
@@ -4066,7 +4121,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | `enrich.decision`, `decision_wide`, spot-checks. |
-| Depends on | T03-19, T03-37 |
+| Depends on | T03-19, T03-37, T08-05 (herness.core.resilience.metrics.record_gauge) |
 | Units | U03-81–U03-83 |
 | Files | `herness/enrich/resolve.py` |
 | Tests | UT03-77, UT03-78, ST03-19, IT03-06 |
@@ -4080,7 +4135,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | `build_inputs`, `decide-primary`, `decide-escalate`, LLM escalation. |
-| Depends on | T03-14, T03-16, T03-20, X:08/herness.core.resilience.DeciderChain, X:08/herness.core.jobs.JobContext |
+| Depends on | T03-14, T03-16, T03-20, T08-10 (herness.core.resilience.DeciderChain), T08-03 (herness.core.jobs.JobContext) |
 | Units | U03-84–U03-87 |
 | Files | `herness/enrich/decide_stage.py` |
 | Tests | UT03-79–UT03-82, FT03-01, FT03-03 |
@@ -4136,7 +4191,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | Snapshots, cadence, incremental and full runs, finalize. |
-| Depends on | T03-24, T03-07 |
+| Depends on | T03-24, T03-07, T08-05 (herness.core.resilience.metrics.record_gauge) |
 | Units | U03-103–U03-106 |
 | Files | `herness/enrich/cluster_stage.py` |
 | Tests | UT03-98–UT03-101, IT03-10–IT03-12, ST03-18 |
@@ -4178,13 +4233,13 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | `run_enrichment` with stage order, GPU switching, degraded modes and report. |
-| Depends on | T03-05–T03-10, T03-21, T03-22, T03-25–T03-27, X:02/build_pipeline handler (call site between SQL 299 and 300), X:08/herness.core.jobs.JobContext.gpu_scope, X:08/herness.core.resilience.metrics.record_counter |
+| Depends on | T03-05–T03-10, T03-21, T03-22, T03-25–T03-27, T08-03 (herness.core.jobs.JobContext.gpu_scope), T08-05 (herness.core.resilience.metrics.record_counter) (called by T02-19 (herness.model.build._stage_enrich); not a dependency) |
 | Units | U03-141–U03-144 |
 | Files | `herness/enrich/pipeline.py` |
 | Tests | UT03-132, UT03-139, IT03-01, IT03-04, IT03-05, IT03-08, FT03-04, FT03-06 |
 | Threats | — |
 | Acceptance checks | IT03-04: second run makes 0 decider calls and 0 embeddings; UT03-139: GPU work only inside `gpu_scope` (R-43) and `stages` validated (R-48) |
-| Blocked by | none (`stages` accepted by R-48 and `llm_factory` by R-05; `force_full_recluster` is an additive keyword under DD-09; gauge emission waits for RQ-04 without blocking the card) |
+| Blocked by | none (`stages` accepted by R-48 and `llm_factory` by R-05; `force_full_recluster` is an additive keyword under DD-09) |
 | Size | M |
 
 ### T03-29 Sampling and gold
@@ -4206,7 +4261,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | Metrics, macro metric, `eval.json`. |
-| Depends on | T03-10, T03-18 |
+| Depends on | T03-10, T03-18, T08-05 (herness.core.resilience.metrics.record_gauge) |
 | Units | U03-127–U03-129 |
 | Files | `herness/enrich/evaluate.py` |
 | Tests | UT03-123–UT03-125, ET03-02 |
@@ -4234,7 +4289,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | `run_distill` and its job handler. |
-| Depends on | T03-29–T03-31, T03-21, X:08/herness.core.jobs.register_handler, X:08/herness.core.jobs.JobContext.gpu_scope |
+| Depends on | T03-29–T03-31, T03-21, T08-12 (herness.core.jobs.register_handler), T08-03 (herness.core.jobs.JobContext.gpu_scope) |
 | Units | U03-135–U03-137 |
 | Files | `herness/enrich/distill.py` |
 | Tests | UT03-128, UT03-129, IT03-15, FT03-05 |
@@ -4248,7 +4303,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | `accept_model`, `rollback_model`, `laya_status` (CLI wired by spec 09). |
-| Depends on | T03-14, T03-30, X:10/herness.core.audit.audit |
+| Depends on | T03-14, T03-30, T10-05 (herness.core.audit.audit) |
 | Units | U03-138–U03-140 |
 | Files | `herness/enrich/laya_admin.py` |
 | Tests | UT03-130, UT03-131, ST03-06, ST03-10, ST03-13 |
@@ -4262,7 +4317,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | `purge_record` and `health`. |
-| Depends on | T03-07, T03-09, T03-18, T03-26, X:02/herness.store.warehouse.open_current |
+| Depends on | T03-07, T03-09, T03-18, T03-26, T02-09 (herness.store.warehouse.open_readonly), T02-08 (herness.store.vectors.VectorStore) |
 | Units | U03-145, U03-146 |
 | Files | `herness/enrich/purge.py`, `herness/enrich/health.py`, `herness/enrich/__init__.py` |
 | Tests | UT03-133–UT03-135, ST03-09, ST03-14 |
@@ -4290,7 +4345,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Field | Content |
 |-------|---------|
 | Goal | Benchmarks and the classifier gate on real or realistic data. |
-| Depends on | T03-28, T03-32, T03-33, X:11/herness.eval.runner.run_classifier |
+| Depends on | T03-28, T03-32, T03-33, T11-35 (herness.eval.classifier.run_classifier) |
 | Units | — |
 | Files | `tests/bench/enrich/`, `tests/eval/enrich/` |
 | Tests | BT03-01–BT03-11, ET03-01 |
@@ -4303,7 +4358,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 
 ## 13. Design deltas and open items
 
-Rulings: the consistency-pass rulings are recorded in [`DECISIONS.md`](DECISIONS.md) (R-01–R-66). Each earlier delta and contradiction below carries a status: "Resolved by R-nn" (a ruling settled it and this spec now follows the ruling), "Accepted (R-nn)" (a ruling adopted this spec's proposal), or "Still open" (no ruling covers it; the default in this spec applies).
+Rulings: the consistency-pass rulings are recorded in [`DECISIONS.md`](DECISIONS.md) (R-01–R-76). Each earlier delta and contradiction below carries a status: "Resolved by R-nn" (a ruling settled it and this spec now follows the ruling), "Accepted (R-nn)" (a ruling adopted this spec's proposal), or "Still open" (no ruling covers it; the default in this spec applies).
 
 ### 13.1 Design deltas (contract changes this spec needs)
 
@@ -4319,14 +4374,14 @@ Rulings: the consistency-pass rulings are recorded in [`DECISIONS.md`](DECISIONS
 | DD-08 | 03 §4.3, 00 §4 | Pair index `data/cache/pairs/part-<build_id>.parquet` for privacy purge | T03-26, T03-34 | Still open |
 | DD-09 | 03 §3.1 | Add keyword-only parameters: `run_enrichment(..., stages=None, llm_factory=None, force_full_recluster=False)`; `run_distill(..., llm_factory=None)` (CLI `--stage` and client injection) | T03-28, T03-32 | `stages`: Accepted (R-48, typed `Sequence[str] \| None`). `llm_factory`: Accepted (R-05). `force_full_recluster`: Still open |
 | DD-10 | 03 §4.4 | Snapshot directory adds `snapshot.json` and `members.parquet`; `centroids.parquet` adds `named_size` | T03-25 | Still open |
-| DD-11 | 02 §5 | `herness.store.ops` functions `create_review_item_if_absent`, `list_review_items`, `count_review_items` (§4.5) | T03-18, T03-20, T03-27 | Resolved by R-08 and R-09: the `review_item` functions are impl 02's `shared.py` functions (`create_review_item`, `get_review_item`, `list_review_items`, `decide_review_item`). The requested behaviour is built in this spec on top of them (U03-147–U03-149, T03-37); the two missing capabilities that affect only performance are requests RQ-01 and RQ-02 (§13.6) |
+| DD-11 | 02 §5 | `herness.store.ops` functions `create_review_item_if_absent`, `list_review_items`, `count_review_items` (§4.5) | T03-18, T03-20, T03-27 | Resolved by R-08 and R-09: the `review_item` functions are impl 02's `shared.py` functions (`create_review_item`, `get_review_item`, `list_review_items`, `decide_review_item`). The requested behaviour is built in this spec on top of them (U03-147–U03-149, T03-37); the two missing capabilities (requests RQ-01 and RQ-02, §13.6) are now provided by impl 02 (U02-58 filters, U02-130) |
 | DD-12 | 03 §7 | `deciders.openjev.base_url` default `http://127.0.0.1:8100` (spec 08 §5.8 and spec 10 §5.6.2 map host 8100 → container 8080) | T03-02 | Resolved by R-51 (OpenJev host `127.0.0.1:8100`, container port 8080) |
 | DD-13 | 03 §4.3 | Calibration files also store `accuracy` per question (ensemble weights, design 03 §5.9) | T03-10 | Still open |
 | DD-14 | 03 §4.1 | Ensemble `agreement` is stored in the cache's `backend_confidence` column for `decider = 'ensemble'` rows | T03-16 | Still open |
 | DD-15 | 08 §5.1 | Spec 08 says rekey uses "GPU work via 03 functions"; spec 10 §5.3 does the label re-key itself and leaves re-embedding to the next build. This spec provides no rekey function; spec 08 wording should drop the reference, or spec 10 should call `LabelStore` for the label re-key | — | Still open |
-| DD-16 | 10 §4.2 | Spec 10 lists `deciders (03)` under `models.yaml`; design 03 §7 puts them in `decisions.yaml`. This spec follows design 03 | T03-02 | Still open (DECISIONS.md §9 lists the design 03 settings location among the pending design edits) |
+| DD-16 | 10 §4.2 | Spec 10 lists `deciders (03)` under `models.yaml`; design 03 §7 puts them in `decisions.yaml`. This spec follows design 03 | T03-02 | Resolved by R-76: `deciders` is the top-level section of `config/models.yaml` (U03-150), composed by impl 10's root config into `cfg.models.deciders`; every other key stays in `decisions.yaml`; cross-file rules in U03-151. This closes impl 05 D05-31 |
 | DD-17 | 00 §6, §3 | Shared types move from `herness/core/types.py` to the submodule `herness/core/types/decisions.py`, re-exported from `herness.core.types` | T03-01 | Resolved by R-01 (ENG §14 E6; design 00 edit pending, DECISIONS.md §9) |
-| DD-18 | 03 §3.3, 10 §3.5 | OpenJev requests use the loopback client of `herness.core.egress` and a bounded thread pool instead of a package-built `httpx.AsyncClient` | T03-12 | Resolved by R-06 (ENG §14 E7; design 10 edit pending, DECISIONS.md §9) |
+| DD-18 | 03 §3.3, 10 §3.5 | OpenJev requests use the loopback client of `herness.core.egress` and a bounded thread pool instead of a package-built `httpx.AsyncClient` | T03-12 | Resolved by R-06 (ENG §14 E7; design 10 edit pending, DECISIONS.md §9). Impl 10 U10-59 `loopback_http_client(base_url, *, timeout_s, bearer=None)` verified; U03-53 and U03-54 pass `bearer` |
 | DD-19 | 03 §5.1, 08 | GPU class switching: `build_pipeline` starts with no class, and the enrichment GPU stages run inside `ctx.gpu_scope("decider")` with a nested `ctx.gpu_scope("reasoning")` | T03-28, T03-32 | Resolved by R-43 (design 08 edit pending, DECISIONS.md §9) |
 
 ### 13.2 Open questions inherited from design 03 §11 (current defaults)
@@ -4361,6 +4416,7 @@ Rulings: the consistency-pass rulings are recorded in [`DECISIONS.md`](DECISIONS
 | OI-12 | Validation split | hash rule ≈ 12.5 % instead of 10 % (deterministic without a list) |
 | OI-13 | Deletion of unreferenced Laya versions and cluster snapshots | none; manual |
 | OI-14 | Review UI hiding gold items from a reviewer who already answered the same key (spec 09) | consolidation ignores repeated reviewers |
+| OI-15 | Impl 02 OI-16: the yield signal was the private `_YieldRequested` | public `YieldRequested` (U03-152), imported by impl 02 as `herness.enrich.pipeline.YieldRequested`; resolved |
 
 ### 13.4 Verification items (open-questions.md §b) blocking task cards
 
@@ -4382,22 +4438,24 @@ Rulings: the consistency-pass rulings are recorded in [`DECISIONS.md`](DECISIONS
 | 03 §7 vs 08 §5.8, 10 §5.6.2 | OpenJev at `127.0.0.1:8080` vs host port 8100 | default 8100 (DD-12) | Resolved by R-51 |
 | 03 §3.1 vs 05 §11 item 8 | `embed_query` return type | ndarray (DD-05) | Resolved by R-18 |
 | 03 §3.3 vs ENG §2.1 | enrichment (L3) calling spec 05 `client_for` (L4) | injection (DD-02) | Resolved by R-05 |
-| 03 §7 vs 10 §4.2 | location of decider settings | `decisions.yaml` (DD-16) | Still open |
+| 03 §7 vs 10 §4.2 | location of decider settings | `deciders` in `models.yaml`, the rest in `decisions.yaml` (DD-16) | Resolved by R-76 (impl 05 D05-31 closed) |
 | 08 §5.1 vs 10 §5.3 | rekey GPU work "via 03 functions" | none needed (DD-15) | Still open |
 | 03 §5.5 YAML vs 03 §3.2 `Question` | per-question `acceptance` key not in `Question` | kept in `QuestionConfig` only | Still open |
 | 10 §3.1 vs ENG §2.1 | `herness.core.config` (L0) imports `DecisionsConfig` from `herness.enrich.settings` (L3) | settings module imports only the standard library, pydantic, `herness.core.types` and `herness.core.errors` | Resolved by R-03 (named `import-linter` exception, ENG §2.1, ENG §14 E7) |
 | 08 §7 vs 03, 10 §3.3 | OpenJev bearer secret named `openjev.api_key` in 08 but `OPENJEV_API_KEY` here | `OPENJEV_API_KEY` | Resolved by R-53 (`secret:OPENJEV_API_KEY`) |
 | 03 (earlier draft) vs 02 §2, §5.5 | this spec asked impl 02 for `create_review_item_if_absent` and `count_review_items`, and read `review_item` by attaching the ops SQLite file to DuckDB, while impl 02 owns `review_item` with four functions and avoids the DuckDB `sqlite` extension (impl 02 DD02-02) | helpers U03-147–U03-149 over impl 02's functions; no ops attach | Resolved by R-08 and R-09 |
 | 03 (earlier draft) vs 08 GPU classes | the earlier draft assumed `build_pipeline` already held class `decider` and left the job on `reasoning` | `ctx.gpu_scope` nesting (F03-01) | Resolved by R-43 |
+| impl 02 U02-100 vs 03 F03-01 (R-43) | impl 02's `_stage_enrich` wraps `run_enrichment` in `ctx.gpu_scope("decider")`, and `run_enrichment` enters the same scope around its GPU stages only | this spec keeps the per-stage scope (R-43 gives the switch to the enrichment stages); the nested same-class scope is harmless but holds `decider` during CPU-only work | Still open (impl 02 to drop its outer scope, or impl 02 C13 to be revised) |
+| impl 10 U10-20 C03 vs R-76 | C03 reads decider names from `models.models.deciders`; under R-76 the section is `models.deciders` (sibling of `models.models`) | this spec uses `cfg.models.deciders` | Still open (impl 10) |
 
 ### 13.6 Requests to other implementation specs
 
 | # | To | Request | Default until provided | Blocks | Status |
 |---|----|---------|------------------------|--------|--------|
-| RQ-01 | impl 02 (`herness.store.ops.shared.list_review_items`) | Keyword-only filter `decided_after: tuple[datetime, str] \| None` (exclusive (`decided_at`, `item_id`) watermark) with ordering by (`decided_at`, `item_id`), so `sync_label_checks` reads only newly decided items | full scan of decided `label_check` items with in-memory watermark filter (U03-76) | none | Still open |
-| RQ-02 | impl 02 (`herness.store.ops.shared`) | A read that finds `review_item` rows of one kind by equality on named payload fields and a status set (for example `find_review_items(kind, *, payload_match: Mapping[str, str \| None], statuses)`), so idempotent creation does not scan | full scan in `create_if_absent` (U03-148) | none | Still open |
-| RQ-03 | impl 00 (`herness/core/types/_ownership.py`) | Add `QuestionType` and `Entity` to `TYPE_OWNERS` under owner `"03"`; they are public aliases defined in `herness/core/types/decisions.py` and used in the fields of the 03-owned models | none (the ownership check reports `OWN011` for both names) | T03-01 | Still open |
-| RQ-04 | impl 08 (`herness.core.resilience.metrics`) | A gauge recorder (`record_gauge(name, value, *, labels)`) writing `metric_sample` rows through `record_metric_samples` (R-12) | the five gauges of §8.2 are not recorded; their values are in `EnrichReport` and `eval.json` | none | Still open |
+| RQ-01 | impl 02 (`herness.store.ops.shared.list_review_items`) | Keyword-only filter `decided_after: tuple[datetime, str] \| None` (exclusive (`decided_at`, `item_id`) watermark) with ordering by (`decided_at`, `item_id`), so `sync_label_checks` reads only newly decided items | full scan of decided `label_check` items with in-memory watermark filter (U03-76) | none | Provided by impl 02: U02-58 `decided_after` keyset tuple, T02-07; used in U03-76 |
+| RQ-02 | impl 02 (`herness.store.ops.shared`) | A read that finds `review_item` rows of one kind by equality on named payload fields and a status set (for example `find_review_items(kind, *, payload_match: Mapping[str, str \| None], statuses)`), so idempotent creation does not scan | full scan in `create_if_absent` (U03-148) | none | Provided by impl 02: U02-58 `payload_match` and U02-130 `create_review_item_if_absent`, T02-07 and T02-24; used in U03-147–U03-149 |
+| RQ-03 | impl 00 (`herness/core/types/_ownership.py`) | Add `QuestionType` and `Entity` to `TYPE_OWNERS` under owner `"03"`; they are public aliases defined in `herness/core/types/decisions.py` and used in the fields of the 03-owned models | none (the ownership check reports `OWN011` for both names) | T03-01 | Provided by impl 00: U00-45 lists `QuestionType` and `Entity` under `"03"` (UT00-80, T00-08) |
+| RQ-04 | impl 08 (`herness.core.resilience.metrics`) | A gauge recorder (`record_gauge(name, value, *, labels)`) writing `metric_sample` rows through `record_metric_samples` (R-12) | the five gauges of §8.2 are not recorded; their values are in `EnrichReport` and `eval.json` | none | Provided by impl 08: U08-103 `record_gauge`, T08-05; used in §8.2 |
 
 ---
 
@@ -4430,10 +4488,10 @@ Rulings: the consistency-pass rulings are recorded in [`DECISIONS.md`](DECISIONS
 | Spec | Symbols |
 |------|---------|
 | 00 | `herness.core.errors` (taxonomy), `herness.core.ids` (`new_ulid`, `canonical_json`, R-14), `herness.core.time.now`, `herness.core.logging`, `herness.core.types` package skeleton, re-export and ownership check (R-01; RQ-03) |
-| 02 | `enrich.*` DDL, `herness.store.vectors.open_table`, `herness.store.warehouse.open_current`, `herness.store.ops` re-exports of `herness.store.ops.shared` (`ReviewItem`, `list_review_items`, `create_review_item`; R-08; RQ-01, RQ-02), `build_pipeline` call site |
+| 02 | `herness/model/sql/000_settings.sql` placeholder `enrich.*` tables (T02-12), `herness.store.vectors.VectorStore` (`ensure_tables`, `table`; T02-08), `herness.store.warehouse.open_readonly` (T02-09), `herness.store.ops` re-exports of `herness.store.ops.shared` (`ReviewItem`, `list_review_items` with `decided_after` and `payload_match`, `create_review_item_if_absent`; R-08; RQ-01, RQ-02), the `build_pipeline` call site `_stage_enrich` (T02-19), which catches `herness.enrich.pipeline.YieldRequested` |
 | 05 | `herness.core.types.LLMRequest`, `LLMResponse`, `SystemBlock`, `RequestMeta`; `herness.harness.llm.registry.client_for` (composition root only, R-05); roles `enrich_decider`, `cluster_namer`; conversion of `embed_query` output to `list[float]` (R-18) |
 | 07 | `MemoryStore.purge` runs after `purge_record` in the deletion flow (R-54); no symbol is imported |
-| 08 | `herness.core.resilience` (`aretry_call`, `call_with_timeout`, `classify`, `guard`, `complete_validated`, `DeciderChain`, `fault_point` with registry names `embed.batch`, `decider.batch`, `enrich.after_batch_write`, R-40), `herness.core.resilience.metrics` (`record_counter`, `record_histogram`; RQ-04), `herness.core.jobs` (`JobContext` including `gpu_scope`, `services`, `save_state`; `JobOutcome`, `register_handler`, `gpu_state`, `run_inline`; R-42, R-43, R-45) |
+| 08 | `herness.core.resilience` (`aretry_call`, `call_with_timeout`, `classify`, `guard`, `complete_validated`, `DeciderChain`, `fault_point` with registry names `embed.batch`, `decider.batch`, `enrich.after_batch_write`, R-40), `herness.core.resilience.metrics` (`record_counter`, `record_histogram`, `record_gauge`; RQ-04), `herness.core.jobs` (`JobContext` including `gpu_scope`, `services`, `save_state`; `JobOutcome`, `register_handler`, `gpu_state`, `run_inline`; R-42, R-43, R-45) |
 | 09 | CLI commands `enrich` (with `--stage`, R-48), `distill`, `laya accept`, `laya rollback`, `laya status` in impl 09's command table (R-47); review decisions through `decide_review_item` (R-33) |
-| 10 | `herness.core.config` (`get_config`, `HernessConfig`, `DeployConfig`), `herness.core.registry`, `herness.core.secrets` (`resolve`, `exists`; `OPENJEV_API_KEY`, R-53), `herness.core.redact` (`redact_table`, `redact_text`, `get_redactor`), `herness.core.egress` (`get_guard`, `loopback_http_client`, R-06), `herness.core.audit.audit`, deletion flow calling `purge_record` (R-54) |
+| 10 | `herness.core.config` (`get_config`, `HernessConfig`, `DeployConfig`), `herness.core.registry`, `herness.core.secrets` (`resolve`, `exists`; `secret:OPENJEV_API_KEY`, R-53, R-72), `herness.core.config_validate.register_owner_validator` (R-71), `herness.core.redact` (`redact_table`, `redact_text`, `get_redactor`), `herness.core.egress` (`get_guard`, `loopback_http_client`, R-06), `herness.core.audit.audit`, deletion flow calling `purge_record` (R-54) |
 | 11 | `StubDeciderServer`, `FakeLLMClient` (`tests/support/fake_llm.py`, R-65), `FakeClock`, `tiny_build`, `small_build`, synthetic truths T2, T2c, T3 (test code only, R-64); `herness.eval.runner.run_classifier` (consumer of `eval.json`) |

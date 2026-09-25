@@ -3,7 +3,7 @@
 Status: Draft v2 (consistency pass) · 2026-09-24 · Design spec: [`docs/specs/06-swarm-and-pipelines.md`](../specs/06-swarm-and-pipelines.md) (Draft v2) · Phase: 3 · Standards: [`ENG-STANDARDS.md`](ENG-STANDARDS.md) · Rulings: [`DECISIONS.md`](DECISIONS.md)
 Depends on implementation specs: 00 (ids and `canonical_json`, errors including `NotFound`, time, the `herness.core.types` package skeleton, `herness.core.numbers`), 02 (ops store core `connection`, `run_write`, `read_one`, `read_all`; migrations 001–006 for `run`, `task`, `finding`; warehouse handles), 03 (`embed_query`), 04 (`optimize_portfolio`, `Scenario`, `PortfolioResult`, unconfirmed weight keys, metric catalog names), 05 (`run_agent`, `HarnessHooks`, `GatedClient`, `LLMRegistry`, `ToolRegistry`, `AsyncTool`, `ToolContext`, `ToolResult`, `Budgets`, `NumberRef`, `VerificationResult`, `Verifier`, `execute_recorded`, `wrap_untrusted`, `count_tokens`, `RoleSpec`, `Tracer`, `LoopCheckpoint`, `herness.store.ops.evidence.get_evidence`), 07 (`MemoryStore`, `MemoryRunContext`, `RecommendationDraft`, `PriorContext`), 08 (task helpers, `ModelChain`, `JobContext`, `JobOutcome`, `jobs.*`, `worker_alive`, `fault_point`, `record_metric_samples`, `gpu_state`), 09 (`render_run`, `herness.store.ops.chat` functions), 10 (`load_config`, `get_config`, `config_hash`, `get_redactor`, data policy including the chat approval flag), 11 (`FakeLLMClient`, `FakeLLMServer`, synthetic builds with planted truth).
 
-Cross-spec task dependencies are written `X:<NN>/<qualified symbol or artifact>`; the consistency pass maps them to task IDs (DECISIONS §8). Rulings `R-nn` of [`DECISIONS.md`](DECISIONS.md) are binding and are cited where they apply; §13 lists their effect on earlier deltas.
+Cross-spec task dependencies are written `T<NN>-<nn> (<qualified symbol or artifact>)`, naming the owner card whose Units define the symbol (DECISIONS §8); a symbol the owner does not provide is written `UNRESOLVED(...)` and listed in §13. Rulings `R-nn` of [`DECISIONS.md`](DECISIONS.md) are binding and are cited where they apply; §13 lists their effect on earlier deltas.
 
 ## 1. Scope and traceability
 
@@ -33,7 +33,7 @@ Traceability matrix (every design section of `docs/specs/06-swarm-and-pipelines.
 | 3.7 | `ChatService.answer` synchronous generator | 3.13 | U06-127–U06-129 | T06-25 | IT06-11, IT06-23 |
 | 4 (intro) | Types in `herness.core.types.swarm` (R-01), markers `[[nX]]` (R-16), untrusted text in task inputs (R-20) | 3.1, 3.5, 3.10 | U06-01–U06-21, U06-47, U06-140, U06-141 | T06-01, T06-02, T06-07, T06-13 | UT06-31, UT06-92, UT06-93, PT06-02, ST06-19 |
 | 4.1 | `TaskSpec`, `EntityScope`, `TaskInputs`, `TaskBudget`, role mapping, `task.result` | 3.1, 3.10 | U06-01–U06-06, U06-96, U06-97 | T06-01, T06-13 | UT06-01–UT06-03, UT06-63, UT06-64 |
-| 4.2 | `Finding`, post validation, `impact_usd` | 3.1, 3.5 | U06-07, U06-08, U06-47, U06-49, U06-50, U06-53 | T06-01, T06-07, T06-08 | UT06-04, UT06-05, UT06-36–UT06-38, ST06-01, ST06-05 |
+| 4.2 | `Finding`, post validation, `impact_usd` | 3.1, 3.5 | U06-07, U06-143, U06-47, U06-49, U06-50, U06-53 | T06-01, T06-07, T06-08 | UT06-04, UT06-05, UT06-36–UT06-38, ST06-01, ST06-05 |
 | 4.3 | `CheckResult`, `Challenge`, `CrossCheck`, `VerificationRecord`, `RejectReason` | 3.1 | U06-09–U06-12 | T06-01 | UT06-06, UT06-07 |
 | 4.4 | `ReportDraft` and sub-types, `mode` (R-49), `writer_schema`, `ranked_entities` | 3.1, 3.7, 3.12 | U06-13–U06-19, U06-69, U06-116, U06-142 | T06-02, T06-10, T06-19 | UT06-08, UT06-09, UT06-48, UT06-77, UT06-94 |
 | 4.5 | `ChatAnswer`, `ChatEvent`, event order | 3.1, 3.13 | U06-20, U06-21, U06-129 | T06-02, T06-24 | UT06-10, IT06-11 |
@@ -71,16 +71,16 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (spec 00
 | Path | Purpose | Public symbols | Layer | Extra imports | Line budget |
 |------|---------|----------------|-------|---------------|-------------|
 | `herness/core/types/swarm/__init__.py` | Re-exports of the 06 types; itself re-exported by `herness.core.types` (R-01) | all symbols of the two files below | L0 (types) | none | 40 |
-| `herness/core/types/swarm/tasks.py` | Task, finding, challenge and checkpoint-state types | U06-01–U06-12, U06-140 symbols | L0 (types) | `herness.core.types.harness` (05 types `NumberRef`, `VerificationResult`, `Budgets`) | 300 |
+| `herness/core/types/swarm/tasks.py` | Task, finding, challenge and checkpoint-state types | U06-01–U06-07, U06-09–U06-12, U06-140 symbols | L0 (types) | `herness.core.types.harness` (05 types `NumberRef`, `VerificationResult`, `Budgets`) | 300 |
 | `herness/core/types/swarm/drafts.py` | Report draft and chat types | U06-13–U06-21 symbols | L0 (types) | `herness.core.types.harness`, `herness.core.types.jobs` (08 `ChatMode`) | 300 |
 | `herness/harness/pipelines/settings.py` | `PipelinesConfig` section model and knob resolution | `PipelinesConfig`, `SwarmSettings`, `DepthConfig`, `DepthKnobs`, `KSamples`, `FundingPipelineConfig`, `OrgPipelineConfig`, `ChatPipelineConfig`, `HybridConfig`, `resolve_knobs` | L4 settings module: imports only the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03, ENG §2.1 settings exception) | none | 260 |
 | `config/pipelines.yaml` | Default configuration (design 06 §7 verbatim) | — | config | — | 60 |
 | `herness/harness/budget.py` | Run-wide token and cost ledger | `RunBudget`, `new_phase_budgets` | L4 | none | 170 |
 | `herness/harness/gates.py` | Per-client call gates and task slots | `CallGate`, `build_gates`, `TaskSlots` | L4 | none | 170 |
 | `herness/store/ops/runs.py` | Ops area `runs` (owner 06, R-08): `run` rows and `task` inserts and reads | U06-32–U06-40 symbols | L1 | none | 380 |
-| `herness/store/ops/findings.py` | Ops area `findings` (owner 06, R-08): `finding` rows. Evidence reads belong to area `evidence` (05) and chat rows to area `chat` (09) (R-09) | U06-41–U06-44 symbols | L1 | none | 300 |
-| `herness/store/ops/__init__.py` (06 block) | Re-export block for the two areas above (impl 02 owns the file) | U06-32–U06-44 symbols | L1 | none | 20 (06 block) |
-| `herness/harness/findings.py` | Pure finding rules and entity lookups | `extract_markers`, `validate_markers`, `find_stray_numerals`, `normalize_objective`, `compute_dedup_key`, `EntityCatalog` | L4 | none | 260 |
+| `herness/store/ops/findings.py` | Ops area `findings` (owner 06, R-08): `finding` rows, including the privacy scrub (R-77). Evidence reads belong to area `evidence` (05) and chat rows to area `chat` (09) (R-09) | U06-41–U06-44, U06-144 symbols | L1 | none | 300 |
+| `herness/store/ops/__init__.py` (06 block) | Re-export block for the two areas above (impl 02 owns the file) | U06-32–U06-44, U06-144 symbols | L1 | none | 20 (06 block) |
+| `herness/harness/findings.py` | Pure finding rules and entity lookups | `extract_markers`, `validate_markers`, `impact_usd`, `normalize_objective`, `compute_dedup_key`, `EntityCatalog` | L4 | none | 260 |
 | `herness/harness/blackboard.py` | Blackboard API, single writer thread | `FindingFilter`, `Blackboard` | L4 | `herness.core.redact`, `herness.core.resilience` (fault point), `herness.core.jobs` (task helpers) | 380 |
 | `herness/harness/swarm/__init__.py` | Re-exports | `Swarm`, `RunRequest`, `RunResult`, `review_job_handler` | L4 | none | 20 |
 | `herness/harness/swarm/tools.py` | Swarm-provided tools | `PostFindingTool`, `ListFindingsTool`, `RequestSubtaskTool`, `EscalateTool`, `build_task_tools` | L4 | `herness.harness.tools` | 330 |
@@ -221,14 +221,7 @@ U06-01–U06-12 and U06-140 live in `herness/core/types/swarm/tasks.py`; U06-13�
 
 #### U06-08 herness.core.types.swarm.impact_usd
 
-| Field | Content |
-|-------|---------|
-| Kind | function |
-| Purpose | Largest USD value a finding cites. |
-| Signature | `f: Finding` (positional) → `Decimal` |
-| Postconditions | `max(Decimal(str(n.value)) for n in f.numbers if n.unit == "usd")`, `Decimal("0")` when there is none. |
-| Algorithm | Collect USD numbers; return the max or zero. Pure. |
-| Tests | UT06-05 |
+Removed (R-75): `herness.core.types` holds no functions; see U06-143 `herness.harness.findings.impact_usd`.
 
 #### U06-09 herness.core.types.swarm.CheckResult
 
@@ -499,7 +492,7 @@ U06-01–U06-12 and U06-140 live in `herness/core/types/swarm/tasks.py`; U06-13�
 
 ### 3.4 Store access (`herness/store/ops/runs.py`, `herness/store/ops/findings.py`)
 
-These are the ops areas `runs` and `findings`, owned by 06 (R-08). Every function of these areas that another spec references has a unit here (R-09). Write functions take `conn: sqlite3.Connection` as the first positional parameter and MUST run inside a write transaction: the callback of `X:02/herness.store.ops.core.run_write(fn, op=…)`, or the `writes` callback of spec 08 `save_checkpoint` / `complete_task`. Read functions take no connection and use `X:02/herness.store.ops.core.read_one` / `read_all` on the thread's connection (R-10). JSON columns are TEXT written with `X:02/herness.store.ops.core.dump_json` (canonical JSON, byte-capped); timestamps use the spec 00 §8 fixed-width format through `X:00/herness.core.time.fmt_ts`. SQL is parameterised; the only dynamic SQL is the `IN (...)` placeholder list, built from the count of values (ENG §3.5). Both modules are re-exported by `herness.store.ops`. The `evidence` table is read through area `evidence` (05) and `chat_message` through area `chat` (09); this spec defines no function in those areas (R-09). The readers that list rows are named `select_runs` and `select_tasks` so they do not collide with impl 09's `ui_reads.list_runs` and `ui_reads.list_tasks` in the `herness.store.ops` namespace (D06-31).
+These are the ops areas `runs` and `findings`, owned by 06 (R-08). Every function of these areas that another spec references has a unit here (R-09). Write functions take `conn: sqlite3.Connection` as the first positional parameter and MUST run inside a write transaction: the callback of `T02-04 (herness.store.ops.core.run_write)(fn, op=…)`, or the `writes` callback of spec 08 `save_checkpoint` / `complete_task`. Read functions take no connection and use `T02-04 (herness.store.ops.core.read_one)` / `read_all` on the thread's connection (R-10). JSON columns are TEXT written with `T02-04 (herness.store.ops.core.dump_json)` (canonical JSON, byte-capped); timestamps use the spec 00 §8 fixed-width format through `T00-04 (herness.core.time.format_utc)`. SQL is parameterised; the only dynamic SQL is the `IN (...)` placeholder list, built from the count of values (ENG §3.5). Both modules are re-exported by `herness.store.ops`. The `evidence` table is read through area `evidence` (05) and `chat_message` through area `chat` (09); this spec defines no function in those areas (R-09). The readers that list rows are named `select_runs` and `select_tasks` so they do not collide with impl 09's `ui_reads.ui_list_runs` and `ui_reads.ui_list_tasks` (R-68) in the `herness.store.ops` namespace (D06-31).
 
 #### U06-32 herness.store.ops.runs.RunRow, TaskRow
 
@@ -507,7 +500,7 @@ These are the ops areas `runs` and `findings`, owned by 06 (R-08). Every functio
 |-------|---------|
 | Kind | class (frozen dataclasses) |
 | Purpose | Typed rows returned by the read functions. |
-| Signature | `RunRow(run_id: str, kind: str, depth: str, profile: str, build_id: str, status: str, started_at: datetime, finished_at: datetime \| None, token_usage: dict, cost_usd: Decimal, config_hash: str, meta: dict)`; `TaskRow(task_id: str, run_id: str, parent_task_id: str \| None, role: str, spec: TaskSpec, status: str, attempts: int, last_error: dict \| None, checkpoint: dict \| None, result: dict \| None, created_at: datetime, updated_at: datetime)`. Chat rows are impl 09's `ChatMessageRow` (`X:09/herness.store.ops.chat`, R-09). |
+| Signature | `RunRow(run_id: str, kind: str, depth: str, profile: str, build_id: str, status: str, started_at: datetime, finished_at: datetime \| None, token_usage: dict, cost_usd: Decimal, config_hash: str, meta: dict)`; `TaskRow(task_id: str, run_id: str, parent_task_id: str \| None, role: str, spec: TaskSpec, status: str, attempts: int, last_error: dict \| None, checkpoint: dict \| None, result: dict \| None, created_at: datetime, updated_at: datetime)`. Chat rows are impl 09's `ChatMessageRow` (`T09-03 (herness.store.ops.chat)`, R-09). |
 | Algorithm | Built by private `_run_from_row`, `_task_from_row`. `TaskRow.spec` is `TaskSpec.model_validate_json(spec)`; a failure raises `SchemaViolation("task spec invalid: task_id=<id>")`. `last_error` that is a plain string is wrapped as `{"message": <text>}`. |
 | Tests | UT06-21 |
 
@@ -529,7 +522,7 @@ These are the ops areas `runs` and `findings`, owned by 06 (R-08). Every functio
 | Kind | function |
 | Purpose | Read one run by id, or the run a review job created. |
 | Signature | `get_run(run_id: str) -> RunRow \| None`; `find_run_by_job(job_id: str) -> RunRow \| None`; `find_run_by_escalation(session_id: str, message_id: str) -> RunRow \| None`; `select_runs(*, statuses: Collection[str], kinds: Collection[str] \| None = None) -> list[RunRow]` |
-| Algorithm | `get_run`: select by PK. `find_run_by_job`: `SELECT ... FROM run WHERE json_extract(meta, '$.job_id') = ? ORDER BY started_at DESC, run_id DESC LIMIT 1`. `find_run_by_escalation`: same with `json_extract(meta, '$.escalated_from.session_id') = ? AND json_extract(meta, '$.escalated_from.message_id') = ?`. `select_runs`: status and kind filters, ordered by `started_at`. All four read through `read_one` / `read_all`. `get_run` is the reader impl 09 references (`X:06/herness.store.ops.get_run`). |
+| Algorithm | `get_run`: select by PK. `find_run_by_job`: `SELECT ... FROM run WHERE json_extract(meta, '$.job_id') = ? ORDER BY started_at DESC, run_id DESC LIMIT 1`. `find_run_by_escalation`: same with `json_extract(meta, '$.escalated_from.session_id') = ? AND json_extract(meta, '$.escalated_from.message_id') = ?`. `select_runs`: status and kind filters, ordered by `started_at`. All four read through `read_one` / `read_all`. `get_run` is the reader impl 09 references (`T06-05 (herness.store.ops.get_run)`). |
 | Tests | UT06-21 |
 
 #### U06-35 herness.store.ops.runs.set_run_status
@@ -642,13 +635,37 @@ These are the ops areas `runs` and `findings`, owned by 06 (R-08). Every functio
 | Algorithm | 1. Select the `max_runs` most recent runs with `kind IN ('funding_review','org_review') AND status = 'done'` by `finished_at DESC`. 2. Select `verified` findings of those runs with the entity filters, ordered by run recency then `created_at`. |
 | Tests | UT06-28 |
 
+#### U06-144 herness.store.ops.findings.scrub_record_from_findings
+
+| Name | Type | Default | Kind | Constraints |
+|------|------|---------|------|-------------|
+| `record_id` | `str` | — | positional | a source record id `<source>:<kind>:<key>`, 1–300 characters |
+| `conn` | `sqlite3.Connection` | — | keyword-only | the connection of the caller's open write transaction (`run_write` callback) |
+
+Returns: `int`, the number of `finding` rows changed.
+
+| Field | Content |
+|-------|---------|
+| Kind | function |
+| Purpose | Remove a deleted record's values from findings during privacy deletion (design 10 §5.5 step 4; R-77). Impl 10's privacy deletion calls it and does not define it. |
+| Preconditions | Called inside a write transaction on `conn` (impl 10 opens it with `run_write(op="privacy_scrub_findings")`). |
+| Postconditions | No element of any `finding.numbers` contains a string value equal to `record_id` or to its key part (the text after the second `:`). Every `[[nX]]` marker in `finding.claim` whose `NumberRef` was dropped is replaced by the literal `[redacted]`. Status, `query_ids`, `challenge` and `verification` are unchanged. |
+| Invariants | Idempotent: a second call with the same `record_id` changes 0 rows. |
+| Algorithm | 1. `key` = the text after the second `:` of `record_id` (the whole id when there are fewer than two). 2. `SELECT finding_id, numbers, claim FROM finding WHERE instr(numbers, ?) > 0 OR instr(numbers, ?) > 0` with `(record_id, key)` on `conn`. 3. For each row: `load_json` the list and drop each element whose string values, at any depth up to 4, equal `record_id` or `key` exactly; no element dropped → skip the row. 4. Replace the markers of the dropped ids in `claim` (markers found by `T00-16 (herness.core.numbers.parse_markers)`, replaced right to left). 5. `UPDATE finding SET numbers = ?, claim = ? WHERE finding_id = ?` with `dump_json` of the reduced list. 6. Return the number of rows updated. |
+| Side effects | `finding` rows. |
+| Errors | Invalid JSON in `numbers` → `SchemaViolation("finding invalid: finding_id=<id>")`; `StoreBusy` from the caller's transaction propagates. |
+| Concurrency | Runs on the caller's write connection; a swarm writer thread updating the same row serialises on the SQLite write lock. |
+| Complexity and limits | One pass over the matching rows; the number of findings citing one record is bounded by the runs that queried it. |
+| Security notes | TH06-10; values are compared exactly, never logged. |
+| Tests | UT06-95 |
+
 #### U06-45 herness.store.ops.findings.known_query_ids, evidence_sql
 
-Removed (R-08, R-09): see impl 05 area `evidence`, `X:05/herness.store.ops.evidence.get_evidence` (returns the `Evidence` row with `sql` and `build_id`). Callers in this spec (U06-53 step 4, U06-113, U06-117) call `get_evidence` once per `query_id` (at most 50 per post).
+Removed (R-08, R-09): see impl 05 area `evidence`, `T05-12 (herness.store.ops.evidence.get_evidence)` (returns the `Evidence` row with `sql` and `build_id`). Callers in this spec (U06-53 step 4, U06-113, U06-117) call `get_evidence` once per `query_id` (at most 50 per post).
 
 #### U06-46 herness.store.ops.findings.get_user_message, latest_user_message, find_assistant_message
 
-Removed (R-08, R-09): see impl 09 area `chat`: `X:09/herness.store.ops.chat.latest_user_message`, `X:09/herness.store.ops.chat.get_chat_message`, `X:09/herness.store.ops.chat.upsert_assistant_placeholder` and `X:09/herness.store.ops.chat.find_assistant_message` (lookup of the assistant row whose `meta.escalation_run_id` equals a run id; impl 09 adds this unit under R-09, §13 D06-31).
+Removed (R-08, R-09): see impl 09 area `chat`: `T09-03 (herness.store.ops.chat.latest_user_message)`, `T09-03 (herness.store.ops.chat.get_chat_message)`, `T09-03 (herness.store.ops.chat.upsert_assistant_placeholder)` and `T09-03 (herness.store.ops.chat.find_assistant_message)` (lookup of the assistant row whose `meta.escalation_run_id` equals a run id; impl 09 U09-107, R-09).
 
 ### 3.5 Finding rules and Blackboard
 
@@ -659,14 +676,14 @@ Removed (R-08, R-09): see impl 09 area `chat`: `X:09/herness.store.ops.chat.late
 | Kind | function |
 | Purpose | Marker ↔ `NumberRef` consistency (spec 00 §12.1, design 06 §4.2). |
 | Signature | `extract_markers(text: str) -> tuple[list[str], list[str]]` (valid ids in order of appearance, malformed marker strings); `validate_markers(text: str, numbers: Sequence[NumberRef], *, require_all_used: bool = True) -> list[str]` (error messages, empty when valid) |
-| Algorithm | 1. Markers come from the `herness.core.numbers` marker parser (`X:00/herness.core.numbers.parse_markers`, R-16), which returns the valid marker ids (pattern `[[n\d+]]`) in order of appearance and the malformed marker strings; `extract_markers` returns that pair unchanged and no regex is defined here. 2. Errors, in this order: each malformed marker (`"malformed marker [[x]]"`); duplicate `NumberRef.id` (`"duplicate number id nX"`); marker without a `NumberRef` (`"marker [[nX]] has no number"`); when `require_all_used`, a `NumberRef` never referenced (`"number nX is not referenced in the text"`). Pure. |
+| Algorithm | 1. Markers come from the `herness.core.numbers` marker parser (`T00-16 (herness.core.numbers.parse_markers)`, R-16), which returns the valid marker ids (pattern `[[n\d+]]`) in order of appearance and the malformed marker strings; `extract_markers` returns that pair unchanged and no regex is defined here. 2. Errors, in this order: each malformed marker (`"malformed marker [[x]]"`); duplicate `NumberRef.id` (`"duplicate number id nX"`); marker without a `NumberRef` (`"marker [[nX]] has no number"`); when `require_all_used`, a `NumberRef` never referenced (`"number nX is not referenced in the text"`). Pure. |
 | Complexity and limits | O(len(text) + len(numbers)). |
 | Security notes | TH06-01, TH06-08. |
 | Tests | UT06-31, PT06-02 |
 
 #### U06-48 herness.harness.findings.find_stray_numerals
 
-Removed (R-16): see impl 00 `herness.core.numbers`, the numeral scanner of design 00 §12.1 with the allowed patterns of `reports.allowed_numeral_patterns` (`X:00/herness.core.numbers.find_stray_numerals`). Callers in this spec (U06-53 step 3, U06-118, U06-132) use it and receive `(start, end, token)` spans of numerals outside markers that no allowed pattern covers.
+Removed (R-16): see impl 00 `herness.core.numbers`, the numeral scanner of design 00 §12.1 with the allowed patterns of `reports.allowed_numeral_patterns` (`T00-16 (herness.core.numbers.find_uncited)`, with the patterns compiled once by `T00-16 (herness.core.numbers.compile_allowed_patterns)`). Callers in this spec (U06-53 step 3, U06-118, U06-132) use it and receive `NumeralHit` values (`text`, `start`, `end`) for numerals outside markers that no allowed pattern covers.
 
 #### U06-49 herness.harness.findings.normalize_objective, compute_dedup_key
 
@@ -690,6 +707,17 @@ Removed (R-16): see impl 00 `herness.core.numbers`, the numeral scanner of desig
 | Complexity and limits | One query per call, ≤ 50 ids per scope. |
 | Security notes | TH06-02 (`bad_scope`), TH06-04 (hypothesis entities). |
 | Tests | UT06-34 |
+
+#### U06-143 herness.harness.findings.impact_usd
+
+| Field | Content |
+|-------|---------|
+| Kind | function |
+| Purpose | Largest USD value a finding cites. |
+| Signature | `f: Finding` (positional) → `Decimal` |
+| Postconditions | `max(Decimal(str(n.value)) for n in f.numbers if n.unit == "usd")`, `Decimal("0")` when there is none. |
+| Algorithm | Collect USD numbers; return the max or zero. Pure. |
+| Tests | UT06-05 |
 
 #### U06-51 herness.harness.blackboard.FindingFilter
 
@@ -722,7 +750,7 @@ Removed (R-16): see impl 00 `herness.core.numbers`, the numeral scanner of desig
 | Signature | `ctx: ToolContext`; `**args` (the `post_finding` input: `claim`, `entity_type`, `entity_id`, `numbers`, `query_ids`, `confidence`) → `str` (finding_id) |
 | Preconditions | `ctx.run_id == self.run_id`; `ctx.role == "analyst"`; else `ToolInputError("post_finding is only available to analyst tasks")`. |
 | Postconditions | The finding row exists with status `proposed` (or the existing identical finding's id is returned); the `state` key of the task checkpoint was replaced in the same transaction and lists the finding id in `pending_findings` (R-21). |
-| Algorithm | 1. Build a `Finding`: new `fnd_` id, `run_id`/`task_id`/`author_role` from `ctx`, `query_ids = sorted(set(args.query_ids) ∪ {n.query_id for n in numbers})`, `created_at = now`. `ValidationError` → `ToolInputError` listing the failing field paths. 2. `validate_markers(claim, numbers)`; errors → `ToolInputError("; ".join(errors), hint="use [[nX]] markers for every number and cite each NumberRef")`. 3. The `herness.core.numbers` scanner (`X:00/herness.core.numbers.find_stray_numerals`, R-16) with `allowed` returns spans → `ToolInputError("numerals outside markers: <tokens>")`. 4. Unknown query ids: ids whose `X:05/herness.store.ops.evidence.get_evidence(q)` row exists with `build_id` equal to the run's build ∪ ids present in warehouse `meta.evidence` (one `SELECT query_id FROM meta.evidence WHERE query_id IN (SELECT unnest(?))`); any missing → `ToolInputError("unknown query_id <id>", hint="cite query_ids returned by tools in this task")`. 5. `catalog.missing(entity_type, [entity_id])` non-empty → `ToolInputError("unknown <entity_type> <id>")`. 6. `X:10/herness.core.redact.get_redactor().scan(claim)` non-empty → `ToolInputError("claim contains personal data (<types>)")` naming only entity types. 7. On the writer thread (`run_on_writer_sync`, timeout 30 s): a. read the task row; b. if a finding of this task (`list_task_findings`) has the same `claim`, `entity_type`, `entity_id` and `numbers` (compared with `herness.core.ids.canonical_json`, R-14), return its id without writing; c. if `spec.revision_of` is set and the task already has a finding → `ToolInputError("revision tasks post exactly one finding")`; d. `state` = the current `SwarmTaskState` (U06-140) from `checkpoint["state"]`, or `SwarmTaskState(phase=<run status>)` when absent, with the new id appended to `pending_findings`; call spec 08 `save_checkpoint(task_id, "state", state.model_dump(mode="json"), writes=cb)` (R-21: only the `state` key is replaced) where `cb` runs `insert_finding` or, for a revision task, `tx_supersede(conn, spec.revision_of, finding)` (U06-57). 8. `X:08/herness.core.resilience.fault_point("swarm.after_finding_write", role="analyst")`. 9. Emit `harness.finding.posted` (DEBUG) and the write-latency metric; return the id. |
+| Algorithm | 1. Build a `Finding`: new `fnd_` id, `run_id`/`task_id`/`author_role` from `ctx`, `query_ids = sorted(set(args.query_ids) ∪ {n.query_id for n in numbers})`, `created_at = now`. `ValidationError` → `ToolInputError` listing the failing field paths. 2. `validate_markers(claim, numbers)`; errors → `ToolInputError("; ".join(errors), hint="use [[nX]] markers for every number and cite each NumberRef")`. 3. The `herness.core.numbers` scanner (`T00-16 (herness.core.numbers.find_uncited)`, R-16) with `allowed` returns hits → `ToolInputError("numerals outside markers: <tokens>")`. 4. Unknown query ids: ids whose `T05-12 (herness.store.ops.evidence.get_evidence)(q)` row exists with `build_id` equal to the run's build ∪ ids present in warehouse `meta.evidence` (one `SELECT query_id FROM meta.evidence WHERE query_id IN (SELECT unnest(?))`); any missing → `ToolInputError("unknown query_id <id>", hint="cite query_ids returned by tools in this task")`. 5. `catalog.missing(entity_type, [entity_id])` non-empty → `ToolInputError("unknown <entity_type> <id>")`. 6. `T10-10 (herness.core.redact.get_redactor)().scan(claim)` non-empty → `ToolInputError("claim contains personal data (<types>)")` naming only entity types. 7. On the writer thread (`run_on_writer_sync`, timeout 30 s): a. read the task row; b. if a finding of this task (`list_task_findings`) has the same `claim`, `entity_type`, `entity_id` and `numbers` (compared with `herness.core.ids.canonical_json`, R-14), return its id without writing; c. if `spec.revision_of` is set and the task already has a finding → `ToolInputError("revision tasks post exactly one finding")`; d. `state` = the current `SwarmTaskState` (U06-140) from `checkpoint["state"]`, or `SwarmTaskState(phase=<run status>)` when absent, with the new id appended to `pending_findings`; call spec 08 `save_checkpoint(task_id, "state", state.model_dump(mode="json"), writes=cb)` (R-21: only the `state` key is replaced) where `cb` runs `insert_finding` or, for a revision task, `tx_supersede(conn, spec.revision_of, finding)` (U06-57). 8. `T08-08 (herness.core.resilience.fault_point)("swarm.after_finding_write", role="analyst")`. 9. Emit `harness.finding.posted` (DEBUG) and the write-latency metric; return the id. |
 | Side effects | Writes `finding` and the `state` key of `task.checkpoint` in one transaction. |
 | Errors | Steps 1–7 → `ToolInputError` (a `RecoverableError`; spec 05 returns it to the agent as an error result; this spec owns the `post_finding` schema and its rejections, R-27). Writer timeout → `StoreBusy("blackboard writer timeout: task_id=<id>")`. |
 | Concurrency | Called from spec 05's tool worker thread; blocks only on the writer future. |
@@ -1006,7 +1034,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Signature | `bb_writer: Blackboard`; `cfg: HernessConfig`; `req: RunRequest`; `job_id: str \| None`, `escalated_from: dict \| None`, `now: datetime`, `current_build: Callable[[], str]` (keyword-only) → `RunRow` |
 | Preconditions | `req.kind` is a review kind. |
 | Postconditions | Run `created` with `meta = {"request": req (JSON), "stage": "main", "escalated_from", "render_error": null, "blocked_reason": null, "job_id": job_id}` (`job_id` key: D06-26); planner task `pending`. |
-| Algorithm | 1. `profile = req.profile or cfg.profile`. 2. `resolve_knobs(cfg.pipelines, req.kind, req.depth, override=req.budget_override)` (fails early with `ConfigError`). 3. `build_id = req.build_id or current_build()` (`X:02/herness.store.warehouse.current_build_id`). 4. `config_hash = request_config_hash(cfg, req, profile)`. 5. `run_id = "run_" + new_ulid()`. 6. Planner spec: `role="planner"`, scope `run:[run_id]`, objective `"Plan the <kind> review."`, `tools = default_tools("planner", ...)`, `budget = role_budget("planner", knobs, writer_tokens=0)` (U06-101), `model_role="planner"`, `dedup_key` via U06-49. 7. On the writer in `run_write(fn, op="swarm_create_run")`: `insert_run`, `insert_tasks([planner])`. |
+| Algorithm | 1. `profile = req.profile or cfg.profile`. 2. `resolve_knobs(cfg.pipelines, req.kind, req.depth, override=req.budget_override)` (fails early with `ConfigError`). 3. `build_id = req.build_id or T02-09 (herness.store.warehouse.read_current)()`; `None` (no promoted build) → `NotFound("no promoted warehouse build")` (R-19). 4. `config_hash = request_config_hash(cfg, req, profile)`. 5. `run_id = "run_" + new_ulid()`. 6. Planner spec: `role="planner"`, scope `run:[run_id]`, objective `"Plan the <kind> review."`, `tools = default_tools("planner", ...)`, `budget = role_budget("planner", knobs, writer_tokens=0)` (U06-101), `model_role="planner"`, `dedup_key` via U06-49. 7. On the writer in `run_write(fn, op="swarm_create_run")`: `insert_run`, `insert_tasks([planner])`. |
 | Side effects | Writes `run`, `task`. |
 | Errors | `ConfigError` from steps 2–3 (no row is written). |
 | Tests | UT06-54, IT06-32 |
@@ -1018,7 +1046,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | function |
 | Purpose | `run.config_hash`: effective config plus the request fields that change behavior (design 06 §4.6, §7 last paragraph). |
 | Signature | `cfg: HernessConfig`; `req: RunRequest`; `profile: str` → `str` |
-| Postconditions | `"cfg_" + sha256(canonical_json({"config": X:10 config_hash(cfg), "request": {"kind", "depth", "profile", "question", "focus", "scenarios", "budget_override"}})).hexdigest()[:16]`. Canonical JSON: `sort_keys=True`, `separators=(",", ":")`, `Decimal` and dates as strings. Pure. |
+| Postconditions | `"cfg_" + sha256(canonical_json({"config": T10-03 (herness.core.config.config_hash)(cfg), "request": {"kind", "depth", "profile", "question", "focus", "scenarios", "budget_override"}})).hexdigest()[:16]`. Canonical JSON: `sort_keys=True`, `separators=(",", ":")`, `Decimal` and dates as strings. Pure. |
 | Tests | UT06-55, ST06-13 |
 
 #### U06-84 herness.harness.swarm.lifecycle.handle_budget_exhausted
@@ -1039,7 +1067,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | function |
 | Purpose | `herness doctor` health check (ENG §4). |
 | Signature | `list_jobs: Callable[..., list[JobRow]]`; `worker_alive: Callable[[], bool]`; `now: datetime` (all keyword-only) → `dict` (`{"status": "ok"\|"degraded"\|"down", "reason": str}`) |
-| Algorithm | 1. `select_runs(statuses=<non-terminal statuses>, kinds={"funding_review","org_review"})`; a `HernessError` → `down`, reason = class name. 2. Non-terminal runs exist and `worker_alive()` (`X:08/herness.core.jobs.worker_alive`, heartbeat within 3 × `heartbeat_s`, R-44) is false → `degraded`, reason `"no live worker for <n> open runs"`. 3. Read queued and running `review` jobs (`X:08/herness.core.jobs.list_jobs`, two calls, limit 50). 4. A non-terminal run started more than 24 h ago that no such job references (`payload.run_id` or a matching `meta.job_id`) → `degraded`, reason `"stalled run <run_id>"`. 5. Else `ok`. |
+| Algorithm | 1. `select_runs(statuses=<non-terminal statuses>, kinds={"funding_review","org_review"})`; a `HernessError` → `down`, reason = class name. 2. Non-terminal runs exist and `worker_alive()` (`T08-12 (herness.core.jobs.worker_alive)`, heartbeat within 3 × `heartbeat_s`, R-44) is false → `degraded`, reason `"no live worker for <n> open runs"`. 3. Read queued and running `review` jobs (`T08-12 (herness.core.jobs.list_jobs)`, two calls, limit 50). 4. A non-terminal run started more than 24 h ago that no such job references (`payload.run_id` or a matching `meta.job_id`) → `degraded`, reason `"stalled run <run_id>"`. 5. Else `ok`. |
 | Tests | UT06-57 |
 
 #### U06-78 herness.harness.swarm.run.Swarm
@@ -1083,7 +1111,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | async method |
 | Purpose | Cancel a run (design 06 §6.4). |
 | Signature | `run_id: str` → `None` |
-| Algorithm | 1. If this Swarm drives `run_id`, set its stop flag. 2. For each `review` job queued or running whose `payload.run_id` equals `run_id` or whose `job_id` equals `run.meta.job_id`: `X:08/herness.core.jobs.cancel(job_id)`. 3. `set_run_status(to="canceled", allowed_from=<non-terminal statuses>)`. 4. Log `harness.run.canceled` (INFO). Running tasks stop at their next step boundary (U06-99 `stop`). |
+| Algorithm | 1. If this Swarm drives `run_id`, set its stop flag. 2. For each `review` job queued or running whose `payload.run_id` equals `run_id` or whose `job_id` equals `run.meta.job_id`: `T08-12 (herness.core.jobs.cancel)(job_id)`. 3. `set_run_status(to="canceled", allowed_from=<non-terminal statuses>)`. 4. Log `harness.run.canceled` (INFO). Running tasks stop at their next step boundary (U06-99 `stop`). |
 | Tests | IT06-19 |
 
 #### U06-82 herness.harness.swarm.run.Swarm._drive
@@ -1105,7 +1133,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | function |
 | Purpose | Spec 08 `review` job handler (`register_handler("review", review_job_handler)`, registered by `herness.cli`). |
 | Signature | `review_job_handler(ctx: JobContext) -> JobOutcome` (one argument, R-42); `build_swarm_from_config(cfg: HernessConfig) -> Swarm` |
-| Algorithm | Handler: 1. `cfg = get_config()`; `swarm = build_swarm_from_config(cfg)`. 2. Payload `ctx.job.payload` (R-42): `{"run_id": str, "resume": true, "force"?: bool}` → `asyncio.run(swarm.resume(run_id, ctx, force=force))`; `{"request": {...}}` → `RunRequest.model_validate(...)` (failure → `ConfigError("review payload invalid: job_id=<id>")`), then `asyncio.run(swarm.start(req, ctx))`; anything else → `ConfigError`. 3. Result status non-terminal and `ctx.should_yield()` → `JobOutcome(status="yield", result={"run_id", "status"})`; else `JobOutcome(status="done", result={"run_id", "status", "partial": status == "partial"})`. 4. `swarm.close()` in `finally`. `build_swarm_from_config`: `LLMRegistry(cfg.models, profile=cfg.profile)` (X:05), `X:07/herness.harness.memory.MemoryStore.from_config(cfg)`, default `SwarmDeps` (`worker_alive` bound to `X:08/herness.core.jobs.worker_alive` for U06-86). This is a composition root for the job child process (ENG §2.2 exception, §13 O06-12). |
+| Algorithm | Handler: 1. `cfg = get_config()`; `swarm = build_swarm_from_config(cfg)`. 2. Payload `ctx.job.payload` (R-42): `{"run_id": str, "resume": true, "force"?: bool}` → `asyncio.run(swarm.resume(run_id, ctx, force=force))`; `{"request": {...}}` → `RunRequest.model_validate(...)` (failure → `ConfigError("review payload invalid: job_id=<id>")`), then `asyncio.run(swarm.start(req, ctx))`; anything else → `ConfigError`. 3. Result status non-terminal and `ctx.should_yield()` → `JobOutcome(status="yield", result={"run_id", "status"})`; else `JobOutcome(status="done", result={"run_id", "status", "partial": status == "partial"})`. 4. `swarm.close()` in `finally`. `build_swarm_from_config`: `T05-10 (herness.harness.llm.registry.LLMRegistry)(cfg.models, profile=cfg.profile)`, `T07-23 (herness.harness.memory.MemoryStore.from_config)(cfg)`, default `SwarmDeps` (`worker_alive` bound to `T08-12 (herness.core.jobs.worker_alive)` for U06-86). This is a composition root for the job child process (ENG §2.2 exception, §13 O06-12). |
 | Errors | `ConfigError` propagates (spec 08 marks the job failed). |
 | Tests | UT06-56 |
 
@@ -1118,7 +1146,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | async function |
 | Purpose | Assemble `PlanContext` (design 06 §5.2 Inputs, Scenarios). |
 | Signature | `run: RunRow`; `knobs: DepthKnobs`; `reader: RecordedReader`, `memory: MemoryStore`, `portfolio_fn: Callable[..., PortfolioResult]`, `unconfirmed_weights: Sequence[str]`, `pipelines_cfg: PipelinesConfig`, `planner_task_id: str` (keyword-only) → `PlanContext` |
-| Algorithm | 1. DQ: `SELECT check_name, severity, value, threshold, details FROM meta.dq_result WHERE passed = false ORDER BY check_name` through `reader` (in `asyncio.to_thread`); rows get the query id. 2. `pc = memory.prior_context(MemoryRunContext(run_id, run_kind=kind, role="planner", task_id=planner_task_id, build_id, profile))` in a thread; `prior_context = pc.rendered` (spec 07 returns `PriorContext`, R-30; the rendered text is already inside `<untrusted_data source="memory">` blocks, R-20); `prior_recs` = items whose `run_id` is among the two most recent distinct `run_id`s of `pc.items` (by `rec_id` order), dumped to JSON. 3. Scenarios: `names = req.scenarios or [pipelines.funding_review.portfolio_scenario]` (org runs: `portfolio = {"scenario": "", "rows": [], "selected": [], "query_ids": [], "custom": []}`). Read `SELECT DISTINCT scenario FROM score.portfolio`. For each entry: a string present there → rows `SELECT * FROM score.portfolio WHERE scenario = ? ORDER BY order_rank NULLS LAST, candidate_id`; a `Scenario` or unknown string → `portfolio_fn(entry, persist=False, build_id=run.build_id, run_id=run.run_id)` (`X:04/herness.metrics.portfolio.optimize_portfolio`, in a thread), whose JSON is appended to `custom`. The first entry defines `scenario`, `rows`, `selected` (`selected = true` rows or `PortfolioResult.selected`) and `query_ids`. 4. `unconfirmed_weights` from `X:04/herness.metrics.scoring.unconfirmed_weight_keys(cfg.weights)`. 5. Return `PlanContext(...)`. |
+| Algorithm | 1. DQ: `SELECT check_name, severity, value, threshold, details FROM meta.dq_result WHERE passed = false ORDER BY check_name` through `reader` (in `asyncio.to_thread`); rows get the query id. 2. `pc = memory.prior_context(MemoryRunContext(run_id, run_kind=kind, role="planner", task_id=planner_task_id, build_id, profile))` in a thread; `prior_context = pc.rendered` (spec 07 returns `PriorContext`, R-30; the rendered text is already inside `<untrusted_data source="memory">` blocks, R-20); `prior_recs` = items whose `run_id` is among the two most recent distinct `run_id`s of `pc.items` (by `rec_id` order), dumped to JSON. 3. Scenarios: `names = req.scenarios or [pipelines.funding_review.portfolio_scenario]` (org runs: `portfolio = {"scenario": "", "rows": [], "selected": [], "query_ids": [], "custom": []}`). Read `SELECT DISTINCT scenario FROM score.portfolio`. For each entry: a string present there → rows `SELECT * FROM score.portfolio WHERE scenario = ? ORDER BY order_rank NULLS LAST, candidate_id`; a `Scenario` or unknown string → `portfolio_fn(entry, persist=False, build_id=run.build_id, run_id=run.run_id)` (`T04-20 (herness.metrics.portfolio.optimize_portfolio)`, in a thread), whose JSON is appended to `custom`. The first entry defines `scenario`, `rows`, `selected` (`selected = true` rows or `PortfolioResult.selected`) and `query_ids`. 4. `unconfirmed_weights` from `T04-02 (herness.metrics.settings.unconfirmed_blocks)(cfg.weights, cfg.weights.blocks())`. 5. Return `PlanContext(...)`. |
 | Errors | `QueryError`, `ConfigError` from spec 04, `ModelUnavailable` from memory propagate. |
 | Tests | IT06-35, IT06-17 |
 
@@ -1254,7 +1282,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | function; class |
 | Purpose | Resolve role spec, model role and client for a task (design 06 §5.11, §5.12). |
 | Signature | `route_task(spec: TaskSpec, *, llms: LLMRegistry, depth: Depth, profile: str, ledger: RunBudget) -> Route`; `Route(role_spec: RoleSpec, model_role: str, client_key: str, client: LLMClient, config: ClientConfig, off_network: bool, fallback_local: bool)` (frozen) |
-| Algorithm | 1. `role_spec = X:05/herness.harness.roles.get_role_spec(role_prompt_name(spec.role, spec.specialty))`. 2. `model_role = spec.model_role`; `key = llms.model_for(model_role, depth)`; a `ConfigError` for a missing routing key with `model_role` in `BASE_MODEL_ROLE = {"skeptic_final": "skeptic", "chat_off_hours": "chat", "judge": "planner"}` → `model_role = BASE_MODEL_ROLE[model_role]`, `key = llms.model_for(model_role, depth)`. 3. `config = llms.config(key)`; `off_network = config.kind == "anthropic" or host(config.base_url) not in {"127.0.0.1", "localhost", "::1"}`. 4. `profile == "hybrid" and off_network and ledger.cost_cap_reached` → `key` = first entry of `llms.chain_for(model_role, depth)` whose config is not off-network (none → `ConfigError("no local fallback for <model_role>")`), `off_network = False`, `fallback_local = True`. 5. Return `Route(role_spec, model_role, key, llms.client(key), config, off_network, fallback_local)`. |
+| Algorithm | 1. `role_spec = T05-19 (herness.harness.roles.base.get_role)(role_prompt_name(spec.role, spec.specialty))`. 2. `model_role = spec.model_role`; `key = llms.model_for(model_role, depth)`; a `ConfigError` for a missing routing key with `model_role` in `BASE_MODEL_ROLE = {"skeptic_final": "skeptic", "chat_off_hours": "chat", "judge": "planner"}` → `model_role = BASE_MODEL_ROLE[model_role]`, `key = llms.model_for(model_role, depth)`. 3. `config = llms.config(key)`; `off_network = config.kind == "anthropic" or host(config.base_url) not in {"127.0.0.1", "localhost", "::1"}`. 4. `profile == "hybrid" and off_network and ledger.cost_cap_reached` → `key` = first entry of `llms.chain_for(model_role, depth)` whose config is not off-network (none → `ConfigError("no local fallback for <model_role>")`), `off_network = False`, `fallback_local = True`. 5. Return `Route(role_spec, model_role, key, llms.client(key), config, off_network, fallback_local)`. |
 | Errors | `ConfigError` for unknown roles or routing keys. |
 | Security notes | TH06-06 (off-network detection), TH06-12. |
 | Tests | UT06-65 |
@@ -1266,7 +1294,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | function |
 | Purpose | Construct spec 05 `HarnessHooks` for one task (design 06 §3.3). |
 | Signature | `env: RunEnv`; `spec: TaskSpec`; `route: Route`; `ctx: ToolContext`; `on_text_delta: Callable[[str \| None], Awaitable[None]] \| None = None` (keyword-only) → `HarnessHooks` |
-| Algorithm | `HarnessHooks(registry=env.llms, gates=env.gates, chain=None if route.fallback_local else ModelChain(route.model_role, registry=env.llms, depth=env.run.depth, gpu=X:08/herness.core.jobs.gpu_state()), compactor=env.memory.compactor(route.config, ctx=ctx), task_id=spec.task_id, phase=<current run status>, stop=env.stop, on_text_delta=on_text_delta, tracer=env.tracer)`. Gate wait times reach the metric through the `on_wait` callback given to `build_gates`. |
+| Algorithm | `HarnessHooks(registry=env.llms, gates=env.gates, chain=None if route.fallback_local else ModelChain(route.model_role, registry=env.llms, depth=env.run.depth, gpu=T08-18 (herness.core.jobs.gpu_state)()), compactor=env.memory.compactor(route.config, ctx=ctx), task_id=spec.task_id, phase=<current run status>, stop=env.stop, on_text_delta=on_text_delta, tracer=env.tracer)`. Gate wait times reach the metric through the `on_wait` callback given to `build_gates`. |
 | Tests | UT06-66 |
 
 #### U06-100 herness.harness.swarm.routing.build_tool_context
@@ -1298,7 +1326,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | function |
 | Purpose | Build the `task_input` passed to spec 05 `run_agent`, wrapping every untrusted text field in an `<untrusted_data>` block (R-20, design 10 §9.1). |
 | Signature | `role: Role`; `payload: Mapping[str, object]` → `dict` |
-| Postconditions | Returns a copy of `payload` in which each field of the table below that is present and non-empty is replaced by `X:05/herness.harness.tools.wrap_untrusted(text, source=<source>, record_id=<record_id>)`. Every other field is unchanged. |
+| Postconditions | Returns a copy of `payload` in which each field of the table below that is present and non-empty is replaced by `T05-15 (herness.harness.tools.wrap_untrusted)(text, source=<source>, record_id=<record_id>)`. Every other field is unchanged. |
 | Algorithm | 1. Fields and sources (matched by key at any nesting depth of `payload`, for example inside `planner_input` or `deterministic[*]`): `inputs.notes` and `notes` → `source="task_notes"`, `record_id` = the task id (text from the Planner, a spawn `reason` or a pipeline); `objective` of a task with `revision_of` set → `source="revision"`, `record_id` = `revision_of`; `finding.claim` and every `findings[*].claim` → `source="finding"`, `record_id` = the finding id; `required_actions[*]`, `open_concerns[*].required_actions[*]` and `challenge_summary` → `source="skeptic"`, `record_id` = the finding id; `question` → `source="chat"`, `record_id` = the user `message_id` when present, else empty. 2. `prior_context` and `session` are passed unchanged, because spec 07 already wrapped them with `source="memory"`. 3. `wrap_untrusted` escapes any literal `</untrusted_data` inside the text before wrapping (R-20), so a field cannot close its own block. 4. `role` only selects which fields can occur (planner, analyst, skeptic, writer, chat); an unknown role raises `ConfigError("no task input rules for role <role>")`. Pure. |
 | Errors | Unknown role → `ConfigError`. |
 | Security notes | TH06-07, TH06-19 (LLM01). |
@@ -1325,7 +1353,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | async function |
 | Purpose | Dedup after fan-out (design 06 §5.6). |
 | Signature | `env: RunEnv` → `int` (findings merged) |
-| Algorithm | 1. `proposed` findings of the run, excluding those authored by crosscheck tasks. 2. `mode = "query_set"` when `run.depth == "fast"`, else `embedding`. 3. Embedding mode: text = claim with every marker replaced by `<num>`; vectors via `X:03/herness.enrich.embed.embed_query` in `asyncio.to_thread` (each a 1-D `numpy.ndarray` of float32, R-18); `ModelUnavailable` or `ConfigError` → `query_set` mode and log `harness.dedup.degraded` (WARNING). 4. `dedup_components(...)`; for each component `await bb.merge(keep, dups)`. 5. Log `harness.dedup.completed` (INFO: `merged`, `mode`). Idempotent: merged findings are no longer `proposed`. The second dedup on the writer input set is in memory only; there is no `verified → merged` transition (U06-115, R-31). |
+| Algorithm | 1. `proposed` findings of the run, excluding those authored by crosscheck tasks. 2. `mode = "query_set"` when `run.depth == "fast"`, else `embedding`. 3. Embedding mode: text = claim with every marker replaced by `<num>`; vectors via `T03-06 (herness.enrich.embed.embed_query)` in `asyncio.to_thread` (each a 1-D `numpy.ndarray` of float32, R-18); `ModelUnavailable` or `ConfigError` → `query_set` mode and log `harness.dedup.degraded` (WARNING). 4. `dedup_components(...)`; for each component `await bb.merge(keep, dups)`. 5. Log `harness.dedup.completed` (INFO: `merged`, `mode`). Idempotent: merged findings are no longer `proposed`. The second dedup on the writer input set is in memory only; there is no `verified → merged` transition (U06-115, R-31). |
 | Tests | IT06-27, IT06-09 |
 
 #### U06-104 herness.harness.swarm.adversarial.select_for_challenge
@@ -1429,7 +1457,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | function |
 | Purpose | Build `CrossCheck` records for one finding at gate 1. |
 | Signature | `f: Finding`; `reader: CrosscheckReader` (reads tasks, findings and evidence SQL), `knobs: DepthKnobs`, `tolerances: CrosscheckSettings` (keyword-only) → `CrosscheckOutcome(checks: list[CrossCheck], disagree: bool, incomplete: bool)` |
-| Algorithm | 1. Chain = `f` and its ancestors through `supersedes`. 2. Crosscheck tasks whose `inputs.finding_ids` intersect the chain. 3. For each task: target number = the `NumberRef` with id `target_number` in the original target finding; the matching number of `f` = same `(query_id, column, row_key)`; none → skip. 4. Candidate value = first `NumberRef` with the target's unit in the findings posted by that crosscheck task; valid when its `query_id` differs from the original and `is_independent_sql(get_evidence(orig).sql, get_evidence(candidate).sql)` (`X:05/herness.store.ops.evidence.get_evidence`; a missing row makes the value invalid). 5. Per number: `values = [original] + valid values`; `agreed = len(valid) >= ways − 1 and all(crosscheck_agree(original, v))`; `disagree` when any valid value does not agree; `incomplete` when there is no disagreement and fewer than `ways − 1` valid values. |
+| Algorithm | 1. Chain = `f` and its ancestors through `supersedes`. 2. Crosscheck tasks whose `inputs.finding_ids` intersect the chain. 3. For each task: target number = the `NumberRef` with id `target_number` in the original target finding; the matching number of `f` = same `(query_id, column, row_key)`; none → skip. 4. Candidate value = first `NumberRef` with the target's unit in the findings posted by that crosscheck task; valid when its `query_id` differs from the original and `is_independent_sql(get_evidence(orig).sql, get_evidence(candidate).sql)` (`T05-12 (herness.store.ops.evidence.get_evidence)`; a missing row makes the value invalid). 5. Per number: `values = [original] + valid values`; `agreed = len(valid) >= ways − 1 and all(crosscheck_agree(original, v))`; `disagree` when any valid value does not agree; `incomplete` when there is no disagreement and fewer than `ways − 1` valid values. |
 | Tests | IT06-29, IT06-10 |
 
 #### U06-114 herness.harness.swarm.challenge.run_gate1, execute_verifier
@@ -1549,7 +1577,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 | Kind | function |
 | Purpose | Input for off-network Skeptic and Writer tasks (design 06 §5.12). |
 | Signature | `spec: TaskSpec`; `findings: Sequence[Finding]`, `inp: Mapping[str, object]`, `pseudo: Pseudonymizer`, `max_tokens: int` (keyword-only) → `dict` |
-| Algorithm | 1. Items: `objective`; per finding `finding_id`, `entity_type`, pseudonymized `entity_id`, pseudonymized `claim`, `numbers` (row-key string values that are entity ids pseudonymized), `confidence`, challenge summaries (verdict and check notes); portfolio and lever rows with ids pseudonymized; DQ check names; unconfirmed weight keys. Never included: `evidence.result_sample`, ticket text, `enrich.text_redacted`, `prior_context`, `inputs.notes`. 2. Size: while `X:05/herness.harness.llm.tokens.count_tokens(<pack JSON>) > max_tokens − PACK_HEADROOM_TOKENS` (8,000; `count_tokens` is the only estimator, R-17), drop the lowest-priority finding (last in input order). `max_tokens = hybrid.max_input_tokens_per_call`. Pure. |
+| Algorithm | 1. Items: `objective`; per finding `finding_id`, `entity_type`, pseudonymized `entity_id`, pseudonymized `claim`, `numbers` (row-key string values that are entity ids pseudonymized), `confidence`, challenge summaries (verdict and check notes); portfolio and lever rows with ids pseudonymized; DQ check names; unconfirmed weight keys. Never included: `evidence.result_sample`, ticket text, `enrich.text_redacted`, `prior_context`, `inputs.notes`. 2. Size: while `T05-07 (herness.harness.llm.tokens.count_tokens)(<pack JSON>) > max_tokens − PACK_HEADROOM_TOKENS` (8,000; `count_tokens` is the only estimator, R-17), drop the lowest-priority finding (last in input order). `max_tokens = hybrid.max_input_tokens_per_call`. Pure. |
 | Security notes | TH06-06 (LLM02). |
 | Tests | UT06-83, ST06-06 |
 
@@ -1566,7 +1594,7 @@ A `RecordedReader` is `Callable[[str, dict], RecordedResult]`: spec 05 `execute_
 
 #### U06-125 herness.harness.swarm.formatting.format_number_ref, render_markers
 
-Removed (R-16): see impl 00 `herness.core.numbers` (`X:00/herness.core.numbers.format_number_ref`, `X:00/herness.core.numbers.render_markers`), which formats every `NumberRef.format` value and replaces `[[nX]]` markers for both the renderer (09) and the chat and escalation text of this spec (U06-129, U06-135). The former formats and the percent scale of O06-13 are inputs to impl 00, not rules of this spec.
+Removed (R-16): see impl 00 `herness.core.numbers`: `T00-16 (herness.core.numbers.format_number)` formats every `NumberRef.format` value and `T00-16 (herness.core.numbers.parse_markers)` finds the `[[nX]]` markers. Impl 00 has no plain-text marker renderer, so the chat and escalation text of this spec (U06-129, U06-135) composes the two in place: each valid marker whose id is in the text's numbers is replaced by the formatted value, and other markers are kept. The former formats and the percent scale of O06-13 are inputs to impl 00, not rules of this spec.
 
 ### 3.13 Chat (`pipelines/chat_support.py`, `pipelines/chat.py`, `swarm/escalation.py`)
 
@@ -1596,7 +1624,7 @@ Removed (R-16): see impl 00 `herness.core.numbers` (`X:00/herness.core.numbers.f
 | Kind | method (synchronous generator) |
 | Purpose | Answer the latest user message of a session (design 06 §5.13). |
 | Signature | `session_id: str`; `text: str`; `user_ref: str`; `mode: ChatMode` → `Iterator[ChatEvent]` |
-| Algorithm | 1. `msg = latest_user_message(session_id)`; (`X:09/herness.store.ops.chat.latest_user_message`); none → yield `ErrorEvent("NotFound", "no user message to answer", None)` (R-19) and return. 2. Delegate to `_answer_message(session_id, msg.message_id, user_ref, mode)` (U06-129). The question sent to the model is `msg.content` (stored redacted by spec 09); `text` is accepted for the interface and not used, so unredacted text never reaches a model or the log. |
+| Algorithm | 1. `msg = latest_user_message(session_id)`; (`T09-03 (herness.store.ops.chat.latest_user_message)`); none → yield `ErrorEvent("NotFound", "no user message to answer", None)` (R-19) and return. 2. Delegate to `_answer_message(session_id, msg.message_id, user_ref, mode)` (U06-129). The question sent to the model is `msg.content` (stored redacted by spec 09); `text` is accepted for the interface and not used, so unredacted text never reaches a model or the log. |
 | Tests | IT06-11, IT06-23 |
 
 #### U06-129 herness.harness.pipelines.chat.ChatService._answer_message
@@ -1606,7 +1634,7 @@ Removed (R-16): see impl 00 `herness.core.numbers` (`X:00/herness.core.numbers.f
 | Kind | method (synchronous generator; runs the async turn in a worker thread) |
 | Purpose | One chat turn for a known user message. |
 | Signature | `session_id: str`; `message_id: str`; `user_ref: str`; `mode: ChatMode` → `Iterator[ChatEvent]` |
-| Algorithm | 1. Placeholder: `reply = X:09/herness.store.ops.chat.upsert_assistant_placeholder(session_id, reply_to=message_id)` (one assistant row per user row); `None` (not a user row of the session) → yield `ErrorEvent("NotFound", "message not found in session", None)` and return. A reply row already `done` → return without events (idempotent re-run of a deferred job). 2. `defer`: `job_id = jobs.enqueue("chat", {"session_id", "message_id"}, gpu_class="reasoning", priority=None, idem_key=f"chat:{session_id}:{message_id}")` (`None` = the spec 08 per-kind default, 75 for `chat`, R-41); `X:09/herness.store.ops.chat.update_chat_message(reply, status="queued", meta={"reply_to", "mode": "defer", "job_id"})`; yield `ModeEvent("defer", MODE_MESSAGES["defer"])`; log `harness.chat.turn_deferred`; return. 3. `cloud` is kept only when `data_policy_allows_cloud(profile)` is true: profile `hybrid` with the chat approval flag `security.data_policy.chat_approved` set (R-38; flag added by impl 10), or profile `premium` with `premium_approved`; otherwise `mode = "small_model"` (the local model). Yield `ModeEvent(mode, MODE_MESSAGES[mode])`. 4. Start a thread running `asyncio.run(self._turn(...))`; events pass through a `queue.Queue(maxsize=1000)`; the generator yields them until a sentinel; `queue.get(timeout=budget.wall_clock_s + 30)` timing out → yield `ErrorEvent("ModelUnavailable", "chat turn timed out", "Try again later.")`. Generator close (consumer stopped) sets the turn's stop flag. 5. `_turn`: a. chat run and task: `insert_run(kind="chat", depth="fast", status="running", meta={"request": {"kind": "chat", "question": "<redacted>"}, "session_id"})` and one `chat` task (role `chat`, `budget` from `pipelines.chat.budget`, `tools = CHAT_TOOLS[mode]`), both in one `run_write(fn, op="chat_create_run")`; b. `session = memory.session_load(session_id)`; `pc = memory.prior_context(MemoryRunContext(run_id, "chat", "chat", task_id, build_id, profile, session_id, user_ref))`; c. client key `jobs.chat_model_profile(mode)`, model role `chat_off_hours` for `small_model`, else `chat`; in `cloud` mode the model purpose is `reasoning` with payload class `aggregated_evidence` (R-38); `RunBudget("chat", tokens_cap=chat.budget.max_tokens, run_id)`; gates `build_gates(mode="chat")`; `task_tools` = `ObservedTool` wrappers (U06-130) around every process tool in `CHAT_TOOLS[mode]` plus chat-mode `ListFindingsTool` and `EscalateTool` bound to `escalate_to_review(session_id, message_id, ...)` which also enqueues `EscalatedEvent`; d. `run_agent(chat role, build_task_input("chat", {"question": msg.content, "session": session, "prior_context": pc.rendered}), ctx, client, config, HarnessHooks(chain=None, on_text_delta=None, ...))` (U06-141: the question is wrapped with `source="chat"`, R-20); `EgressBlocked` in `cloud` → rerun once with `chat_model_profile("small_model")` and prefix the answer text with `EGRESS_NOTICE`; e. service escalation: `res.stop_reason in {"budget","task_tokens","task_budget","no_progress"}` and `has_review_intent(question)` and no escalation yet → `escalate_to_review(...)`; f. `answer = ChatAnswer(res.output)`; token events: `chunk_text(X:00/herness.core.numbers.render_markers(answer.text, answer.numbers))` each as `TokenEvent` (R-16); g. `v = verify_answer(answer, build_id)` in a thread; `ConfigError` or `QueryError` from the verifier (warehouse missing) → status `unverified`; `v.passed` → `verified`; else one repair `run_agent` with `{"previous": answer, "verifier_report": v}` and re-verify; still failing → `answer, removed = trim_failing_claims(answer, v)`, status `partial`; h. yield `VerificationEvent(v, status, removed)`; i. `update_chat_message(reply, status="done", content=render_markers(answer.text, answer.numbers), verified=status, run_id, query_ids=answer.query_ids, meta={"reply_to", "mode", "model": client key, "latency_ms", "numbers": [...]})`; j. `complete_task`, run → `done`; yield `FinalEvent(answer, run_id)`; log `harness.chat.turn_completed` (INFO: `run_id`, `mode`, `status`, `latency_ms`); metrics `herness_harness_chat_turns_total{mode, verified}`, `herness_harness_chat_latency_seconds{mode}`; k. after the answer was sent (R-32), unless status is `unverified`: `memory_id = memory.session_save_turn(session_id, run_id)` (spec 07 captures a correction there; D06-29); a returned `memory_id` → yield `CorrectionCapturedEvent(memory_id)` and log `harness.chat.correction_captured` (INFO: `run_id`, `memory_id`). The answer text never mentions the capture. A `HernessError` in step k → log `harness.chat.session_save_failed` (WARNING: `run_id`, `error_type`); no `ErrorEvent`, because the answer was already delivered. 6. A `HernessError` in steps 5a–5j → yield `ErrorEvent(type(e).__name__, str(e), hint)` where `hint` is `e.hint` when set (R-19), else `"Try again later."` for `RetryableError` and `None` otherwise; update the reply row `status="failed"`; run `failed`; log `harness.chat.turn_failed` (ERROR: `error_type`). User text and answers are never logged above DEBUG. |
+| Algorithm | 1. Placeholder: `reply = T09-03 (herness.store.ops.chat.upsert_assistant_placeholder)(session_id, reply_to=message_id)` (one assistant row per user row); `None` (not a user row of the session) → yield `ErrorEvent("NotFound", "message not found in session", None)` and return. A reply row already `done` → return without events (idempotent re-run of a deferred job). 2. `defer`: `job_id = jobs.enqueue("chat", {"session_id", "message_id"}, gpu_class="reasoning", priority=None, idem_key=f"chat:{session_id}:{message_id}")` (`None` = the spec 08 per-kind default, 75 for `chat`, R-41); `T09-03 (herness.store.ops.chat.update_chat_message)(reply, status="queued", meta={"reply_to", "mode": "defer", "job_id"})`; yield `ModeEvent("defer", MODE_MESSAGES["defer"])`; log `harness.chat.turn_deferred`; return. 3. `cloud` is kept only when `T10-16 (herness.core.egress.cloud_chat_allowed)(cfg)` is true: egress enabled with purpose `reasoning`, and profile `premium`, or profile `hybrid` with the chat approval flag `security.data_policy.chat_approved` (`T10-01 (herness.core.settings.SecurityConfig)`, R-38); otherwise `mode = "small_model"` (the local model). Yield `ModeEvent(mode, MODE_MESSAGES[mode])`. 4. Start a thread running `asyncio.run(self._turn(...))`; events pass through a `queue.Queue(maxsize=1000)`; the generator yields them until a sentinel; `queue.get(timeout=budget.wall_clock_s + 30)` timing out → yield `ErrorEvent("ModelUnavailable", "chat turn timed out", "Try again later.")`. Generator close (consumer stopped) sets the turn's stop flag. 5. `_turn`: a. chat run and task: `insert_run(kind="chat", depth="fast", status="running", meta={"request": {"kind": "chat", "question": "<redacted>"}, "session_id"})` and one `chat` task (role `chat`, `budget` from `pipelines.chat.budget`, `tools = CHAT_TOOLS[mode]`), both in one `run_write(fn, op="chat_create_run")`; b. `session = memory.session_load(session_id)`; `pc = memory.prior_context(MemoryRunContext(run_id, "chat", "chat", task_id, build_id, profile, session_id, user_ref))`; c. client key `jobs.chat_model_profile(mode)`, model role `chat_off_hours` for `small_model`, else `chat`; in `cloud` mode the model purpose is `reasoning` with payload class `aggregated_evidence` (R-38); `RunBudget("chat", tokens_cap=chat.budget.max_tokens, run_id)`; gates `build_gates(mode="chat")`; `task_tools` = `ObservedTool` wrappers (U06-130) around every process tool in `CHAT_TOOLS[mode]` plus chat-mode `ListFindingsTool` and `EscalateTool` bound to `escalate_to_review(session_id, message_id, ...)` which also enqueues `EscalatedEvent`; d. `run_agent(chat role, build_task_input("chat", {"question": msg.content, "session": session, "prior_context": pc.rendered}), ctx, client, config, HarnessHooks(chain=None, on_text_delta=None, ...))` (U06-141: the question is wrapped with `source="chat"`, R-20); `EgressBlocked` in `cloud` → rerun once with `chat_model_profile("small_model")` and prefix the answer text with `EGRESS_NOTICE`; e. service escalation: `res.stop_reason in {"budget","task_tokens","task_budget","no_progress"}` and `has_review_intent(question)` and no escalation yet → `escalate_to_review(...)`; f. `answer = ChatAnswer(res.output)`; token events: `chunk_text(t)` each as `TokenEvent`, where `t` is the marker text of `T00-16 (herness.core.numbers.parse_markers)` with each valid marker whose id is in `answer.numbers` replaced by `T00-16 (herness.core.numbers.format_number)` of that `NumberRef` (other markers kept; R-16); g. `v = verify_answer(answer, build_id)` in a thread; `ConfigError` or `QueryError` from the verifier (warehouse missing) → status `unverified`; `v.passed` → `verified`; else one repair `run_agent` with `{"previous": answer, "verifier_report": v}` and re-verify; still failing → `answer, removed = trim_failing_claims(answer, v)`, status `partial`; h. yield `VerificationEvent(v, status, removed)`; i. `update_chat_message(reply, status="done", content=render_markers(answer.text, answer.numbers), verified=status, run_id, query_ids=answer.query_ids, meta={"reply_to", "mode", "model": client key, "latency_ms", "numbers": [...]})`; j. `complete_task`, run → `done`; yield `FinalEvent(answer, run_id)`; log `harness.chat.turn_completed` (INFO: `run_id`, `mode`, `status`, `latency_ms`); metrics `herness_harness_chat_turns_total{mode, verified}`, `herness_harness_chat_latency_seconds{mode}`; k. after the answer was sent (R-32), unless status is `unverified`: `memory_id = memory.session_save_turn(session_id, run_id)` (spec 07 captures a correction there; D06-29); a returned `memory_id` → yield `CorrectionCapturedEvent(memory_id)` and log `harness.chat.correction_captured` (INFO: `run_id`, `memory_id`). The answer text never mentions the capture. A `HernessError` in step k → log `harness.chat.session_save_failed` (WARNING: `run_id`, `error_type`); no `ErrorEvent`, because the answer was already delivered. 6. A `HernessError` in steps 5a–5j → yield `ErrorEvent(type(e).__name__, str(e), hint)` where `hint` is `e.hint` when set (R-19), else `"Try again later."` for `RetryableError` and `None` otherwise; update the reply row `status="failed"`; run `failed`; log `harness.chat.turn_failed` (ERROR: `error_type`). User text and answers are never logged above DEBUG. |
 | Side effects | `run`, `task`, `chat_message`, memory session, `chat` job. |
 | Concurrency | One worker thread and event loop per turn; queue hand-off. |
 | Security notes | TH06-11 (budget, timeout), TH06-12 (cloud gate), TH06-14 (no text in logs), TH06-17. |
@@ -1669,7 +1697,7 @@ Removed (R-16): see impl 00 `herness.core.numbers` (`X:00/herness.core.numbers.f
 | Kind | function |
 | Purpose | Post the mini run's executive summary into the chat session as a new assistant turn. |
 | Signature | `run: RunRow`; `draft: ReportDraft \| None`; `append_message: Callable[..., str]`, `find_message: Callable[..., ChatMessageRow \| None]` (keyword-only) → `str \| None` (message_id) |
-| Algorithm | Callers bind `append_message` to `X:09/herness.store.ops.chat.append_chat_message` and `find_message` to `X:09/herness.store.ops.chat.find_assistant_message` (R-09). 1. Existing assistant message with `meta.escalation_run_id == run_id` → return its id. 2. Paragraph = first paragraph of section `executive_summary` when `draft.mode == "full"`; none when there is no draft or `draft.mode == "findings_only"` (R-49). 3. Content = `X:00/herness.core.numbers.render_markers(p.text, p.numbers)` (R-16), or `"The review finished without an executive summary; see run " + run_id + "."`. 4. `append_message(session_id, role="assistant", content, status="done", verified="verified" if draft and draft.verification.passed else "partial", run_id, query_ids=sorted(n.query_id for n in p.numbers), meta={"escalation_run_id": run_id, "mode": "escalation", "numbers": [...]})`. |
+| Algorithm | Callers bind `append_message` to `T09-03 (herness.store.ops.chat.append_chat_message)` and `find_message` to `T09-03 (herness.store.ops.chat.find_assistant_message)` (R-09). 1. Existing assistant message with `meta.escalation_run_id == run_id` → return its id. 2. Paragraph = first paragraph of section `executive_summary` when `draft.mode == "full"`; none when there is no draft or `draft.mode == "findings_only"` (R-49). 3. Content = the marker text of `T00-16 (herness.core.numbers.parse_markers)` with each valid marker whose id is in `p.numbers` replaced by `T00-16 (herness.core.numbers.format_number)` of that `NumberRef` (other markers kept; R-16), applied to `p.text`, or `"The review finished without an executive summary; see run " + run_id + "."`. 4. `append_message(session_id, role="assistant", content, status="done", verified="verified" if draft and draft.verification.passed else "partial", run_id, query_ids=sorted(n.query_id for n in p.numbers), meta={"escalation_run_id": run_id, "mode": "escalation", "numbers": [...]})`. |
 | Tests | IT06-33, IT06-14 |
 
 #### U06-136 herness.harness.pipelines.chat.chat_job_handler
@@ -1679,12 +1707,12 @@ Removed (R-16): see impl 00 `herness.core.numbers` (`X:00/herness.core.numbers.f
 | Kind | function |
 | Purpose | Spec 08 `chat` job handler for deferred turns. |
 | Signature | `ctx: JobContext` → `JobOutcome` |
-| Algorithm | 1. Payload `ctx.job.payload` (R-42) = `{"session_id", "message_id"}`, else `ConfigError`. 2. `user_ref` from `X:09/herness.store.ops.chat.get_chat_session(session_id)["user_ref"]`; `None` → `NotFound("chat session not found")` (R-19). 3. Build `ChatService` from `get_config()`. 4. Consume `_answer_message(session_id, message_id, user_ref, "live")` to the end. 5. Return `JobOutcome(status="done", result={"run_id": <final run id or null>, "status": <final status>})`. A second run of the same job finds the reply row already `done` and returns without a model call. |
+| Algorithm | 1. Payload `ctx.job.payload` (R-42) = `{"session_id", "message_id"}`, else `ConfigError`. 2. `user_ref` from `T09-03 (herness.store.ops.chat.get_chat_session)(session_id)["user_ref"]`; `None` → `NotFound("chat session not found")` (R-19). 3. Build `ChatService` from `get_config()`. 4. Consume `_answer_message(session_id, message_id, user_ref, "live")` to the end. 5. Return `JobOutcome(status="done", result={"run_id": <final run id or null>, "status": <final status>})`. A second run of the same job finds the reply row already `done` and returns without a model call. |
 | Tests | IT06-34, IT06-12 |
 
 ## 4. State and data
 
-### 4.1 Ops tables owned (DDL in impl 02 migrations 001–006, `X:02/herness/store/migrations`; columns per spec 02 §5.3)
+### 4.1 Ops tables owned (DDL in impl 02 migrations 001–006; `run`, `task`, `finding` and `task_dedup` in `T02-06 (herness/store/migrations/003_runs_evidence.sql)`; columns per spec 02 §5.3)
 
 Every table and index this spec uses exists in a design spec and is created by impl 02 (R-11), including the unique index `task_dedup` on `task(run_id, json_extract(spec, '$.dedup_key'))`. This spec therefore adds no migration; its range 040–049 stays unused.
 
@@ -1717,7 +1745,7 @@ Every table and index this spec uses exists in a design spec and is created by i
 | Merge, supersede | status compare-and-set | one `run_write` |
 | `draft.json`, pass files | path per run | temp file + `os.replace` |
 | Recommendations | `run_id` (spec 07) | spec 07 transaction |
-| Chat assistant row | `meta.reply_to` = user `message_id` | `X:09/herness.store.ops.chat.upsert_assistant_placeholder` |
+| Chat assistant row | `meta.reply_to` = user `message_id` | `T09-03 (herness.store.ops.chat.upsert_assistant_placeholder)` |
 | `chat` job | `chat:<session_id>:<message_id>` | spec 08 |
 | Escalation `review` job | `escalate:<session_id>:<message_id>` | spec 08 |
 | Escalation summary row | `meta.escalation_run_id` | spec 09 functions |
@@ -1982,7 +2010,7 @@ None read directly. Model and egress credentials are resolved by specs 05 and 10
 | `harness.chat.correction_captured` | INFO | run_id, memory_id | U06-129 |
 | `harness.chat.session_save_failed` | WARNING | run_id, error_type | U06-129 |
 
-### 8.2 Metrics (`metric_sample`, through `X:08/herness.store.ops.metrics.record_metric_samples`, R-12)
+### 8.2 Metrics (`metric_sample`, through `T08-05 (herness.store.ops.metrics.record_metric_samples)`, R-12)
 
 | Name | Type | Labels |
 |------|------|--------|
@@ -2009,7 +2037,7 @@ None read directly. Model and egress credentials are resolved by specs 05 and 10
 
 ### 8.4 Health
 
-`swarm_health` (U06-86): `ok`, `degraded` (open review runs while `worker_alive()` is false, R-44; or a non-chat run non-terminal for more than 24 h without a queued or running review job), `down` (ops store unreadable). Registered with `herness doctor` (X:10/herness doctor checks).
+`swarm_health` (U06-86): `ok`, `degraded` (open review runs while `worker_alive()` is false, R-44; or a non-chat run non-terminal for more than 24 h without a queued or running review job), `down` (ops store unreadable). Reported by `herness doctor` through the `swarm` check row of T09-22 (herness._cli.doctor.run_doctor): `degraded` → WARN, `down` → FAIL (UT09-107; §13 O06-17).
 
 ## 9. Configuration
 
@@ -2082,7 +2110,7 @@ Resource limits enforced in code: concurrent agents ≤ `TaskSlots` size; concur
 
 ## 11. Test specification
 
-Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `X:11/tests/support/fake_llm.py`, with scripts in `tests/fixtures/llm_scripts/` keyed by role, `dedup_key` and call index (R-65); `tiny_build` and `small_build` with planted truth T1 (bad team) and T2 (high-ROI epic) (`X:11/tests/support/builds.py`); `FakeClock`; tmp ops SQLite migrated by `X:02` migrations; fixed ULID seed. Markers per spec 11 §4.1.
+Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `T11-23 (tests/support/fake_llm.py)`, with scripts in `tests/fixtures/llm_scripts/` keyed by role, `dedup_key` and call index (R-65); `tiny_build` and `small_build` with planted truth T1 (bad team) and T2 (high-ROI epic) (`T11-17 (tests/support/builds.py)`); `FakeClock`; tmp ops SQLite migrated by `T02-05 (herness.store.ops.migrate.migrate)`; fixed ULID seed. Markers per spec 11 §4.1.
 
 ### 11.1 Unit tests (`unit`)
 
@@ -2092,7 +2120,7 @@ Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `
 | UT06-02 | U06-04 | budget 12/40000/300 | `to_budgets(now)`, `scaled(0.5)`, naive `now` | same fields and `deadline = now + 300 s` (R-22); 6/20000/150; `SchemaViolation` |
 | UT06-03 | U06-06 | planner JSON with `budget` key | validate | `ValidationError` (extra forbidden) |
 | UT06-04 | U06-07 | finding missing a number's query id | validate | `ValidationError`; merged without `merged_into` rejected |
-| UT06-05 | U06-08 | usd "1250000.00" and "3.10" | `impact_usd` | `Decimal("1250000.00")`; no usd → 0 |
+| UT06-05 | U06-143 | usd "1250000.00" and "3.10" | `impact_usd` | `Decimal("1250000.00")`; no usd → 0 |
 | UT06-06 | U06-09, U06-10 | 5 checks; `concern` without query; `revise` without actions | validate | each rejected; defaults on round/model accepted |
 | UT06-07 | U06-11, U06-12 | values/query_ids length mismatch | validate | rejected |
 | UT06-08 | U06-13–U06-18 | draft fixture | validate | numbers without finding ids rejected; rank gap rejected; unknown flags key rejected; summary of 401 chars rejected (R-30); `mode` defaults to `full`; `findings_only` with a recommendation rejected (R-49) |
@@ -2111,7 +2139,7 @@ Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `
 | UT06-21 | U06-32–U06-34 | tmp ops | insert twice, get, find by job, find by escalation, `select_runs` | second insert False; lookups match |
 | UT06-22 | U06-35 | run `running` | CAS from `planning`; from `running` to `done` | False; True with `finished_at` |
 | UT06-23 | U06-36 | meta with keys | patch `render_error` and `None` value | merged; null kept |
-| UT06-24 | U06-37, U06-38 | two specs same dedup key | insert | one row; ids of inserted only |
+| UT06-24 | U06-37, U06-38 | two specs same dedup key | insert; then `get_task`, `get_task_by_dedup`, `select_tasks` | one row; ids of inserted only; the reads return that row (with `spec` parsed as `TaskSpec`); `get_task` of an unknown id → `None` |
 | UT06-25 | U06-39 | tasks with rounds, depths, priorities, ages | `ready_tasks` | order per design 06 §5.4 |
 | UT06-26 | U06-40 | pending, running, blocked ids | `count_open`, `count_tasks` | exclusions applied |
 | UT06-27 | U06-41, U06-42 | findings in each status | every transition of design 06 §6.5 and one illegal per status | allowed True; illegal False, row unchanged |
@@ -2182,6 +2210,7 @@ Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `
 | UT06-92 | U06-141 | payloads per role with notes, claims, required actions, a chat question containing `</untrusted_data>`, and `prior_context` | build | each listed field wrapped with its `source` and `record_id`; the literal closing tag escaped; `prior_context` unchanged; other fields unchanged; unknown role → `ConfigError` |
 | UT06-93 | U06-140 | state with duplicates; valid state; stored invalid JSON | validate; read back | duplicates rejected; round trip equal; `SchemaViolation` |
 | UT06-94 | U06-142 | 60 verified findings, fake `verify` | build | `mode = findings_only`; one `executive_summary` section with 50 claim paragraphs in priority order; no recommendations; banner `partial_run`; `publishable = false`; `verification` stored |
+| UT06-95 | U06-144 | ops store with two findings whose `numbers` cite the record (one by `record_id`, one by key only), whose claims carry the matching markers, and one finding that does not | `scrub_record_from_findings` inside `run_write`; then again | cited elements removed and their markers replaced by `[redacted]`; other elements and rows unchanged; second call returns 0 |
 
 ### 11.2 Property tests (`unit`, hypothesis)
 
@@ -2283,12 +2312,12 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Owner-06 task, finding and challenge types exist in `herness.core.types`. |
-| Depends on | X:00/herness.core.types (package skeleton and re-export, R-01), X:05/herness.core.types.harness (`NumberRef`, `VerificationResult`, `Budgets` with `deadline`, R-22) |
-| Units | U06-01–U06-12, U06-140 |
+| Depends on | T00-08 (herness.core.types) (package skeleton and re-export, R-01), T05-01 (herness.core.types.harness) (`NumberRef`, `VerificationResult`, `Budgets` with `deadline`, R-22) |
+| Units | U06-01–U06-07, U06-09–U06-12, U06-140 (U06-08 removed, R-75) |
 | Files | `herness/core/types/swarm/__init__.py`, `herness/core/types/swarm/tasks.py` |
-| Tests | UT06-01–UT06-07, UT06-93 |
+| Tests | UT06-01–UT06-04, UT06-06, UT06-07, UT06-93 |
 | Threats | TH06-03, TH06-04 (schema bounds) |
-| Acceptance checks | UT06-01–UT06-07 and UT06-93 pass; `herness.core.types.TaskSpec is herness.core.types.swarm.TaskSpec` |
+| Acceptance checks | UT06-01–UT06-04, UT06-06, UT06-07 and UT06-93 pass; `herness.core.types.TaskSpec is herness.core.types.swarm.TaskSpec` |
 | Blocked by | none (D06-23 resolved by R-01; D06-28 does not block) |
 | Size | M |
 
@@ -2296,7 +2325,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | `ReportDraft` family, `writer_output_model`, `ChatAnswer`, `ChatEvent`. |
-| Depends on | T06-01, X:08/herness.core.types.jobs.ChatMode |
+| Depends on | T06-01, T08-01 (herness.core.types.jobs.ChatMode) |
 | Units | U06-13–U06-21 |
 | Files | `herness/core/types/swarm/drafts.py`, `herness/core/types/swarm/__init__.py` |
 | Tests | UT06-08–UT06-10 |
@@ -2309,12 +2338,12 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | `PipelinesConfig`, knobs and the shipped YAML. |
-| Depends on | T06-01, X:10/herness.core.config.load_config |
+| Depends on | T06-01, T10-03 (herness.core.config.load_config) |
 | Units | U06-22–U06-24 |
 | Files | `herness/harness/pipelines/settings.py`, `config/pipelines.yaml`, `herness/harness/pipelines/__init__.py` |
 | Tests | UT06-11–UT06-13, ST06-15 |
 | Threats | TH06-15 |
-| Acceptance checks | `herness config validate` accepts the shipped file (X:10) |
+| Acceptance checks | `herness config validate` (`T10-14 (herness.admin.commands_config.cmd_config_validate)`) accepts the shipped file |
 | Blocked by | none |
 | Size | M |
 
@@ -2322,7 +2351,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Ledger and concurrency primitives. |
-| Depends on | T06-03, X:00/herness.core.errors |
+| Depends on | T06-03, T00-03 (herness.core.errors) |
 | Units | U06-25–U06-31 |
 | Files | `herness/harness/budget.py`, `herness/harness/gates.py` |
 | Tests | UT06-14–UT06-20, PT06-05 |
@@ -2335,12 +2364,12 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Area `herness.store.ops.runs` (R-08) re-exported by `herness.store.ops`. |
-| Depends on | T06-01, X:02/herness/store/migrations (run, task, finding tables and the `task_dedup` index), X:02/herness.store.ops.core.run_write, X:02/herness.store.ops.core.read_all |
+| Depends on | T06-01, T02-06 (herness/store/migrations/003_runs_evidence.sql) (run, task, finding tables and the `task_dedup` index), T02-04 (herness.store.ops.core.run_write), T02-04 (herness.store.ops.core.read_all) |
 | Units | U06-32–U06-40 |
 | Files | `herness/store/ops/runs.py`, `herness/store/ops/__init__.py` (06 re-export block) |
 | Tests | UT06-21–UT06-26, PT06-08 |
 | Threats | TH06-10 |
-| Acceptance checks | UT06-21–26 pass on a migrated tmp DB; `herness.store.ops.select_tasks` and `herness.store.ops.list_tasks` (impl 09) are distinct functions |
+| Acceptance checks | UT06-21–26 pass on a migrated tmp DB; `herness.store.ops.select_tasks` and `herness.store.ops.ui_list_tasks` (impl 09, R-68) are distinct functions |
 | Blocked by | none (O06-06 resolved by R-08) |
 | Size | M |
 
@@ -2349,9 +2378,9 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 |-------|---------|
 | Goal | Area `herness.store.ops.findings` (R-08). |
 | Depends on | T06-05 |
-| Units | U06-41–U06-44 |
+| Units | U06-41–U06-44, U06-144 |
 | Files | `herness/store/ops/findings.py`, `herness/store/ops/__init__.py` (06 re-export block) |
-| Tests | UT06-27, UT06-28 |
+| Tests | UT06-27, UT06-28, UT06-95 |
 | Threats | TH06-10 |
 | Acceptance checks | every design 06 §6.5 transition covered by UT06-27 |
 | Blocked by | none |
@@ -2361,10 +2390,10 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Marker, numeral, dedup-key and entity checks. |
-| Depends on | T06-01, T06-05, X:00/herness.core.numbers.parse_markers, X:00/herness.core.ids.canonical_json, X:02/warehouse read-only handle |
-| Units | U06-47, U06-49, U06-50 |
+| Depends on | T06-01, T06-05, T00-16 (herness.core.numbers.parse_markers), T00-05 (herness.core.ids.canonical_json), T02-09 (herness.store.warehouse.open_readonly) |
+| Units | U06-47, U06-49, U06-50, U06-143 |
 | Files | `herness/harness/findings.py` |
-| Tests | UT06-31, UT06-33, UT06-34, PT06-01, PT06-02 |
+| Tests | UT06-05, UT06-31, UT06-33, UT06-34, PT06-01, PT06-02 |
 | Threats | TH06-01, TH06-08 |
 | Acceptance checks | property tests pass with the `commit` profile |
 | Blocked by | none |
@@ -2374,7 +2403,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Blackboard API with atomic post and single writer. |
-| Depends on | T06-06, T06-07, X:08/herness.core.jobs.save_checkpoint, X:08/herness.core.resilience.fault_point, X:10/herness.core.redact.get_redactor, X:00/herness.core.numbers.find_stray_numerals, X:05/herness.store.ops.evidence.get_evidence |
+| Depends on | T06-06, T06-07, T08-16 (herness.core.jobs.save_checkpoint), T08-08 (herness.core.resilience.fault_point), T10-10 (herness.core.redact.get_redactor), T00-16 (herness.core.numbers.find_uncited), T05-12 (herness.store.ops.evidence.get_evidence) |
 | Units | U06-51–U06-59 |
 | Files | `herness/harness/blackboard.py` |
 | Tests | UT06-35–UT06-42, IT06-16, ST06-01, ST06-05, ST06-10 |
@@ -2387,7 +2416,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Four swarm tools, `SpawnBroker`, `default_tools`, `role_budget`, `role_prompt_name`. |
-| Depends on | T06-08, T06-04, X:05/herness.harness.tools.AsyncTool, X:05/herness.harness.tracing.Tracer |
+| Depends on | T06-08, T06-04, T05-02 (herness.harness.tools.AsyncTool), T05-11 (herness.harness.tracing.Tracer) |
 | Units | U06-60–U06-65, U06-97, U06-101 |
 | Files | `herness/harness/swarm/tools.py`, `herness/harness/swarm/spawn.py`, `herness/harness/swarm/routing.py` (pure part), `herness/harness/swarm/__init__.py` |
 | Tests | UT06-43–UT06-47, UT06-64, UT06-68, ST06-02, ST06-03, ST06-17 |
@@ -2400,7 +2429,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | `Pipeline`, `PlanContext`, shared helpers, factory. |
-| Depends on | T06-02, T06-03, X:07/herness.core.types.memory.RecommendationDraft |
+| Depends on | T06-02, T06-03, T07-01 (herness.core.types.memory.RecommendationDraft) |
 | Units | U06-66–U06-70, U06-75 |
 | Files | `herness/harness/pipelines/base.py` |
 | Tests | UT06-48, UT06-49 |
@@ -2413,7 +2442,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Funding deterministic plan and writer input. |
-| Depends on | T06-10, T06-07, X:05/herness.harness.tools.execute_recorded |
+| Depends on | T06-10, T06-07, T05-15 (herness.harness.tools.execute_recorded) |
 | Units | U06-71, U06-72 |
 | Files | `herness/harness/pipelines/funding_review.py` |
 | Tests | UT06-50, UT06-51 |
@@ -2439,7 +2468,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | `RunEnv`, `route_task`, `build_hooks`, `build_tool_context`, `map_agent_result`, `build_task_input`. |
-| Depends on | T06-09, X:05/herness.harness.loop.HarnessHooks, X:05/herness.harness.roles.get_role_spec, X:05/herness.harness.tools.wrap_untrusted, X:08/herness.core.resilience.ModelChain, X:08/herness.core.jobs.gpu_state, X:07/herness.harness.memory.MemoryStore.compactor |
+| Depends on | T06-09, T05-22 (herness.harness.loop.HarnessHooks), T05-19 (herness.harness.roles.base.get_role), T05-15 (herness.harness.tools.wrap_untrusted), T08-09 (herness.core.resilience.ModelChain), T08-18 (herness.core.jobs.gpu_state), T07-23 (herness.harness.memory.MemoryStore.compactor) |
 | Units | U06-139, U06-96, U06-98–U06-100, U06-141 |
 | Files | `herness/harness/swarm/routing.py` |
 | Tests | UT06-63, UT06-65–UT06-67, UT06-92, ST06-19 |
@@ -2452,7 +2481,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | `PhaseRunner`, `execute_task`, admission and caps. |
-| Depends on | T06-13, X:05/herness.harness.loop.run_agent, X:08/herness.core.jobs.{claim_task,complete_task,fail_task,release_task} |
+| Depends on | T06-13, T05-23 (herness.harness.loop.run_agent), T08-16 (herness.core.jobs.claim_task), T08-16 (herness.core.jobs.complete_task), T08-16 (herness.core.jobs.fail_task), T08-16 (herness.core.jobs.release_task) |
 | Units | U06-92–U06-95 |
 | Files | `herness/harness/swarm/scheduler.py` |
 | Tests | UT06-61, UT06-62, IT06-08, IT06-24, IT06-25 |
@@ -2465,7 +2494,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Plan context, planner and judge, post-processing, plan commit. |
-| Depends on | T06-11, T06-12, T06-14, X:04/herness.metrics.portfolio.optimize_portfolio, X:04/herness.metrics.scoring.unconfirmed_weight_keys, X:07/herness.harness.memory.MemoryStore.prior_context |
+| Depends on | T06-11, T06-12, T06-14, T04-20 (herness.metrics.portfolio.optimize_portfolio), T04-02 (herness.metrics.settings.unconfirmed_blocks), T07-16 (herness.harness.memory.MemoryStore.prior_context) |
 | Units | U06-87–U06-91 |
 | Files | `herness/harness/swarm/planner.py` |
 | Tests | UT06-58–UT06-60, IT06-26, IT06-35, ST06-04 |
@@ -2478,7 +2507,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Dedup, selection, verdict rules, task builders, cross-check planning and agreement. |
-| Depends on | T06-13, X:03/herness.enrich.embed.embed_query |
+| Depends on | T06-13, T03-06 (herness.enrich.embed.embed_query) |
 | Units | U06-102–U06-107, U06-110–U06-112 |
 | Files | `herness/harness/swarm/dedup.py`, `herness/harness/swarm/adversarial.py` |
 | Tests | UT06-69–UT06-76, PT06-03, PT06-04, IT06-27, ST06-16 |
@@ -2491,7 +2520,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Skeptic execution, rounds, large stage entry, cross-check evaluation, gate 1. |
-| Depends on | T06-16, T06-14, X:05/herness.harness.verifier.Verifier.verify_findings, X:08/JobContext.gpu_scope |
+| Depends on | T06-16, T06-14, T05-25 (herness.harness.verifier.Verifier.verify_findings), T08-03 (herness.core.jobs.JobContext.gpu_scope) |
 | Units | U06-108, U06-109, U06-113, U06-114 |
 | Files | `herness/harness/swarm/challenge.py` |
 | Tests | IT06-04, IT06-05, IT06-10, IT06-28, IT06-29, ST06-07 |
@@ -2504,7 +2533,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Evidence pack and pseudonyms. |
-| Depends on | T06-02, X:05/herness.harness.llm.tokens.count_tokens |
+| Depends on | T06-02, T05-07 (herness.harness.llm.tokens.count_tokens) |
 | Units | U06-123, U06-124 |
 | Files | `herness/harness/swarm/hybrid.py` |
 | Tests | UT06-83, UT06-84, PT06-06 |
@@ -2517,7 +2546,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Writer, rules, gate 2, removals, coverage, `draft.json`, findings-only draft. |
-| Depends on | T06-17, T06-18, X:05/herness.harness.verifier.Verifier.{verify_draft,verify_numbers}, X:00/herness.core.numbers.find_stray_numerals |
+| Depends on | T06-17, T06-18, T05-25 (herness.harness.verifier.Verifier.verify_draft), T05-25 (herness.harness.verifier.Verifier.verify_numbers), T00-16 (herness.core.numbers.find_uncited) |
 | Units | U06-115–U06-121, U06-142 |
 | Files | `herness/harness/swarm/writer.py`, `herness/harness/swarm/draft_rules.py` |
 | Tests | UT06-77–UT06-82, UT06-94, IT06-06, IT06-30, ST06-08, ST06-18 |
@@ -2530,7 +2559,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Recommendations hand-off, `rec_id` fill, promotion, render. |
-| Depends on | T06-19, X:07/herness.harness.memory.MemoryStore.{write_recommendations,promote_procedural}, X:10/herness.core.registry built-in `("renderer","report")` → X:09/herness.reports.render.render_run |
+| Depends on | T06-19, T07-23 (herness.harness.memory.MemoryStore.write_recommendations), T07-23 (herness.harness.memory.MemoryStore.promote_procedural), T10-04 (herness.core.registry) built-in `("renderer","report")` → T09-11 (herness.reports.render.render_run) |
 | Units | U06-122 |
 | Files | `herness/harness/swarm/record.py` |
 | Tests | IT06-22, IT06-31 |
@@ -2543,7 +2572,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Request and result models, run record, config hash, budget exhaustion, health. |
-| Depends on | T06-05, T06-09, X:10/herness.core.config.config_hash, X:02/herness.store.warehouse.current_build_id, X:08/herness.core.jobs.list_jobs, X:08/herness.core.jobs.worker_alive, X:00/herness.core.ids.canonical_json |
+| Depends on | T06-05, T06-09, T10-03 (herness.core.config.config_hash), T02-09 (herness.store.warehouse.read_current), T08-12 (herness.core.jobs.list_jobs), T08-12 (herness.core.jobs.worker_alive), T00-05 (herness.core.ids.canonical_json) |
 | Units | U06-76, U06-77, U06-83, U06-84, U06-86, U06-137 |
 | Files | `herness/harness/swarm/lifecycle.py` |
 | Tests | UT06-54, UT06-55, UT06-57, UT06-91 |
@@ -2556,7 +2585,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | `Swarm` start, resume, cancel, state machine, handler. |
-| Depends on | T06-15, T06-17, T06-19, T06-20, T06-21, X:08/herness.core.jobs.{recover_run_tasks,register_handler,cancel}, X:02/herness.store.warehouse.build_exists |
+| Depends on | T06-15, T06-17, T06-19, T06-20, T06-21, T08-16 (herness.core.jobs.recover_run_tasks), T08-12 (herness.core.jobs.register_handler), T08-12 (herness.core.jobs.cancel), T02-09 (herness.store.warehouse.build_exists) |
 | Units | U06-78–U06-82, U06-85 |
 | Files | `herness/harness/swarm/run.py`, `herness/harness/swarm/handler.py`, `herness/harness/swarm/__init__.py` |
 | Tests | UT06-56, IT06-01–IT06-03, IT06-15, IT06-17–IT06-21, IT06-32, ST06-13 |
@@ -2569,7 +2598,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Chat constants and pure helpers. |
-| Depends on | T06-02, X:00/herness.core.numbers.find_stray_numerals |
+| Depends on | T06-02, T00-16 (herness.core.numbers.find_uncited) |
 | Units | U06-126, U06-130–U06-133 |
 | Files | `herness/harness/pipelines/chat_support.py` |
 | Tests | UT06-86–UT06-90 |
@@ -2582,7 +2611,7 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | Mini-swarm escalation and summary message. |
-| Depends on | T06-21, X:08/herness.core.jobs.enqueue, X:09/herness.store.ops.chat.append_chat_message, X:09/herness.store.ops.chat.find_assistant_message, X:00/herness.core.numbers.render_markers |
+| Depends on | T06-21, T08-12 (herness.core.jobs.enqueue), T09-03 (herness.store.ops.chat.append_chat_message), T09-03 (herness.store.ops.chat.find_assistant_message), T00-16 (herness.core.numbers.parse_markers), T00-16 (herness.core.numbers.format_number) |
 | Units | U06-134, U06-135 |
 | Files | `herness/harness/swarm/escalation.py` |
 | Tests | IT06-33 |
@@ -2595,20 +2624,20 @@ All cards are Phase 3. Every card's acceptance includes: `ruff check`, `ruff for
 | Field | Content |
 |-------|---------|
 | Goal | `ChatService.answer`, turn logic, `chat_job_handler`. |
-| Depends on | T06-23, T06-24, T06-13, X:08/herness.core.jobs.{chat_model_profile,enqueue}, X:07/herness.harness.memory.MemoryStore.{session_load,session_save_turn}, X:09/herness.store.ops.chat.{upsert_assistant_placeholder,latest_user_message,update_chat_message,get_chat_session}, X:05/herness.harness.verifier.Verifier.verify_answer, X:10/security.data_policy chat approval flag |
+| Depends on | T06-23, T06-24, T06-13, T08-19 (herness.core.jobs.chat_model_profile), T08-12 (herness.core.jobs.enqueue), T07-23 (herness.harness.memory.MemoryStore.session_load), T07-23 (herness.harness.memory.MemoryStore.session_save_turn), T09-03 (herness.store.ops.chat.upsert_assistant_placeholder), T09-03 (herness.store.ops.chat.latest_user_message), T09-03 (herness.store.ops.chat.update_chat_message), T09-03 (herness.store.ops.chat.get_chat_session), T05-25 (herness.harness.verifier.Verifier.verify_answer), T10-16 (herness.core.egress.cloud_chat_allowed), T10-01 (herness.core.settings.SecurityConfig) (`data_policy.chat_approved`) |
 | Units | U06-127–U06-129, U06-136 |
 | Files | `herness/harness/pipelines/chat.py`, `herness/harness/pipelines/__init__.py` |
 | Tests | IT06-11–IT06-14, IT06-23, IT06-34, IT06-36, ST06-11, ST06-12, ST06-14 |
 | Threats | TH06-11, TH06-12, TH06-14 |
 | Acceptance checks | IT06-23 exactly one assistant row in every mode; IT06-36 `correction_captured` follows `final` |
-| Blocked by | D06-29 (impl 07 `session_save_turn` returns the captured memory id); D06-07 (token reset) does not block |
+| Blocked by | none (D06-29 resolved: U07-94 returns the captured memory id); D06-07 (token reset) does not block |
 | Size | M |
 
 #### T06-26 Fault and hybrid security suite
 | Field | Content |
 |-------|---------|
 | Goal | Fault plans and end-to-end security tests. |
-| Depends on | T06-22, T06-25, X:08/fault plans (JSON, honoured only when `HERNESS_ENV=test`, R-40), X:10/egress guard spy, X:11/tests/support/fake_llm.py (`FakeLLMClient`, `FakeLLMServer`, R-65) |
+| Depends on | T06-22, T06-25, T08-08 (herness.core.resilience.faults.load_fault_plan) (JSON plans, honoured only when `HERNESS_ENV=test`, R-40), T10-16 (herness.core.egress.get_guard) (spied guard), T11-23 (tests/support/fake_llm.py) (`FakeLLMClient`, `FakeLLMServer`, R-65) |
 | Units | none (tests only) |
 | Files | none (tests under `tests/fault/`, `tests/integration/`) |
 | Tests | FT06-01–FT06-05, ST06-06, ST06-09 |
@@ -2678,10 +2707,10 @@ Status of every earlier delta and open item follows the binding rulings of [`DEC
 | D06-25 | 06 §3.1, §3.7 | `Swarm` and `ChatService` constructors gain keyword-only `deps` (additive) for verifier, renderer, clock, tracer factory, worker liveness | Still open |
 | D06-26 | 06 §4.6 | `run.meta.job_id` key (additive) so a retried `review` job resumes its own run instead of creating a second one | Still open |
 | D06-27 | 06 §3.1, §3.5, §3.7 | `Swarm`, `Blackboard` and `ChatService` constructors drop the `ops: OpsStore` parameter; ops access goes through `herness.store.ops` functions | Accepted (R-10: `OpsStore` is replaced wherever used) |
-| D06-28 | 00 §6 | `herness.core.types.swarm` is a subpackage (`__init__.py`, `tasks.py`, `drafts.py`) so each file stays under 400 lines (ENG §2.4) | Still open: impl 00's ownership check must accept a subpackage for the `swarm` submodule of R-01 |
-| D06-29 | 07 §5.12 | `MemoryStore.session_save_turn` returns the `memory_id` of a correction it captured (else `None`), so 06 can emit `correction_captured` (R-32). Impl 07 U07-94 returns `None` today | Still open (impl 07 change) |
+| D06-28 | 00 §6 | `herness.core.types.swarm` is a subpackage (`__init__.py`, `tasks.py`, `drafts.py`) so each file stays under 400 lines (ENG §2.4) | Resolved by R-01: an owner's submodule may itself be a package |
+| D06-29 | 07 §5.12 | `MemoryStore.session_save_turn` returns the `memory_id` of a correction it captured (else `None`), so 06 can emit `correction_captured` (R-32). | Resolved: impl 07 U07-94 returns the captured `memory_id` (or `None`); T06-25 unblocked |
 | D06-30 | 06 §4.4, §6.2 | Findings-only draft representation: `mode = "findings_only"`, one `executive_summary` section of verified claims, no recommendations (U06-142) | Accepted (R-49); impl 09 renders it with a banner |
-| D06-31 | 02 §2, 07, 09 | `herness.store.ops` namespace collisions: impl 09 `ui_reads` defines `list_runs`, `list_tasks`, `RunRow`, `TaskRow`, and impl 07 `closed_loop` defines `get_run`, all over tables of areas `runs` and `findings`. This spec renames its listers to `select_runs` and `select_tasks`. Impl 09 must add `herness.store.ops.chat.find_assistant_message` (R-09) | Still open for 07 and 09 |
+| D06-31 | 02 §2, 07, 09 | `herness.store.ops` namespace collisions: impl 09 `ui_reads` defines `list_runs`, `list_tasks`, `RunRow`, `TaskRow`, and impl 07 `closed_loop` defines `get_run`, all over tables of areas `runs` and `findings`. This spec renames its listers to `select_runs` and `select_tasks`. Impl 09 must add `herness.store.ops.chat.find_assistant_message` (R-09) | Resolved by R-68: impl 06 owns `get_run`, `select_runs`, `select_tasks` (U06-34, U06-38); impl 09's UI projections take the `ui_` prefix; impl 07 reads runs through `T06-05 (herness.store.ops.runs.get_run)`; impl 09 added U09-107 |
 | D06-32 | 06 §4.5 | `ChatEvent` gains `CorrectionCapturedEvent` (`type = "correction_captured"`), emitted only after `final` | Accepted (R-32) |
 | D06-33 | 06 §5.2, §5.7, §5.8, §5.13 | Untrusted task-input fields (notes, claims, required actions, chat question) are wrapped in `<untrusted_data>` by U06-141 | Accepted (R-20) |
 | D06-34 | 00 §3, 05 | `herness/harness/__init__.py` (05) and `herness/harness/pipelines/__init__.py` (06) import nothing eagerly, so that `herness.core.config` importing `herness.harness.pipelines.settings` (R-03) loads no L4 module | Still open for impl 05 |
@@ -2714,8 +2743,11 @@ Status of every earlier delta and open item follows the binding rulings of [`DEC
 | O06-12 | Job handler builds its own dependencies; renderer obtained from `herness.core.registry` (L5 not imported) | ENG §2.2 exception for `swarm/handler.py` and `pipelines/chat.py` `chat_job_handler` | Still open |
 | O06-13 | Scale of `pct` values | already in percent (0–100); now an input to impl 00 `herness.core.numbers` | Still open (owner impl 00 under R-16) |
 | O06-14 | Skeptic samples on resume | re-run all samples (no per-sample checkpoint) | Still open |
-| O06-15 | Symbol names in `herness.core.numbers` (`parse_markers`, `find_stray_numerals`, `format_number_ref`, `render_markers`) used by this spec | The names above; impl 00 confirms them when it adds the module (R-16) | Still open |
-| O06-16 | Save-checkpoint signature | `save_checkpoint(task_id, "state", value, writes=cb)`: R-21 names the key form; this spec also needs impl 08's `writes` callback, which U08-60 has today | Still open (impl 08 update under R-21) |
+| O06-15 | Symbol names in `herness.core.numbers` used by this spec | Impl 00 T00-16 names: `parse_markers`, `find_uncited`, `compile_allowed_patterns`, `format_number`. Impl 00 has no plain-text marker renderer; U06-129 and U06-135 compose `parse_markers` and `format_number` | Resolved (R-16, impl 00 U00-66–U00-70) |
+| O06-16 | Save-checkpoint signature | `save_checkpoint(task_id, "state", value, writes=cb)`: R-21 names the key form; this spec also needs impl 08's `writes` callback | Resolved: U08-60 takes `(task_id, key, value, *, writes=None)` with `key` in `loop`, `state`, `scratchpad` (R-21) |
+| O06-17 | `herness doctor` row for `swarm_health` (U06-86, §8.4) | T09-22 (herness._cli.doctor.run_doctor) has a `swarm` check row that calls `herness.harness.swarm.lifecycle.swarm_health`, `degraded` → WARN, `down` → FAIL (UT09-107) | Resolved (impl 09) |
+| O06-18 | `impact_usd` was a function in `herness.core.types.swarm` | Moved to `herness.harness.findings.impact_usd` (U06-143, card T06-07); U06-08 kept as a removed stub | Resolved by R-75 |
+| O06-19 | Privacy deletion of findings that cite a deleted record | `herness.store.ops.findings.scrub_record_from_findings(record_id, *, conn)` (U06-144, card T06-06), called by impl 10's privacy deletion, which no longer defines it | Resolved by R-77 (impl 10 U10-106 moves here) |
 
 ### 13.4 Verification items (open-questions.md §b) affecting cards
 
@@ -2743,13 +2775,13 @@ No new dependency beyond spec 00 §9.
 
 | Spec | Units used |
 |------|-----------|
-| 00 | `new_ulid`, `canonical_json` (R-14), error taxonomy including `NotFound` and `HernessError.hint` (R-19), `herness.core.types` package skeleton and re-export (R-01), `herness.core.numbers` (`parse_markers`, `find_stray_numerals`, `format_number_ref`, `render_markers`; R-16), `time` |
-| 02 | migrations 001–006 for `run`, `task`, `finding` and index `task_dedup` (R-11); `herness.store.ops.core` `connection`, `run_write`, `read_one`, `read_all`, `dump_json` (R-10); `current_build_id`, `build_exists`; warehouse read-only handles |
+| 00 | `new_ulid`, `canonical_json` (R-14), error taxonomy including `NotFound` and `HernessError.hint` (R-19), `herness.core.types` package skeleton and re-export (R-01), `herness.core.numbers` (`parse_markers`, `find_uncited`, `compile_allowed_patterns`, `format_number`; R-16), `herness.core.time.format_utc` |
+| 02 | migrations 001–006 for `run`, `task`, `finding` and index `task_dedup` (R-11); `herness.store.ops.core` `connection`, `run_write`, `read_one`, `read_all`, `dump_json` (R-10); `herness.store.ops.migrate.migrate`; `herness.store.warehouse` `read_current`, `build_exists`, `open_readonly` |
 | 03 | `embed_query` (1-D float32 `numpy.ndarray`, R-18) |
-| 04 | `optimize_portfolio`, `Scenario`, `PortfolioResult`, `unconfirmed_weight_keys`, metric catalog names |
-| 05 | `run_agent` (`resume_from: LoopCheckpoint \| None`, R-29), `HarnessHooks`, `GatedClient`, `LoopCheckpoint`, `LLMRegistry`, `ClientConfig`, `ToolRegistry`, `Tool`, `AsyncTool`, `ToolContext`, `ToolResult`, `Budgets` (with `deadline`, R-22), `PlannerOutput` (R-28), `NumberRef`, `VerificationResult`, `Verifier` (`verify_findings`, `verify_draft`, `verify_answer`, `verify_numbers`), `execute_recorded`, `wrap_untrusted` (R-20), `count_tokens` (R-17), `get_role_spec`, `Tracer`, `AgentResult`, `herness.store.ops.evidence.get_evidence` (R-09) |
+| 04 | `optimize_portfolio`, `Scenario`, `PortfolioResult`, `herness.metrics.settings.unconfirmed_blocks`, metric catalog names |
+| 05 | `run_agent` (`resume_from: LoopCheckpoint \| None`, R-29), `HarnessHooks`, `GatedClient`, `LoopCheckpoint`, `LLMRegistry`, `ClientConfig`, `ToolRegistry`, `Tool`, `AsyncTool`, `ToolContext`, `ToolResult`, `Budgets` (with `deadline`, R-22), `PlannerOutput` (R-28), `NumberRef`, `VerificationResult`, `Verifier` (`verify_findings`, `verify_draft`, `verify_answer`, `verify_numbers`), `execute_recorded`, `wrap_untrusted` (R-20), `count_tokens` (R-17), `herness.harness.roles.base.get_role`, `Tracer`, `AgentResult`, `herness.store.ops.evidence.get_evidence` (R-09) |
 | 07 | `MemoryStore` (`prior_context` returning `PriorContext`, `write_recommendations`, `promote_procedural`, `compactor`, `session_load`, `session_save_turn`, `from_config`), `MemoryRunContext`, `RecommendationDraft` (R-30), `PriorContext` |
 | 08 | `claim_task`, `save_checkpoint` (key `state`, R-21), `complete_task`, `fail_task`, `release_task` (R-36), `recover_run_tasks`, `ModelChain`, `gpu_state`, `JobContext`, `JobOutcome`, `enqueue` (priority `None` = per-kind default, R-41), `cancel`, `list_jobs`, `worker_alive` (R-44), `chat_model_profile`, `register_handler`, `fault_point` (points `swarm.after_task_claim`, `swarm.after_finding_write`, `sqlite.write` of impl 08's registry, R-40), `herness.store.ops.metrics.record_metric_samples` (R-12), `ChatMode` |
-| 09 | `render_run` (through the registry), `herness.store.ops.chat` (`upsert_assistant_placeholder`, `latest_user_message`, `get_chat_message`, `append_chat_message`, `update_chat_message`, `get_chat_session`, `find_assistant_message`; R-09) |
-| 10 | `get_config`, `load_config`, `config_hash`, `get_redactor`, registry, data policy including the chat approval flag (R-38), egress guard (inside spec 05 adapters) |
+| 09 | `render_run` (through the registry), `herness.store.ops.chat` (`upsert_assistant_placeholder`, `latest_user_message`, `get_chat_message`, `append_chat_message`, `update_chat_message`, `get_chat_session`, `find_assistant_message`; R-09); `herness doctor` row for `swarm_health` (T09-22, O06-17) |
+| 10 | `get_config`, `load_config`, `config_hash`, `get_redactor`, registry, `SecurityConfig.data_policy.chat_approved` and `herness.core.egress.cloud_chat_allowed` (R-38), egress guard `get_guard` (inside spec 05 adapters), `cmd_config_validate`. Impl 10's privacy deletion calls U06-144 (R-77) |
 | 11 | `FakeLLMClient`, `FakeLLMServer`, `tests/fixtures/llm_scripts/` (R-65), `tiny_build`, `small_build`, `FakeClock`, planted truth |

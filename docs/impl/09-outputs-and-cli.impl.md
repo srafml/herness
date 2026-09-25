@@ -28,8 +28,8 @@ This spec builds everything a person touches: the report renderer (`herness/repo
 | 5.5 | Chat UI steps 1–9; correction form carries `session_id` and `source_message_id` (R-33) | §5 F09-04, F09-05 | U09-69–U09-71, U09-83, U09-34–U09-36 | T09-19, T09-12 | IT09-12, IT09-13, FT09-04, ST09-14 |
 | 5.6 | CLI global options, wait/no-wait, admin `--inline` (R-45), worker liveness (R-44), full command table (R-47), CLI identity | §3 U09-84–U09-106, §3.12 | U09-84–U09-101, U09-103–U09-106 | T09-20–T09-25, T09-27 | IT09-14, IT09-28, UT09-66, UT09-67–UT09-70, UT09-99–UT09-102, ST09-29 |
 | 5.7 | `--json` envelope `cli/1` | §3 U09-86 | U09-86 | T09-20 | UT09-64, IT09-16, ST09-24 |
-| 5.8 | Exit codes `0`–`4` (R-46; design codes 5–13 dropped) and 130 on interrupt (DD-23) | §3 U09-87, §6 | U09-87, U09-91 | T09-20, T09-21 | UT09-63, UT09-67, IT09-15 |
-| 6 | Error/Fix messages; idempotent render; partial run reported as a warning with exit 0 (R-46); widget isolation; StoreBusy retry; chat errors; audit failure blocks action | §6 | U09-88, U09-66, U09-34–U09-41, U09-25 | T09-02, T09-15, T09-12, T09-11 | UT09-65, FT09-01–FT09-06 |
+| 5.8 | Exit codes of design 09 §5.8 plus 14 for a failed eval gate (R-46 corrected), including 130 on interrupt | §3 U09-87, §6 | U09-87, U09-91 | T09-20, T09-21 | UT09-63, UT09-67, IT09-15 |
+| 6 | Error/Fix messages; idempotent render; partial run reported with its warning and exit 6 (R-46); widget isolation; StoreBusy retry; chat errors; audit failure blocks action | §6 | U09-88, U09-66, U09-34–U09-41, U09-25 | T09-02, T09-15, T09-12, T09-11 | UT09-65, FT09-01–FT09-06 |
 | 7 | `config/app.yaml` keys; keys read from 10, 08, 04 | §9 | U09-02 | T09-01 | UT09-02–UT09-04 |
 | 8 | Performance targets | §10 | U09-62, U09-24, U09-84 | T09-26, T09-11 | BT09-01–BT09-07 |
 | 9.1 | Binding flags, proxy-only exposure with loopback bind (R-50), XSRF, no custom endpoints | §3 U09-93, U09-54; §7 | U09-93, U09-54 | T09-22, T09-13 | ST09-06, ST09-23, ST09-04 |
@@ -85,7 +85,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/_cli/identity.py` | CLI actor, command→role table, elevation check | `cli_actor`, `COMMAND_ROLES`, `DENIED_ALLOWED`, `WRITE_COMMANDS`, `ELEVATED_COMMANDS`, `check_command_role`, `guarded` | L5 | none | 220 |
 | `herness/_cli/term.py` | Terminal-safe text | `safe_terminal_text` | L5 | none | 60 |
 | `herness/_cli/wait.py` | Enqueue, follow and inline-run jobs | `submit_job`, `follow_job`, `FollowOutcome`, `run_job_inline` | L5 | `rich` | 300 |
-| `herness/_cli/payloads.py` | Job payload builders | `sync_payload`, `pipeline_payload`, `review_request`, `eval_payload`, `parse_budget_usd`, `STAGE_ORDER` | L5 | none | 180 |
+| `herness/_cli/payloads.py` | Job payload builders (the sync payload is impl 01's `build_sync_payload`) | `pipeline_payload`, `review_request`, `parse_budget_usd`, `STAGE_ORDER` | L5 | none | 180 |
 | `herness/_cli/cmd_system.py` | `init`, `doctor`, `status`, `ui`, `worker`, `gpu` | `register` | L5 | `rich` | 300 |
 | `herness/_cli/doctor.py` | Doctor checks owned here plus spec 10 checks | `CheckResult`, `run_doctor` | L5 | none | 200 |
 | `herness/_cli/cmd_data.py` | `sync`, `build`, `enrich`, `score`, `metrics list`, `pipeline` | `register` | L5 | none | 250 |
@@ -98,7 +98,7 @@ Import rules beyond ENG §2.1: `herness/_cli/*` and `herness/cli.py` import `duc
 
 ## 3. Unit specs
 
-Conventions for this section: each unit has a signature table (parameter, type, default, kind, constraints) followed by the field table of ENG §12.3. "Kind" in the signature table is `pos` (positional-or-keyword) or `kw` (keyword-only). `cfg` means the process `HernessConfig` from `X:10/herness.core.config.get_config`. `now()` means `X:00/herness.core.time.now` (patched by spec 11 `FakeClock`). Every error class is from spec 00 §7 unless declared here; `NotFound` and the `hint` and `details` attributes of `HernessError` are impl 00's (R-19). Ops-store calls use impl 02's core API names (`connection`, `run_write`, `read_one`, `read_all`, `migrate`, `pending_migrations`; R-10).
+Conventions for this section: each unit has a signature table (parameter, type, default, kind, constraints) followed by the field table of ENG §12.3. "Kind" in the signature table is `pos` (positional-or-keyword) or `kw` (keyword-only). `cfg` means the process `HernessConfig` from `T10-03 (herness.core.config.get_config)`. `now()` means `T00-04 (herness.core.time.now)` (patched by spec 11 `FakeClock`). Every error class is from spec 00 §7 unless declared here; `NotFound` and the `hint` and `details` attributes of `HernessError` are impl 00's (R-19). Ops-store calls use impl 02's core API names (`connection`, `run_write`, `read_one`, `read_all`, `migrate`, `pending_migrations`; R-10).
 
 ### 3.1 Shared types and configuration
 
@@ -166,7 +166,7 @@ Section model for `config/app.yaml` (spec 10 loads it as `cfg.app`). All models 
 | Invariants | Frozen; compiled patterns are computed once per instance. |
 | Algorithm | 1. Field validators enforce the ranges above. 2. The `allowed_numeral_patterns` validator compiles each pattern; a `re.error` becomes a validation error at path `reports.allowed_numeral_patterns.<i>`, which spec 10's loader converts to `ConfigError`. 3. The `formats` validator rejects duplicates. 4. `prior_outcomes_window_days` accepts a two-element YAML list and validates the order. |
 | Side effects | None. |
-| Errors | Invalid value → pydantic `ValidationError` → `ConfigError` (raised by `X:10/herness.core.config.load_config`). |
+| Errors | Invalid value → pydantic `ValidationError` → `ConfigError` (raised by `T10-03 (herness.core.config.load_config)`). |
 | Concurrency | Immutable. |
 | Complexity and limits | Pattern compile at load, ≤ 50 patterns of ≤ 200 chars. |
 | Security notes | Patterns are admin-controlled (TB10). The length and count caps bound scan cost (TH09-14). |
@@ -178,7 +178,7 @@ Section model for `config/app.yaml` (spec 10 loads it as `cfg.app`). All models 
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| (not defined here) | Marker pattern, marker parsing and the numeral scanner are imported from `X:00/herness.core.numbers` (R-16) | One implementation shared with the Verifier (05) |
+| (not defined here) | Marker pattern, marker parsing and the numeral scanner are imported from `T00-16 (herness.core.numbers)` (R-16) | One implementation shared with the Verifier (05) |
 | `SUPPORTED_SCHEMA_VERSIONS` | `frozenset({"1"})` | Draft versions the templates support |
 | `RENDERABLE_RUN_STATUSES` | `frozenset({"done", "partial"})` | Run statuses that may be rendered |
 | `RUN_ID_RE` | regex `^run_[0-9A-HJKMNP-TV-Z]{26}$` | Valid `run_id` (spec 00 §5, Crockford ULID) |
@@ -206,7 +206,7 @@ Section model for `config/app.yaml` (spec 10 loads it as `cfg.app`). All models 
 
 | Parameter | Type | Default | Kind | Constraints |
 |-----------|------|---------|------|-------------|
-| `draft` | `ReportDraft` (X:06) | — | pos | validated model |
+| `draft` | `ReportDraft` (T06-02 (herness.core.types.swarm.ReportDraft)) | — | pos | validated model |
 
 Returns `Iterator[TextField]`. `TextField` is a frozen dataclass: `where: str`, `text: str`, `numbers: tuple[NumberRef, ...]`, `finding_ids: tuple[str, ...]`, `refs: tuple[tuple[str, str], ...]` (ref field name, `NumberRef` id).
 
@@ -227,7 +227,7 @@ Returns `Iterator[TextField]`. `TextField` is a frozen dataclass: `where: str`, 
 
 #### U09-05 herness.reports.contract.find_uncited
 
-Removed (R-16): see `X:00/herness.core.numbers` (numeral scanner of design 00 §12.1). U09-09 calls it for every draft text field; its former tests UT09-06, UT09-07, UT09-08, PT09-01 and IT09-03 now exercise U09-09.
+Removed (R-16): see `T00-16 (herness.core.numbers)` (numeral scanner of design 00 §12.1). U09-09 calls it for every draft text field; its former tests UT09-06, UT09-07, UT09-08, PT09-01 and IT09-03 now exercise U09-09.
 
 #### U09-06 herness.reports.contract.load_draft
 
@@ -236,7 +236,7 @@ Removed (R-16): see `X:00/herness.core.numbers` (numeral scanner of design 00 §
 | `run_id` | `str` | — | pos | matches `RUN_ID_RE` |
 | `reports_root` | `Path \| None` | `None` | kw | `None` → `Path(cfg.paths.data) / "reports"` |
 
-Returns `ReportDraft` (X:06).
+Returns `ReportDraft` (T06-02 (herness.core.types.swarm.ReportDraft)).
 
 | Field | Content |
 |-------|---------|
@@ -301,9 +301,9 @@ Returns `None`; raises `ReportContractError` listing every violation.
 | Preconditions | Draft loaded by U09-06. |
 | Postconditions | On return: every marker resolves; every `NumberRef.query_id` and every `draft.query_ids` entry exists; every non-null `rec_id` belongs to the run; every cited finding is verified. |
 | Invariants | Not applicable. |
-| Algorithm | 1. `schema_version ∉ SUPPORTED_SCHEMA_VERSIONS` → violation `schema_version`. 2. For each `TextField` (U09-04), parse markers with the marker parser of `X:00/herness.core.numbers` (R-16): (a) each malformed double-bracket token it reports → `<where>: malformed marker`; (b) each marker id without a `NumberRef` of that id in `field.numbers` → `<where>: marker [[id]] has no NumberRef`; (c) duplicate ids in `field.numbers` → `<where>: duplicate NumberRef id`; (d) each `refs` value not in `field.numbers` ids → `<where>.<ref name>: unknown ref`; `expected_usd_ref`, `effort_usd_ref` and every `delta_usd_ref` must point to `unit == "usd"`, else `<where>.<ref name>: wrong unit`. 3. All `NumberRef.query_id` values plus `draft.query_ids`: ids failing `QUERY_ID_RE` → violation; ids not returned by `lookups.known_query_ids` → `<first where>: unknown query_id <id>`. 4. Non-null `rec_id`s not in `lookups.run_rec_ids(draft.run_id)` → `recommendations[k].rec_id: unknown rec_id`. 5. Union of paragraph and recommendation `finding_ids` minus `lookups.verified_finding_ids(...)` → `<where>: finding <id> is not verified`. 6. With ≥ 1 violation raise `ReportContractError(f"{n} report contract violations in run {run_id}")` with `details = {"code": "contract_violation", "where": <locations joined by ", ">, "rules": <rule names joined by ", ">}` in first-seen order, capped at 200 entries plus a final `"… and N more"` (`details` values are strings only, R-74). |
+| Algorithm | 1. `schema_version ∉ SUPPORTED_SCHEMA_VERSIONS` → violation `schema_version`. 2. For each `TextField` (U09-04), parse markers with the marker parser of `T00-16 (herness.core.numbers)` (R-16): (a) each malformed double-bracket token it reports → `<where>: malformed marker`; (b) each marker id without a `NumberRef` of that id in `field.numbers` → `<where>: marker [[id]] has no NumberRef`; (c) duplicate ids in `field.numbers` → `<where>: duplicate NumberRef id`; (d) each `refs` value not in `field.numbers` ids → `<where>.<ref name>: unknown ref`; `expected_usd_ref`, `effort_usd_ref` and every `delta_usd_ref` must point to `unit == "usd"`, else `<where>.<ref name>: wrong unit`. 3. All `NumberRef.query_id` values plus `draft.query_ids`: ids failing `QUERY_ID_RE` → violation; ids not returned by `lookups.known_query_ids` → `<first where>: unknown query_id <id>`. 4. Non-null `rec_id`s not in `lookups.run_rec_ids(draft.run_id)` → `recommendations[k].rec_id: unknown rec_id`. 5. Union of paragraph and recommendation `finding_ids` minus `lookups.verified_finding_ids(...)` → `<where>: finding <id> is not verified`. 6. With ≥ 1 violation raise `ReportContractError(f"{n} report contract violations in run {run_id}")` with `details = {"code": "contract_violation", "where": <locations joined by ", ">, "rules": <rule names joined by ", ">}` in first-seen order, capped at 200 entries plus a final `"… and N more"` (`details` values are strings only, R-74). |
 | Side effects | Lookups only; logs `reports.contract.violated` (WARNING: `run_id`, `count`, `rules`). |
-| Errors | `ReportContractError` (CLI exit 1, R-46). |
+| Errors | `ReportContractError` (CLI exit 12, R-46). |
 | Concurrency | Pure apart from lookups. |
 | Complexity and limits | O(text length + ids); 200 listed violations. |
 | Security notes | Refuses forged evidence and references (TH09-17) and unresolved markers (TH09-16). |
@@ -324,8 +324,8 @@ Returns `list[UncitedHit]`. `UncitedHit` is a frozen dataclass `where: str` (fie
 | Purpose | Apply the shared numeral scanner to every model-written field (design §5.1 step 5; spec 00 §12.1; design §4.1 rule 2). |
 | Preconditions | Draft passed U09-08; patterns compiled. |
 | Postconditions | Hits ordered by U09-04 field order, then offset. |
-| Invariants | Accept and reject decisions are those of `X:00/herness.core.numbers`, so the renderer and the Verifier agree by construction (R-16). |
-| Algorithm | For each `TextField` from U09-04, call the numeral scanner of `X:00/herness.core.numbers` on `field.text` with `patterns`; convert each returned span to `UncitedHit(where=field.where, text=span text cut to UNCITED_TEXT_MAX, start, end)`. |
+| Invariants | Accept and reject decisions are those of `T00-16 (herness.core.numbers)`, so the renderer and the Verifier agree by construction (R-16). |
+| Algorithm | For each `TextField` from U09-04, call the numeral scanner of `T00-16 (herness.core.numbers)` on `field.text` with `patterns`; convert each returned span to `UncitedHit(where=field.where, text=span text cut to UNCITED_TEXT_MAX, start, end)`. |
 | Side effects | None. |
 | Errors | None. |
 | Concurrency | Pure. |
@@ -360,7 +360,7 @@ Returns `list[str]`, sorted ascending.
 
 #### U09-11 herness.reports._format.format_number
 
-Removed (R-16): see `X:00/herness.core.numbers` (`NumberRef` formatting for every `format` value, design §4.1 rule 5). U09-17 and U09-59 call it directly; table cells use U09-102. Its former tests UT09-19, UT09-20 and PT09-04 now exercise U09-102.
+Removed (R-16): see `T00-16 (herness.core.numbers)` (`NumberRef` formatting for every `format` value, design §4.1 rule 5). U09-17 and U09-59 call it directly; table cells use U09-102. Its former tests UT09-19, UT09-20 and PT09-04 now exercise U09-102.
 
 #### U09-12 herness.reports._format.confidence_label
 
@@ -399,7 +399,7 @@ Returns `str`.
 | Kind | function (pure) |
 | Purpose | Format a raw warehouse value for a report or dashboard table cell with exactly the rules used for `NumberRef`s (R-16), so a cell and a marker showing the same value print the same text. |
 | Preconditions | None. |
-| Postconditions | `None` → `"—"` (the cell is not linked); a non-finite float or a value that `Decimal(str(value))` cannot convert → `"n/a"`; otherwise the output of the `X:00/herness.core.numbers` formatter for `(Decimal(str(value)), fmt)`. |
+| Postconditions | `None` → `"—"` (the cell is not linked); a non-finite float or a value that `Decimal(str(value))` cannot convert → `"n/a"`; otherwise the output of the `T00-16 (herness.core.numbers)` formatter for `(Decimal(str(value)), fmt)`. |
 | Invariants | No formatting rule is defined in this module. |
 | Algorithm | 1. `None` → `"—"`. 2. Convert with `Decimal(str(value))`; conversion failure or a non-finite result → `"n/a"`. 3. Delegate to the impl 00 formatter with the converted value and `fmt`. |
 | Side effects | None. |
@@ -466,7 +466,7 @@ Returns `list[EvidenceEntry]` in `collector.ordered_ids()` order.
 
 | Parameter | Type | Default | Kind | Constraints |
 |-----------|------|---------|------|-------------|
-| `run` | the row returned by `X:06/herness.store.ops.get_run` | — | pos | status `done` or `partial` |
+| `run` | the row returned by `T06-05 (herness.store.ops.get_run)` | — | pos | status `done` or `partial` |
 | `draft` | `ReportDraft` | — | pos | passed U09-08 |
 | `wh_con` | `duckdb.DuckDBPyConnection` | — | kw | read-only, `wh-<draft.build_id>` |
 | `collector` | `EvidenceCollector` | — | kw | empty on entry |
@@ -483,7 +483,7 @@ Returns `ReportData` (frozen dataclass; all text already split into `Segment` li
 | 0 Header | `meta.build` row for `build_id`; `data_as_of` = max of the ISO timestamps in `source_watermarks` (NULL or empty → `None`); coverage and `verification` from the draft |
 | 1 Banners | U09-16 |
 | 2 Executive summary | draft section `executive_summary` paragraphs. When `draft.mode == "findings_only"` (R-49) the draft has no Writer paragraphs: this slot instead lists the run's verified findings (`ui_list_run_findings(run.run_id, status="verified")`, U09-52), one text block per finding segmented from its `claim` with its `numbers` (U09-17), in `created_at` order, under the heading "Verified findings" |
-| 3 Recommendations | Cards for draft items of kind `fund` (funding review) or `org_action` (org review), in `rank` order. Fund card extras from `score.funding` row where `candidate_id = target_id`: `priority`, `wsjf`, `confidence` (label via U09-12), `unconfirmed`, first `query_ids` entry as link for each value. Table: `score.funding` ordered by `rank` limit `top_n`; chart `bar_h` of `priority` (labels = `title` passed through `X:10/herness.core.redact.redact_text`). Org: `score.org` rows for the entity type of the first `ranked_entities` item (default `team`), one row per entity with its `composite` and `rank` (`metric = 'composite'` rows when present, else the minimum `rank` per entity), top `top_n` by `rank`; chart `dot_z` of `z_score` per metric for those entities |
+| 3 Recommendations | Cards for draft items of kind `fund` (funding review) or `org_action` (org review), in `rank` order. Fund card extras from `score.funding` row where `candidate_id = target_id`: `priority`, `wsjf`, `confidence` (label via U09-12), `unconfirmed`, first `query_ids` entry as link for each value. Table: `score.funding` ordered by `rank` limit `top_n`; chart `bar_h` of `priority` (labels = `title` passed through `T10-10 (herness.core.redact.redact_text)`). Org: `score.org` rows for the entity type of the first `ranked_entities` item (default `team`), one row per entity with its `composite` and `rank` (`metric = 'composite'` rows when present, else the minimum `rank` per entity), top `top_n` by `rank`; chart `dot_z` of `z_score` per metric for those entities |
 | 4 Portfolio | First each `draft.portfolio_custom[i]` (validated into `_PortfolioCustom`: `scenario` (str, or object with `name`), `budget_usd`, `solver_status`, `rows[]` with `candidate_id`, `selected`, `order_rank`, `expected_impact_usd`, `query_ids[]`; unknown extra keys ignored; a missing key → `ReportContractError` at `portfolio_custom[i].<key>`); cells link to `query_ids[0]`, and every id in its `query_ids` is registered. Then each `score.portfolio` scenario ordered by `budget_usd`: rows with `selected = true` by `order_rank`. Chart `step_budget` per block using cumulative `score.funding.effort_cost_usd` (joined by `candidate_id`) on x and cumulative `expected_impact_usd` on y |
 | 5 Org scorecards | Entities: `ranked_entities` with `entity_type` in (`team`, `service`, `org`); when none, the top `top_n` teams of `score.org` by `rank`. Per entity: `score.org` rows (metric, value, `peer_group`, `peer_median`, `z_score`, `sample_size`, `composite`, `rank`, `flags`), and a `sparkline` of `metrics.metric_value.value` for the last 8 `period = 'month'` rows per metric ordered by `period_start` |
 | 6 Actions | `score.action_lever` ordered by `delta_usd DESC` limit `top_n`; `rationale` = `rationale_template` with placeholders `{name}` (regex `\{([a-z_][a-z0-9_]{0,40})\}`) replaced by `template_params[name]` formatted with `format_value(value, "plain")`, unknown names left as written; draft `action_levers` linked to their card anchors `rec-<rank>` |
@@ -563,7 +563,7 @@ Returns `list[Segment]`; `Segment` = frozen dataclass `kind: Literal["text", "nu
 | Preconditions | Markers resolve (U09-08 passed). |
 | Postconditions | Concatenating segment texts with markers replaced by formatted numbers equals the display text. |
 | Invariants | Not applicable. |
-| Algorithm | 1. Collect cut points from the markers found by the marker parser of `X:00/herness.core.numbers` and from the `uncited` spans; spans never overlap markers because the shared scanner masks markers (R-16). 2. Walk the text left to right emitting `text` segments for literal runs, `number` segments for markers (`text` = the `X:00/herness.core.numbers` formatting of `ref`, `query_id = ref.query_id`, or `query_id = None` when the formatted value is `n/a`), and `uncited` segments for spans. |
+| Algorithm | 1. Collect cut points from the markers found by the marker parser of `T00-16 (herness.core.numbers)` and from the `uncited` spans; spans never overlap markers because the shared scanner masks markers (R-16). 2. Walk the text left to right emitting `text` segments for literal runs, `number` segments for markers (`text` = the `T00-16 (herness.core.numbers)` formatting of `ref`, `query_id = ref.query_id`, or `query_id = None` when the formatted value is `n/a`), and `uncited` segments for spans. |
 | Side effects | None. |
 | Errors | Marker without `NumberRef` → `ReportContractError` (defensive; unreachable after U09-08). |
 | Concurrency | Pure. |
@@ -742,8 +742,8 @@ Returns `ReportManifest`.
 | Preconditions | Run exists and is `done` or `partial`; `draft.json` present. |
 | Postconditions | Files per §4.2 of this spec in `out_dir`; `manifest.json` written last; returned manifest equals the file content. |
 | Invariants | Idempotent: same inputs and `now` → byte-identical files. |
-| Algorithm | See flow F09-01 (§5): validate `run_id` and `formats` (unknown format → `ConfigError`); load run via `X:06/herness.store.ops.get_run` (None → `NotFound("run <run_id> not found")`, R-19); status gate; `load_draft`; resolve `out_dir` (when `out_dir` is given, it is resolved, created with parents, and must not be a symlink); remove leftover `*.tmp` in `out_dir`; open the run's warehouse read-only via `X:02/herness.store.warehouse.open_readonly(build_id)` (missing or retired file → `ReportContractError` with message "Build `<id>` used by this run was deleted by retention." and hint "Re-run the review: `herness report funding`."); `check_render_contract`; `scan_draft_uncited`; strict and hits → `ReportContractError(f"{n} numbers in the draft have no evidence")` with `details.where`; `load_report_data`; `load_evidence_entries`; render `<kind>.html.j2` and `<kind>.md.j2` with the context `r` (the `ReportData`, evidence entries, manifest fields); PDF via U09-26 when requested; `_write_outputs`; compute `numbers_linked` = count of `number_query_ids` whose entry has `found=True`; warnings: evidence not found ids, `report.html exceeds 5 MB` when its size > 5,242,880 bytes; log and record metrics. |
-| Side effects | Files in `out_dir` only; reads ops and warehouse; log `reports.render.completed`; metrics `herness_reports_render_seconds`, `herness_reports_renders_total`, `herness_reports_uncited_total` through `X:08/herness.store.ops.metrics.record_metric_samples` (R-12). |
+| Algorithm | See flow F09-01 (§5): validate `run_id` and `formats` (unknown format → `ConfigError`); load run via `T06-05 (herness.store.ops.get_run)` (None → `NotFound("run <run_id> not found")`, R-19); status gate; `load_draft`; resolve `out_dir` (when `out_dir` is given, it is resolved, created with parents, and must not be a symlink); remove leftover `*.tmp` in `out_dir`; open the run's warehouse read-only via `T02-09 (herness.store.warehouse.open_readonly)(build_id)` (missing or retired file → `ReportContractError` with message "Build `<id>` used by this run was deleted by retention." and hint "Re-run the review: `herness report funding`."); `check_render_contract`; `scan_draft_uncited`; strict and hits → `ReportContractError(f"{n} numbers in the draft have no evidence")` with `details.where`; `load_report_data`; `load_evidence_entries`; render `<kind>.html.j2` and `<kind>.md.j2` with the context `r` (the `ReportData`, evidence entries, manifest fields); PDF via U09-26 when requested; `_write_outputs`; compute `numbers_linked` = count of `number_query_ids` whose entry has `found=True`; warnings: evidence not found ids, `report.html exceeds 5 MB` when its size > 5,242,880 bytes; log and record metrics. |
+| Side effects | Files in `out_dir` only; reads ops and warehouse; log `reports.render.completed`; metrics `herness_reports_render_seconds`, `herness_reports_renders_total`, `herness_reports_uncited_total` through `T08-05 (herness.store.ops.metrics.record_metric_samples)` (R-12). |
 | Errors | Table below. Any `jinja2.TemplateError` → `SchemaViolation`. |
 | Concurrency | Two renders of the same `run_id` at once: each writes its own `*.tmp` names (suffix `.<pid>.<ulid>.tmp`) and `os.replace` makes the last writer win with complete files; no lock. |
 | Complexity and limits | Target < 30 s for ≤ 300 evidence entries (BT09-05). |
@@ -906,7 +906,7 @@ The dashboard and the CLI call the same action functions, so every write path ru
 | Parameter | Type | Default | Kind | Constraints |
 |-----------|------|---------|------|-------------|
 | `username` | `str \| None` | — | pos | identity from the OS or the trusted header |
-| `roles` | `UiRolesConfig` (X:10 `cfg.security.ui.roles`) | — | pos | |
+| `roles` | `RolesConfig` (T10-01 (herness.core.settings.RolesConfig), `cfg.security.ui.roles`) | — | pos | |
 
 Returns `Role`.
 
@@ -930,7 +930,7 @@ Returns `Role`.
 | Function | Signature | Behavior |
 |----------|-----------|----------|
 | `user_ref_for` | `(username: str, key: bytes) -> str` | `hex(HMAC-SHA256(key, username.strip().lower() as UTF-8))[:32]` |
-| `load_user_ref_key` | `() -> bytes` | `X:10/herness.core.secrets.resolve("ui_user_ref_key").get_secret_value().encode("utf-8")`, cached per process (reset by the config fixture) |
+| `load_user_ref_key` | `() -> bytes` | `T10-06 (herness.core.secrets.resolve)("ui_user_ref_key").get_secret_value().encode("utf-8")`, cached per process (reset by the config fixture) |
 
 | Field | Content |
 |-------|---------|
@@ -965,7 +965,7 @@ Returns `None`.
 | Invariants | Not applicable. |
 | Algorithm | 1. Unknown action → `ConfigError("unknown action <action>")`. 2. Allowed → return. 3. Refused → `audit("auth", actor.user_ref, user_ref=actor.user_ref, role=actor.role, result="denied", action=action)`; log `app.auth.denied` (WARNING: `user_ref`, `role`, `action`, `channel`); metric `herness_app_auth_denied_total{channel}`; raise `PermissionDenied(f"You need the {needed} role to {phrase}.")` with hint `Ask an admin to add you to security.ui.roles.<admins or reviewers>.` When `audit` itself raises, the error is logged (`app.auth.audit_failed`, ERROR) and `PermissionDenied` is still raised. |
 | Side effects | Audit line and log on refusal. |
-| Errors | `PermissionDenied` (CLI exit 1, R-46; `error.type` names the class); `ConfigError` for an unknown action. |
+| Errors | `PermissionDenied` (CLI exit 11, R-46; `error.type` names the class); `ConfigError` for an unknown action. |
 | Concurrency | Thread-safe. |
 | Complexity and limits | O(1). |
 | Security notes | TH09-07, TH09-08, TH09-19, TH09-27. |
@@ -1014,7 +1014,7 @@ Returns `None`.
 | Preconditions | Actor established. |
 | Postconditions | `start_session`: new `chat_session` row owned by `actor.user_ref`. `post_user_message`: one new `chat_message` row, `role = 'user'`, `content` = redacted text; session `last_active_at = now`; title set if it was NULL. |
 | Invariants | The UI never inserts assistant rows (design §3.3). |
-| Algorithm | `start_session`: 1. `require_role(actor, "chat")`. 2. `retry_call("sqlite_write", create_chat_session, actor.user_ref, now=now)` (X:08). `post_user_message`: 1. `require_role(actor, "chat")`. 2. `validate_question(text, max_chars=max_chars)`. 3. `require_session_owner(actor, session_id)`. 4. `redacted = X:10/herness.core.redact.redact_text(text)`; if redaction raises, raise `PolicyViolation("Your message could not be processed safely.")` from it (fail closed: raw text is never stored). 5. `message_id = retry_call("sqlite_write", append_chat_message, session_id, "user", redacted, now=now)`; `None` → `NotFound("chat session <id> not found")`. 6. Log `app.chat.message_posted` (INFO: `session_id`, `message_id`, `chars`, `channel`). |
+| Algorithm | `start_session`: 1. `require_role(actor, "chat")`. 2. `retry_call("sqlite_write", create_chat_session, actor.user_ref, now=now)` (T08-07 (herness.core.resilience.retry_call)). `post_user_message`: 1. `require_role(actor, "chat")`. 2. `validate_question(text, max_chars=max_chars)`. 3. `require_session_owner(actor, session_id)`. 4. `redacted = T10-10 (herness.core.redact.redact_text)(text)`; if redaction raises, raise `PolicyViolation("Your message could not be processed safely.")` from it (fail closed: raw text is never stored). 5. `message_id = retry_call("sqlite_write", append_chat_message, session_id, "user", redacted, now=now)`; `None` → `NotFound("chat session <id> not found")`. 6. Log `app.chat.message_posted` (INFO: `session_id`, `message_id`, `chars`, `channel`). |
 | Side effects | Ops writes; log. |
 | Errors | `PermissionDenied`, `UserInputError`, `NotFound`, `PolicyViolation`, `StoreBusy` after retries. |
 | Concurrency | Called from the Streamlit script thread or the CLI main thread. |
@@ -1057,10 +1057,10 @@ Returns `None`.
 | `statement` | `str` | — | kw | 1–1000 chars |
 | `entity` | `tuple[Literal["service","team","org","work_item","cluster"], str] \| None` | `None` | kw | entity id ≤ 200 chars |
 | `source_message_id` | `str` | — | kw | `MESSAGE_ID_RE`; a `user` row of `session_id` (R-33; impl 07 TH07-22) |
-| `memory` | `MemoryStore` (X:07) | — | kw | |
+| `memory` | `MemoryStore` (T07-23 (herness.harness.memory.MemoryStore)) | — | kw | |
 | `build_id` | `str \| None` | `None` | kw | current build when known |
 
-Returns `ProposeResult` (X:07).
+Returns `ProposeResult` (T07-01 (herness.harness.memory.types.ProposeResult)).
 
 The dashboard form of U09-83 and the terminal `/correct` command both carry `session_id` and `source_message_id` (R-33): the dashboard passes the `meta.reply_to` of the assistant row being corrected; the terminal passes the latest user row of the session. This explicit path is separate from the automatic capture that runs after an answer is sent (R-32, impl 07 `capture_correction`), whose result the UI shows through the `correction_captured` event (U09-69).
 
@@ -1099,7 +1099,7 @@ Returns `None`.
 | Preconditions | Recommendation exists. |
 | Postconditions | One `recommendation_decision` audit line written, then `MemoryStore.decide(rec_id, decision, reason, actor.user_ref, effective_at_dt)` called once. |
 | Invariants | Not applicable. |
-| Algorithm | 1. `require_role(actor, "decide_recommendation")`. 2. `check_id(REC_ID_RE, …)`; `validate_reason`. 3. `ui_get_recommendation(rec_id)` (U09-52) `None` → `NotFound`. 4. `effective_at_dt = datetime.combine(effective_at, time(0), UTC)` when given. 5. `X:10/herness.core.audit.audit("recommendation_decision", actor.user_ref, rec_id=rec_id, decision=decision, reason_len=len(reason))`; an audit failure propagates and nothing is recorded (impl 07 U07-82 assigns this line to spec 09; OI-06). 6. `memory.decide(...)`. 7. Log `app.action.completed` (INFO: `action="decide_recommendation"`, `rec_id`, `decision`, `channel`). |
+| Algorithm | 1. `require_role(actor, "decide_recommendation")`. 2. `check_id(REC_ID_RE, …)`; `validate_reason`. 3. `ui_get_recommendation(rec_id)` (U09-52) `None` → `NotFound`. 4. `effective_at_dt = datetime.combine(effective_at, time(0), UTC)` when given. 5. `T10-05 (herness.core.audit.audit)("recommendation_decision", actor.user_ref, rec_id=rec_id, decision=decision, reason_len=len(reason))`; an audit failure propagates and nothing is recorded (impl 07 U07-82 assigns this line to spec 09; OI-06). 6. `memory.decide(...)`. 7. Log `app.action.completed` (INFO: `action="decide_recommendation"`, `rec_id`, `decision`, `channel`). |
 | Side effects | Audit line; `decision_log` row and `decision_note` item (spec 07). |
 | Errors | `PermissionDenied`, `UserInputError`, `NotFound`, `FatalError` or `StoreBusy` from the audit write, errors from spec 07 (`MemoryNotFound`, `ToolInputError`, `StoreBusy`). |
 | Concurrency | As U09-34. |
@@ -1126,9 +1126,9 @@ Returns `Literal["approved", "rejected"]`.
 | Kind | function |
 | Purpose | Approve or reject a `review_item` (design §5.4 Review Queue; CLI `review-queue approve/reject`). |
 | Preconditions | Item exists and is `pending`. |
-| Postconditions | `memory_write` → `MemoryStore.approve/reject`, which also decides the linked review item in the same transaction (R-33); other kinds → `X:02/herness.store.ops.shared.decide_review_item` (R-08, R-33). |
+| Postconditions | `memory_write` → `MemoryStore.approve/reject`, which also decides the linked review item in the same transaction (R-33); other kinds → `T02-07 (herness.store.ops.shared.decide_review_item)` (R-08, R-33). |
 | Invariants | Not applicable. |
-| Algorithm | 1. `check_id`. 2. `item = X:02/herness.store.ops.shared.get_review_item(item_id)` (raises `NotFound`). 3. `item.status != "pending"` → `UserInputError("Item <id> was already <status>.")`. 4. `action = "review_decide_weight_change"` when `item.kind == "weight_change"`, `"memory_decide"` when `memory_write`, else `"review_decide"`; `require_role(actor, action)`. 5. `note = validate_note(note, required=not approve, max_chars=500 if (approve and item.kind == "memory_write") else 1000)`. 6. `memory_write`: `memory_id = item.payload["memory_id"]` (missing → `SchemaViolation("review item <id> has no memory_id")`); approve → `memory.approve(memory_id, actor.user_ref, note)`; reject → `memory.reject(memory_id, actor.user_ref, note)`; impl 07 `PolicyViolation` with rule `approve.not_pending` or `reject.not_pending` → `UserInputError("Item <id> is no longer pending.")`. 7. `label_check` approve: `answer = validate_answer(answer)` (missing → `UserInputError("Choose the correct answer to approve a label check.")`); stored note = canonical JSON `{"answer": answer}` (spec 03 §4.6). 8. Other kinds: `status = "approved" if approve else "rejected"`; `retry_call("sqlite_write", decide_review_item, item_id, status, decided_by=actor.user_ref, note=stored_note, now=now)`; impl 02 `ReviewItemConflict` → `UserInputError("Item <id> was already decided.")`; `NotFound` propagates. 9. Log `app.action.completed` (`action`, `item_id`, `kind`, `status`, `channel`). |
+| Algorithm | 1. `check_id`. 2. `item = T02-07 (herness.store.ops.shared.get_review_item)(item_id)` (raises `NotFound`). 3. `item.status != "pending"` → `UserInputError("Item <id> was already <status>.")`. 4. `action = "review_decide_weight_change"` when `item.kind == "weight_change"`, `"memory_decide"` when `memory_write`, else `"review_decide"`; `require_role(actor, action)`. 5. `note = validate_note(note, required=not approve, max_chars=500 if (approve and item.kind == "memory_write") else 1000)`. 6. `memory_write`: `memory_id = item.payload["memory_id"]` (missing → `SchemaViolation("review item <id> has no memory_id")`); approve → `memory.approve(memory_id, actor.user_ref, note)`; reject → `memory.reject(memory_id, actor.user_ref, note)`; impl 07 `PolicyViolation` with rule `approve.not_pending` or `reject.not_pending` → `UserInputError("Item <id> is no longer pending.")`. 7. `label_check` approve: `answer = validate_answer(answer)` (missing → `UserInputError("Choose the correct answer to approve a label check.")`); stored note = canonical JSON `{"answer": answer}` (spec 03 §4.6). 8. Other kinds: `status = "approved" if approve else "rejected"`; `retry_call("sqlite_write", decide_review_item, item_id, status, decided_by=actor.user_ref, note=stored_note, now=now)`; impl 02 `ReviewItemConflict` → `UserInputError("Item <id> was already decided.")`; `NotFound` propagates. 9. Log `app.action.completed` (`action`, `item_id`, `kind`, `status`, `channel`). |
 | Side effects | `review_item` update plus the `review_decision` audit line written by impl 02's `decide_review_item`, or spec 07 memory writes (which call the same function). |
 | Errors | `PermissionDenied`, `UserInputError`, `NotFound`, `SchemaViolation`, `StoreBusy`, `FatalError` (audit failure). |
 | Concurrency | Impl 02 checks `status = 'pending'` inside its write transaction, so exactly one of two concurrent approvals wins; the loser gets `ReviewItemConflict` → `UserInputError`. |
@@ -1153,7 +1153,7 @@ Returns `str`: for cancel the spec 08 result (`canceled`, `cancel_requested`, `n
 | Preconditions | Job exists. |
 | Postconditions | Spec 08 `jobs.cancel` or `jobs.retry` called once after the audit line is written. |
 | Invariants | Not applicable. |
-| Algorithm | 1. `require_role(actor, "job_cancel" or "job_retry")`. 2. `check_id`. 3. `ui_job_exists(job_id)` (U09-52) false → `NotFound`. 4. `audit("admin_action", actor.user_ref, action="job_cancel" or "job_retry", target=job_id)` (DD-19); an audit failure propagates and nothing else happens. 5. Call `X:08/herness.core.jobs.cancel(job_id)` or `X:08/herness.core.jobs.retry(job_id)`. 6. Log `app.action.completed`. |
+| Algorithm | 1. `require_role(actor, "job_cancel" or "job_retry")`. 2. `check_id`. 3. `ui_job_exists(job_id)` (U09-52) false → `NotFound`. 4. `audit("admin_action", actor.user_ref, action="job_cancel" or "job_retry", target=job_id)` (DD-19); an audit failure propagates and nothing else happens. 5. Call `T08-12 (herness.core.jobs.cancel)(job_id)` or `T08-12 (herness.core.jobs.retry)(job_id)`. 6. Log `app.action.completed`. |
 | Side effects | Audit line; job state change (spec 08). |
 | Errors | `PermissionDenied`, `UserInputError`, `NotFound`, `FatalError` (audit), spec 08 errors. |
 | Concurrency | Spec 08 functions are safe across processes. |
@@ -1179,7 +1179,7 @@ Returns `str` (`job_id`).
 | Preconditions | Run exists. |
 | Postconditions | One `review` job exists with `idem_key = resume:<run_id>` (spec 08 §4.1); a second call while it is queued or running returns the same `job_id`. |
 | Invariants | Not applicable. |
-| Algorithm | 1. `require_role(actor, "run_resume")`. 2. Validate `run_id`. 3. `get_run(run_id)` (X:06) `None` → `NotFound`. 4. Audit `admin_action` with `action="run_resume"`, `target=run_id`. 5. `res = X:08/herness.core.jobs.enqueue_resume(run_id, force=force, retry_dead=retry_dead)` (impl 08 builds the payload, priority and `idem_key`; R-09). 6. `res.job_id is None` (run already finished and not `force`) → `UserInputError("Run <run_id> is already <res.run_status>; use --force to resume it.")`. 7. Return `res.job_id`. |
+| Algorithm | 1. `require_role(actor, "run_resume")`. 2. Validate `run_id`. 3. `get_run(run_id)` (T06-05 (herness.store.ops.runs.get_run)) `None` → `NotFound`. 4. Audit `admin_action` with `action="run_resume"`, `target=run_id`. 5. `res = T08-22 (herness.core.jobs.enqueue_resume)(run_id, force=force, retry_dead=retry_dead)` (impl 08 builds the payload, priority and `idem_key`; R-09). 6. `res.job_id is None` (run already finished and not `force`) → `UserInputError("Run <run_id> is already <res.run_status>; use --force to resume it.")`. 7. Return `res.job_id`. |
 | Side effects | Audit; job row. |
 | Errors | `PermissionDenied`, `UserInputError`, `NotFound`, `FatalError` (audit), impl 08 `JobStateError` (chat runs). |
 | Concurrency | Idempotent through `idem_key`. |
@@ -1247,7 +1247,7 @@ Returns `ChatSessionRow`.
 | `memory_id` | `str` | — | kw | `MEMORY_ID_RE` |
 | `approve` | `bool` | — | kw | |
 | `note` | `str \| None` | `None` | kw | ≤ 500 chars to approve, 1–1000 chars (required) to reject |
-| `memory` | `MemoryStore` (X:07) | — | kw | |
+| `memory` | `MemoryStore` (T07-23 (herness.harness.memory.MemoryStore)) | — | kw | |
 
 Returns `Literal["approved", "rejected"]`.
 
@@ -1268,7 +1268,7 @@ Returns `Literal["approved", "rejected"]`.
 
 ### 3.8 Ops-store functions owned here (`herness/store/ops/`)
 
-These functions live in the two areas this spec owns, `herness/store/ops/chat.py` and `herness/store/ops/ui_reads.py` (R-08), and follow impl 02's ops conventions: one SQLite connection per thread from `X:02/herness.store.ops.connection`, write transactions opened with `BEGIN IMMEDIATE` through `X:02/herness.store.ops.run_write` (R-10), reads through `read_one` and `read_all`, JSON through `dump_json` and `load_json`, timestamps in the fixed-width text of spec 00 §8. They raise only `StoreBusy` (from `SQLITE_BUSY` after `busy_timeout`) and `SchemaViolation` (constraint misuse). Not-found is reported by return values so each caller chooses its message; `NotFound` (impl 00, R-19) is raised by the callers in `herness.reports.actions`. Review-item functions are impl 02's (`herness.store.ops.shared`, R-08); U09-51 is removed.
+These functions live in the two areas this spec owns, `herness/store/ops/chat.py` and `herness/store/ops/ui_reads.py` (R-08), and follow impl 02's ops conventions: one SQLite connection per thread from `T02-04 (herness.store.ops.connection)`, write transactions opened with `BEGIN IMMEDIATE` through `T02-04 (herness.store.ops.run_write)` (R-10), reads through `read_one` and `read_all`, JSON through `dump_json` and `load_json`, timestamps in the fixed-width text of spec 00 §8. They raise only `StoreBusy` (from `SQLITE_BUSY` after `busy_timeout`) and `SchemaViolation` (constraint misuse). Not-found is reported by return values so each caller chooses its message; `NotFound` (impl 00, R-19) is raised by the callers in `herness.reports.actions`. Review-item functions are impl 02's (`herness.store.ops.shared`, R-08); U09-51 is removed.
 
 #### U09-43 herness/store/migrations/090_chat.sql
 
@@ -1276,7 +1276,7 @@ These functions live in the two areas this spec owns, `herness/store/ops/chat.py
 |-------|---------|
 | Kind | SQL file |
 | Purpose | Add the index that exists only in this implementation spec: one assistant row per `meta.reply_to` (R-11). The tables `chat_session` and `chat_message` and their indexes `chat_session_user`, `chat_session_active` and `chat_message_session` are created by impl 02 migration `005_review_chat_privacy.sql`. |
-| Preconditions | Migration 005 applied; applied by `X:02/herness.store.ops.migrate` in numeric order, in a transaction, and recorded in `schema_migration`. |
+| Preconditions | Migration 005 applied; applied by `T02-05 (herness.store.ops.migrate)` in numeric order, in a transaction, and recorded in `schema_migration`. |
 | Postconditions | Index `chat_message_reply` and column `chat_session.summary_through_message_id` exist (§4.1). |
 | Invariants | Forward-only; the file is in this spec's range 090–099 (R-11). |
 | Algorithm | Two statements, both for objects that exist only in this implementation spec (R-11): 1. `CREATE UNIQUE INDEX IF NOT EXISTS chat_message_reply ON chat_message(session_id, json_extract(meta, '$.reply_to')) WHERE role = 'assistant'` (OI-03 resolved by R-11). 2. `ALTER TABLE chat_session ADD COLUMN summary_through_message_id TEXT` (nullable; the last message the rolling summary covers, used by U09-109). No `CREATE TABLE`. |
@@ -1584,7 +1584,7 @@ Signature: `get_services() -> AppServices`, decorated with `st.cache_resource` (
 | Preconditions | Process started by `herness ui` (U09-93), which sets environment `HERNESS_CONFIG_DIR`, `HERNESS_DATA_DIR`, `HERNESS_PROFILE` and `HERNESS_SET_OVERRIDES` (JSON list of `--set` strings, `[]` when none). |
 | Postconditions | Socket guard installed before any other import that may open a socket; config loaded; services built. |
 | Invariants | The socket guard is installed once per process (a module flag guarded by a `threading.Lock`; listed as an ENG §2.3 exception). |
-| Algorithm | 1. Read the four environment variables; `HERNESS_SET_OVERRIDES` must parse as a JSON list of strings, else `ConfigError`. 2. `X:10/herness.core.egress_socket.install_socket_guard` with the bootstrap config from `X:10/herness.core.config_sources.load_bootstrap` (design 10 §5.1 step 1). 3. `cfg = X:10/herness.core.config.load_config(profile, overrides, config_dir)`. 4. `X:00/herness.core.logging.configure(component="app")`. 5. Bind the L0 ports (R-04): `X:08/herness.store.ops.resilience.bind_core_backends()`. 6. Start-up validation (R-71): `herness.cli.run_startup_validation(cfg)` (U09-106) runs impl 10's start-up validation hook, which calls the owner validators that need layers above L0 (for example impl 04 `validate_catalog`); an error issue raises `ConfigError`. 7. `memory = X:07/herness.harness.memory.get_memory_store()`. 8. `chat = X:06/herness.harness.pipelines.chat.ChatService(cfg.pipelines, <the herness.store.ops module, which replaces OpsStore per R-10>, X:05/herness.harness.llm.LLMRegistry for cfg.profile, memory)`. 9. `roster = build_roster(cfg.security.ui.roles, load_user_ref_key())`. 10. `queries = load_named_queries(<app>/common/queries.sql.yaml)` then `check_forbidden_columns(queries)`; any violation → `ConfigError("named query <name> reads raw ticket text")`. |
+| Algorithm | 1. Read the four environment variables; `HERNESS_SET_OVERRIDES` must parse as a JSON list of strings, else `ConfigError`. 2. `T10-18 (herness.core.egress_socket.install_socket_guard)` with the bootstrap config from `T10-02 (herness.core.config_sources.load_bootstrap)` (design 10 §5.1 step 1). 3. `cfg = T10-03 (herness.core.config.load_config)(profile, overrides, config_dir)`. 4. `T00-07 (herness.core.logging.configure_logging)(cfg.logging.level, log_dir=cfg.paths.logs, scrubber=T10-07 (herness.core.secrets.scrub_secrets), stderr=True)`. 5. Bind the L0 ports (R-04): `T08-23 (herness.store.ops.resilience.bind_core_backends)()`. 6. Start-up validation (R-71): `herness.cli.run_startup_validation(cfg)` (U09-106) runs impl 10's start-up validation hook, which calls the owner validators that need layers above L0 (for example impl 04 `validate_catalog`); an error issue raises `ConfigError`. 7. `memory = T07-23 (herness.harness.memory.get_memory_store)()`. 8. `chat = T06-25 (herness.harness.pipelines.chat.ChatService)(cfg.pipelines, <the herness.store.ops module, which replaces OpsStore per R-10>, T05-10 (herness.harness.llm.LLMRegistry) for cfg.profile, memory)`. 9. `roster = build_roster(cfg.security.ui.roles, load_user_ref_key())`. 10. `queries = load_named_queries(<app>/common/queries.sql.yaml)` then `check_forbidden_columns(queries)`; any violation → `ConfigError("named query <name> reads raw ticket text")`. |
 | Side effects | Socket guard, config snapshot and `config_change` audit (spec 10), port binding, log configuration. |
 | Errors | `ConfigError` (shown by U09-65 with its fix). |
 | Concurrency | `st.cache_resource` builds once; the objects are shared across sessions and must be thread-safe (`ChatService` per spec 06, `MemoryStore` per spec 07, config immutable). |
@@ -1598,7 +1598,7 @@ Signature: `get_services() -> AppServices`, decorated with `st.cache_resource` (
 |-----------|------|---------|------|-------------|
 | `headers` | `Mapping[str, str]` | — | pos | request headers of the websocket session |
 | `remote_ip` | `str \| None` | — | pos | peer address seen by Streamlit, `None` when unknown |
-| `ui` | `UiConfig` (X:10 `cfg.security.ui`) | — | pos | |
+| `ui` | `UiConfig` (T10-01 (herness.core.settings.UiConfig), `cfg.security.ui`) | — | pos | |
 | `os_user` | `str` | — | pos | `getpass.getuser()` of the dashboard process |
 
 Returns `Identity` (frozen dataclass: `username: str | None`, `source: Literal["os", "header", "none"]`, `reason: str | None`).
@@ -1706,7 +1706,7 @@ Signature: `escape_markdown_chunk(text: str) -> str`.
 
 | Function | Signature | Behavior |
 |----------|-----------|----------|
-| `render_answer_markdown` | `(content: str, numbers: Sequence[NumberRef]) -> str` | For stored assistant text where numbers are already plain (design §4.4): for each `NumberRef` in ascending numeric id order, find the first occurrence of its `X:00/herness.core.numbers` formatting (R-16) in `content` that does not overlap an already chosen span; sort chosen spans by position; emit `safe_markdown(literal piece)` for text between spans and `[<escaped display>](#ev-<query_id>)` for each span. Numbers not found are not linked (they remain in the evidence expander). |
+| `render_answer_markdown` | `(content: str, numbers: Sequence[NumberRef]) -> str` | For stored assistant text where numbers are already plain (design §4.4): for each `NumberRef` in ascending numeric id order, find the first occurrence of its `T00-16 (herness.core.numbers)` formatting (R-16) in `content` that does not overlap an already chosen span; sort chosen spans by position; emit `safe_markdown(literal piece)` for text between spans and `[<escaped display>](#ev-<query_id>)` for each span. Numbers not found are not linked (they remain in the evidence expander). |
 | `render_marked_markdown` | `(text: str, numbers: Sequence[NumberRef]) -> str` | For model text that still has `[[nX]]` markers (finding claims, recommendation summaries): `segment_text(text, numbers)` (U09-17), then `safe_markdown` on text segments and `[<escaped display>](#ev-<query_id>)` on number segments; a marker without a `NumberRef` renders as `[unresolved]`. |
 
 | Field | Content |
@@ -1728,7 +1728,7 @@ Signature: `escape_markdown_chunk(text: str) -> str`.
 
 | Function | Signature | Behavior |
 |----------|-----------|----------|
-| `current_build_id` | `(data_dir: Path) -> str` | Read the pointer through `X:02/herness.store.warehouse.read_current(data_dir)`; strip; must match `^\d{8}-\d{6}-[0-9A-HJKMNP-TV-Z]{6}$`; missing or invalid → `NoCurrentBuild` |
+| `current_build_id` | `(data_dir: Path) -> str` | Read the pointer through `T02-09 (herness.store.warehouse.read_current)(data_dir)`; strip; must match `^\d{8}-\d{6}-[0-9A-HJKMNP-TV-Z]{6}$`; missing or invalid → `NoCurrentBuild` |
 | `get_conn` | `() -> tuple[str, duckdb.DuckDBPyConnection]` | Per-session recheck and a per-process connection pool |
 | `NoCurrentBuild(ConfigError)` | exception | "No promoted warehouse yet." Fix "Run `herness pipeline`." |
 
@@ -1739,7 +1739,7 @@ Signature: `escape_markdown_chunk(text: str) -> str`.
 | Preconditions | Services built. |
 | Postconditions | Returned connection is read-only for the build named in `CURRENT` as last checked. |
 | Invariants | At most one open connection per build per process; connections to non-current builds close 300 s after they stop being current. |
-| Algorithm | 1. Session state keys `wh_build_id`, `wh_checked_at`. 2. When absent or `now − wh_checked_at ≥ cfg.app.app.current_recheck_s`: re-read `current_build_id`; set `wh_checked_at = now`; when the id changed and a previous id existed, show `st.toast(f"Data refreshed to build {id}")` and log `app.warehouse.switched` (INFO: `old_build_id`, `new_build_id`). 3. The pool (an object in `st.cache_resource`, holding `dict[build_id, (conn, last_current_at)]` behind a `threading.Lock`) opens a connection with `X:02/herness.store.warehouse.open_readonly(build_id)` and then runs `SET enable_external_access = false` and `SET lock_configuration = true` (setting names per open-questions item 4). 4. On each call, the pool closes connections whose build is not current and whose `last_current_at` is more than 300 s old. 5. Return `(build_id, conn)`. |
+| Algorithm | 1. Session state keys `wh_build_id`, `wh_checked_at`. 2. When absent or `now − wh_checked_at ≥ cfg.app.app.current_recheck_s`: re-read `current_build_id`; set `wh_checked_at = now`; when the id changed and a previous id existed, show `st.toast(f"Data refreshed to build {id}")` and log `app.warehouse.switched` (INFO: `old_build_id`, `new_build_id`). 3. The pool (an object in `st.cache_resource`, holding `dict[build_id, (conn, last_current_at)]` behind a `threading.Lock`) opens a connection with `T02-09 (herness.store.warehouse.open_readonly)(build_id)` and then runs `SET enable_external_access = false` and `SET lock_configuration = true` (setting names per open-questions item 4). 4. On each call, the pool closes connections whose build is not current and whose `last_current_at` is more than 300 s old. 5. Return `(build_id, conn)`. |
 | Side effects | Opens and closes DuckDB files read-only. |
 | Errors | `NoCurrentBuild`; open failure (file retired between check and open) → `NoCurrentBuild` after one re-read of `CURRENT`. |
 | Concurrency | Pool lock guards the dict; queries use `conn.cursor()` per call so sessions never share a cursor. |
@@ -1844,7 +1844,7 @@ Every query below is a parameterised `SELECT` over `meta`, `score`, `metrics`, `
 
 | Function | Signature | Behavior |
 |----------|-----------|----------|
-| `ops_read` | `(fn_name: str, **params) -> object` | Allowlisted names: the U09-52 functions, impl 02's `list_review_items` and `get_review_item` (X:02, R-08) and `status_snapshot` (X:08); cached with `st.cache_data(ttl=cfg.app.app.cache_ttl_s.ops, max_entries=500)` keyed on `(fn_name, params)`; unknown name → `ConfigError`. Chat reads (U09-49) are never routed here and never cached |
+| `ops_read` | `(fn_name: str, **params) -> object` | Allowlisted names: the U09-52 functions, impl 02's `list_review_items` and `get_review_item` (T02-07 (herness.store.ops.shared.list_review_items, herness.store.ops.shared.get_review_item), R-08) and `status_snapshot` (T08-22 (herness.core.jobs.status_snapshot)); cached with `st.cache_data(ttl=cfg.app.app.cache_ttl_s.ops, max_entries=500)` keyed on `(fn_name, params)`; unknown name → `ConfigError`. Chat reads (U09-49) are never routed here and never cached |
 | `after_write` | `() -> None` | `ops_read.clear()` (design §5.3: ops caches are cleared after the session writes) |
 | `read_trace_page` | `(run_id: str, *, type_filter: str \| None, page: int, include_payload: bool) -> TracePage` | See algorithm |
 
@@ -2031,7 +2031,7 @@ Returns `TurnState`.
 | Preconditions | No other turn in flight for the session. |
 | Postconditions | Exactly one user row inserted when `text` is given, zero when retrying; zero assistant rows and zero jobs created by the UI. |
 | Invariants | `st.session_state["chat_inflight"]` (a set of session ids) contains the session while the turn runs. |
-| Algorithm | 1. If the session is in flight → `st.warning("A question is already being answered in this chat.")`; return. 2. Add to the in-flight set. 3. When `text` is given: `posted = post_user_message(ctx.actor, session_id, text, max_chars=cfg.app.chat.max_question_chars, now=ctx.now)`; question text = `posted.redacted_text`. When retrying: `latest_user_message(session_id)`; none → `UserInputError("Nothing to retry.")`; question text = its content. 4. `mode = X:08/herness.core.jobs.chat_policy(now())`; `eta = X:08/herness.core.jobs.chat_next_live_at(now())` when `mode == "defer"`. 5. Inside `st.chat_message("assistant")`: show `mode_banner`; `st.caption("Draft — verifying numbers…")`; a collapsed `st.status("Running queries…")`; `st.write_stream(gen)` where `gen` iterates `ctx.services.chat.answer(session_id, question_text, ctx.actor.user_ref, mode)`, applies every event with `apply_event`, writes tool events into the status box, and yields `escape_markdown_chunk(event.text)` for token events. 6. Record `herness_app_chat_first_token_seconds` at the first token. 7. After the stream: `error` → `st.error` with message and hint and a "Retry" button (key `retry-<session_id>`) that calls `run_turn(ctx, session_id, None)`; `escalated` → `st.info` with the run id and a `st.page_link` to `pages/10_Runs_and_Traces.py`; `defer` → the queued banner stays; `correction_memory_id` set → a separate `st.caption` below the answer with the U09-69 notice (R-32). 8. `finally`: remove from the in-flight set; `after_write()`; log `app.chat.turn_completed` (INFO: `session_id`, `mode`, `final_run_id`, `verification`, `n_evidence`, `latency_ms`) or `app.chat.turn_failed` (WARNING: `session_id`, `error_type`); metric `herness_app_chat_turns_total{mode, result}`; `st.rerun()` so the page reloads the assistant row written by `ChatService`. A `HernessError` raised by the generator itself becomes an `error` state with `user_message(exc)`. |
+| Algorithm | 1. If the session is in flight → `st.warning("A question is already being answered in this chat.")`; return. 2. Add to the in-flight set. 3. When `text` is given: `posted = post_user_message(ctx.actor, session_id, text, max_chars=cfg.app.chat.max_question_chars, now=ctx.now)`; question text = `posted.redacted_text`. When retrying: `latest_user_message(session_id)`; none → `UserInputError("Nothing to retry.")`; question text = its content. 4. `mode = T08-19 (herness.core.jobs.chat_policy)(now())`; `eta = T08-19 (herness.core.jobs.chat_next_live_at)(now())` when `mode == "defer"`. 5. Inside `st.chat_message("assistant")`: show `mode_banner`; `st.caption("Draft — verifying numbers…")`; a collapsed `st.status("Running queries…")`; `st.write_stream(gen)` where `gen` iterates `ctx.services.chat.answer(session_id, question_text, ctx.actor.user_ref, mode)`, applies every event with `apply_event`, writes tool events into the status box, and yields `escape_markdown_chunk(event.text)` for token events. 6. Record `herness_app_chat_first_token_seconds` at the first token. 7. After the stream: `error` → `st.error` with message and hint and a "Retry" button (key `retry-<session_id>`) that calls `run_turn(ctx, session_id, None)`; `escalated` → `st.info` with the run id and a `st.page_link` to `pages/10_Runs_and_Traces.py`; `defer` → the queued banner stays; `correction_memory_id` set → a separate `st.caption` below the answer with the U09-69 notice (R-32). 8. `finally`: remove from the in-flight set; `after_write()`; log `app.chat.turn_completed` (INFO: `session_id`, `mode`, `final_run_id`, `verification`, `n_evidence`, `latency_ms`) or `app.chat.turn_failed` (WARNING: `session_id`, `error_type`); metric `herness_app_chat_turns_total{mode, result}`; `st.rerun()` so the page reloads the assistant row written by `ChatService`. A `HernessError` raised by the generator itself becomes an `error` state with `user_message(exc)`. |
 | Side effects | One user row (U09-34); spec 06 writes the assistant row and, for `defer`, the job. |
 | Errors | `UserInputError`, `PermissionDenied`, `NotFound`, `PolicyViolation` shown by the page. |
 | Concurrency | The generator is consumed on the script thread; spec 06 runs the model loop in its own worker thread. |
@@ -2113,7 +2113,7 @@ Tests: IT09-10, BT09-02, ST09-12. Security notes: TH09-11 (redacted text only), 
 | Block | Data | Controls and behavior |
 |-------|------|-----------------------|
 | Filters | `entities.services`, `entities.teams` | Service, team, period (`week`, `month`, `quarter`; default `month`) |
-| Metrics | `metrics.values` with `metrics` = names from `X:04/herness.metrics.catalog.load_catalog()` whose `MetricDef.domain == "change"` | Table and line chart per metric |
+| Metrics | `metrics.values` with `metrics` = names from `T04-03 (herness.metrics.catalog.load_catalog)()` whose `MetricDef.domain == "change"` | Table and line chart per metric |
 | Change-caused incidents | `change.link_counts`, `change.caused_incidents` | Counts by method; list of incident and change identifiers with no text |
 
 Tests: IT09-10. Security notes: TH09-11.
@@ -2194,7 +2194,7 @@ Every command handler is wrapped by `herness._cli.identity.guarded("<command pat
 | Preconditions | None. |
 | Postconditions | Exit code per §6 table; with `--json`, stdout holds exactly one JSON object. |
 | Invariants | The socket guard is installed before any command code runs. |
-| Algorithm | 1. Pre-scan `argv` for `--config-dir`, `--profile` values (first occurrence; `=` and space forms). 2. `X:10/herness.core.egress_socket.install_socket_guard` with the bootstrap config from `X:10/herness.core.config_sources.load_bootstrap` for that directory and profile (design 10 §5.1 step 1); when `config/herness.yaml` is absent, the bootstrap config is spec 10's secure default (loopback only). 3. Configure logging to stderr and the log file (`X:00/herness.core.logging.configure(component="cli")`). 4. Register command groups: `cmd_system.register(app)`, `cmd_data.register(app)`, `cmd_review.register(app)`, `cmd_queue.register(app)`, `cmd_admin.register(app)`, `cmd_chat.register(app)`. 5. Run `app(args=argv, standalone_mode=False)`; the full config, the port binding (R-04) and start-up validation happen on first use through `GlobalOptions.config()` (U09-85). 6. Handle outcomes (R-46): returned int → that exit code; `click.exceptions.UsageError` or `UserInputError` → print usage message to stderr (JSON error envelope with `--json`), exit 2; `click.exceptions.Exit` → its code; `KeyboardInterrupt` → exit 130 (DD-23); `HernessError` → `emit_error` and `exit_code_for(exc)` (1); any other `Exception` → log `cli.command.failed` (ERROR: `command`, `error_type`), `emit_error` with type `InternalError` and message "Unexpected error.", exit 1. 7. Log `cli.command.completed` (INFO: `command`, `exit_code`, `duration_ms`) and increment `herness_cli_commands_total{command, exit_code}`. |
+| Algorithm | 1. Pre-scan `argv` for `--config-dir`, `--profile` values (first occurrence; `=` and space forms). 2. `T10-18 (herness.core.egress_socket.install_socket_guard)` with the bootstrap config from `T10-02 (herness.core.config_sources.load_bootstrap)` for that directory and profile (design 10 §5.1 step 1); when `config/herness.yaml` is absent, the bootstrap config is spec 10's secure default (loopback only). 3. Configure logging to stderr only: `T00-07 (herness.core.logging.configure_logging)("DEBUG" if --verbose else "INFO", stderr=True)`; `GlobalOptions.config()` (U09-85) reconfigures it with the log file after config load (impl 00 U00-36 two-phase start). 4. Register command groups: `cmd_system.register(app)`, `cmd_data.register(app)`, `cmd_review.register(app)`, `cmd_queue.register(app)`, `cmd_admin.register(app)`, `cmd_chat.register(app)`. 5. Run `app(args=argv, standalone_mode=False)`; the full config, the port binding (R-04) and start-up validation happen on first use through `GlobalOptions.config()` (U09-85). 6. Handle outcomes (R-46): returned int → that exit code; `click.exceptions.UsageError` or `UserInputError` → print usage message to stderr (JSON error envelope with `--json`), exit 2; `click.exceptions.Exit` → its code; `KeyboardInterrupt` → exit 130 (R-46); `HernessError` → `emit_error` and `exit_code_for(exc)` (U09-87: 3–13 by class, else 1); any other `Exception` → log `cli.command.failed` (ERROR: `command`, `error_type`), `emit_error` with type `InternalError` and message "Unexpected error.", exit 1. 7. Log `cli.command.completed` (INFO: `command`, `exit_code`, `duration_ms`) and increment `herness_cli_commands_total{command, exit_code}`. |
 | Side effects | Logging, metrics. |
 | Errors | None escape. |
 | Concurrency | Single main thread. |
@@ -2223,9 +2223,9 @@ Every command handler is wrapped by `herness._cli.identity.guarded("<command pat
 | Preconditions | None. |
 | Postconditions | `ctx.obj` is the `GlobalOptions`; config is not loaded until a command needs it. |
 | Invariants | Not applicable. |
-| Algorithm | `config(startup_validation)`: 1. `X:10/herness.core.config.load_config(profile, overrides, config_dir)` with `overrides = set_overrides + ("paths.data=<data_dir>",)` when `data_dir` is set. 2. First call only: bind the L0 ports with `X:08/herness.store.ops.resilience.bind_core_backends()` (R-04). 3. When `startup_validation` is true: `run_startup_validation(cfg)` (U09-106, R-71), which raises `ConfigError` on an error issue; `doctor` and `config validate` pass `False` and report the issues themselves. 4. Cache and return. `actor(need_ref)`: U09-89 `cli_actor`. |
+| Algorithm | `config(startup_validation)`: 1. `T10-03 (herness.core.config.load_config)(profile, overrides, config_dir)` with `overrides = set_overrides + ("paths.data=<data_dir>",)` when `data_dir` is set. 2. First call only: reconfigure logging with the log file, `T00-07 (herness.core.logging.configure_logging)("DEBUG" if verbose else cfg.logging.level, log_dir=cfg.paths.logs, scrubber=T10-07 (herness.core.secrets.scrub_secrets), stderr=True)`, and bind the L0 ports with `T08-23 (herness.store.ops.resilience.bind_core_backends)()` (R-04). 3. When `startup_validation` is true: `run_startup_validation(cfg)` (U09-106, R-71), which raises `ConfigError` on an error issue; `doctor` and `config validate` pass `False` and report the issues themselves. 4. Cache and return. `actor(need_ref)`: U09-89 `cli_actor`. |
 | Side effects | None at callback time; port binding on the first `config()` call. |
-| Errors | Bad `--set` → usage error (exit 2); `ConfigError` from `config()` (exit 1, R-46). |
+| Errors | Bad `--set` → usage error (exit 2); `ConfigError` from `config()` (exit 3, R-46). |
 | Concurrency | Main thread. |
 | Complexity and limits | Not applicable. |
 | Security notes | `--set security.*` is refused by spec 10's loader (TB10). |
@@ -2241,7 +2241,7 @@ Every command handler is wrapped by `herness._cli.identity.guarded("<command pat
 | `emit_error` | `(opts: GlobalOptions, command: str, exc: BaseException) -> int` | JSON mode: `{"ok": false, "command", "data": null, "warnings": [], "error": {"type": <class name>, "exit_code", "message", "hint", "details"}}` on stdout. Human mode: stderr lines `Error: <what>` and `Fix: <fix>` from `user_message(exc)`; with `--verbose` the traceback follows on stderr. Returns the exit code |
 | `json_default` | `(value: object) -> object` | `Decimal` → string; `datetime` → ISO-8601 UTC with `Z`; `date` → ISO date; `Path` → POSIX string; pydantic models → `model_dump(mode="json")`; `set`/`frozenset` → sorted list; others → `TypeError` |
 
-Data shapes (design §5.7): list commands → `{"<plural>": [rows with spec 02 column names]}`; job commands → `{"job_id", "status", "run_id", "partial"}` (`run_id` present when known; `partial` true when the run finished partial, which R-46 reports as exit 0 with a warning); `report` → `ReportManifest` fields; `doctor` → `{"checks": [{"name", "status", "detail", "fix"}]}`. Commands implemented by `herness.admin` return a `CommandResult` (U09-105), which the handler converts to a `CliResult` before `emit`.
+Data shapes (design §5.7): list commands → `{"<plural>": [rows with spec 02 column names]}`; job commands → `{"job_id", "status", "run_id", "partial"}` (`run_id` present when known; `partial` true when the run finished partial, which R-46 reports as exit 6 with a warning); `report` → `ReportManifest` fields; `doctor` → `{"checks": [{"name", "status", "detail", "fix"}]}`. Commands implemented by `herness.admin` return a `CommandResult` (U09-105), which the handler converts to a `CliResult` before `emit`.
 
 | Field | Content |
 |-------|---------|
@@ -2258,28 +2258,38 @@ Data shapes (design §5.7): list commands → `{"<plural>": [rows with spec 02 c
 | Security notes | TH09-15, TH09-22. |
 | Tests | UT09-64, IT09-16, ST09-24 |
 
-#### U09-87 herness._cli.output.exit_code_for, EXIT_CODES
+#### U09-87 herness._cli.output.exit_code_for, exit_code_for_class_name, EXIT_CODES
 
-The exit codes are those of R-46. `EXIT_CODES` is the constant mapping code → meaning, used by the `--help` epilog text:
+The exit codes are those of R-46 (corrected): design 09 §5.8 plus 14 for a failed eval gate. `EXIT_CODES` is the constant mapping code → meaning, used by the `--help` epilog text:
 
 | Code | Meaning | Produced by |
 |------|---------|-------------|
-| 0 | Success, including `--no-wait` enqueue and a run that finished `partial` (reported as a warning and `data.partial = true`) | handlers |
-| 1 | Operation failed: any `HernessError` or other exception, a failed or canceled job, `PermissionDenied`, `ConfigError` at load | `exit_code_for`, U09-91 |
-| 2 | Usage error | Typer `UsageError`, `UserInputError` |
-| 3 | Validation found problems: `config validate` found an error (or a warning with `--strict`); `doctor` has a FAIL row | U09-93, U09-98 |
-| 4 | An eval gate failed | U09-98 (`eval`) |
-| 130 | Interrupted by Ctrl+C (detached; the job keeps running). Not listed in R-46; kept pending DD-23 | U09-84, U09-91 |
+| 0 | Success, including a `--no-wait` enqueue | handlers |
+| 1 | General failure: a `HernessError` not listed below (for example `PolicyViolation`, `QueryError`, `JobStateError`), any other exception, a canceled job; `doctor` with a FAIL row; `config validate` that finds invalid config (an error issue, or a warning with `--strict`) | `exit_code_for`, U09-91, U09-94, U09-98 |
+| 2 | Usage error (only usage errors) | Typer `UsageError`, `UserInputError` |
+| 3 | Configuration error | `ConfigError` (including a start-up validation error issue, R-71) |
+| 4 | Source auth or availability failure after retries | `AuthError`, `SourceUnavailable`, `RateLimited`, `CircuitOpen` whose `key` is a source key (not `model:*` or `decider:*`); a sync that ended `skipped_open_circuit` (R-39) |
+| 5 | Build blocked (DQ error or SQL failure) | `SchemaViolation`; a `build_pipeline` job failed by DQ |
+| 6 | Finished with dead tasks or `run.status = 'partial'` (report still written) | U09-91 (run status) |
+| 7 | Not found (run, job, item, memory, build, record) | `NotFound` and its subclasses (`MemoryNotFound`, impl 07); `NoCurrentBuild` reported as `NotFound` code `no_current` |
+| 8 | Store busy or another writer holds the lease | `StoreBusy` |
+| 9 | Model or GPU unavailable after the fallback chain | `ModelUnavailable`, `ModelRefused`, `CircuitOpen` whose `key` starts with `model:` or `decider:` |
+| 10 | Budget exceeded | `BudgetExceeded` |
+| 11 | Permission denied | `PermissionDenied` |
+| 12 | Report contract violation | `ReportContractError` |
+| 13 | Off-network call blocked | `EgressBlocked` |
+| 14 | An eval gate failed (impl 11) | `T11-30 (herness.eval.runner.exit_code)` via U09-98 |
+| 130 | Interrupted by Ctrl+C (detached; the job keeps running) | U09-84, U09-91, U09-103 |
 
-`exit_code_for(exc: BaseException) -> int`: `KeyboardInterrupt` → 130; `click.exceptions.UsageError` or `UserInputError` → 2; every other exception → 1. The error class stays visible to automation as `error.type` in the JSON envelope (U09-86). Codes 3 and 4 never come from an exception. The former `exit_code_for_class_name` is removed (R-46): U09-91 maps every failed job to 1.
+`exit_code_for(exc: BaseException) -> int`: `KeyboardInterrupt` → 130; `click.exceptions.UsageError` or `UserInputError` → 2; otherwise the first matching row of the table above, checked with `isinstance` in table order from code 3 to 13 (so a subclass maps with its parent); every other exception → 1. `exit_code_for_class_name(name: str, *, key: str | None = None) -> int` applies the same table to a job's `last_error["class"]` (and `last_error["key"]` for `CircuitOpen`), because a failed job carries the class name, not the exception; an unknown name → 1. The error class stays visible to automation as `error.type` in the JSON envelope (U09-86).
 
 | Field | Content |
 |-------|---------|
-| Kind | function and constant |
-| Purpose | Stable exit codes (R-46; replaces design §5.8 codes 5–13). |
+| Kind | functions and constant |
+| Purpose | Stable exit codes (R-46 corrected, design 09 §5.8). |
 | Preconditions | None. |
-| Postconditions | Deterministic. |
-| Invariants | Not applicable. |
+| Postconditions | Deterministic; never returns 2 except for the two usage classes. |
+| Invariants | `EXIT_CODES` keys are exactly 0–14 and 130. |
 | Algorithm | As above. |
 | Side effects | None. |
 | Errors | None. |
@@ -2290,7 +2300,7 @@ The exit codes are those of R-46. `EXIT_CODES` is the constant mapping code → 
 
 #### U09-88 herness.reports.rules.user_message
 
-Signature: `user_message(exc: BaseException) -> tuple[str, str]` (what, fix). Raising sites in this spec set `details["code"]` so no message parsing is needed; `hint` and `details` (a `dict[str, str]`, values strings only, R-74) are attributes of `X:00/herness.core.errors.HernessError` (R-19; OI-08 resolved).
+Signature: `user_message(exc: BaseException) -> tuple[str, str]` (what, fix). Raising sites in this spec set `details["code"]` so no message parsing is needed; `hint` and `details` (a `dict[str, str]`, values strings only, R-74) are attributes of `T00-03 (herness.core.errors.HernessError)` (R-19; OI-08 resolved).
 
 | Condition | What | Fix |
 |-----------|------|-----|
@@ -2333,7 +2343,7 @@ The warning "No worker is running; the job is queued." / "Start `herness worker`
 
 | Function | Signature | Behavior |
 |----------|-----------|----------|
-| `cli_actor` | `(cfg: HernessConfig, *, need_ref: bool) -> Actor` | `username = getpass.getuser()`; `role = role_for(username, cfg.security.ui.roles)`; `user_ref = user_ref_for(username, load_user_ref_key())`; when the key is missing and `need_ref` is false, `user_ref = "unkeyed"`; when `need_ref` is true the `ConfigError` propagates (exit 1, R-46) |
+| `cli_actor` | `(cfg: HernessConfig, *, need_ref: bool) -> Actor` | `username = getpass.getuser()`; `role = role_for(username, cfg.security.ui.roles)`; `user_ref = user_ref_for(username, load_user_ref_key())`; when the key is missing and `need_ref` is false, `user_ref = "unkeyed"`; when `need_ref` is true the `ConfigError` propagates (exit 3, R-46) |
 | `check_command_role` | `(opts: GlobalOptions, path: str, *, inline: bool = False) -> Actor \| None` | Returns `None` without loading config for paths in `DENIED_ALLOWED`; `init` with no `<config_dir>/herness.yaml` → `None` (bootstrap, OI-05); otherwise loads config, builds the actor (`need_ref = path in WRITE_COMMANDS`) and compares `ROLE_RANK[actor.role]` with `ROLE_RANK[COMMAND_ROLES[path]]`; `inline` true additionally requires `admin` (R-45); a path in `ELEVATED_COMMANDS` (design 10 §3.7 "admin (OS)") additionally requires an elevated process (`ctypes.windll.shell32.IsUserAnAdmin()` on Windows, `os.geteuid() == 0` elsewhere), else `PermissionDenied("Run this command from an elevated shell.")`; refusal → `audit("auth", actor.user_ref, user_ref=actor.user_ref, role=actor.role, result="denied", action=f"cli:{path}")`, log `cli.auth.denied`, raise `PermissionDenied(f"You need the {needed} role to run herness {path}.")` |
 | `guarded` | `(path: str) -> Callable[[F], F]` | Decorator: runs `check_command_role` and passes the actor to the handler as keyword `actor` |
 
@@ -2370,7 +2380,7 @@ The warning "No worker is running; the job is queued." / "Start `herness worker`
 | Invariants | Not applicable. |
 | Algorithm | As in the table. |
 | Side effects | Audit and log on refusal. |
-| Errors | `PermissionDenied`, `ConfigError` (both exit 1, R-46). |
+| Errors | `PermissionDenied` (exit 11), `ConfigError` (exit 3) (R-46). |
 | Concurrency | Main thread. |
 | Complexity and limits | O(1). |
 | Security notes | TH09-27. The OS user of a shell is trusted as the CLI identity (TB10); anyone with the `svc-herness` account has its role (accepted, §7 g). |
@@ -2380,10 +2390,10 @@ The warning "No worker is running; the job is queued." / "Start `herness worker`
 
 | Parameter | Type | Default | Kind | Constraints |
 |-----------|------|---------|------|-------------|
-| `kind` | `JobKind` (X:08) | — | kw | |
+| `kind` | `JobKind` (T08-01 (herness.core.types.jobs.JobKind)) | — | kw | |
 | `payload` | `dict[str, object]` | — | kw | ≤ 64 KB as JSON (spec 08 §4.1) |
-| `gpu_class` | `GpuClass` (X:08) | — | kw | |
-| `priority` | `int \| None` | `MANUAL_PRIORITY` (80, X:08) | kw | manual CLI priority (spec 08 §4.1); `None` → the per-kind default of impl 08 (R-41) |
+| `gpu_class` | `GpuClass` (T08-01 (herness.core.types.jobs.GpuClass)) | — | kw | |
+| `priority` | `int \| None` | `MANUAL_PRIORITY` (80, T08-12 (herness.core.jobs.MANUAL_PRIORITY)) | kw | manual CLI priority (spec 08 §4.1); `None` → the per-kind default of impl 08 (R-41) |
 | `scheduled_for` | `datetime \| None` | `None` | kw | timezone-aware |
 | `idem_key` | `str \| None` | `None` | kw | `None` → spec 08 default |
 
@@ -2396,7 +2406,7 @@ Returns `str` (`job_id`).
 | Preconditions | Payload serialisable. |
 | Postconditions | Job row exists (or the existing deduplicated one). |
 | Invariants | Not applicable. |
-| Algorithm | 1. Serialise the payload with `json_default`; > 65,536 bytes → `UserInputError("job payload too large")`. 2. `X:08/herness.core.jobs.enqueue(kind, payload, gpu_class, priority, scheduled_for, idem_key=idem_key)`. 3. Log `cli.job.enqueued` (INFO: `job_id`, `kind`). 4. Unless the caller runs the job inline, when `X:08/herness.core.jobs.worker_alive()` is false (R-44) print to stderr "Warning: No worker is running; the job is queued." and "Fix: Start `herness worker` or the `herness-worker` task, or rerun with `--inline` (admin)." (R-45), set `opts.worker_warned = True` and log `cli.worker.absent` (WARNING: `job_id`). |
+| Algorithm | 1. Serialise the payload with `json_default`; > 65,536 bytes → `UserInputError("job payload too large")`. 2. `T08-12 (herness.core.jobs.enqueue)(kind, payload, gpu_class, priority, scheduled_for, idem_key=idem_key)`. 3. Log `cli.job.enqueued` (INFO: `job_id`, `kind`). 4. Unless the caller runs the job inline, when `T08-12 (herness.core.jobs.worker_alive)()` is false (R-44) print to stderr "Warning: No worker is running; the job is queued." and "Fix: Start `herness worker` or the `herness-worker` task, or rerun with `--inline` (admin)." (R-45), set `opts.worker_warned = True` and log `cli.worker.absent` (WARNING: `job_id`). |
 | Side effects | Job row; stderr warning. |
 | Errors | `StoreBusy`, spec 08 errors. |
 | Concurrency | Main thread. |
@@ -2421,7 +2431,7 @@ Returns `FollowOutcome` (frozen dataclass: `job: JobRow`, `exit_code: int`, `run
 | Preconditions | Job exists. |
 | Postconditions | Returns on a terminal job status, on Ctrl+C (detached, exit 130) or after `MAX_FOLLOW_S` = 172,800 s (detached, exit 0, message "Still running; detached. Follow with `herness jobs list`."). |
 | Invariants | Never cancels the job. |
-| Algorithm | 1. Loop: `job = X:08/herness.core.jobs.get(job_id)`. 2. `run_id` = `job.result["run_id"]`, else `job.payload["request"]["run_id"]` or `job.payload["run_id"]` when present. 3. Unless `--quiet`, print a progress line to stderr when status, attempts or (for `review` jobs with a `run_id`) `ui_task_status_counts(run_id)` change. 4. When `X:08/herness.core.jobs.worker_alive()` is false (R-44; DD-05 resolved) and `opts.worker_warned` is false, print the U09-90 warning to stderr, set the flag, log `cli.worker.absent` (WARNING) and keep waiting. 5. Terminal statuses (R-46): `done` → exit 0; when `job.result.get("partial") is True` or the run's status is `partial` (via `X:06/herness.store.ops.get_run`) add the warning "Run `<run_id>` finished partial: some tasks did not finish." and set `partial`; when `job.result.get("outcome") == "skipped_open_circuit"` (R-39) add the warning "The source circuit is open; this sync was skipped. The next scheduled run retries."; `failed` → exit 1 with `job.last_error["class"]` as the error type and the message from `last_error.message`; `canceled` → exit 1 with "Job `<id>` was canceled.". 6. Sleep `poll_s` with `X:00/herness.core.time.sleep`. 7. `KeyboardInterrupt` → print "Detached; job `<id>` keeps running." and return exit 130 with `detached=True`; log `cli.job.detached`. |
+| Algorithm | 1. Loop: `job = T08-12 (herness.core.jobs.get)(job_id)`. 2. `run_id` = `job.result["run_id"]`, else `job.payload["request"]["run_id"]` or `job.payload["run_id"]` when present. 3. Unless `--quiet`, print a progress line to stderr when status, attempts or (for `review` jobs with a `run_id`) `ui_task_status_counts(run_id)` change. 4. When `T08-12 (herness.core.jobs.worker_alive)()` is false (R-44; DD-05 resolved) and `opts.worker_warned` is false, print the U09-90 warning to stderr, set the flag, log `cli.worker.absent` (WARNING) and keep waiting. 5. Terminal statuses (R-46): `done` → exit 0, except: when `job.result.get("partial") is True` or the run's status is `partial` (via `T06-05 (herness.store.ops.get_run)`) add the warning "Run `<run_id>` finished partial: some tasks did not finish.", set `partial` and exit 6 (the report is still written); when `job.result.get("outcome") == "skipped_open_circuit"` (R-39) add the warning "The source circuit is open; this sync was skipped. The next scheduled run retries." and exit 4; `failed` → exit `exit_code_for_class_name(job.last_error["class"], key=job.last_error.get("key"))` (U09-87) with `last_error["class"]` as the error type and the message from `last_error.message`; `canceled` → exit 1 with "Job `<id>` was canceled.". 6. Sleep `poll_s` with `T00-04 (herness.core.time.sleep)`. 7. `KeyboardInterrupt` → print "Detached; job `<id>` keeps running." and return exit 130 with `detached=True`; log `cli.job.detached`. |
 | Side effects | Reads; stderr progress. |
 | Errors | `StoreBusy` during a poll is retried at the next poll (logged at WARNING); ten consecutive failures raise it. |
 | Concurrency | Main thread. |
@@ -2433,12 +2443,12 @@ Returns `FollowOutcome` (frozen dataclass: `job: JobRow`, `exit_code: int`, `run
 
 | Function | Signature | Payload (keys in snake_case; DD-10) |
 |----------|-----------|-------------------------------------|
-| `sync_payload` | `(source: str \| None, entities: Sequence[str], full: bool, backfill_from: date \| None, backfill_to: date \| None) -> dict` | `{"source": source, "entities": list, "mode": "backfill" if from/to else "full" if full else "incremental", "from": iso or null, "to": iso or null}`; mode `full` means a backfill from `backfill.start` to now, resolved by impl 01 (R-63) |
+| `sync_payload` | Removed (R-09): impl 01 `T01-11 (herness.connectors.jobs.build_sync_payload)` (U01-54) builds the `sync` or `reconcile` job kind, payload and `idem_key` (U09-95 `sync` row) | — |
 | `pipeline_payload` | `(stages: Sequence[str], build_id: str \| None, **extra) -> dict` | `{"stages": list, "build_id": build_id, **extra}` where `extra` holds `enrich_stage` (passed to `run_enrichment(..., stages=[S])`, R-48), `depth` (enrich) or `score_steps` (score; the key the impl 02 handler reads) |
 | `STAGE_ORDER` | constant | `("build", "enrich", "score", "dq", "promote")`; `--from-stage S` yields the suffix starting at `S` |
-| `review_request` | `(kind: Literal["funding_review","org_review"], depth: str, budgets_usd: Sequence[Decimal], question: str \| None = None) -> dict` | `{"request": RunRequest(kind=kind, depth=depth, scenarios=[Scenario(name=f"custom_{int(b)}", budget_usd=b) for b in budgets_usd]).model_dump(mode="json")}` (X:06 `RunRequest`, X:04 `Scenario`) |
+| `review_request` | `(kind: Literal["funding_review","org_review"], depth: str, budgets_usd: Sequence[Decimal], question: str \| None = None) -> dict` | `{"request": RunRequest(kind=kind, depth=depth, scenarios=[Scenario(name=f"custom_{int(b)}", budget_usd=b) for b in budgets_usd]).model_dump(mode="json")}` (T06-21 (herness.harness.swarm.lifecycle.RunRequest), T04-20 (herness.metrics.portfolio.Scenario)) |
 | `resume_payload` | Removed (R-09): impl 08 `enqueue_resume` builds the resume payload (U09-40) |
-| `eval_payload` | `(**options) -> dict` | spec 11 §3.2 option names in snake_case (`suite`, `profile`, `compare`, `depth`, `ids` (list), `tags` (list), `repeat`, `mock_llm`, `no_judge`, `resume`, `baseline`, `set_baseline`, `compare_runs` (list)); unset options omitted |
+| `eval_payload` | Removed (R-09): impl 11 `T11-30 (herness.eval.runner.build_eval_payload)` (U11-69) builds the eval payload, and `eval_gpu_class` picks its GPU class | — |
 | `maintenance_payload` | Removed (R-07): impl 10 `cmd_maintenance` and `cmd_privacy_delete` enqueue their own jobs (U09-98) |
 | `parse_budget_usd` | `(text: str) -> Decimal` | Accepts digits with optional `_` or `,` separators and optional `.00`; 1 ≤ value ≤ 10^12; else `UserInputError` |
 
@@ -2461,12 +2471,12 @@ Returns `FollowOutcome` (frozen dataclass: `job: JobRow`, `exit_code: int`, `run
 
 | Command | Behavior |
 |---------|----------|
-| `init [--force]` | 1. Create `<data>/` subdirectories `inbox`, `raw`, `cache/decisions`, `labels`, `warehouse`, `reports`, `traces`, `logs`, `config_snapshots`, `models`, `vectors`, `bench`, `synth`, `locks` (spec 00 §4) with `mkdir(parents=True, exist_ok=True)`. 2. Copy each file of the config template set (`X:10/config templates package data`, OI-04) into `<config_dir>` when absent; with `--force`, an existing file is first renamed to `<name>.bak-<YYYYMMDDTHHMMSSZ>` and then replaced. 3. `X:02/herness.store.ops.migrate()`. 4. Print "Next: run `herness secrets init`." Data: `{"created_dirs", "copied", "backed_up", "migrations_applied"}` |
-| `doctor [--fix-hints] [--sources]` | `checks = run_doctor(...)` (U09-94); table PASS/WARN/FAIL with detail and (with `--fix-hints`, or always in JSON) the fix; exit 3 when any FAIL (R-46), else 0 |
+| `init [--force]` | 1. Create `<data>/` subdirectories `inbox`, `raw`, `cache/decisions`, `labels`, `warehouse`, `reports`, `traces`, `logs`, `config_snapshots`, `models`, `vectors`, `bench`, `synth`, `locks` (spec 00 §4) with `mkdir(parents=True, exist_ok=True)`. 2. Copy each file of the config template set (`T10-13 (config templates `config/herness.yaml`, `config/profiles/*.yaml`)`, OI-04) into `<config_dir>` when absent; with `--force`, an existing file is first renamed to `<name>.bak-<YYYYMMDDTHHMMSSZ>` and then replaced. 3. `T02-05 (herness.store.ops.migrate)()`. 4. Print "Next: run `herness secrets init`." Data: `{"created_dirs", "copied", "backed_up", "migrations_applied"}` |
+| `doctor [--fix-hints] [--sources]` | `checks = run_doctor(...)` (U09-94); table PASS/WARN/FAIL with detail and (with `--fix-hints`, or always in JSON) the fix; exit 1 when any FAIL (R-46), else 0 |
 | `status` | Collect: `CURRENT` build id and age (`build.meta` via a read-only connection), last `build_pipeline` job (`jobs.list_jobs(kind="build_pipeline", limit=1)`), DQ warnings (`meta.dq_result` failed rows), `jobs.status_snapshot()` (workers, running and queued jobs, planned rekey, breakers, faults flag), last 5 runs (`ui_list_runs(limit=5)`), chat mode now (`jobs.chat_policy(now())`). Missing `CURRENT` shows "No promoted warehouse yet." and continues |
 | `ui [--port N]` | 1. Read `cfg.security.ui` (bind, port; `--port` overrides for this launch, 1024–65535). 2. When `bind` is not loopback (`127.0.0.1`, `::1`, `localhost`) → `ConfigError("dashboard bind must be loopback")`: without exposure the dashboard is local only (design §9.1), and with exposure on the app binds to loopback behind the proxy (R-50); spec 10 validation repeated. 3. Build the argument list: `sys.executable -m streamlit run <app>/Home.py --server.address <bind> --server.port <port> --server.headless true --browser.gatherUsageStats false --server.enableXsrfProtection true --server.enableCORS true`. 4. Environment: copy of `os.environ` plus `HERNESS_CONFIG_DIR`, `HERNESS_DATA_DIR`, `HERNESS_PROFILE`, `HERNESS_SET_OVERRIDES` (JSON), `HF_HUB_OFFLINE=1`, `DO_NOT_TRACK=1`. 5. `subprocess.run(args, env=env, check=False)` without a timeout: the child is the server for the service lifetime (ENG §2.5 exception, §13.1 DD-21); Ctrl+C is forwarded by the console and the command returns the child's exit code |
-| `worker [--gpu-class LIST] [--concurrency N] [--once]` | Sets `HERNESS_CONFIG_DIR`, `HERNESS_DATA_DIR`, `HERNESS_PROFILE` and `HERNESS_SET_OVERRIDES` for child processes, then returns the exit code of `X:08/herness.core.jobs.run_worker(gpu_classes=<parsed subset of none,reasoning,decider,large; default all four>, concurrency=<1–64 or None>, once=once, bootstrap="herness.cli:worker_bootstrap")` (U09-104) |
-| `gpu load CLASS` / `gpu unload` | `CLASS` ∈ `reasoning`, `decider`, `large` (R-47). Calls the spec 08 manual GPU class switch (`X:08/manual gpu load and unload, design 08 §5.8`): with a live worker it sets `worker.requested_class`; never starts containers directly; with no live worker → exit 1 with "No worker is running." / "Start `herness worker`, or use `herness deploy up CLASS`." |
+| `worker [--gpu-class LIST] [--concurrency N] [--once]` | Sets `HERNESS_CONFIG_DIR`, `HERNESS_DATA_DIR`, `HERNESS_PROFILE` and `HERNESS_SET_OVERRIDES` for child processes, then returns the exit code of `T08-21 (herness.core.jobs.run_worker)(gpu_classes=<parsed subset of none,reasoning,decider,large; default all four>, concurrency=<1–64 or None>, once=once, bootstrap="herness.cli:worker_bootstrap")` (U09-104) |
+| `gpu load CLASS` / `gpu unload` | `CLASS` ∈ `reasoning`, `decider`, `large` (R-47). Calls the spec 08 manual GPU class switch `T08-18 (herness.core.jobs.request_gpu_class)(CLASS)` (`gpu unload` passes `"none"`; design 08 §5.8): with a live worker it sets `worker.requested_class`; never starts containers directly; with no live worker → exit 1 with "No worker is running." / "Start `herness worker`, or use `herness deploy up CLASS`." |
 
 | Field | Content |
 |-------|---------|
@@ -2496,13 +2506,17 @@ Returns `list[CheckResult]`; `CheckResult` = frozen dataclass `name: str`, `stat
 |--------------------|------|
 | `config` | `opts.config()` loads → PASS; `ConfigError` → FAIL with the message and fix "Run `herness config validate`." (later checks that need config are skipped with WARN "skipped: config invalid") |
 | `current_build` | `CURRENT` readable → PASS "build `<id>`, age <h> h"; age > `DOCTOR_BUILD_AGE_WARN_H` = 48 → WARN; missing → WARN "No promoted warehouse yet." fix "Run `herness pipeline`." |
-| `ops_migrations` | `X:02/herness.store.ops.pending_migrations()` (R-10) non-empty → FAIL fix "Run `herness init`." |
-| `startup_validation` | `run_startup_validation(cfg, raise_on_error=False)` (U09-106, R-71): each `error` issue → FAIL with the issue text and fix "Fix the named file, then run `herness config validate`."; each `warn` issue → WARN; none → PASS |
+| `ops_migrations` | `T02-05 (herness.store.ops.pending_migrations)()` (R-10) non-empty → FAIL fix "Run `herness init`." |
+| `startup_validation` | `run_startup_validation(cfg, raise_on_error=False, offline=not sources, config_dir=opts.config_dir)` (U09-106, R-71): each `error` issue → FAIL with the issue text and fix "Fix the named file, then run `herness config validate`."; each `warn` issue → WARN; none → PASS |
+| `ops_store` | `T02-05 (herness.store.ops.migrate.ops_health)()` (impl 02 C14): `ok` → PASS; `degraded` → WARN with the reason and fix "Run `herness init`." (pending migrations or journal mode); `down` → FAIL with the reason and fix "Check that `data/ops.sqlite` exists and is not locked by another program." |
+| `warehouse` | `T02-09 (herness.store.warehouse.warehouse_health)(now=T00-04 (herness.core.time.now)(), stale_after_h=DOCTOR_BUILD_AGE_WARN_H)`: `ok` → PASS; `degraded` → WARN with the reason and fix "Run `herness pipeline`."; `down` → FAIL with the reason and the same fix |
+| `vectors` | `T02-08 (herness.store.vectors.VectorStore)().health()`: `ok` → PASS; `degraded` → WARN with the reason and fix "Run `herness build` to create the vector tables."; `down` → FAIL with the reason and fix "Check the `data/vectors` directory." |
 | `worker` | `jobs.worker_alive()` false → WARN fix "Start `herness worker` or the `herness-worker` task." |
+| `swarm` | `T06-21 (herness.harness.swarm.lifecycle.swarm_health)(list_jobs=T08-12 (herness.core.jobs.list_jobs), worker_alive=T08-12 (herness.core.jobs.worker_alive), now=T00-04 (herness.core.time.now)())` (impl 06 O06-17): `ok` → PASS; `degraded` → WARN with the returned `reason` and fix "Start `herness worker`, or resume or cancel the stuck run with `herness jobs`."; `down` → FAIL with the `reason` and fix "Run `herness doctor` again; if it persists, check `data/ops.sqlite`." |
 | `weasyprint` | Importable → PASS; not importable → FAIL when `pdf ∈ reports.formats`, else WARN; fix "`uv sync --extra pdf`" |
 | `reports_templates` | `render.health()` (U09-27): `down` → FAIL |
-| `sources` (with `--sources`) | For each configured source: `X:10/herness.core.registry.get("connector", name)` instance `.check()` → PASS or FAIL with the error class and `user_message` fix |
-| spec 10 checks | Every check of design 10 §5.6.3 from `X:10/herness.admin.doctor_host.doctor_checks(cfg)` (R-07), appended in their order |
+| `sources` (with `--sources`) | For each configured source: `T10-04 (herness.core.registry.get)("connector", name)` instance `.check()` → PASS or FAIL with the error class and `user_message` fix |
+| spec 10 checks | Every check of design 10 §5.6.3 from `T10-27 (herness.admin.doctor_host.doctor_checks)(cfg)` (R-07), appended in their order |
 
 | Field | Content |
 |-------|---------|
@@ -2517,17 +2531,17 @@ Returns `list[CheckResult]`; `CheckResult` = frozen dataclass `name: str`, `stat
 | Concurrency | Sequential. |
 | Complexity and limits | Each check ≤ 10 s timeout where it does I/O (connector checks use their own client timeouts). |
 | Security notes | Details never include secret values (spec 10 checks report presence only). |
-| Tests | UT09-76, UT09-103 |
+| Tests | UT09-76, UT09-103, UT09-107, UT09-108 |
 
 #### U09-95 herness._cli.cmd_data (sync, build, enrich, score, metrics list, pipeline)
 
 | Command | Behavior |
 |---------|----------|
-| `sync [SOURCE] [--entity E]... [--full] [--backfill --from D --to D] [--reconcile] [--check-mapping] [--discover-fields] [--wait/--no-wait] [--inline]` | `--check-mapping` and `--discover-fields` run in-process through spec 01 (`X:01/sync --check-mapping and --discover-fields behavior, design 01 §3.2, §5`), print results and enqueue nothing; `--discover-fields` requires `SOURCE = jira`. `--backfill` requires both `--from` and `--to` (dates, `from < to`). `--full` is a backfill from `backfill.start` to now (R-63). Otherwise enqueue kind `reconcile` when `--reconcile`, else `sync`; `gpu_class="none"`; payload `sync_payload(...)`; `idem_key = f"sync:{source or 'all'}"` (spec 08 §4.1) |
+| `sync [SOURCE] [--entity E]... [--full] [--backfill --from D [--to D]] [--reconcile] [--check-mapping] [--discover-fields] [--wait/--no-wait] [--inline]` | `--check-mapping` and `--discover-fields` run in-process through spec 01 and enqueue nothing: `--check-mapping` prints `T01-12 (herness.connectors.mapping_check.check_mapping)(SOURCE, cfg)`; `--discover-fields` requires `SOURCE = jira` and prints `discover_fields()` of the connector built by `T01-11 (herness.connectors.factory.build_connector)` (`T01-17 (herness.connectors.jira.JiraConnector.discover_fields)`; design 01 §3.2, §5). Otherwise `kind, payload, idem_key = T01-11 (herness.connectors.jobs.build_sync_payload)(source, entities=E, full=full, backfill=backfill, from_=from, to=to, reconcile=reconcile, today=<UTC date>)` (impl 01 U01-54 owns the option rules: `--entity` needs `SOURCE`, `--full` excludes `--backfill`, `--backfill` needs `--from` and `--to` defaults to today, `--reconcile` needs `SOURCE`; `--full` is a backfill from `backfill.start` to now, R-63). This command checks the same option rules first and raises `UserInputError` (exit 2) so that a bad option combination is a usage error; the `ConfigError` of `build_sync_payload` is then unreachable. `submit_job(kind=kind, payload=payload, gpu_class="none", idem_key=idem_key)` uses impl 01's `idem_key` unchanged (incremental `sync:<source or all>`, matching the spec 08 `sync:<source>` key; `sync:<source or all>:backfill:<from>:<to>`; `reconcile:<source>`) |
 | `build [--wait/--no-wait] [--inline]` | Enqueue `build_pipeline`, `gpu_class="none"` (R-43: enrichment stages take the `decider` class through `ctx.gpu_scope`), payload `pipeline_payload(["build"], None)` |
 | `enrich [--build-id ID] [--stage S] [--depth D] [--wait/--no-wait] [--inline]` | Enqueue `build_pipeline`, `gpu_class="none"` (R-43), with `pipeline_payload(["enrich"], build_id, enrich_stage=S, depth=D)` (R-48) |
-| `score [--build-id ID] [--step S] [--scenario NAME\|USD] [--wait/--no-wait] [--inline]` | Without `--scenario`: enqueue `build_pipeline`, `gpu_class="none"`, with `pipeline_payload(["score"], build_id, score_steps=[S] or null)`; the handler calls `load_catalog()` then `run_scoring(build_id, steps=...)` (spec 04 §3; `--step org` means `["org", "levers"]`); `--inline` runs that job in this process (R-45). With `--scenario`: after promotion only (`CURRENT` required, else `NotFound` code `no_current`): `X:04/herness.metrics.portfolio.optimize_portfolio(Scenario(name=f"custom_{usd}", budget_usd=usd) if numeric else name, persist=False)`; print the `PortfolioResult` (selected candidates, totals, `solver_status`); no job |
-| `metrics list` | `X:04/herness.metrics.catalog.load_catalog().describe()`; data `{"metrics": [...]}` |
+| `score [--build-id ID] [--step S] [--scenario NAME\|USD] [--wait/--no-wait] [--inline]` | Without `--scenario`: enqueue `build_pipeline`, `gpu_class="none"`, with `pipeline_payload(["score"], build_id, score_steps=[S] or null)`; the handler calls `load_catalog()` then `run_scoring(build_id, steps=...)` (spec 04 §3; `--step org` means `["org", "levers"]`); `--inline` runs that job in this process (R-45). With `--scenario`: after promotion only (`CURRENT` required, else `NotFound` code `no_current`): `T04-20 (herness.metrics.portfolio.optimize_portfolio)(Scenario(name=f"custom_{usd}", budget_usd=usd) if numeric else name, persist=False)`; print the `PortfolioResult` (selected candidates, totals, `solver_status`); no job |
+| `metrics list` | `T04-03 (herness.metrics.catalog.load_catalog)().describe()`; data `{"metrics": [...]}` |
 | `pipeline [--from-stage S] [--build-id ID] [--wait/--no-wait] [--inline]` | Enqueue `build_pipeline`, `gpu_class="none"` (R-43), with `pipeline_payload(STAGE_ORDER from S, build_id)`; `--from-stage` other than `build` requires `--build-id` |
 
 All enqueueing commands (R-45): default → `submit_job` then, with `--wait` (default), `follow_job`; `--no-wait` → print `job_id`, exit 0; `--inline` (admin only; excludes `--no-wait`, both → usage error) → `run_job_inline` (U09-103). Data `{"job_id", "status", "run_id", "partial"}`.
@@ -2551,9 +2565,9 @@ All enqueueing commands (R-45): default → `submit_job` then, with `--wait` (de
 
 | Command | Behavior |
 |---------|----------|
-| `report funding\|org [--depth D] [--budget USD]... [--top-n N] [--format LIST] [--out DIR] [--no-strict] [--open] [--wait/--no-wait] [--inline]` | 1. `budgets = [parse_budget_usd(b) ...]`. 2. Enqueue `review`, `gpu_class="reasoning"`, priority `MANUAL_PRIORITY` (80), payload `review_request(kind, depth, budgets)`. 3. `--no-wait` → print `job_id` (and a warning when `--top-n`, `--format`, `--out`, `--no-strict` or `--open` were given: "Render options apply only with --wait; use `herness report render <run_id>`."), exit 0. 4. `--wait` → `follow_job` (or `--inline` → `run_job_inline`, R-45); on exit 0: `run_id` from the job; when any of `--top-n`, `--format`, `--out`, `--no-strict` differs from config defaults, call `rerender_report(actor, run_id=..., formats, out_dir, strict=not no_strict, top_n)`; otherwise read `<data>/reports/<run_id>/manifest.json` (validated as `ReportManifest`). 5. Print report paths; `--open` → `webbrowser.open(path_of_report_html.as_uri())`. 6. Exit code = follow exit (0 for a partial run, with its warning and `partial: true`, R-46). Data = `ReportManifest` fields plus `job_id` and `partial` |
-| `report render RUN_ID [--format LIST] [--out DIR] [--no-strict]` | `rerender_report(actor, run_id=RUN_ID, formats, out_dir, strict=not no_strict)`; print paths; exit 0; when the run is `partial` add the warning "Run `<run_id>` is partial; the report carries the partial banner." (R-46) |
-| `review [--kind funding\|org\|both] [--depth D] [--at ISO_TIME] [--wait/--no-wait] [--inline]` | One `review` job per kind (`both` → funding then org); `--at` must parse as ISO-8601 with an offset (naive → `UserInputError`) and becomes `scheduled_for` (`--at` with `--inline` → usage error); waits for (or runs inline) all jobs in order; the exit code is 1 when any job failed, else 0 |
+| `report funding\|org [--depth D] [--budget USD]... [--top-n N] [--format LIST] [--out DIR] [--no-strict] [--open] [--wait/--no-wait] [--inline]` | 1. `budgets = [parse_budget_usd(b) ...]`. 2. Enqueue `review`, `gpu_class="reasoning"`, priority `MANUAL_PRIORITY` (80), payload `review_request(kind, depth, budgets)`. 3. `--no-wait` → print `job_id` (and a warning when `--top-n`, `--format`, `--out`, `--no-strict` or `--open` were given: "Render options apply only with --wait; use `herness report render <run_id>`."), exit 0. 4. `--wait` → `follow_job` (or `--inline` → `run_job_inline`, R-45); on exit 0: `run_id` from the job; when any of `--top-n`, `--format`, `--out`, `--no-strict` differs from config defaults, call `rerender_report(actor, run_id=..., formats, out_dir, strict=not no_strict, top_n)`; otherwise read `<data>/reports/<run_id>/manifest.json` (validated as `ReportManifest`). 5. Print report paths; `--open` → `webbrowser.open(path_of_report_html.as_uri())`. 6. Exit code = follow exit (6 for a partial run, with its warning and `partial: true`, R-46). Data = `ReportManifest` fields plus `job_id` and `partial` |
+| `report render RUN_ID [--format LIST] [--out DIR] [--no-strict]` | `rerender_report(actor, run_id=RUN_ID, formats, out_dir, strict=not no_strict)`; print paths; exit 0; when the run is `partial` add the warning "Run `<run_id>` is partial; the report carries the partial banner." and exit 6 (R-46) |
+| `review [--kind funding\|org\|both] [--depth D] [--at ISO_TIME] [--wait/--no-wait] [--inline]` | One `review` job per kind (`both` → funding then org); `--at` must parse as ISO-8601 with an offset (naive → `UserInputError`) and becomes `scheduled_for` (`--at` with `--inline` → usage error); waits for (or runs inline) all jobs in order; the exit code is that of the first job that did not end plain `done` (U09-91 step 5, for example 5 for a build blocked by DQ), else 0 |
 | `resume RUN_ID [--retry-dead] [--force] [--wait/--no-wait] [--inline]` | `resume_run(actor, run_id, retry_dead, force)` then follow, or `run_job_inline` with `--inline` (R-45) |
 | `decide REC_ID accepted\|rejected\|deferred --reason TEXT [--effective-at DATE]` | `decide_recommendation(actor, rec_id, decision, reason, effective_at)`; `--effective-at` as `YYYY-MM-DD` |
 
@@ -2566,7 +2580,7 @@ All enqueueing commands (R-45): default → `submit_job` then, with `--wait` (de
 | Invariants | Not applicable. |
 | Algorithm | As in the table. |
 | Side effects | Jobs; report files; browser launch with `--open`. |
-| Errors | Mapped by U09-87 (exit 1 with `error.type` `ReportContractError` for contract violations, R-46). |
+| Errors | Mapped by U09-87 (exit 12 with `error.type` `ReportContractError` for contract violations, R-46). |
 | Concurrency | Main thread. |
 | Complexity and limits | Not applicable. |
 | Security notes | TH09-16, TH09-18 (`RUN_ID` validated before any path use). |
@@ -2576,14 +2590,14 @@ All enqueueing commands (R-45): default → `submit_job` then, with `--wait` (de
 
 | Command | Behavior |
 |---------|----------|
-| `jobs list [--status S] [--kind K] [--limit N]` | `X:08/herness.core.jobs.list_jobs(status, kind, limit)` (limit 1–500, default 50); data `{"jobs": [...]}` |
+| `jobs list [--status S] [--kind K] [--limit N]` | `T08-12 (herness.core.jobs.list_jobs)(status, kind, limit)` (limit 1–500, default 50); data `{"jobs": [...]}` |
 | `jobs cancel JOB_ID` / `jobs retry JOB_ID` | `job_control(actor, job_id, op)` |
 | `review-queue list [--kind K] [--status S]` | `list_review_items(kind, status or "pending")`; payloads summarised to one line per item (kind-specific key fields; no text) |
 | `review-queue approve ITEM_ID [--note TEXT]` / `reject ITEM_ID --note TEXT` | `decide_review(actor, item_id, approve, note, answer=None)`; a `label_check` approve raises `UserInputError("Approve label checks in the dashboard Review Queue.")` because the CLI has no answer option (DD-11) |
 | `memory list [--layer L] [--status S] [--limit N]` | `ui_list_memory_items`; `content` cut to 120 chars and passed through `safe_terminal_text`; data `{"memory_items": [...]}` |
 | `memory approve MEMORY_ID [--note TEXT]` / `memory reject MEMORY_ID --note TEXT` | `MEMORY_ID` is a `memory_item` id (`mem_…`, R-33); `decide_memory(actor, memory_id, approve, note, memory=...)` (U09-101); impl 07 decides the linked review item in the same transaction |
-| `memory export-lora --out DIR` | `MemoryStore.export_lora(out_dir)` (X:07); print the export report |
-| `memory purge --author-ref HASH` | `HASH` must match `^[0-9a-f]{32}$`; audit `admin_action` (`action="purge"`, `target="author_ref:<first 8>"`); `X:07/herness.harness.memory.MemoryStore.purge(author_ref=HASH)` |
+| `memory export-lora --out DIR` | `MemoryStore.export_lora(out_dir)` (T07-23 (herness.harness.memory.MemoryStore.export_lora)); print the export report |
+| `memory purge --author-ref HASH` | `HASH` must match `^[0-9a-f]{32}$`; audit `admin_action` (`action="purge"`, `target="author_ref:<first 8>"`); `T07-26 (herness.harness.memory.MemoryStore.purge)(author_ref=HASH)` |
 
 | Field | Content |
 |-------|---------|
@@ -2604,16 +2618,16 @@ All enqueueing commands (R-45): default → `submit_job` then, with `--wait` (de
 
 | Command | Behavior (owning spec) |
 |---------|------------------------|
-| `config validate [--profile P] [--offline] [--strict]` | `X:10/herness.admin.commands_config.cmd_config_validate(config_dir=, profile=, offline=, strict=)`; then, unless `--offline` or the load itself failed, the R-71 owner validators through `run_startup_validation(opts.config(startup_validation=False), raise_on_error=False)` (U09-106) and its issues are appended; prints `severity path file: message` lines, the resolved profile and `config_hash`; exit 0 when no problem, 3 on any error issue or, with `--strict`, any warning (R-46; DD-13 resolved) |
-| `config show [--profile P]` | `X:10/herness.admin.commands_config.cmd_config_show(config_dir=, profile=)`; the `data` mapping printed as YAML via `yaml.safe_dump`; secrets remain `secret:<name>` |
-| `config hash [--profile P]` | `X:10/herness.admin.commands_config.cmd_config_hash(config_dir=, profile=)` |
-| `secrets init`, `secrets set NAME`, `secrets status`, `secrets rekey` | `X:10/herness.admin.commands_secrets.cmd_secrets_init`, `cmd_secrets_set`, `cmd_secrets_status`, `cmd_secrets_rekey` with `actor = actor.user_ref`; this spec supplies `prompt` (`typer.prompt(hide_input=True)`) and `show` (a stderr console write that bypasses logging); `set` never takes the value as an argument; `--json` with `secrets init`, `set` or `rekey` → `UserInputError` |
-| `deploy render`, `deploy pull --allow-download`, `deploy up CLASS`, `deploy down [CLASS]`, `deploy rollback CLASS`, `deploy prune`, `deploy install BUNDLE_DIR` | `X:10/herness.admin.commands_deploy.cmd_deploy_render`, `cmd_deploy_pull`, `cmd_deploy_up`, `cmd_deploy_down`, `cmd_deploy_rollback`, `cmd_deploy_prune`, `cmd_deploy_install` (R-07, R-47, R-58); `CLASS` ∈ `reasoning`, `decider`, `large`; `BUNDLE_DIR` an existing directory holding the release wheel, attestation and SBOM |
-| `eval [options of spec 11 §3.2] [--wait/--no-wait] [--inline]` | Enqueue `eval` with `eval_payload(...)`; `gpu_class = "none"` with `--mock-llm` or `--suite classifier`, else `reasoning`; `--compare-runs` renders a comparison in-process through `X:11/herness.eval.report.compare` and enqueues nothing; on `done`, exit 4 when `job.result["passed"] is False` (an eval gate failed, R-46), else 0 |
+| `config validate [--profile P] [--offline] [--strict]` | `T10-14 (herness.admin.commands_config.cmd_config_validate)(config_dir=, profile=, offline=, strict=)`; then, unless `--offline` or the load itself failed, the R-71 owner validators through `run_startup_validation(opts.config(startup_validation=False), raise_on_error=False)` (U09-106) and its issues are appended; prints `severity path file: message` lines, the resolved profile and `config_hash`; exit 0 when no problem, 1 on any error issue or, with `--strict`, any warning (R-46: invalid config found by `config validate` is 1; a config that cannot be loaded at all raises `ConfigError`, exit 3) |
+| `config show [--profile P]` | `T10-14 (herness.admin.commands_config.cmd_config_show)(config_dir=, profile=)`; the `data` mapping printed as YAML via `yaml.safe_dump`; secrets remain `secret:<name>` |
+| `config hash [--profile P]` | `T10-14 (herness.admin.commands_config.cmd_config_hash)(config_dir=, profile=)` |
+| `secrets init`, `secrets set NAME`, `secrets status`, `secrets rekey` | `T10-14 (herness.admin.commands_secrets.cmd_secrets_init)`, `cmd_secrets_set`, `cmd_secrets_status`, `cmd_secrets_rekey` with `actor = actor.user_ref`; this spec supplies `prompt` (`typer.prompt(hide_input=True)`) and `show` (a stderr console write that bypasses logging); `set` never takes the value as an argument; `--json` with `secrets init`, `set` or `rekey` → `UserInputError` |
+| `deploy render`, `deploy pull --allow-download`, `deploy up CLASS`, `deploy down [CLASS]`, `deploy rollback CLASS`, `deploy prune`, `deploy install BUNDLE_DIR` | `T10-24 (herness.admin.commands_deploy.cmd_deploy_render)`, `cmd_deploy_pull`, `cmd_deploy_up`, `cmd_deploy_down`, `cmd_deploy_rollback`, `cmd_deploy_prune`, `cmd_deploy_install` (R-07, R-47, R-58); `CLASS` ∈ `reasoning`, `decider`, `large`; `BUNDLE_DIR` an existing directory holding the release wheel, attestation and SBOM |
+| `eval [options of spec 11 §3.2] [--wait/--no-wait] [--inline]` | `--compare-runs` renders a comparison in-process through `T11-38 (herness.eval.report.compare)` and enqueues nothing. Otherwise `payload = T11-30 (herness.eval.runner.build_eval_payload)(**options)` (spec 11 §3.2 option names in snake_case; unset options omitted) and `submit_job(kind="eval", payload=payload, gpu_class=T11-30 (herness.eval.runner.eval_gpu_class)(payload), priority=None, idem_key=<`resume:eval:<run_id>` with `--resume`, else None>)`: `none` with `--mock-llm`, `decider` for `--suite classifier` (R-43), else `reasoning`. On a terminal job the exit code is `T11-30 (herness.eval.runner.exit_code)(outcome)`: 0 when passed, 14 when an eval gate failed (R-46), 3 on `ConfigError`, 1 for any other failure |
 | `distill [--active] [--wait/--no-wait] [--inline]` | Enqueue `distill`, `gpu_class = "decider"`, payload `{"active": bool}` |
-| `laya status`, `laya accept VERSION`, `laya rollback VERSION` | Spec 03 functions (`X:03/laya status, accept and rollback, design 03 §5.8`) in-process |
-| `privacy delete --record-id ID... --reason-ref REF [--inline]` | `X:10/herness.admin.commands_data.cmd_privacy_delete(record_ids, reason_ref=, actor=)`; it enqueues one `maintenance` job per record (spec 10 §5.5); with `--inline` each returned `job_id` is run through `run_job_inline` in order |
-| `maintenance backup [--dry-run] [--inline]` / `maintenance purge [--dry-run] [--inline]` | `X:10/herness.admin.commands_data.cmd_maintenance(action, dry_run=, actor=)`; with `--inline` the returned `job_id` is run through `run_job_inline` |
+| `laya status`, `laya accept VERSION`, `laya rollback VERSION` | Spec 03 functions `T03-33 (herness.enrich.laya_admin.laya_status)`, `accept_model` and `rollback_model` (design 03 §5.8) in-process |
+| `privacy delete --record-id ID... --reason-ref REF [--inline]` | `T10-19 (herness.admin.commands_data.cmd_privacy_delete)(record_ids, reason_ref=, actor=)`; it enqueues one `maintenance` job per record (spec 10 §5.5); with `--inline` each returned `job_id` is run through `run_job_inline` in order |
+| `maintenance backup [--dry-run] [--inline]` / `maintenance purge [--dry-run] [--inline]` | `T10-19 (herness.admin.commands_data.cmd_maintenance)(action, dry_run=, actor=)`; with `--inline` the returned `job_id` is run through `run_job_inline` |
 
 Every `cmd_*` of impl 10 returns a `CommandResult` (U09-105); the handler converts it to a `CliResult` with the same `data`, `warnings` and `exit_code`. The role and elevation checks run before the call (U09-89).
 
@@ -2700,7 +2714,7 @@ Returns `FollowOutcome` (U09-91).
 | Preconditions | `actor.role == "admin"` (checked again here with `require_role(actor, "job_inline")`, in addition to U09-89). |
 | Postconditions | The job reached a terminal status or was released (`yield`) by impl 08. |
 | Invariants | The job row is the same one a worker would claim, so a worker that starts meanwhile cannot run it twice (impl 08 claim by `job_id`). |
-| Algorithm | 1. `require_role(actor, "job_inline")`. 2. Log `cli.job.inline_started` (INFO: `job_id`). 3. `outcome = X:08/herness.core.jobs.run_inline(job_id)`; a `HernessError` it raises propagates to U09-84 (exit 1). 4. `job = X:08/herness.core.jobs.get(job_id)`. 5. `outcome.status == "yield"` (Ctrl+C or a lost lease) → print "Interrupted; job `<id>` was released and stays queued." and return exit 130 with `detached=True`. 6. Otherwise apply U09-91 step 5 to `job` (exit 0 with partial and circuit warnings, or exit 1 for `failed` and `canceled`). 7. Log `cli.job.inline_completed` (INFO: `job_id`, `kind`, `status`, `exit_code`). |
+| Algorithm | 1. `require_role(actor, "job_inline")`. 2. Log `cli.job.inline_started` (INFO: `job_id`). 3. `outcome = T08-22 (herness.core.jobs.run_inline)(job_id)`; a `HernessError` it raises propagates to U09-84 (exit by class, U09-87). 4. `job = T08-12 (herness.core.jobs.get)(job_id)`. 5. `outcome.status == "yield"` (Ctrl+C or a lost lease) → print "Interrupted; job `<id>` was released and stays queued." and return exit 130 with `detached=True`. 6. Otherwise apply U09-91 step 5 to `job` (0; 6 partial or 4 open circuit with their warnings; the class code for `failed`; 1 for `canceled`). 7. Log `cli.job.inline_completed` (INFO: `job_id`, `kind`, `status`, `exit_code`). |
 | Side effects | The job's handler runs in this process (GPU lock and class swap per impl 08); job row updates. |
 | Errors | `PermissionDenied`, impl 08 `JobStateError` ("job not claimable" when a worker claimed it first), handler errors. |
 | Concurrency | Main thread; impl 08 runs its heartbeat thread and SIGINT handler. |
@@ -2719,7 +2733,7 @@ Signature: `worker_bootstrap() -> None`. Referenced by impl 08 (`run_worker(...,
 | Preconditions | Environment `HERNESS_CONFIG_DIR`, `HERNESS_DATA_DIR`, `HERNESS_PROFILE`, `HERNESS_SET_OVERRIDES` set by the `worker` command (U09-93); an absent variable means the default. |
 | Postconditions | Socket guard installed; config cached; L0 ports bound; start-up validation passed; every job kind has its handler registered. |
 | Invariants | Idempotent: a second call in the same process changes nothing (impl 08 treats a repeated registration of the same callable as a no-op). |
-| Algorithm | 1. `X:10/herness.core.egress_socket.install_socket_guard` with the bootstrap config (`X:10/herness.core.config_sources.load_bootstrap`). 2. `cfg = X:10/herness.core.config.init_config(...)` from the environment variables (overrides parsed as in U09-53 step 1). 3. `X:00/herness.core.logging.configure(component="worker")`. 4. `X:08/herness.store.ops.resilience.bind_core_backends()` (R-04). 5. `run_startup_validation(cfg)` (U09-106, R-71). 6. Register the handlers of every owner by importing and calling their registration functions: `X:10/herness.admin.register_handlers`, and the job handler registration of X:01 (`sync`, `reconcile`), X:02 (`build_pipeline`), X:03 (`distill`), X:06 (`review`, `chat`), X:07 (`outcome_measure`, `memory_maintenance`) and X:11 (`eval`). |
+| Algorithm | 1. `T10-18 (herness.core.egress_socket.install_socket_guard)` with the bootstrap config (`T10-02 (herness.core.config_sources.load_bootstrap)`). 2. `cfg = T10-03 (herness.core.config.init_config)(...)` from the environment variables (overrides parsed as in U09-53 step 1). 3. `T00-07 (herness.core.logging.configure_logging)(cfg.logging.level, log_dir=cfg.paths.logs, scrubber=T10-07 (herness.core.secrets.scrub_secrets), stderr=True)`. 4. `T08-23 (herness.store.ops.resilience.bind_core_backends)()` (R-04). 5. `run_startup_validation(cfg)` (U09-106, R-71). 6. Register the handlers of every owner by importing and calling their registration functions: `T10-19 (herness.admin.register_handlers)`; `T01-11 (herness.connectors.jobs.register_job_handlers)` (`sync`, `reconcile`); `T07-23 (herness.harness.memory.register_memory_components)` (`outcome_measure`, `memory_maintenance`); and, through `T08-12 (herness.core.jobs.register_handler)`: `build_pipeline` → `T02-19 (herness.model.build.make_build_pipeline_handler)(llm_factory=llm_factory)`, `distill` → `T03-32 (herness.enrich.distill.make_distill_handler)(llm_factory)`, `review` → `T06-22 (herness.harness.swarm.handler.review_job_handler)`, `chat` → `T06-25 (herness.harness.pipelines.chat.chat_job_handler)`, `eval` → `T11-30 (herness.eval.runner.handle_eval)` after `T11-30 (herness.eval.runner.set_deps_factory)` (R-04 binding pattern). `llm_factory` builds clients from `T05-10 (herness.harness.llm.LLMRegistry)` for `cfg.profile` (R-05: L3 receives clients from the composition root). |
 | Side effects | Process-wide guard, config cache, port binding, handler registry. |
 | Errors | `ConfigError` (the child exits and impl 08 records the error). |
 | Concurrency | Called once at process start, before any job thread. |
@@ -2735,7 +2749,7 @@ Signature: `worker_bootstrap() -> None`. Referenced by impl 08 (`run_worker(...,
 |-------|---------|
 | Kind | class |
 | Purpose | The result type that `herness.admin` command functions return without printing, so this spec renders every command the same way (design §5.7). |
-| Preconditions | `exit_code` ∈ {0, 1, 3} for impl 10 commands (R-46; `2` is reserved for usage errors); `ok` is true exactly when `exit_code == 0`. |
+| Preconditions | `exit_code` is a key of `EXIT_CODES` (U09-87) other than 2 and 130 (R-46; `2` is reserved for usage errors; impl 10 returns 1 for `config validate` findings and failed checks); `ok` is true exactly when `exit_code == 0`. |
 | Postconditions | `CliResult(command=<path>, data=data, warnings=warnings, human=<default table printer>, exit_code=exit_code)` is the conversion used by U09-98. |
 | Invariants | Immutable. |
 | Algorithm | Conversion as stated; an `exit_code` outside the allowed set → `SchemaViolation("command <path> returned exit code <n>")`. |
@@ -2752,19 +2766,21 @@ Signature: `worker_bootstrap() -> None`. Referenced by impl 08 (`run_worker(...,
 |-----------|------|---------|------|-------------|
 | `cfg` | `HernessConfig` | — | pos | loaded by `load_config` |
 | `raise_on_error` | `bool` | `True` | kw | |
+| `offline` | `bool` | `True` | kw | `False` only for `doctor --sources` |
+| `config_dir` | `Path` | `Path("config")` | kw | the `--config-dir` or `HERNESS_CONFIG_DIR` value |
 
-Returns `list[ConfigIssue]` (X:10 `herness.core.config.ConfigIssue`).
+Returns `list[ConfigIssue]` (T10-03 (herness.core.config.ConfigIssue)).
 
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Run impl 10's start-up validation hook after `load_config` in every composition root (R-71). The hook calls owner validators that need layers above L0 and so cannot run inside the L0 config loader (for example impl 04 `validate_catalog`; impl 04 DD04-20). |
+| Purpose | Run impl 10's start-up validation hook (`T10-12 (herness.core.config_validate.run_owner_validators)`, U10-109) after `load_config` in every composition root (R-71; impl 10 F10-01 step 3a). The hook calls owner validators that need layers above L0 and so cannot run inside the L0 config loader (for example impl 04 `validate_catalog`; impl 04 DD04-20). |
 | Preconditions | Ports bound (R-04). |
-| Postconditions | With `raise_on_error`, returns only when no issue has severity `error`. |
-| Invariants | Called by `GlobalOptions.config()` (U09-85), `app/common/bootstrap.get_services` (U09-53), `worker_bootstrap` (U09-104), `doctor` (U09-94, `raise_on_error=False`) and `config validate` (U09-98, `raise_on_error=False`). |
-| Algorithm | 1. `issues = X:10/herness.core.config_validate.run_startup_validators(cfg)` (the impl 10 hook; name pending, DD-30). 2. Log `config.startup.validated` (INFO: `errors`, `warnings` counts). 3. `raise_on_error` and any `error` issue → `ConfigError(f"start-up validation failed: {n} errors", details={"issues": "; ".join(str(i) for i in error issues)[:2000]})`. 4. Return `issues`. |
-| Side effects | Whatever the owner validators read (for example the metric catalog files). |
-| Errors | `ConfigError`. |
+| Postconditions | With `raise_on_error`, returns only when no issue has severity `error`. The owner validators are registered once per process. |
+| Invariants | Called by `GlobalOptions.config()` (U09-85), `app/common/bootstrap.get_services` (U09-53), `worker_bootstrap` (U09-104), `doctor` (U09-94, `raise_on_error=False`) and `config validate` (U09-98, `raise_on_error=False`). A second call registers nothing new (impl 10 treats a repeated registration of the same object as a no-op). |
+| Algorithm | 1. Register the owner validators with `T10-12 (herness.core.config_validate.register_owner_validator)`: name `metrics.catalog` → a module-level adapter bound to `config_dir` that reads `<config_dir>/metrics.yaml` (UTF-8, ≤ 1 MiB, `yaml.safe_load`, `MetricsCatalogConfig.model_validate`; a missing, oversized or invalid file becomes one `error` issue at path `metrics`) and returns `T04-03 (herness.metrics.catalog.validate_catalog)(catalog, weights=cfg.weights)`. Owners that later need the hook add their validator here. 2. `issues = T10-12 (herness.core.config_validate.run_owner_validators)(cfg, offline=offline)`. 3. Log `config.startup.validated` (INFO: `errors`, `warnings` counts). 4. `raise_on_error` and any `error` issue → `ConfigError(f"start-up validation failed: {n} errors", details={"issues": "; ".join(str(i) for i in error issues)[:2000]})`, which exits 3 (R-46). 5. Return `issues`. |
+| Side effects | Owner-validator registry (process-wide, impl 10); whatever the owner validators read (for example the metric catalog files). |
+| Errors | `ConfigError` (exit 3, R-46). |
 | Concurrency | Called on the process main thread before serving commands, pages or jobs. |
 | Complexity and limits | Bounded by the owner validators; each is expected to finish in < 5 s. |
 | Security notes | Issue text names files and keys only, never values of secrets. |
@@ -2906,11 +2922,11 @@ Read but not owned: `review_item` (read and decided only through impl 02's `hern
 | Step | Unit | State change | On failure |
 |------|------|--------------|------------|
 | 1 | U09-24 validate `run_id`, `formats` | — | `ReportContractError` / `ConfigError`; nothing written |
-| 2 | `X:06 get_run` | — | `NotFound` (exit 1, R-46) |
+| 2 | `T06-05 (herness.store.ops.get_run)` | — | `NotFound` (exit 7, R-46) |
 | 3 | status gate | — | `ReportContractError` code `run_not_finished` |
 | 4 | U09-06 `load_draft` | — | `ReportContractError` code `draft_missing`/`draft_invalid` |
 | 5 | U09-24 prepare `out_dir`, delete old `*.tmp` | tmp files removed | `SchemaViolation` on OS error |
-| 6 | `X:02 open_readonly(build_id)` | — | `ReportContractError` code `build_retired` |
+| 6 | T02-09 (herness.store.warehouse.open_readonly) `open_readonly(build_id)` | — | `ReportContractError` code `build_retired` |
 | 7 | U09-08 contract check | — | `ReportContractError` code `contract_violation` |
 | 8 | U09-09 uncited scan | — | strict: `ReportContractError` code `uncited`; non-strict: hits passed to step 9 |
 | 9 | U09-15 load data, U09-16 banners, U09-17 segments, U09-19–22 charts | collector filled | `QueryError`, `StoreBusy`, `ReportContractError` (portfolio_custom) |
@@ -2949,8 +2965,8 @@ Called by spec 06 at the end of each review (`render_run(run_id, formats=cfg.app
 |------|------|--------------|------------|
 | 1 | U09-71 in-flight guard | session in-flight set | second submit refused |
 | 2 | U09-34 validate, ownership, redact, insert user row | one `chat_message` (user) | `UserInputError`, `PolicyViolation` (redaction failed), `StoreBusy` |
-| 3 | `X:08 jobs.chat_policy(now)`; `chat_next_live_at` for `defer` | — | spec 08 error → error box |
-| 4 | `X:06 ChatService.answer(...)` events → U09-69 reducer; tokens escaped by U09-58 into `st.write_stream` | spec 06 writes the assistant row and, for `defer`, the `chat` job | `error` event → error box + Retry (FT09-04) |
+| 3 | T08-19 (herness.core.jobs.chat_policy) `chat_policy(now)`; `chat_next_live_at` for `defer` | — | spec 08 error → error box |
+| 4 | T06-25 (herness.harness.pipelines.chat.ChatService.answer) `ChatService.answer(...)` events → U09-69 reducer; tokens escaped by U09-58 into `st.write_stream` | spec 06 writes the assistant row and, for `defer`, the `chat` job | `error` event → error box + Retry (FT09-04) |
 | 5 | after `final`: rerun; page reloads rows; U09-59 renders the answer; U09-68 badge; U09-67 evidence | in-flight flag cleared | — |
 | 5a | a `correction_captured` event after `final` (R-32) → U09-69 sets `correction_memory_id`; U09-71 shows the separate notice below the answer | — | — |
 | 6 | Retry: U09-71 with `text=None` | no new user row | same as step 4 |
@@ -2968,9 +2984,9 @@ Called by spec 06 at the end of each review (`render_run(run_id, formats=cfg.app
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|------------|
-| 1 | U09-84 pre-scan, `install_socket_guard`, logging | process guard | guard error → exit 1 |
+| 1 | U09-84 pre-scan, `install_socket_guard`, logging | process guard | guard error → exit by class (U09-87; `ConfigError` 3) |
 | 2 | Typer parse, U09-85 root callback | `ctx.obj` | usage error → exit 2 |
-| 3 | U09-89 `guarded` role check (loads config) | `auth` audit on refusal | `ConfigError` or `PermissionDenied` → exit 1 (R-46) |
+| 3 | U09-89 `guarded` role check (loads config) | `auth` audit on refusal | `ConfigError` → exit 3, `PermissionDenied` → exit 11 (R-46) |
 | 4 | command handler | per command | taxonomy error → U09-87 code |
 | 5 | U09-86 `emit` / `emit_error` | stdout/stderr | — |
 | 6 | U09-84 exit | — | — |
@@ -2980,12 +2996,12 @@ Called by spec 06 at the end of each review (`render_run(run_id, formats=cfg.app
 | Step | Unit | State change | On failure |
 |------|------|--------------|------------|
 | 1 | U09-92 payload | — | `UserInputError` 2 |
-| 2 | U09-90 `submit_job` | job row | `StoreBusy` → exit 1 |
+| 2 | U09-90 `submit_job` | job row | `StoreBusy` → exit 8 |
 | 2a | no live worker and not `--inline` → stderr warning with the fix (R-44, R-45) | — | — |
 | 3 | `--no-wait` → print `job_id`, exit 0 | — | — |
-| 3a | `--inline` (admin) → U09-103 `run_job_inline` → impl 08 `run_inline(job_id)` in this process, then step 5 | job claimed and run here | non-admin → `PermissionDenied`, exit 1; job already claimed by a worker → `JobStateError`, exit 1; Ctrl+C → job released, exit 130 |
-| 4 | U09-91 poll every `cli.poll_interval_s`; worker warning once | — | ten consecutive `StoreBusy` → exit 1 |
-| 5 | terminal status → exit 0 (with the partial or open-circuit warning when it applies) or 1 (failed, canceled); Ctrl+C → 130 detached (R-46) | — | — |
+| 3a | `--inline` (admin) → U09-103 `run_job_inline` → impl 08 `run_inline(job_id)` in this process, then step 5 | job claimed and run here | non-admin → `PermissionDenied`, exit 11; job already claimed by a worker → `JobStateError`, exit 1; Ctrl+C → job released, exit 130 |
+| 4 | U09-91 poll every `cli.poll_interval_s`; worker warning once | — | ten consecutive `StoreBusy` → exit 8 |
+| 5 | terminal status → exit 0, 6 (partial) or 4 (open circuit) with their warnings, the class code of `last_error` (failed) or 1 (canceled); Ctrl+C → 130 detached (R-46) | — | — |
 
 ### F09-08 `herness report funding|org`
 
@@ -2993,7 +3009,7 @@ Called by spec 06 at the end of each review (`render_run(run_id, formats=cfg.app
 |------|------|--------------|------------|
 | 1 | U09-92 `parse_budget_usd`, `review_request` (custom scenarios `custom_<usd>`) | — | exit 2 |
 | 2 | F09-07 | `review` job; spec 06 run, draft, render | exit per U09-87 |
-| 3 | U09-41 re-render when render options differ, else read `manifest.json` | report files | exit 1 on contract error (`error.type` `ReportContractError`) |
+| 3 | U09-41 re-render when render options differ, else read `manifest.json` | report files | exit 12 on contract error (`error.type` `ReportContractError`) |
 | 4 | U09-96 print paths, `--open` | browser | — |
 
 ### F09-09 Terminal chat (U09-99)
@@ -3017,7 +3033,7 @@ Same steps as F09-04 with terminal output: step 4 prints tool lines and the fina
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|------------|
-| 1 | U09-93 bind check (loopback only, R-50) | — | `ConfigError` → exit 1 |
+| 1 | U09-93 bind check (loopback only, R-50) | — | `ConfigError` → exit 3 |
 | 2 | build Streamlit argument list and environment | — | — |
 | 3 | child process: U09-53 guard, config, services on first page load | — | config error shown on every page |
 | 4 | parent returns the child's exit code | — | — |
@@ -3026,27 +3042,27 @@ Same steps as F09-04 with terminal output: step 4 prints tool lines and the fina
 
 | Failure condition | Class raised | Caught where | Retry / fallback | User-visible effect | Log event |
 |-------------------|--------------|--------------|------------------|---------------------|-----------|
-| `CURRENT` missing | `NoCurrentBuild`; CLI `NotFound` code `no_current` | U09-65; U09-84 | none | "No promoted warehouse yet." / "Run `herness pipeline`."; exit 1 | `app.page.rendered` (empty state) |
-| Run's build retired | `ReportContractError` (`build_retired`) | U09-84, U09-66 | none | design §6 row; exit 1 | `reports.render.failed` |
-| `draft.json` missing or invalid | `ReportContractError` | same | none | design §6 row; exit 1 | `reports.render.failed` |
-| Contract violation | `ReportContractError` (`contract_violation`) | same | none | message with `details.where`; exit 1 | `reports.contract.violated` |
-| Uncited numerals (strict) | `ReportContractError` (`uncited`) | same | none; `--no-strict` renders with marks | exit 1 | `reports.render.failed` |
-| Run not finished | `ReportContractError` (`run_not_finished`) | same | none | exit 1 | `reports.render.failed` |
-| Partial run | none (status) | U09-91, U09-96 | none | banner, caveats, watermark; exit 0 with a warning and `partial: true` (R-46) | `reports.render.completed` |
-| PDF engine missing | `ConfigError` (`pdf_missing`) | U09-84 | none | design §6 row; exit 1 | `reports.render.failed` |
-| Template error | `SchemaViolation` | U09-84 | none | exit 1 | `reports.render.failed` |
-| Lease held / ops busy | `StoreBusy` | action callers; U09-84 | `retry_call("sqlite_write")` (spec 08: 6 attempts, ≤ 30 s) | design §6 rows; form keeps input; exit 1 | `app.action.failed` / `cli.command.failed` |
+| `CURRENT` missing | `NoCurrentBuild`; CLI `NotFound` code `no_current` | U09-65; U09-84 | none | "No promoted warehouse yet." / "Run `herness pipeline`."; exit 7 | `app.page.rendered` (empty state) |
+| Run's build retired | `ReportContractError` (`build_retired`) | U09-84, U09-66 | none | design §6 row; exit 12 | `reports.render.failed` |
+| `draft.json` missing or invalid | `ReportContractError` | same | none | design §6 row; exit 12 | `reports.render.failed` |
+| Contract violation | `ReportContractError` (`contract_violation`) | same | none | message with `details.where`; exit 12 | `reports.contract.violated` |
+| Uncited numerals (strict) | `ReportContractError` (`uncited`) | same | none; `--no-strict` renders with marks | exit 12 | `reports.render.failed` |
+| Run not finished | `ReportContractError` (`run_not_finished`) | same | none | exit 12 | `reports.render.failed` |
+| Partial run | none (status) | U09-91, U09-96 | none | banner, caveats, watermark; exit 6 with a warning and `partial: true` (R-46) | `reports.render.completed` |
+| PDF engine missing | `ConfigError` (`pdf_missing`) | U09-84 | none | design §6 row; exit 3 | `reports.render.failed` |
+| Template error | `SchemaViolation` | U09-84 | none | exit 5 | `reports.render.failed` |
+| Lease held / ops busy | `StoreBusy` | action callers; U09-84 | `retry_call("sqlite_write")` (spec 08: 6 attempts, ≤ 30 s) | design §6 rows; form keeps input; exit 8 | `app.action.failed` / `cli.command.failed` |
 | No worker | none (warning) | U09-91 | keeps waiting | stderr warning | `cli.worker.absent` |
 | Model endpoint down (chat) | `ModelUnavailable` → `error` event from spec 06 | U09-71, U09-99 | Retry button / `/retry` | error box; assistant row `failed` (spec 06) | `app.chat.turn_failed` |
-| Model down (CLI job) | job `failed` with class `ModelUnavailable` | U09-91 | spec 08 fallback chain before failing | exit 1 | `cli.command.completed` |
+| Model down (CLI job) | job `failed` with class `ModelUnavailable` | U09-91 | spec 08 fallback chain before failing | exit 9 | `cli.command.completed` |
 | Chat budget exceeded | `BudgetExceeded` handled in spec 06 | — | partial answer kept | badge `Unverified` | `app.chat.turn_completed` |
-| Source auth failure | `AuthError` | U09-84 | spec 08 breaker | design §6 row; exit 1 | `cli.command.failed` |
-| Egress blocked | `EgressBlocked` | U09-84 | spec 08 may fall back to local | design §6 row; exit 1 | `cli.command.failed` |
-| Role missing | `PermissionDenied` | U09-65/U09-66, U09-84 | none | "You need the <role> role to …" / hint; exit 1 | `app.auth.denied`, `cli.auth.denied` |
+| Source auth failure | `AuthError` | U09-84 | spec 08 breaker | design §6 row; exit 4 | `cli.command.failed` |
+| Egress blocked | `EgressBlocked` | U09-84 | spec 08 may fall back to local | design §6 row; exit 13 | `cli.command.failed` |
+| Role missing | `PermissionDenied` | U09-65/U09-66, U09-84 | none | "You need the <role> role to …" / hint; exit 11 | `app.auth.denied`, `cli.auth.denied` |
 | Audit write fails | `FatalError`/`StoreBusy` from spec 10 | action callers | spec 10 retries 3× | action does not happen; error shown | `app.action.failed` |
 | Invalid user input | `UserInputError` | forms; U09-84 | none | message next to the form; exit 2 | none (DEBUG `app.input.rejected`) |
 | Chat redaction failure | `PolicyViolation` | U09-71, U09-99 | none | "Your message could not be processed safely."; nothing stored | `app.chat.turn_failed` |
-| Unknown object id | `NotFound` (impl 00, R-19) or `MemoryNotFound` (impl 07) | callers | none | "<kind> <id> not found"; exit 1 | none |
+| Unknown object id | `NotFound` (impl 00, R-19) or `MemoryNotFound` (impl 07) | callers | none | "<kind> <id> not found"; exit 7 | none |
 | Warehouse query timeout | `QueryError` | U09-66 | none | error card for that block | `app.widget.failed` |
 | Unexpected exception | any | U09-65, U09-66, U09-84 (ENG §3.4 boundaries) | none | "Unexpected error." + log path; exit 1 | `app.page.failed`, `app.widget.failed`, `cli.command.failed` |
 | Ctrl+C while waiting | `KeyboardInterrupt` | U09-91 | job continues | "Detached …"; exit 130 | `cli.job.detached` |
@@ -3137,7 +3153,7 @@ AI RMF functions served: **Measure** (verification status shown per answer; `num
 
 | Secret | Use | Resolution |
 |--------|-----|-----------|
-| `ui_user_ref_key` | HMAC key for `user_ref` (dashboard and CLI) | `X:10/herness.core.secrets.resolve` at first use, cached in process memory as bytes, never logged |
+| `ui_user_ref_key` | HMAC key for `user_ref` (dashboard and CLI) | `T10-06 (herness.core.secrets.resolve)` at first use, cached in process memory as bytes, never logged |
 
 No other secret is read here; commands of spec 10 handle their own.
 
@@ -3206,7 +3222,7 @@ No other secret is read here; commands of spec 10 handle their own.
 
 No event carries chat text, ticket text, usernames or header values.
 
-### 8.2 Metrics (`metric_sample`, written through `X:08/herness.store.ops.metrics.record_metric_samples`, R-12, ENG E5)
+### 8.2 Metrics (`metric_sample`, written through `T08-05 (herness.store.ops.metrics.record_metric_samples)`, R-12, ENG E5)
 
 | Name | Type | Labels |
 |------|------|--------|
@@ -3289,7 +3305,7 @@ Limits enforced in code: `page_row_limit` 5000 rows per named query; query timeo
 
 ## 11. Test specification
 
-Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`, `draft_org.json`, `golden/` (X:11), `tiny_build` and `full` synthetic builds (X:11 `tests/support/builds.py`), a temp ops store migrated by `X:02 migrate`, `FakeClock` (X:11), a `FakeChatService` in `tests/support/fake_chat.py` (created by T09-19) that replays scripted `ChatEvent` lists, and a `FakeMemoryStore` recording calls.
+Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`, `draft_org.json`, `golden/` (spec 09 test fixtures, created by T09-11; impl 11 §4.4 does not list them), `tiny_build` (T11-17 (tests.support.builds.tiny_build)) and the `full` synthetic dataset (T11-14 (tools.synth_data.main) `--scale full`, then a build), a temp ops store migrated by `T02-05 (herness.store.ops.migrate)`, `T11-03 (tests/support/fake_clock.FakeClock)`, a `FakeChatService` in `tests/support/fake_chat.py` (created by T09-19) that replays scripted `ChatEvent` lists, and a `FakeMemoryStore` recording calls.
 
 ### 11.1 Unit tests (`tests/unit/reports`, `tests/unit/app`, `tests/unit/cli`; marker `unit`)
 
@@ -3357,11 +3373,11 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | UT09-60 | U09-62 | query over 6,000 rows; wrong param type; interrupt | query | 5000 rows + truncated; `UserInputError`; `QueryError` timeout |
 | UT09-61 | U09-69 | each event kind; event after done | reduce | table state changes; ignored after done |
 | UT09-62 | U09-70 | each mode; defer with and without ETA | banner | exact texts; tz formatting |
-| UT09-63 | U09-87 | instance of every taxonomy class, `UserInputError`, `UsageError`, `KeyboardInterrupt`, `ValueError` | map | 2 for the two usage classes, 130 for the interrupt, 1 for every other class (R-46); `EXIT_CODES` keys are exactly 0, 1, 2, 3, 4, 130 |
+| UT09-63 | U09-87 | instance of every taxonomy class, `UserInputError`, `UsageError`, `KeyboardInterrupt`, `ValueError` | map | 2 for the two usage classes, 130 for the interrupt, the U09-87 table code for each taxonomy class (3 `ConfigError`, 4 `AuthError`/`SourceUnavailable`/`RateLimited`/source `CircuitOpen`, 5 `SchemaViolation`, 7 `NotFound`, 8 `StoreBusy`, 9 `ModelUnavailable`/`ModelRefused`/`model:` `CircuitOpen`, 10, 11, 12, 13), 1 for `PolicyViolation` and `ValueError`; `exit_code_for_class_name` gives the same codes from class names, 1 for an unknown name; `EXIT_CODES` keys are exactly 0–14 and 130 (R-46) |
 | UT09-64 | U09-86 | success and error in JSON and human modes | emit | envelope shape `cli/1`; stdout one line; warnings to stderr |
 | UT09-65 | U09-88 | each table row | message | exact what/fix strings |
 | UT09-66 | U09-89 | every registered Typer command path | enumerate | each in `COMMAND_ROLES` and in the §3.12 table (parsed from a fixture copy); `deploy install`, `secrets rekey` and `gpu load large` exist (R-47); denied user refused for all but `doctor`, `config validate` |
-| UT09-67 | U09-91 | fake jobs: done, done partial, done `skipped_open_circuit`, failed `ModelUnavailable`, failed unknown on build_pipeline, canceled | follow | 0 with partial warning and `partial=True`; 0 with circuit warning; 1; 1; 1; exit 0 for plain done (R-46, R-39) |
+| UT09-67 | U09-91 | fake jobs: done, done partial, done `skipped_open_circuit`, failed `ModelUnavailable`, failed unknown on build_pipeline, canceled | follow | 6 with partial warning and `partial=True`; 4 with circuit warning; 9; 1; 1; exit 0 for plain done (R-46, R-39) |
 | UT09-68 | U09-90, U09-91 | `worker_alive()` false | submit then follow | one warning on stderr naming `herness worker` and `--inline` (R-44, R-45); follow does not repeat it; keeps polling |
 | UT09-69 | U09-91, U09-84 | KeyboardInterrupt during poll | follow | exit 130, detached, job untouched |
 | UT09-70 | U09-92 | budgets `2,000,000` and `1_500_000.00`; stage `dq` | build | scenarios `custom_2000000`, `custom_1500000`; stages `dq, promote` |
@@ -3370,7 +3386,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | UT09-73 | U09-65 | body raising `HernessError`, `ValueError`, `StopException` | page (AppTest) | error card ×2; stop propagates |
 | UT09-74 | U09-66 | block raising | page | error card; next block renders |
 | UT09-75 | U09-34 – U09-41 | viewer and reviewer actors, fake stores | each action | role enforced, validation applied, audit order (audit before admin actions) |
-| UT09-76 | U09-94 | missing CURRENT, old build, pending migrations, no worker, no weasyprint with pdf, start-up hook returning an `error` issue | doctor | WARN/FAIL per rule, including a `startup_validation` FAIL row (R-71); exceptions become FAIL; exit 3 on any FAIL (R-46) |
+| UT09-76 | U09-94 | missing CURRENT, old build, pending migrations, no worker, no weasyprint with pdf, start-up hook returning an `error` issue | doctor | WARN/FAIL per rule, including a `startup_validation` FAIL row (R-71); exceptions become FAIL; exit 1 on any FAIL (R-46) |
 | UT09-77 | U09-53 | env with bad `HERNESS_SET_OVERRIDES`; start-up hook returning an `error` issue; `bind_core_backends` spy | bootstrap | `ConfigError` for both; ports bound before the hook runs (R-04, R-71); guard installed once on repeated calls |
 | UT09-78 | U09-64 | trace with long, invalid and matching lines; viewer | read page | paging of 200; skipped counts; no `payload`/`args` keys |
 | UT09-79 | U09-15 | fixture warehouse and draft | load data | collector order; titles redacted; rationale placeholders filled; unknown kept |
@@ -3381,10 +3397,10 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | UT09-84 | U09-67 | ids in ops, meta, none | render (AppTest) | anchors, "Sample not stored", "Evidence not found" |
 | UT09-85 | U09-85 | `--quiet --verbose`; bad `--set` | parse | exit 2 |
 | UT09-86 | U09-93 | `ui` with fake subprocess runner | run | exact argument list and env; non-loopback bind refused |
-| UT09-87 | U09-95 | `sync --backfill` without `--to`; `score --scenario 2000000` | run | exit 2; optimizer fake called with `persist=False` |
+| UT09-87 | U09-95 | `sync --backfill` without `--from`; `sync --entity incident` without `SOURCE`; `sync jira --backfill --from 2026-01-01` (fake `build_sync_payload` and `submit_job`); `score --scenario 2000000` | run | exit 2 for the first two, no job; the third enqueues with impl 01's kind, payload and `idem_key` unchanged; optimizer fake called with `persist=False` |
 | UT09-88 | U09-96 | `report funding --no-wait --top-n 5` | run | job enqueued; warning about render options |
 | UT09-89 | U09-97 | `review-queue approve` on `label_check`; `memory approve rev_…` (a review item id, not a memory id) | run | `UserInputError` exit 2 for both (R-33) |
-| UT09-90 | U09-98 | each delegated command with `herness.admin` fakes | run | owning `cmd_*` function called with parsed args and `actor`; `config validate --strict` with a warning → 3; `config validate` appends the start-up hook's issues (R-71) and exits 3 on an error issue; `eval` job with `passed = false` → 4 (R-46) |
+| UT09-90 | U09-98 | each delegated command with `herness.admin` fakes | run | owning `cmd_*` function called with parsed args and `actor`; `config validate --strict` with a warning → 1; `config validate` appends the start-up hook's issues (R-71) and exits 1 on an error issue; `eval` enqueues with `build_eval_payload` and `eval_gpu_class` (`decider` for `--suite classifier`, R-43); `eval` job with `passed = false` → 14 (R-46) |
 | UT09-91 | U09-99 | scripted stdin with each slash command | run | expected calls and outputs |
 | UT09-92 | U09-28 | render templates with a context missing one variable | render | `SchemaViolation` naming the template |
 | UT09-93 | U09-03 | ids and tokens; AST of `herness/reports/contract.py` | match; scan | `RUN_ID_RE`, `QUERY_ID_RE` accept/reject tables; the module compiles no marker or numeral regex of its own (R-16) |
@@ -3396,11 +3412,13 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | UT09-99 | U09-101 | viewer and reviewer actors; `FakeMemoryStore` raising `PolicyViolation("approve.not_pending")`; 501-char approve note | decide | viewer refused; reviewer → one `approve` call with `memory_id`; not pending → `UserInputError`; long note → `UserInputError` |
 | UT09-100 | U09-103 | admin and reviewer actors; fake `run_inline` returning `done`, `yield`; raising `JobStateError` | run inline | reviewer refused before any call; `done` → exit 0; `yield` → exit 130 detached; `JobStateError` propagates |
 | UT09-101 | U09-104 | environment variables set; fake registration functions and `bind_core_backends` spy | call twice | guard installed before the first registration import; ports bound; start-up validation called; handlers registered once |
-| UT09-102 | U09-105 | `CommandResult` with exit codes 0, 1, 3 and 2 | convert; emit JSON | `CliResult` fields copied; envelope `ok` matches; exit 2 → `SchemaViolation` |
-| UT09-103 | U09-106, U09-85 | fake start-up hook returning one `error` issue, then one `warn` issue | `run_startup_validation` with both flags; `GlobalOptions.config()` with and without `startup_validation` | error issue → `ConfigError` with a string `details["issues"]` (R-74), CLI exit 1; `raise_on_error=False` returns the issues; `startup_validation=False` skips the hook; warn issue never raises (R-71) |
+| UT09-102 | U09-105 | `CommandResult` with exit codes 0, 1, 3, 2 and 130 | convert; emit JSON | `CliResult` fields copied; envelope `ok` matches; exit 2 and 130 → `SchemaViolation` |
+| UT09-103 | U09-106, U09-85 | fake start-up hook returning one `error` issue, then one `warn` issue | `run_startup_validation` with both flags; `GlobalOptions.config()` with and without `startup_validation` | error issue → `ConfigError` with a string `details["issues"]` (R-74), CLI exit 3; `raise_on_error=False` returns the issues; the `metrics.catalog` validator is registered once; `startup_validation=False` skips the hook; warn issue never raises (R-71) |
 | UT09-104 | U09-107 | assistant row with `meta.reply_to = msg_A`; user rows only for `msg_B` | find | row for `msg_A`; `None` for `msg_B`; other session's row not returned |
 | UT09-105 | U09-108 | session with 3 user, 2 assistant, 1 system rows; unknown session | count | 3; 0 |
 | UT09-106 | U09-109 | set with `msg_2`; repeat with `msg_2`; call with older `msg_1`; message of another session; 6,001 chars | set | stored; repeat unchanged; stale ignored; `SchemaViolation`; `SchemaViolation` |
+| UT09-107 | U09-94 | fake `swarm_health` returning `ok`, `degraded` (reason "worker down"), `down` (reason `StoreBusy`), and raising | doctor | `swarm` row PASS; WARN with the reason and fix; FAIL with the reason; FAIL with the error class name; `swarm_health` called with `list_jobs`, `worker_alive` and `now` keywords |
+| UT09-108 | U09-94 | fake `ops_health`, `warehouse_health`, `VectorStore.health` each returning `("ok", "")`, `("degraded", "r")`, `("down", "StoreBusy")` | doctor | `ops_store`, `warehouse`, `vectors` rows PASS, WARN with reason `r` and fix, FAIL with reason `StoreBusy`; exit 1 only when a row is FAIL (R-46) |
 
 ### 11.2 Property tests (marker `unit`, hypothesis)
 
@@ -3420,11 +3438,11 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 |----|------|-------|--------|----------|
 | IT09-01 | F09-01 | fixture drafts, `tiny_build`, ops fixture, FakeClock | render both kinds | `report.html` and `report.md` byte-identical to `tests/fixtures/reports/golden/` (update only with `--snapshot-update`) |
 | IT09-02 | F09-01 | same | parse HTML | every `a.num` href resolves to an `id="ev-…"`; numerals in model text inside `a.num` or allowed; `numbers_linked == numbers_total` |
-| IT09-03 | U09-09 vs X:05 Verifier | shared fixture strings | both paths | identical accept/reject decisions (both call `herness.core.numbers`, R-16) |
-| IT09-04 | F09-01, F09-08 | draft with uncited "42%" | `herness report render` | exit 1 with `error.type` `ReportContractError` (R-46); `--no-strict` renders `<mark class="uncited">` and lists it in the manifest |
+| IT09-03 | U09-09 vs T05-25 (herness.harness.verifier.Verifier.verify_numbers) | shared fixture strings | both paths | identical accept/reject decisions (both call `herness.core.numbers`, R-16) |
+| IT09-04 | F09-01, F09-08 | draft with uncited "42%" | `herness report render` | exit 12 with `error.type` `ReportContractError` (R-46); `--no-strict` renders `<mark class="uncited">` and lists it in the manifest |
 | IT09-05 | F09-01 | drafts with marker without ref, unknown query_id, unknown rec_id, unverified finding, wrong schema_version | render | each fails with a field path |
 | IT09-06 | F09-01 | warehouse fixture without `meta.evidence.result_sample` | render | "Sample not stored for this build"; success |
-| IT09-07 | F09-01, F09-02 | weights with one unconfirmed; run partial with 2 dead tasks; publishable false | render; AppTest; CLI | banners and watermark in HTML, MD and dashboard; CLI exit 0 with the partial warning and `partial: true` (R-46) |
+| IT09-07 | F09-01, F09-02 | weights with one unconfirmed; run partial with 2 dead tasks; publishable false | render; AppTest; CLI | banners and watermark in HTML, MD and dashboard; CLI exit 6 with the partial warning and `partial: true` (R-46) |
 | IT09-08 | F09-01 | draft with `portfolio_custom` | render | custom block first in the portfolio section; numbers link to its `query_ids` |
 | IT09-09 | F09-08 | `report funding --budget 2000000` with a fake review handler | run | `RunRequest.scenarios` holds `custom_2000000`; renderer shows it from `portfolio_custom`; optimizer spy not called by the renderer; inputs have ops `evidence` rows |
 | IT09-10 | F09-02 | `AppTest.from_file` for each of the 12 pages on `tiny_build` | run | no exception; key elements present |
@@ -3432,7 +3450,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | IT09-12 | F09-04 | `FakeChatService` emitting all 8 design kinds plus `correction_captured`; each `ChatMode` | AppTest chat | one user row per turn, zero assistant rows and zero `chat` jobs by the UI; badge; evidence ids; stored user text redacted; feedback changes only feedback columns; correction calls `propose`; defer banner |
 | IT09-13 | F09-05 | queued assistant row flipped to done by the test | AppTest with FakeClock | fragment reload shows the answer |
 | IT09-14 | F09-06 | CliRunner | `--help` on every command | exit 0 |
-| IT09-15 | F09-06 | handlers raising injected errors; `doctor` with a FAIL; `eval` gate failed | run | exit codes per R-46 (U09-87): 1 for every failure class, 2 for usage, 3 for `doctor` FAIL, 4 for the eval gate |
+| IT09-15 | F09-06 | handlers raising injected errors; `doctor` with a FAIL; `eval` gate failed | run | exit codes per R-46 (U09-87): 3–13 by class, 1 for other failures and for `doctor` FAIL, 2 for usage, 6 for a partial run, 14 for the eval gate |
 | IT09-16 | F09-06 | `--json` on list, job, report, doctor commands | run | stdout parses; validates against the `cli/1` JSON Schema in `tests/fixtures/cli/cli1.schema.json` |
 | IT09-17 | F09-10 | promote a second fixture build during an AppTest session | advance clock 60 s | page shows the new `build_id`; toast |
 | IT09-18 | F09-01 | render twice with the same `now` | compare | identical bytes and manifest |
@@ -3445,7 +3463,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | IT09-25 | U09-93 | fixture ops and warehouse | `herness status` | sections rendered; missing `CURRENT` tolerated |
 | IT09-26 | U09-82 | admin AppTest | resume, retry, cancel, re-render | spec 08 functions called (`enqueue_resume` for resume); audit lines; files re-rendered |
 | IT09-27 | F09-01 | `draft.json` with `mode: "findings_only"`, no sections or recommendations, three verified findings of the run in the ops fixture | render | HTML and MD carry the `findings_only` banner and a "Verified findings" block with the three claims, their numbers linked to evidence; `numbers_linked == numbers_total` (R-49) |
-| IT09-28 | F09-07 | no live worker; CliRunner as admin and as reviewer; fake `run_inline` | `herness build --inline`; `herness build --no-wait`; `herness report render` untouched | admin: job enqueued then run inline, exit 0; reviewer: exit 1 `PermissionDenied`, no job; `--no-wait` prints the no-worker warning with the fix (R-45) |
+| IT09-28 | F09-07 | no live worker; CliRunner as admin and as reviewer; fake `run_inline` | `herness build --inline`; `herness build --no-wait`; `herness report render` untouched | admin: job enqueued then run inline, exit 0; reviewer: exit 11 `PermissionDenied`, no job; `--no-wait` prints the no-worker warning with the fix (R-45) |
 
 ### 11.4 Fault tests (`tests/fault`, marker `fault`)
 
@@ -3456,7 +3474,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | FT09-03 | Kill the render process after the first file replace (subprocess) | re-render | leftover tmp removed; complete files; manifest present only after a full render |
 | FT09-04 | FakeChatService emits `error` (`ModelUnavailable`) | click Retry | no new user row; answer re-requested for the same row |
 | FT09-05 | One named query raising | load page | error card for that block; other blocks render |
-| FT09-06 | Delete the run's warehouse file | render | build-retired message; exit 1 (R-46) |
+| FT09-06 | Delete the run's warehouse file | render | build-retired message; exit 12 (R-46) |
 
 ### 11.5 Security tests (`tests/unit/security_09`, `tests/integration/security_09`; marker per file)
 
@@ -3482,7 +3500,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | ST09-18 | TH09-23 | Evidence sample cell `<b onmouseover=x>` | escaped in HTML and MD; plain cell in dashboard |
 | ST09-19 | TH09-20 | Sentinel secret values configured; render, `config show`, JSON outputs, logs | sentinel absent everywhere |
 | ST09-20 | TH09-21, TH09-12 | Chat with a unique marker string containing an email | marker absent from logs at INFO and above; stored text redacted |
-| ST09-21 | TH09-27 | OS user mapped to viewer and to denied | admin commands exit 1 with `error.type` `PermissionDenied` (R-46); denied can run only `doctor`, `config validate` |
+| ST09-21 | TH09-27 | OS user mapped to viewer and to denied | admin commands exit 11 with `error.type` `PermissionDenied` (R-46); denied can run only `doctor`, `config validate` |
 | ST09-22 | TH09-03 | HTML with a remote stylesheet injected before PDF | fetcher refuses; no network call (socket spy) |
 | ST09-23 | TH09-09, TH09-28 | `herness ui` argument list | XSRF true, CORS true, usage stats false, headless true, bind from config |
 | ST09-24 | TH09-22 | `--json` command that logs warnings | stdout exactly one JSON object |
@@ -3505,7 +3523,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `cfg.app` loads and validates `config/app.yaml`; `ReportManifest` exists in `herness.core.types.reports` and is re-exported from `herness.core.types` (R-01). |
-| Depends on | X:10/herness.core.config.load_config (section registration), X:00/herness.core.types package skeleton and re-export (R-01) |
+| Depends on | T10-03 (herness.core.config.load_config) (section registration), T00-08 (herness.core.types) package skeleton and re-export (R-01) |
 | Units | U09-01, U09-02 |
 | Files | `herness/reports/settings.py`, `herness/core/types/reports.py`, `herness/reports/__init__.py`, `config/app.yaml` |
 | Tests | UT09-01, UT09-02, UT09-03, UT09-04 |
@@ -3519,7 +3537,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `herness/reports/rules.py` provides roles, `user_ref`, `require_role`, `UserInputError`, validators and `user_message`. |
-| Depends on | T09-01; X:10/herness.core.secrets.resolve; X:10/herness.core.audit.audit; X:00/herness.core.errors (including `NotFound`, `hint`, `details`; R-19) |
+| Depends on | T09-01; T10-06 (herness.core.secrets.resolve); T10-05 (herness.core.audit.audit); T00-03 (herness.core.errors) (including `NotFound`, `hint`, `details`; R-19) |
 | Units | U09-29, U09-30, U09-31, U09-32, U09-33, U09-88 |
 | Files | `herness/reports/rules.py` |
 | Tests | UT09-50, UT09-51, UT09-52, UT09-65, UT09-72, PT09-06 |
@@ -3533,7 +3551,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | Migration `090_chat.sql` (the unique reply index and the `summary_through_message_id` column, R-11) and the `herness.store.ops.chat` functions exist and are re-exported by `herness.store.ops`. |
-| Depends on | X:02/herness.store.ops (connection, run_write, read_one, read_all, migrate; R-10), X:02/005_review_chat_privacy.sql (creates the chat tables), X:00/herness.core.ids.new_ulid |
+| Depends on | T02-04 (herness.store.ops) (connection, run_write, read_one, read_all, migrate; R-10), T02-06 (005_review_chat_privacy.sql) (creates the chat tables), T00-05 (herness.core.ids.new_ulid) |
 | Units | U09-43, U09-44, U09-45, U09-46, U09-47, U09-48, U09-49, U09-50, U09-107, U09-108, U09-109 |
 | Files | `herness/store/migrations/090_chat.sql`, `herness/store/ops/chat.py`, `herness/store/ops/__init__.py` (re-export lines only) |
 | Tests | UT09-36, UT09-37, UT09-38, UT09-39, UT09-40, UT09-41, UT09-42, UT09-104, UT09-105, UT09-106, IT09-23 |
@@ -3547,7 +3565,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | All U09-52 read helpers, with `ui_`-prefixed names (R-68). The former `decide_review_item` of this card is removed (R-08, R-33): impl 02 owns it. |
-| Depends on | T09-03; X:02/herness.store.ops (read_one, read_all, load_json) |
+| Depends on | T09-03; T02-04 (herness.store.ops) (read_one, read_all, load_json) |
 | Units | U09-52 (U09-51 removed) |
 | Files | `herness/store/ops/ui_reads.py`, `herness/store/ops/__init__.py` (re-export lines) |
 | Tests | UT09-44 |
@@ -3561,7 +3579,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | Draft loading, §4.1 checks and the uncited-numeral scanner. |
-| Depends on | T09-01, T09-02, T09-04; X:06/herness.core.types.ReportDraft; X:05/herness.core.types.NumberRef; X:00/herness.core.numbers (scanner and marker parsing, R-16) |
+| Depends on | T09-01, T09-02, T09-04; T06-02 (herness.core.types.ReportDraft); T05-02 (herness.core.types.NumberRef); T00-16 (herness.core.numbers) (scanner and marker parsing, R-16) |
 | Units | U09-03, U09-04, U09-06, U09-07, U09-08, U09-09, U09-10 (U09-05 removed, R-16) |
 | Files | `herness/reports/contract.py` |
 | Tests | UT09-05 – UT09-18, UT09-93, UT09-94, PT09-01 |
@@ -3575,7 +3593,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | Table-cell formatting over `herness.core.numbers`, confidence labels and four pure SVG charts. |
-| Depends on | T09-01; X:05/herness.core.types.NumberRef; X:00/herness.core.numbers (formatter, R-16) |
+| Depends on | T09-01; T05-02 (herness.core.types.NumberRef); T00-16 (herness.core.numbers) (formatter, R-16) |
 | Units | U09-12, U09-102, U09-19, U09-20, U09-21, U09-22 (U09-11 removed, R-16) |
 | Files | `herness/reports/_format.py`, `herness/reports/charts.py` |
 | Tests | UT09-19, UT09-20, UT09-21, UT09-28, UT09-29, UT09-30, UT09-31, PT09-04, PT09-07 |
@@ -3603,7 +3621,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `load_report_data` builds the full outline plan from warehouse, ops and draft; `derive_banners`; `fill_rationale`. |
-| Depends on | T09-07; X:02/herness.store.warehouse.open_readonly; X:06/herness.store.ops.get_run; X:10/herness.core.redact.redact_text |
+| Depends on | T09-07; T02-09 (herness.store.warehouse.open_readonly); T06-05 (herness.store.ops.get_run); T10-10 (herness.core.redact.redact_text) |
 | Units | U09-15, U09-16 |
 | Files | `herness/reports/_data.py` |
 | Tests | UT09-24, UT09-79 |
@@ -3645,7 +3663,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `render_run` produces HTML, MD, optional PDF and manifest atomically; golden snapshots committed. |
-| Depends on | T09-05, T09-08, T09-09, T09-10; X:11/tests/fixtures/reports drafts and golden directory; X:11/tests/support/builds.tiny_build |
+| Depends on | T09-05, T09-08, T09-09, T09-10; `tests/fixtures/reports/` drafts and `golden/` (created by this card, §11 fixtures note); T11-17 (tests.support.builds.tiny_build) |
 | Units | U09-23, U09-24, U09-25, U09-26, U09-27 |
 | Files | `herness/reports/render.py`, `herness/reports/__init__.py` |
 | Tests | UT09-32, UT09-33, UT09-34, UT09-35, UT09-80, IT09-01, IT09-02, IT09-03, IT09-05, IT09-06, IT09-07 (render part), IT09-08, IT09-18, IT09-19, IT09-27, FT09-03, FT09-06, ST09-01, ST09-03, ST09-16, ST09-18, ST09-22, ST09-26, BT09-05, BT09-06 |
@@ -3659,7 +3677,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | Every write the dashboard and CLI perform exists as a role-checked, validated, audited action. |
-| Depends on | T09-02, T09-03, T09-04, T09-11; X:07/herness.harness.memory.MemoryStore (propose, approve, reject, decide); X:02/herness.store.ops.shared (get_review_item, decide_review_item, ReviewItemConflict); X:08/herness.core.jobs (cancel, retry, enqueue_resume); X:08/herness.core.resilience.retry_call; X:10/herness.core.redact.redact_text; X:10/herness.core.audit.audit |
+| Depends on | T09-02, T09-03, T09-04, T09-11; T07-23 (herness.harness.memory.MemoryStore) (propose, approve, reject, decide); T02-07 (herness.store.ops.shared) (get_review_item, decide_review_item, ReviewItemConflict); T08-02 (herness.core.jobs) (cancel, retry, enqueue_resume); T08-07 (herness.core.resilience.retry_call); T10-10 (herness.core.redact.redact_text); T10-05 (herness.core.audit.audit) |
 | Units | U09-34, U09-35, U09-36, U09-37, U09-38, U09-39, U09-40, U09-41, U09-42, U09-101 |
 | Files | `herness/reports/actions.py` |
 | Tests | UT09-75, UT09-81, UT09-43, UT09-99, ST09-07, ST09-09, ST09-10, ST09-11, ST09-14, ST09-27, FT09-02 |
@@ -3673,7 +3691,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `app/common` bootstrap, identity resolution, roster and Markdown sanitiser. |
-| Depends on | T09-02, T09-20 (`run_startup_validation`); X:10/herness.core.egress_socket.install_socket_guard; X:10/herness.core.config_sources.load_bootstrap; X:10/herness.core.config.load_config; X:08/herness.store.ops.resilience.bind_core_backends; X:06/herness.harness.pipelines.chat.ChatService; X:07/herness.harness.memory.get_memory_store; X:05/herness.harness.llm.LLMRegistry |
+| Depends on | T09-02, T09-20 (`run_startup_validation`); T10-18 (herness.core.egress_socket.install_socket_guard); T10-02 (herness.core.config_sources.load_bootstrap); T10-03 (herness.core.config.load_config); T08-23 (herness.store.ops.resilience.bind_core_backends); T06-25 (herness.harness.pipelines.chat.ChatService); T07-23 (herness.harness.memory.get_memory_store); T05-10 (herness.harness.llm.LLMRegistry) |
 | Units | U09-53, U09-54, U09-55, U09-56, U09-57, U09-58, U09-59 |
 | Files | `app/common/__init__.py`, `app/common/bootstrap.py`, `app/common/auth.py`, `app/common/sanitize.py` |
 | Tests | UT09-45 – UT09-49, UT09-53 – UT09-56, UT09-77, UT09-83, PT09-02, PT09-05, ST09-04, ST09-05, ST09-06, ST09-02 (sanitiser part), ST09-28 |
@@ -3687,7 +3705,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | Read-only warehouse pool following `CURRENT`, validated named queries with the raw-text guard, cached ops reads and the trace reader. |
-| Depends on | T09-04, T09-13; X:02/herness.store.warehouse.read_current and open_readonly; X:04/herness.metrics.catalog.load_catalog |
+| Depends on | T09-04, T09-13; T02-09 (herness.store.warehouse.read_current) and open_readonly; T04-03 (herness.metrics.catalog.load_catalog) |
 | Units | U09-60, U09-61, U09-62, U09-63, U09-64 |
 | Files | `app/common/wh.py`, `app/common/queries.sql.yaml`, `app/common/data.py` |
 | Tests | UT09-57, UT09-58, UT09-59, UT09-60, UT09-78, IT09-17, ST09-12, ST09-13, ST09-17, ST09-25 |
@@ -3701,7 +3719,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `page`, `block`, evidence widget, badges, banners, sidebar and `Home.py`. |
-| Depends on | T09-14; X:08/herness.core.jobs.status_snapshot |
+| Depends on | T09-14; T08-22 (herness.core.jobs.status_snapshot) |
 | Units | U09-65, U09-66, U09-67, U09-68, U09-72 |
 | Files | `app/common/widgets.py`, `app/Home.py` |
 | Tests | UT09-73, UT09-74, UT09-84, UT09-96, FT09-05, ST09-08, IT09-10 (Home), IT09-11 (Home) |
@@ -3757,7 +3775,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | Chat reducer, banners, turn driver and the Chat page, plus `tests/support/fake_chat.py`. |
-| Depends on | T09-12, T09-15; X:08/herness.core.jobs.chat_policy and chat_next_live_at; X:06/herness.harness.pipelines.chat.ChatService |
+| Depends on | T09-12, T09-15; T08-19 (herness.core.jobs.chat_policy) and chat_next_live_at; T06-25 (herness.harness.pipelines.chat.ChatService) |
 | Units | U09-69, U09-70, U09-71, U09-83 |
 | Files | `app/common/chat_ui.py`, `app/pages/11_Chat.py` |
 | Tests | UT09-61, UT09-62, UT09-97, UT09-98, IT09-12, IT09-13, FT09-04, ST09-02, ST09-14, ST09-20, ST09-25, BT09-04 |
@@ -3771,12 +3789,12 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | Typer root, global options with port binding and start-up validation, output envelope and `CommandResult`, R-46 exit codes, CLI identity, role guard and elevation check. |
-| Depends on | T09-02; X:10/herness.core.egress_socket.install_socket_guard; X:10/herness.core.config_sources.load_bootstrap; X:10/herness.core.config_validate.run_startup_validators (R-71; name pending, DD-30); X:08/herness.store.ops.resilience.bind_core_backends; X:00/herness.core.logging.configure |
+| Depends on | T09-02; T10-18 (herness.core.egress_socket.install_socket_guard); T10-02 (herness.core.config_sources.load_bootstrap); T10-12 (herness.core.config_validate.run_owner_validators) and `register_owner_validator` (R-71); T04-03 (herness.metrics.catalog.validate_catalog); T04-02 (herness.metrics.settings.MetricsCatalogConfig); T08-23 (herness.store.ops.resilience.bind_core_backends); T00-07 (herness.core.logging.configure_logging); T10-07 (herness.core.secrets.scrub_secrets) |
 | Units | U09-84, U09-85, U09-86, U09-87, U09-89, U09-105, U09-106 |
 | Files | `herness/cli.py`, `herness/_cli/__init__.py`, `herness/_cli/output.py`, `herness/_cli/identity.py` |
 | Tests | UT09-63, UT09-64, UT09-66, UT09-85, UT09-95, UT09-102, UT09-103, ST09-21, ST09-24 |
 | Threats | TH09-22, TH09-27, TH09-28 |
-| Acceptance checks | Listed tests pass; `pyproject.toml` entry point `herness = "herness.cli:main"` (edited by the card that owns `pyproject.toml`, X:11) |
+| Acceptance checks | Listed tests pass; `pyproject.toml` entry point `herness = "herness.cli:main"` (edited by the card that owns `pyproject.toml`, T00-01 (pyproject.toml)) |
 | Blocked by | none |
 | Size | M |
 
@@ -3785,7 +3803,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | Enqueue-and-wait with exit mapping and all payload builders. |
-| Depends on | T09-20; X:08/herness.core.jobs (enqueue, get, worker_alive, run_inline, MANUAL_PRIORITY); X:06/herness.harness.swarm.RunRequest; X:04/herness.metrics.portfolio.Scenario |
+| Depends on | T09-20; T08-02 (herness.core.jobs) (enqueue, get, worker_alive, run_inline, MANUAL_PRIORITY); T06-21 (herness.harness.swarm.RunRequest); T04-20 (herness.metrics.portfolio.Scenario) |
 | Units | U09-90, U09-91, U09-92, U09-103 |
 | Files | `herness/_cli/wait.py`, `herness/_cli/payloads.py` |
 | Tests | UT09-67, UT09-68, UT09-69, UT09-70, UT09-82, UT09-100 |
@@ -3799,10 +3817,10 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `init`, `doctor`, `status`, `ui`, `worker`, `gpu` commands. |
-| Depends on | T09-11, T09-21, T09-27; X:02/herness.store.ops.migrate and pending_migrations; X:10/herness.admin.doctor_host.doctor_checks; X:10/config templates package data; X:08/herness.core.jobs.run_worker; X:08/manual gpu load and unload (design 08 §5.8); X:10/herness.core.registry.get |
+| Depends on | T09-11, T09-21, T09-27; T02-05 (herness.store.ops.migrate) and pending_migrations; T10-27 (herness.admin.doctor_host.doctor_checks); T10-13 (config templates `config/herness.yaml`, `config/profiles/*.yaml`); T08-21 (herness.core.jobs.run_worker); T08-18 (herness.core.jobs.request_gpu_class) (design 08 §5.8); T10-04 (herness.core.registry.get); T06-21 (herness.harness.swarm.lifecycle.swarm_health); T02-05 (herness.store.ops.migrate.ops_health); T02-09 (herness.store.warehouse.warehouse_health); T02-08 (herness.store.vectors.VectorStore.health) |
 | Units | U09-93, U09-94 |
 | Files | `herness/_cli/cmd_system.py`, `herness/_cli/doctor.py` |
-| Tests | UT09-76, UT09-86, IT09-25, ST09-06 (CLI part), ST09-23 |
+| Tests | UT09-76, UT09-86, UT09-107, UT09-108, IT09-25, ST09-06 (CLI part), ST09-23 |
 | Threats | TH09-05, TH09-09, TH09-28 |
 | Acceptance checks | Listed tests pass; `herness doctor --json` validates against `cli/1` |
 | Blocked by | OI-04 (config template location), OI-05 (init bootstrap) — defaults assumed |
@@ -3813,7 +3831,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `sync`, `build`, `enrich`, `score`, `metrics list`, `pipeline`, `report`, `review`, `resume`, `decide`. |
-| Depends on | T09-12, T09-21; X:01/sync --check-mapping and --discover-fields behavior; X:04/herness.metrics.portfolio.optimize_portfolio; X:04/herness.metrics.catalog.load_catalog |
+| Depends on | T09-12, T09-21; T01-16 (sync) --check-mapping and --discover-fields behavior; T04-20 (herness.metrics.portfolio.optimize_portfolio); T04-03 (herness.metrics.catalog.load_catalog) |
 | Units | U09-95, U09-96 |
 | Files | `herness/_cli/cmd_data.py`, `herness/_cli/cmd_review.py` |
 | Tests | UT09-87, UT09-88, IT09-04, IT09-07 (CLI part), IT09-09, IT09-24, IT09-28 |
@@ -3827,13 +3845,13 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `jobs`, `review-queue`, `memory`, `config`, `secrets`, `deploy`, `eval`, `distill`, `laya`, `privacy`, `maintenance`. |
-| Depends on | T09-12, T09-21; X:10/herness.admin.commands_config (cmd_config_validate, cmd_config_show, cmd_config_hash); X:10/herness.admin.commands_secrets (cmd_secrets_init, cmd_secrets_set, cmd_secrets_status, cmd_secrets_rekey); X:10/herness.admin.commands_deploy (cmd_deploy_render, cmd_deploy_pull, cmd_deploy_up, cmd_deploy_down, cmd_deploy_rollback, cmd_deploy_prune, cmd_deploy_install); X:10/herness.admin.commands_data (cmd_privacy_delete, cmd_maintenance); X:07/herness.harness.memory.MemoryStore (export_lora, purge); X:03/laya status, accept and rollback; X:11/herness.eval.report.compare; X:08/herness.core.jobs.list_jobs |
+| Depends on | T09-12, T09-21; T10-14 (herness.admin.commands_config) (cmd_config_validate, cmd_config_show, cmd_config_hash); T10-14 (herness.admin.commands_secrets) (cmd_secrets_init, cmd_secrets_set, cmd_secrets_status); T10-30 (herness.admin.commands_secrets.cmd_secrets_rekey); T10-24 (herness.admin.commands_deploy) (cmd_deploy_render, cmd_deploy_pull, cmd_deploy_up, cmd_deploy_down, cmd_deploy_rollback, cmd_deploy_prune, cmd_deploy_install); T10-19 (herness.admin.commands_data) (cmd_privacy_delete, cmd_maintenance); T07-23 (herness.harness.memory.MemoryStore) (export_lora, purge); T03-33 (herness.enrich.laya_admin.laya_status, accept_model, rollback_model); T11-38 (herness.eval.report.compare); T08-12 (herness.core.jobs.list_jobs) |
 | Units | U09-97, U09-98 |
 | Files | `herness/_cli/cmd_queue.py`, `herness/_cli/cmd_admin.py` |
 | Tests | UT09-89, UT09-90, IT09-21 (CLI part), ST09-19 |
 | Threats | TH09-07, TH09-20 |
 | Acceptance checks | Listed tests pass; `secrets set` never accepts the value as an argument (CliRunner test) |
-| Blocked by | DD-11 — default assumed (DD-13 resolved by R-46, DD-14 by R-47) |
+| Blocked by | DD-11 — default assumed (DD-13 resolved by R-46 corrected, DD-14 by R-47) |
 | Size | M |
 
 ### T09-25 Terminal chat
@@ -3855,7 +3873,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | Remaining end-to-end, security and benchmark tests; traceability check green. |
-| Depends on | T09-11 – T09-25, T09-27; X:11/synthetic `full` build; X:11/tests/support/fake_clock.FakeClock |
+| Depends on | T09-11 – T09-25, T09-27; T11-14 (tools.synth_data.main) `--seed 42 --scale full` dataset and its build; T11-03 (tests/support/fake_clock.FakeClock) |
 | Units | none (tests only) |
 | Files | no production files (tests under `tests/integration`, `tests/bench`, `tests/unit/security_09`) |
 | Tests | IT09-10, IT09-11, IT09-14, IT09-15, IT09-16, ST09-19 (end-to-end), ST09-20, ST09-29, BT09-01, BT09-02, BT09-03, BT09-07 |
@@ -3869,7 +3887,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Field | Content |
 |-------|---------|
 | Goal | `herness.cli.worker_bootstrap` exists, so impl 08's worker children and `run_inline` get config, socket guard, bound ports, start-up validation and every job handler. |
-| Depends on | T09-20; X:08/herness.store.ops.resilience.bind_core_backends; X:08/herness.core.jobs.register_handler; X:10/herness.admin.register_handlers; the job handler registration functions of X:01, X:02, X:03, X:06, X:07 and X:11 |
+| Depends on | T09-20; T08-23 (herness.store.ops.resilience.bind_core_backends); T08-12 (herness.core.jobs.register_handler); T10-19 (herness.admin.register_handlers); T01-11 (herness.connectors.jobs.register_job_handlers); T02-19 (herness.model.build.make_build_pipeline_handler); T03-32 (herness.enrich.distill.make_distill_handler); T06-22 (herness.harness.swarm.handler.review_job_handler); T06-25 (herness.harness.pipelines.chat.chat_job_handler); T07-23 (herness.harness.memory.register_memory_components); T11-30 (herness.eval.runner.handle_eval, set_deps_factory) |
 | Units | U09-104 |
 | Files | `herness/cli.py` |
 | Tests | UT09-101 |
@@ -3895,10 +3913,10 @@ Cross-spec rulings are recorded in [`DECISIONS.md`](DECISIONS.md); each item bel
 | DD-07 | 05 §5.6, 06 §5.13 | One shared numeral scanner and one number formatter at L0 so the Verifier, renderer and `ChatService.render_plain` agree | `herness.core.numbers` | Resolved by R-16 |
 | DD-08 | 00 §9 | Streamlit minimum version raised to one providing `st.context.ip_address`, `st.fragment(run_every=…)` and `st.feedback` | Pin at the first version passing V09-01 | Still open |
 | DD-09 | 10 §7.3 | Optional proxy shared-secret header (`security.ui.expose.proxy_secret_header`, secret `ui_proxy_secret`) to close TH09-06 | Not implemented; residual accepted | Still open |
-| DD-10 | 01, 02, 03, 04, 10, 11 | Job payload keys of U09-92 confirmed by each handler owner (`score_steps` confirmed by impl 02; `mode: full` per R-63; `enrich_stage` per R-48) | Payloads as U09-92 | Still open |
+| DD-10 | 01, 02, 03, 04, 10, 11 | Job payload keys of U09-92 confirmed by each handler owner (`score_steps` confirmed by impl 02; `enrich_stage` per R-48). The `sync`/`reconcile` payload and `idem_key` now come from impl 01 `build_sync_payload` (U01-54, `mode: full` per R-63) and the `eval` payload and GPU class from impl 11 `build_eval_payload`/`eval_gpu_class` (U11-69) | Payloads as U09-92 | Still open (sync and eval parts resolved; `pipeline_payload` for 03 and 04 awaits confirmation) |
 | DD-11 | 09 §5.6 | `review-queue approve --answer TEXT` for `label_check` | CLI refuses label-check approvals | Still open |
 | DD-12 | 06 §6.2 vs 09 §5.1 | Writer-dead run renders a findings-only report | `draft.json` with `mode: "findings_only"`; banner and verified-findings block (U09-15, U09-16) | Resolved by R-49 |
-| DD-13 | 10 §5.1, 11 §3.2 vs 09 §5.8 | Exit code 2 means usage only | Exit codes of U09-87 | Resolved by R-46 |
+| DD-13 | 10 §5.1, 11 §3.2 vs 09 §5.8 | Exit code 2 means usage only | Exit codes of U09-87 | Resolved by R-46 (corrected: design 09 §5.8 plus 14) |
 | DD-14 | 09 §5.6 vs 10 §3.7 | Command table is the union: `secrets rekey`, `config hash --profile`, `deploy up large`, `deploy rollback CLASS`, repeatable `privacy delete --record-id`, `maintenance --dry-run`, `deploy install`, `gpu load large` | §3.12 | Resolved by R-47 |
 | DD-15 | 08 §3.4 `run_inline` vs 09 §5.6 | Inline CLI execution without a worker | Admin-only `--inline` (U09-103) | Resolved by R-45 |
 | DD-16 | 07 §3.3 | `MemoryStore.approve/reject` also decides the linked `memory_write` review item | Impl 07 does it in the same transaction | Resolved by R-33 |
@@ -3908,14 +3926,14 @@ Cross-spec rulings are recorded in [`DECISIONS.md`](DECISIONS.md); each item bel
 | DD-20 | 00 §5 | Add IDs `session_id = ses_<ulid>`, `message_id = msg_<ulid>` | Implemented | Still open |
 | DD-21 | ENG §3.4, §2.5 | Exceptions: `widgets.block` as a fourth catch-all; `herness ui` child process without timeout; process-level guard flag in `app/common/bootstrap.py` | Implemented | Still open |
 | DD-22 | 09 §5.1 step 8 | Log event `report_rendered` is named `reports.render.completed` (ENG §3.6) | Implemented | Still open |
-| DD-23 | 09 §5.8 | R-46 lists exit codes 0–4 only; design 09 §5.8 also has 130 for Ctrl+C. This spec keeps 130 for an interrupted wait or inline run (POSIX convention) and drops codes 5–13 | 130 kept | Still open (confirm 130 under R-46) |
+| DD-23 | 09 §5.8 | The first R-46 listed exit codes 0–4 only and omitted 130 and codes 5–13 | Design 09 §5.8 codes, 130 and 14 (U09-87) | Resolved by R-46 (corrected) |
 | DD-24 | 06 §3.3 | `correction_captured` chat event (R-32): fields and position in the stream | `memory_id: str`, emitted after `final` | Still open (impl 06 defines the event class) |
 | DD-25 | 06, 07 | Impl 06 U06-46 (`latest_user_message`, `find_assistant_message`) and impl 07 U07-35 (`get_chat_session`, `last_chat_messages`, `count_user_turns`, `set_chat_summary`, `chat_message_row`) define chat-table functions outside the `chat.py` area; under R-08, R-09 and R-68 they call this spec's units instead (U09-48, U09-49, U09-107, U09-108, U09-109). `last_chat_messages` maps to `list_chat_messages(session_id, limit=n)` and `chat_message_row` to `get_chat_message` | This spec's names are the owners' names | Still open (impls 06 and 07 switch to the U09 units) |
 | DD-26 | 06 §5.13 | Impl 06 U06-129 inserts the assistant placeholder with `append_chat_message(role="assistant", status="streaming", meta=…)`, but U09-45 refuses assistant rows; the idempotent path is `upsert_assistant_placeholder` (U09-47) | Impl 06 calls U09-47 | Still open |
 | DD-27 | 07 §5.9 | Decision reason limits: design 09 requires ≥ 10 chars; impl 07 `decide` accepts 1–1000 | This spec validates 10–1000 | Still open |
 | DD-28 | 10 §4.6 | `recommendation_decision` audit line written by spec 09 before `MemoryStore.decide` (impl 07 U07-82) | Implemented in U09-37 | Still open (design 10 §4.6 names the writer) |
-| DD-29 | 10 | Impl 10 `cmd_config_validate` returns 2 for strict warnings; R-46 requires 3; `herness.admin` commands return `CommandResult` exit codes in {0, 1, 3} | U09-98 maps as R-46 | Resolved by R-46 (impl 10 applies) |
-| DD-30 | 10, 00 | Names not yet defined by their owners: the impl 10 start-up validation hook (`run_startup_validators`, R-71) and the `herness.core.numbers` scanner, marker parser and formatter (R-16) | Names as written in `X:10/` and `X:00/` references | Still open |
+| DD-29 | 10 | Impl 10 `cmd_config_validate` returned 2 for strict warnings; corrected R-46 requires 1 for invalid config found by `config validate` and for a `doctor` FAIL; `herness.admin` commands return any R-46 code except 2 and 130 (U09-105) | U09-98 and U09-94 exit 1 | Resolved by R-46 (corrected); impl 10 still states 3 in U10-65 and F10-03 (§13.5 item 14) |
+| DD-30 | 10, 00 | Names not yet defined by their owners: the impl 10 start-up validation hook (R-71) and the `herness.core.numbers` scanner, marker parser and formatter (R-16) | Hook `T10-12 (herness.core.config_validate.run_owner_validators)` with `register_owner_validator` (U10-109); numbers from T00-16; logging `T00-07 (herness.core.logging.configure_logging)` | Resolved (owners define the names; R-71, R-16) |
 
 ### 13.2 Open questions inherited from the design spec
 
@@ -3965,11 +3983,13 @@ Cross-spec rulings are recorded in [`DECISIONS.md`](DECISIONS.md); each item bel
 | 6 | Spec 10 §3.7 command options differ from spec 09's table (DD-14) | Resolved by R-47 |
 | 7 | Spec 08 §5.1 starts every `build_pipeline` on GPU class `decider`, including `herness build` stages that need no GPU | Resolved by R-43 (`build_pipeline` starts with no GPU class) |
 | 8 | Spec 10 §9.2 checks the header's source address; spec 09 §9.1 checks loopback binding | Resolved by R-50 (both checks, U09-54) |
-| 9 | R-46 lists exit codes 0–4 and omits the Ctrl+C code 130 of design 09 §5.8 (DD-23) | Still open |
+| 9 | R-46 lists exit codes 0–4 and omits the Ctrl+C code 130 of design 09 §5.8 (DD-23) | Resolved by R-46 (corrected) |
 | 10 | Chat-table reads are defined in impl 06 U06-46 and impl 07 U07-35 as well as in this spec's `chat.py`, which R-68's flat namespace forbids (DD-25) | Still open |
 | 11 | Impl 06 inserts assistant rows through `append_chat_message`, which this spec reserves for user and system rows (DD-26) | Still open |
 | 12 | Impl 07 `decide` accepts a 1-character reason; design 09 requires at least 10 characters (DD-27) | Still open |
 | 13 | Impl 10 `cmd_config_validate` returns exit 2 for strict warnings (DD-29) | Resolved by R-46 (impl 10 changes) |
+| 14 | Impl 10 U10-65 and F10-03 exit 3 for `config validate` findings and for a `doctor` FAIL; corrected R-46 gives 1 for both (3 stays for a `ConfigError`, including the R-71 start-up error). This spec exits 1 (U09-94, U09-98) | Still open (impl 10 applies R-46 corrected) |
+| 15 | Impl 10 U10-109 says the composition root registers owner validators before `init_config`; `GlobalOptions.config()` (U09-85) uses `load_config` and registers them in U09-106 right after it, as R-71 states | Resolved by R-71 (registration is idempotent; order within the composition root is not observable) |
 
 ## 14. Dependencies
 
@@ -3995,15 +4015,15 @@ No new dependency beyond spec 00 §9. Test-only: `pytest`, `hypothesis`, `freeze
 
 | Spec | Units / artifacts used |
 |------|------------------------|
-| 00 | `herness.core.errors` taxonomy including `NotFound` and the `hint`/`details` attributes (R-19, R-74), `herness.core.numbers` scanner, marker parser and formatter (R-16), `herness.core.ids.new_ulid`, `herness.core.time.now`/`sleep`, `herness.core.logging.configure`, `herness.core.types` package skeleton and re-export (R-01) |
-| 01 | `sync --check-mapping` / `--discover-fields` behavior; `Connector.check` via registry |
-| 02 | `herness.store.ops` core API (`connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`, `migrate`, `pending_migrations`; R-10), migration `005_review_chat_privacy.sql` (chat tables, R-11), `herness.store.ops.shared` (`get_review_item`, `list_review_items`, `decide_review_item`, `ReviewItem`, `ReviewItemConflict`; R-08, R-33), `score_steps` payload key of the build handler, `herness.store.warehouse.read_current`, `open_readonly` |
-| 03 | `laya status/accept/rollback`, `distill` and enrich job handlers, question sets for label answers |
-| 04 | `load_catalog`, `MetricDef.domain`, `run_scoring` (via job), `optimize_portfolio`, `Scenario` |
+| 00 | `herness.core.errors` taxonomy including `NotFound` and the `hint`/`details` attributes (R-19, R-74), `herness.core.numbers` scanner, marker parser and formatter (R-16), `herness.core.ids.new_ulid`, `herness.core.time.now`/`sleep`, `herness.core.logging.configure_logging`, `herness.core.types` package skeleton and re-export (R-01) |
+| 01 | `build_sync_payload` (U01-54), `check_mapping` (U01-56), `build_connector` (U01-55), `JiraConnector.discover_fields` (U01-75), `register_job_handlers` (U01-53); `Connector.check` via registry |
+| 02 | `herness.store.ops` core API (`connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`, `migrate`, `pending_migrations`; R-10), migration `005_review_chat_privacy.sql` (chat tables, R-11), `herness.store.ops.shared` (`get_review_item`, `list_review_items`, `decide_review_item`, `ReviewItem`, `ReviewItemConflict`; R-08, R-33), `score_steps` payload key of the build handler, `herness.store.warehouse.read_current`, `open_readonly`; doctor health functions `ops_health`, `warehouse_health`, `VectorStore.health` (impl 02 C14) |
+| 03 | `laya_admin.laya_status`/`accept_model`/`rollback_model` (U03-138–U03-140), `make_distill_handler` (U03-137), question sets for label answers |
+| 04 | `load_catalog`, `validate_catalog` and `MetricsCatalogConfig` (R-71 start-up validator), `MetricDef.domain`, `run_scoring` (via job), `optimize_portfolio`, `Scenario` |
 | 05 | `NumberRef`, `VerificationResult`, numeral regex, `LLMRegistry`, trace file format |
-| 06 | `ReportDraft` family including `mode` (R-49), `ChatService`, `ChatEvent` including `correction_captured` (R-32), `RunRequest`, `herness.store.ops.get_run`, `select_runs`, `select_tasks` (R-68), review job handler calling `render_run`, `review` and `chat` handler registration |
-| 07 | `get_memory_store`, `MemoryStore` (`propose`, `approve`, `reject`, `decide`, `export_lora`, `purge`), `MemoryProposal`, `Provenance`, `MemoryNotFound`, handler registration for `outcome_measure` and `memory_maintenance` |
-| 08 | `jobs` (`enqueue`, `get`, `list_jobs`, `cancel`, `retry`, `worker_alive` (R-44), `run_inline` (R-45), `enqueue_resume`, `run_worker`, `register_handler`, `MANUAL_PRIORITY`, `status_snapshot`, `chat_policy`, `chat_next_live_at`), `retry_call("sqlite_write")`, `herness.store.ops.resilience.bind_core_backends` (R-04), GPU switch, `herness.store.ops.metrics.record_metric_samples` (R-12) |
-| 10 | `load_config`, `init_config`, `load_bootstrap`, the start-up validation hook (R-71), `ConfigIssue`, `secrets.resolve`, `redact_text`, `audit`, `install_socket_guard`, registry, `herness.admin` command functions returning `CommandResult` (`commands_config`, `commands_secrets`, `commands_deploy`, `commands_data`; R-07), `herness.admin.doctor_host.doctor_checks`, `herness.admin.register_handlers`, config templates |
-| 11 | Fixtures (`reports/`, golden), `tiny_build`/`full` builds, `FakeClock`, eval `compare`, `eval` handler registration |
+| 06 | `ReportDraft` family including `mode` (R-49), `ChatService`, `ChatEvent` including `correction_captured` (R-32), `RunRequest`, `swarm_health` (doctor `swarm` row, O06-17), `herness.store.ops.get_run`, `select_runs`, `select_tasks` (R-68), review job handler calling `render_run`, `review` and `chat` handler registration |
+| 07 | `get_memory_store`, `register_memory_components`, `MemoryStore` (`propose`, `approve`, `reject`, `decide`, `export_lora`, `purge`), `MemoryProposal`, `Provenance`, `MemoryNotFound`, handler registration for `outcome_measure` and `memory_maintenance` |
+| 08 | `jobs` (`enqueue`, `get`, `list_jobs`, `cancel`, `retry`, `worker_alive` (R-44), `run_inline` (R-45), `enqueue_resume`, `run_worker`, `register_handler`, `MANUAL_PRIORITY`, `status_snapshot`, `chat_policy`, `chat_next_live_at`), `retry_call("sqlite_write")`, `herness.store.ops.resilience.bind_core_backends` (R-04), GPU switch `request_gpu_class`, `herness.store.ops.metrics.record_metric_samples` (R-12) |
+| 10 | `load_config`, `init_config`, `load_bootstrap`, the start-up validation hook `register_owner_validator`/`run_owner_validators` (R-71), `scrub_secrets`, `ConfigIssue`, `secrets.resolve`, `redact_text`, `audit`, `install_socket_guard`, registry, `herness.admin` command functions returning `CommandResult` (`commands_config`, `commands_secrets`, `commands_deploy`, `commands_data`; R-07), `herness.admin.doctor_host.doctor_checks`, `herness.admin.register_handlers`, config templates |
+| 11 | `tiny_build` fixture, `synth_data` `full` dataset, `FakeClock`, eval `compare`, `build_eval_payload`, `eval_gpu_class`, `exit_code`, `handle_eval` and `set_deps_factory` (report drafts and goldens under `tests/fixtures/reports/` are this spec's, T09-11) |
 | 01, 03 | Job handler registration for `sync`, `reconcile` (01) and `distill` (03), called by `worker_bootstrap` (U09-104) |

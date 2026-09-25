@@ -41,7 +41,7 @@ This spec implements everything design 10 assigns to `herness/core/{config,regis
 | 5.5 BitLocker | BitLocker check | 3.7 | U10-90 | T10-27 | UT10-71, ST10-49 |
 | 5.5 Backup | Online ops backup, integrity check, copies, keep policy | 3.7, 5 F10-11 | U10-96, U10-97 | T10-20 | UT10-67, IT10-08, FT10-04, BT10-08 |
 | 5.5 Retention | Nightly purge per key with audit counts (lake exception, R-57) | 3.7, 5 F10-12 | U10-98 | T10-20 | UT10-68, IT10-09 |
-| 5.5 Deletion | Seven-step privacy deletion plus memory purge step 3b (R-54); deletion set read by connectors and staging | 3.7, 4.1, 5 F10-13 | U10-99, U10-105, U10-106, U10-111 | T10-29, T10-32 | UT10-69, UT10-77, UT10-78, UT10-83, IT10-06, FT10-03, ST10-31, ST10-50, ST10-57 |
+| 5.5 Deletion | Seven-step privacy deletion plus memory purge step 3b (R-54); deletion set read by connectors and staging | 3.7, 4.1, 5 F10-13 | U10-99, U10-105, U10-111 | T10-29, T10-32 | UT10-69, UT10-77, UT10-83, IT10-06, FT10-03, ST10-31, ST10-50, ST10-57 |
 | 5.6.1 | Prerequisites | 3.7, 8 | U10-90, U10-91 | T10-27, T10-28 | UT10-71, IT10-13 |
 | 5.6.2 | `docker/compose.yaml` | 12 T10-23, 4.2 | U10-80 | T10-23 | UT10-75, ST10-43, ST10-44 |
 | 5.6.3 | Install runbook and doctor checks | 3.7, 5 F10-09 | U10-89–U10-91 | T10-27, T10-28 | UT10-71, IT10-12, IT10-13, BT10-07 |
@@ -53,7 +53,7 @@ This spec implements everything design 10 assigns to `herness/core/{config,regis
 | 7.3 | UI and access block; identity-header trust conditions (R-50) | 3.1, 9 | U10-05, U10-20 (C05) | T10-01, T10-12 | UT10-19, ST10-27 |
 | 7.4 | Deploy block and `deploy render` | 3.1, 3.7, 9 | U10-07, U10-79 | T10-01, T10-23 | UT10-60, UT10-61, ST10-34 |
 | 8 | Performance targets | 10 | U10-09, U10-11, U10-42, U10-47, U10-51, U10-58, U10-89, U10-96 | T10-15, T10-18, T10-20, T10-27 | BT10-01–BT10-08 |
-| 9.1 | Threat stance (untrusted data blocks, read-only tools, DuckDB lockdown, output stripping, hybrid payload) | 7 | U10-51 (payload re-scan); others realised by X:05, X:06, X:09 | T10-16 | ST10-10, ST10-11; owner specs' tests |
+| 9.1 | Threat stance (untrusted data blocks, read-only tools, DuckDB lockdown, output stripping, hybrid payload) | 7 | U10-51 (payload re-scan); others realised by impl 05, impl 06, impl 09 | T10-16 | ST10-10, ST10-11; owner specs' tests |
 | 9.2 | Network: UI bind, reverse proxy, loopback container ports, Hyper-V firewall, offline env | 3.7, 7 | U10-20 (C05), U10-80, U10-81, U10-90, U10-91, U10-95 | T10-12, T10-23, T10-24, T10-27, T10-28 | ST10-27, ST10-28, ST10-43, ST10-44, ST10-47 |
 | 9.3 | Accounts (`svc-herness`) | 3.7 | U10-90, U10-91 | T10-27, T10-28 | UT10-71 |
 | 10 Precedence | Layer pairs, list/map merge, missing file, unknown key, `--profile hybrid`, env `security` override | 11 | U10-09, U10-15–U10-19 | T10-02, T10-03 | UT10-01–UT10-10 |
@@ -66,7 +66,7 @@ This spec implements everything design 10 assigns to `herness/core/{config,regis
 | 10 Throughput | ≥ 5,000 records/s/core | 10 | U10-42, U10-47 | T10-15 | BT10-03, BT10-04 |
 | 10 Secrets never leak | Sentinel end-to-end grep | 11 | U10-32 | T10-21 | ST10-14 |
 | 10 Audit | One `review_decision` line; tamper breaks chain | 11 | U10-60, U10-62 | T10-05, T10-21 | IT10-05, ST10-17 |
-| 10 Deletion | All stores clean, memory included (R-54); second pass | 11 | U10-99, U10-106 | T10-29, T10-32 | IT10-06, ST10-50, ST10-57 |
+| 10 Deletion | All stores clean, memory included (R-54); second pass | 11 | U10-99 | T10-29 | IT10-06, ST10-50, ST10-57 |
 | 10 Rekey | Labels mapped without loss; kill before swap | 11 | U10-101–U10-103 | T10-30 | IT10-07, FT10-02 |
 | 10 Backup | Concurrent writes, `integrity_check` | 11 | U10-96 | T10-20 | IT10-08 |
 | 10 Deployment | Doctor all pass on target; each profile healthy; one GPU service; loopback binds | 11 | U10-89–U10-91 | T10-31 | IT10-13 |
@@ -74,7 +74,7 @@ This spec implements everything design 10 assigns to `herness/core/{config,regis
 | 12 | Dependencies | 14 | — | — | — |
 | 13 | Contract changes (resolved) | 13 | — | — | — |
 | DECISIONS | Rulings R-01–R-66 that bind this spec | 13.1 status column | U10-03, U10-09, U10-11, U10-20, U10-21, U10-27, U10-58, U10-59, U10-65, U10-99, U10-105–U10-111 | T10-03, T10-12, T10-16–T10-18, T10-29, T10-32, T10-33 | UT10-77–UT10-83, ST10-54–ST10-59 |
-| ENG E4 | `deploy install` verifies attestation and SBOM | 3.7, 5 F10-07 | U10-86–U10-88 | T10-26 | ST10-22–ST10-24, ST10-48, ST10-53, IT10-14 |
+| ENG E4 | `deploy install` verifies attestation and SBOM | 3.7, 5 F10-07 | U10-86–U10-88, U10-112 | T10-26 | ST10-22–ST10-24, ST10-48, ST10-53, ST10-60, UT10-85, IT10-14 |
 | ENG §5.6 | Image and weight digests verified on pull | 3.7, 5 F10-06 | U10-81–U10-83 | T10-24 | ST10-19–ST10-21, UT10-62 |
 
 ## 2. Module map
@@ -107,11 +107,12 @@ Line budgets are production lines including docstrings. "Extra imports" lists im
 | `herness/admin/deploy.py` | Env render, class up/down/rollback, history, prune | `render_env`, `class_up`, `class_down`, `rollback_class`, `prune`, `DeployHistory` | L5 | none | 390 |
 | `herness/admin/deploy_pull.py` | Firewall window, image pull and verification, weight pull and verification | `firewall_window`, `pull_images`, `pull_weights`, `verify_weights`, `run_pull` | L5 | none | 390 |
 | `herness/admin/attest.py` | Release bundle verification and install | `ReleaseBundle`, `verify_bundle`, `install_bundle` | L5 | none | 380 |
+| `herness/admin/duckdb_ext.py` | Offline install and verification of pinned DuckDB extensions from the release bundle (impl 01 O-3) | `install_duckdb_extensions`, `EXT_INSTALL_SCRIPT` | L5 | none (runs the venv's `duckdb` in a subprocess) | 120 |
 | `herness/admin/doctor_host.py` | Doctor checks for host, config, secrets, ACL, BitLocker, audit, disk, clock, ports, socket guard | `CheckResult`, `doctor_checks`, `HOST_CHECKS` | L5 | `psutil` | 390 |
 | `herness/admin/doctor_gpu.py` | Doctor checks for WSL, Docker, GPU, images, weights, health, firewall, services | `GPU_CHECKS` | L5 | none | 380 |
 | `herness/admin/maintenance.py` | `maintenance` job dispatch, backup, purge | `handle_maintenance`, `run_backup`, `select_backup_keep`, `run_purge` | L5 | none | 390 |
 | `herness/admin/privacy.py` | Privacy deletion (seven design steps plus memory purge step 3b, R-54) | `run_privacy_delete` | L5 | none | 330 |
-| `herness/store/ops/privacy.py` | Ops-store area `privacy` (R-08): `deletion_request` rows and the privacy rewrites of `evidence.result_sample` and `finding.numbers` | `DeletionRequest`, `create_deletion_request`, `get_deletion_request`, `open_deletion_request`, `set_deletion_status`, `record_deletion_step`, `scrub_record_from_evidence`, `scrub_record_from_findings`, `deleted_record_ids` | L1 | none | 250 |
+| `herness/store/ops/privacy.py` | Ops-store area `privacy` (R-08): `deletion_request` rows and the deletion-set read (the scrubs of `evidence.result_sample` and `finding.numbers` are impl 05's U05-75 and impl 06's U06-144, R-77) | `DeletionRequest`, `create_deletion_request`, `get_deletion_request`, `open_deletion_request`, `set_deletion_status`, `record_deletion_step`, `deleted_record_ids` | L1 | none | 250 |
 | `herness/core/errors.py` (owned by impl 00; this spec declares two attribute sets, R-19) | `EgressBlocked.egress_id`, `EgressBlocked.reason`, `ConfigError.issues` | `EgressBlocked`, `ConfigError` | L0 | none | +30 lines |
 | `herness/admin/rekey.py` | Redaction key rotation job | `run_rekey`, `rekey_labels`, `build_rekey_map` | L5 | `pyarrow.parquet` | 360 |
 | `config/herness.yaml` | Root config template (§4.2 of design 10) | — | config | — | 110 |
@@ -126,14 +127,14 @@ Layer rules specific to this spec:
 - `herness.core` modules of this spec import each other only in this acyclic order: `settings` → `config_sources` → `config` → {`registry`, `redact_patterns`, `redact_directory`} → `audit` → `secrets` → `redact` → `egress_log` → `egress_socket` → `egress_clients` → `egress` → `config_validate`. A module imports only modules to its left.
 - Network egress (R-06, ENG §2.1): only the egress component (`herness/core/egress.py` and its helper `herness/core/egress_clients.py`, reached as `herness.core.egress`) constructs `httpx` clients and transports: off-network (`EgressGuard.http_client`, `async_http_client`), on-network source hosts (`source_http_client`) and loopback model servers (`loopback_http_client`, `aloopback_http_client`). Vendor SDKs (Snowflake, `pymongo`, `msal`) build their own clients only for hosts listed in `sources.<name>.hosts`, and the socket guard (U10-58) enforces that list.
 - `herness/store/ops/privacy.py` is L1. It uses only the core API of impl 02 (`connection()`, `run_write()`, `read_one()`, `read_all()`, `dump_json()`, `load_json()`; R-10) and adds its public names to the spec-10 `__all__` block of `herness/store/ops/__init__.py`.
-- `herness/admin/*` is L5 (R-07) and is imported only by the composition root `herness.cli` (X:09), which also registers the `maintenance` job handler when it starts the worker or runs a job inline (R-04: `herness.core.jobs` never imports `herness.admin`).
+- `herness/admin/*` is L5 (R-07) and is imported only by the composition root `herness.cli` (impl 09), which also registers the `maintenance` job handler when it starts the worker or runs a job inline (R-04: `herness.core.jobs` never imports `herness.admin`).
 
 ## 3. Unit specs
 
 Conventions for all unit specs below:
 
-- "Raises `ConfigError`" means `herness.core.errors.ConfigError` (X:00/herness.core.errors). All error messages name the operation and identifiers and never contain secret values, ticket text or personal data (ENG §3.4).
-- `now` values are timezone-aware UTC `datetime` objects from X:00/herness.core.time; no unit reads the wall clock except where "reads the clock" is stated.
+- "Raises `ConfigError`" means `herness.core.errors.ConfigError` (T00-03 (herness.core.errors)). All error messages name the operation and identifiers and never contain secret values, ticket text or personal data (ENG §3.4).
+- `now` values are timezone-aware UTC `datetime` objects from T00-04 (herness.core.time); no unit reads the wall clock except where "reads the clock" is stated.
 - File writes marked "atomic" follow ENG §3.5: temp file in the same directory, `fsync`, `os.replace`.
 
 ### 3.1 Configuration (`herness/core/settings.py`, `config_sources.py`, `config.py`, `config_validate.py`)
@@ -175,7 +176,7 @@ Conventions for all unit specs below:
 | Field | Content |
 |-------|---------|
 | Kind | class (pydantic models, `extra="forbid"`, `strict=True`, `frozen=True`) |
-| Purpose | The `security` section (design 10 §4.2, §7.1). Re-exported as `herness.core.config.SecurityConfig`. |
+| Purpose | The `security` section (design 10 §4.2, §7.1). Re-exported as `herness.core.config.SecurityConfig`. The R-38 approval flag for chat `cloud` mode is exactly `security.data_policy.chat_approved` (field `DataPolicyConfig.chat_approved`); every other mention in this spec and in impls 05, 06 and 09 uses this name. |
 | Signature | `DataPolicyConfig`: `hybrid_approved: bool = False`; `premium_approved: bool = False`; `chat_approved: bool = False` (R-38: approval recorded for chat `cloud` mode, purpose `reasoning`, payload class `aggregated_evidence`, in the `hybrid` profile; D5); `approved_by: str \| None = None` (1–128 chars); `approved_on: date \| None = None`. `SecretsConfig`: `backend: Literal["keyring", "dotenv"] = "keyring"`. `EgressConfig`: `enabled: bool = False`; `destinations: tuple[str, ...] = ()`; `purposes: tuple[Literal["reasoning_final", "reasoning", "bulk_classification"], ...] = ()`; `max_request_bytes: int = 2_000_000` (1–50,000,000); `max_tokens_per_request: int = 200_000` (1–2,000,000); `max_tokens_per_day: int = 3_000_000` (1–100,000,000). `NetworkConfig`: `extra_allowed_hosts: tuple[str, ...] = ()` (operator additions to the socket-guard allowlist for hosts that belong to no source; source hosts belong in `sources.<name>.hosts`, R-06); `http_proxy: str \| None = None` (matches `^https?://[A-Za-z0-9.-]+:\d{1,5}$`). `SecurityConfig`: `data_policy`, `secrets`, `redaction` (U10-04), `egress`, `network`, `ui` (U10-05), each with its model's defaults. |
 | Preconditions | none |
 | Postconditions | Instances are immutable. |
@@ -210,11 +211,11 @@ Conventions for all unit specs below:
 | Field | Content |
 |-------|---------|
 | Kind | class (pydantic models, `extra="forbid"`, `strict=True`, `frozen=True`) |
-| Purpose | Dashboard binding, exposure and roles (design 10 §7.3); read by X:09. |
+| Purpose | Dashboard binding, exposure and roles (design 10 §7.3); read by impl 09. |
 | Signature | `ExposeConfig`: `enabled: bool = False`; `trusted_proxy: str \| None = None` (IP literal, checked with `ipaddress.ip_address`); `identity_header: str = "X-Forwarded-User"` (`^[A-Za-z][A-Za-z0-9-]{0,63}$`). `RolesConfig`: `admins: tuple[str, ...] = ()`; `reviewers: tuple[str, ...] = ()`; `default_role: Literal["viewer", "denied"] = "viewer"`; usernames 1–128 chars. `UiConfig`: `bind: str = "127.0.0.1"` (IP literal); `port: int = 8501` (1024–65535); `expose: ExposeConfig`; `roles: RolesConfig`. |
 | Preconditions | none |
 | Postconditions | Usernames lower-cased and de-duplicated preserving order. |
-| Algorithm | Field validators as in the signature. Cross-field rules are C05 and C21 (U10-20), so `config show` can still display a misconfigured block. Identity-header trust has two checks (R-50), and this spec and impl 09 both state them: (1) at config time, C05 requires a loopback `bind`, and requires `trusted_proxy` (a loopback address) whenever `expose.enabled` is true; (2) at request time, X:09 trusts `identity_header` only when `expose.enabled` is true, `trusted_proxy` is set, and the request's peer address equals `trusted_proxy`; otherwise the header is ignored and the request gets `default_role`. |
+| Algorithm | Field validators as in the signature. Cross-field rules are C05 and C21 (U10-20), so `config show` can still display a misconfigured block. Identity-header trust has two checks (R-50), and this spec and impl 09 both state them: (1) at config time, C05 requires a loopback `bind`, and requires `trusted_proxy` (a loopback address) whenever `expose.enabled` is true; (2) at request time, T09-13 (app.common.auth.resolve_identity) trusts `identity_header` only when `expose.enabled` is true, `trusted_proxy` is set, and the request's peer address equals `trusted_proxy`; otherwise the header is ignored and the request gets `default_role`. |
 | Side effects | none |
 | Errors | invalid IP, port or header → `ConfigError` via U10-09 |
 | Concurrency | immutable |
@@ -230,7 +231,7 @@ Conventions for all unit specs below:
 | Purpose | `logging`, `retention` and `backup` sections (design 10 §4.2). |
 | Signature | `LoggingConfig`: `level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"`. `RetentionConfig`: `raw_lake_months: int = 36` (1–240); `traces_days: int = 90`; `egress_log_days: int = 365`; `audit_log_days: int = 730`; `app_log_days: int = 30`; `reports_days: int = 365`; `chat_days: int = 180` (each day value 1–7,300). `BackupConfig`: `nightly_at: str = "01:30"` (`^([01]\d\|2[0-3]):[0-5]\d$`); `keep_daily: int = 14` (1–365); `keep_weekly: int = 8` (0–520); `include_lake: bool = False`; `include_cache: bool = False`. |
 | Preconditions / Postconditions | none / none |
-| Algorithm | Field validation only. `nightly_at` is interpreted in `weights.business_timezone` by X:08's scheduler. |
+| Algorithm | Field validation only. `nightly_at` is interpreted in `weights.business_timezone` by T08-14 (herness.core.jobs.scheduler.run_scheduler). |
 | Side effects / Errors / Concurrency | none / validation → `ConfigError` / immutable |
 | Complexity and limits | n/a |
 | Security notes | ASVS V14.2 retention (§7). |
@@ -242,7 +243,7 @@ Conventions for all unit specs below:
 |-------|---------|
 | Kind | class (pydantic models, `extra="forbid"`, `strict=True`, `frozen=True`) |
 | Purpose | Pinned deployment values (design 10 §7.4) plus the release-verification block that `herness deploy install` needs (ENG E4, R-58). |
-| Signature | `DeployConfig`: `wsl_distro: str = "herness"` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`); `model_root: str = "/opt/herness/hf"`; `env_file: str = "/opt/herness/docker.env"` (absolute POSIX paths matching `^/[A-Za-z0-9._/-]{1,200}$`, no `..` segment, not under `/mnt/`); `reasoning`, `openjev`, `large`, `service`, `release` sub-models. `ReasoningDeploy`: `image: str`; `model: str`; `revision: str`; `served_name: str = "local-30b"`; `gpu_memory_utilization: float = 0.90` (0.10–0.98); `max_model_len: int = 32768` (1,024–1,048,576); `tool_call_parser: str`; `reasoning_parser: str = "qwen3"`; `port: int = 8000` (host `127.0.0.1:8000`, R-51). `OpenJevDeploy`: `image: str`; `model: str = "nvidia/diffusiongemma-26B-A4B-it-NVFP4"`; `revision: str`; `gpu_util: float = 0.9`; `max_num_seqs: int = 64` (1–1024); `canvas: int = 64` (1–1024); `port: int = 8100` (host port `127.0.0.1:8100`; the container listens on 8080, R-51). `LargeDeploy`: `image: str`; `gguf: str`; `sha256: str`; `ctx: int = 32768`; `gpu_layers: int = 20` (0–999); `port: int = 8200` (host `127.0.0.1:8200`, also the port of the `local-large-offload` client, R-51). `ServiceDeploy`: `manager: Literal["nssm", "task_scheduler"] = "nssm"`; `account: str = "svc-herness"`. `ReleaseDeploy`: `repo: str \| None = None` (`^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$`); `signer_workflow: str \| None = None` (`^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}/\.github/workflows/[A-Za-z0-9._-]{1,100}\.ya?ml$`); `licence_exceptions: tuple[str, ...] = ()` (package names). |
+| Signature | `DeployConfig`: `wsl_distro: str = "herness"` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`); `model_root: str = "/opt/herness/hf"`; `env_file: str = "/opt/herness/docker.env"` (absolute POSIX paths matching `^/[A-Za-z0-9._/-]{1,200}$`, no `..` segment, not under `/mnt/`); `reasoning`, `openjev`, `large`, `service`, `release` sub-models. `ReasoningDeploy`: `image: str`; `model: str`; `revision: str`; `served_name: str = "local-30b"`; `gpu_memory_utilization: float = 0.90` (0.10–0.98); `max_model_len: int = 32768` (1,024–1,048,576); `tool_call_parser: str`; `reasoning_parser: str = "qwen3"`; `port: int = 8000` (host `127.0.0.1:8000`, R-51). `OpenJevDeploy`: `image: str`; `model: str = "nvidia/diffusiongemma-26B-A4B-it-NVFP4"`; `revision: str`; `gpu_util: float = 0.9`; `max_num_seqs: int = 64` (1–1024); `canvas: int = 64` (1–1024); `port: int = 8100` (host port `127.0.0.1:8100`; the container listens on 8080, R-51). `LargeDeploy`: `image: str`; `gguf: str`; `sha256: str`; `ctx: int = 32768`; `gpu_layers: int = 20` (0–999); `port: int = 8200` (host `127.0.0.1:8200`, also the port of the `local-large-offload` client, R-51). `ServiceDeploy`: `manager: Literal["nssm", "task_scheduler"] = "nssm"`; `account: str = "svc-herness"`. `ReleaseDeploy`: `repo: str \| None = None` (`^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$`); `signer_workflow: str \| None = None` (`^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}/\.github/workflows/[A-Za-z0-9._-]{1,100}\.ya?ml$`); `licence_exceptions: tuple[str, ...] = ()` (package names); `duckdb_extensions: dict[Literal["excel"], str] = {}` (extension name → SHA-256 of the bundled extension file, 64 lower-case hex characters; pinned per release in `herness.yaml`, used by U10-112). |
 | Preconditions | none |
 | Postconditions | Every string value is safe to pass as one `argv` item and as an env-file value. |
 | Invariants | No value contains whitespace, NUL, `;`, `&`, `\|`, `$`, a backtick, a quote, `<` or `>`, except a whole-value template placeholder `<...>`. |
@@ -260,10 +261,10 @@ Conventions for all unit specs below:
 |-------|---------|
 | Kind | class (`pydantic_settings.BaseSettings`) |
 | Purpose | The immutable root config (design 10 §3.1). |
-| Signature | `model_config = SettingsConfigDict(env_prefix="HERNESS_", env_nested_delimiter="__", extra="forbid", frozen=True)`. Fields exactly as design 10 §3.1: `profile: ProfileName = "local"`; `paths`, `security`, `logging`, `retention`, `backup`, `deploy` (U10-02–U10-07); one field per other file typed with the owner's model: `sources`, `mappings`, `decisions`, `metrics`, `weights`, `models`, `pipelines`, `memory`, `resilience`, `app`; `eval: EvalConfig \| None = None`. Class method `settings_customise_sources` returns, in priority order: `init_settings` (CLI overrides), `GuardedEnvSource`, `FilteredDotEnvSource`, `ProfileYamlSource`, `FilesYamlSource` (U10-16–U10-18). |
+| Signature | `model_config = SettingsConfigDict(env_prefix="HERNESS_", env_nested_delimiter="__", extra="forbid", frozen=True)`. Fields exactly as design 10 §3.1: `profile: ProfileName = "local"`; `paths`, `security`, `logging`, `retention`, `backup`, `deploy` (U10-02–U10-07); one field per other file typed with the owner's model: `sources`, `mappings`, `decisions`, `metrics`, `weights`, `models`, `pipelines`, `memory`, `resilience`, `app`; `eval: EvalConfig \| None = None`. Two files hold sibling top-level sections owned by different specs, and because settings modules never import each other (R-03) this module composes them: `sources: SourcesFileConfig`, a subclass of `T01-02 (herness.connectors.settings.SourcesConfig)` (the connector sections under `sources`) that adds `dq: DqSettings = DqSettings()` and `build: BuildSettings = BuildSettings()` from `T02-01 (herness.model.settings.DqSettings)` and `T02-01 (herness.model.settings.BuildSettings)` (R-69; read as `cfg.sources.dq`, `cfg.sources.build`); and `models: ModelsFileConfig`, a subclass of `T05-04 (herness.harness.llm.settings.ModelsConfig)` (the sections `models`, which holds `roles`, and `harness`) that adds `deciders: DecidersSettings` from `T03-02 (herness.enrich.settings.DecidersSettings)` (R-76; read as `cfg.models.deciders`). Both composite classes are declared in `herness/core/config.py`, keep `extra="forbid"`, and add no validation of their own; each section is validated only by its owner's model. `mappings` is `T02-01 (herness.model.settings.MappingsConfig)`. Class method `settings_customise_sources` returns, in priority order: `init_settings` (CLI overrides), `GuardedEnvSource`, `FilteredDotEnvSource`, `ProfileYamlSource`, `FilesYamlSource` (U10-16–U10-18). |
 | Preconditions | Constructed only by U10-09 inside its load context. Construction without an active context raises `ConfigError("HernessConfig must be built by load_config")` (checked in a `model_validator(mode="before")`). |
 | Postconditions | Frozen; all nested models frozen. |
-| Invariants | No field holds a resolved secret value (only `secret:<name>` strings or bare names in `*_secret` fields). |
+| Invariants | No field holds a resolved secret value: every secret reference is a string matching the `secret:` pattern (R-72), resolved later by `herness.core.secrets`. |
 | Algorithm | Pydantic-settings deep-updates the source dicts: mappings merge key by key; lists and scalars from a higher source replace. |
 | Side effects / Errors | none / `ValidationError`, converted by U10-09 |
 | Concurrency | immutable; safe to share across threads |
@@ -302,7 +303,7 @@ Conventions for all unit specs below:
 | Errors | as U10-09 |
 | Concurrency | lock-protected (`_CACHE_LOCK`, a `threading.Lock`) |
 | Complexity and limits | O(1) after load |
-| Security notes | Worker child processes call `init_config` with the parent's profile and overrides (X:08 child start); no mutated object is inherited. |
+| Security notes | Worker child processes call `init_config` with the parent's profile and overrides (T08-21 (herness.core.jobs.child.child_main)); no mutated object is inherited. |
 | Tests | UT10-22 |
 
 #### U10-11 herness.core.config.config_hash
@@ -314,7 +315,7 @@ Conventions for all unit specs below:
 | Signature | `cfg: HernessConfig` (positional); `key_id: str \| None = None` (keyword-only). Returns `str` matching `^cfg_[0-9a-f]{16}$`. |
 | Preconditions | none |
 | Postconditions | Same inputs give the same output on any OS and in any key order. |
-| Algorithm | 1. `d = effective_dict(cfg)`. 2. Delete the subtrees `logging`, `paths`, `backup`, `security.ui`, `deploy.service`. 3. Set `d["_inputs"] = {"redact_key_id": K, "directory_sha256": H}`. `K` is the `key_id` argument; when `None`, `K` comes from the module hook `_KEY_ID_PROVIDER` (a `Callable[[HernessConfig], str]` that `herness.core.redact` registers at import; it resolves `security.redaction.key` through U10-28 and returns the U10-40 key id), which keeps `config.py` free of imports from `secrets`/`redact`; when no provider is registered or the secret is missing, `K = "unresolved"`. `H` is the SHA-256 hex of the bytes of `security.redaction.directory_file`, or `null` when the file is absent or `directory_file` is `None`. 4. Canonical JSON: `X:00/herness.core.ids.canonical_json(d)`, the single implementation (R-14; it encodes `Decimal` as a string, `Path` as POSIX text, `date` as ISO-8601, tuples as lists, with sorted keys and no insignificant whitespace). 5. Return `"cfg_" + X:00/herness.core.ids.sha256_hex(<UTF-8 bytes of step 4>)[:16]`. |
+| Algorithm | 1. `d = effective_dict(cfg)`. 2. Delete the subtrees `logging`, `paths`, `backup`, `security.ui`, `deploy.service`. 3. Set `d["_inputs"] = {"redact_key_id": K, "directory_sha256": H}`. `K` is the `key_id` argument; when `None`, `K` comes from the module hook `_KEY_ID_PROVIDER` (a `Callable[[HernessConfig], str]` that `herness.core.redact` registers at import; it resolves `security.redaction.key` through U10-28 and returns the U10-40 key id), which keeps `config.py` free of imports from `secrets`/`redact`; when no provider is registered or the secret is missing, `K = "unresolved"`. `H` is the SHA-256 hex of the bytes of `security.redaction.directory_file`, or `null` when the file is absent or `directory_file` is `None`. 4. Canonical JSON: `T00-05 (herness.core.ids.canonical_json)(d)`, the single implementation (R-14; it encodes `Decimal` as a string, `Path` as POSIX text, `date` as ISO-8601, tuples as lists, with sorted keys and no insignificant whitespace). 5. Return `"cfg_" + T00-05 (herness.core.ids.sha256_hex)(<UTF-8 bytes of step 4>)[:16]`. |
 | Side effects | reads the directory file (streamed for hashing, content discarded) and the keyring |
 | Errors | directory file exists but cannot be read → `ConfigError("cannot read directory_file")` |
 | Concurrency | thread-safe |
@@ -330,7 +331,7 @@ Conventions for all unit specs below:
 | Purpose | Plain-dict view for `config show`, snapshots and hashing. |
 | Signature | `cfg: HernessConfig` (positional); `redact_secrets: bool = True` (keyword-only). Returns `dict[str, Any]` (JSON-shaped). |
 | Preconditions | none |
-| Postconditions | Secret references appear as `secret:<name>`, or as the bare name in `*_secret` fields. |
+| Postconditions | Secret references appear as `secret:<name>` (R-72). |
 | Algorithm | 1. `cfg.model_dump(mode="json")`. 2. When `redact_secrets` is true, walk the dict; replace with `"***"` any string value under a key named `password`, `passwd`, `pwd`, `api_key`, `apikey`, `token`, `secret`, `credentials`, `client_secret` or `private_key` that does not start with `secret:` (defense in depth; C16 already rejects such values). 3. Return the dict. |
 | Side effects / Errors / Concurrency | none / none / pure |
 | Complexity and limits | O(size of config) |
@@ -393,7 +394,7 @@ Conventions for all unit specs below:
 | Signature | `__init__(settings_cls: type[BaseSettings])`; `__call__() -> dict[str, Any]` |
 | Preconditions | Inside the U10-09 load context. |
 | Postconditions | Returns the root sections of `herness.yaml` plus one section per other file stem. |
-| Algorithm | 1. Load `herness.yaml` (U10-15); `version` must equal 1 (`ConfigError("<file>: version must be 1")`); the other top-level keys must be a subset of `paths`, `security`, `logging`, `retention`, `backup`, `deploy` (`ConfigError("herness.yaml: unknown root key <k>")`). 2. For each stem in the fixed list `sources`, `mappings`, `decisions`, `metrics`, `weights`, `models`, `pipelines`, `memory`, `resilience`, `app`: load `<stem>.yaml`, check and drop `version`, store the rest as section `<stem>`. 3. Load `eval.yaml` the same way only if it exists. 4. Read `injection_patterns.txt` (UTF-8, ≤ 1 MiB; missing → `ConfigError`); keep stripped lines that are non-empty and do not start with `#`; store the list at `memory["injection_patterns"]` (X:07 declares the field). 5. Any other `*.yaml` file directly under `config/` → `ConfigError("unexpected config file <name>")`. |
+| Algorithm | 1. Load `herness.yaml` (U10-15); `version` must equal 1 (`ConfigError("<file>: version must be 1")`); the other top-level keys must be a subset of `paths`, `security`, `logging`, `retention`, `backup`, `deploy` (`ConfigError("herness.yaml: unknown root key <k>")`). 2. For each stem in the fixed list `sources`, `mappings`, `decisions`, `metrics`, `weights`, `models`, `pipelines`, `memory`, `resilience`, `app`: load `<stem>.yaml`, check `version`, and store the file's top-level mapping as section `<stem>`; `version` is dropped except for `sources.yaml`, whose model `SourcesConfig` (impl 01) declares it. The sibling sections of `sources.yaml` (`sources`, `dq`, `build`; R-69) and of `models.yaml` (`models`, `harness`, `deciders`; R-76) stay together in that section and are split across the owners' models by the U10-08 composite classes. 3. Load `eval.yaml` the same way only if it exists. 4. Read `injection_patterns.txt` (UTF-8, ≤ 1 MiB; missing → `ConfigError`); keep stripped lines that are non-empty and do not start with `#`; store the list at `memory["injection_patterns"]` (T07-02 (herness.harness.memory.settings.MemoryConfig) declares the field). 5. Any other `*.yaml` file directly under `config/` → `ConfigError("unexpected config file <name>")`. |
 | Side effects | reads files |
 | Errors | as above plus U10-15 |
 | Concurrency | per-call state only |
@@ -448,7 +449,7 @@ Conventions for all unit specs below:
 | Side effects / Errors | none / `ConfigError` naming the key path only |
 | Concurrency | pure |
 | Complexity and limits | ≤ 100 overrides |
-| Security notes | The `security.`/`profile` ban is applied by U10-09 step 3. X:09 translates its `--depth D` flag into the override `models.models.depth.default=<D>`. |
+| Security notes | The `security.`/`profile` ban is applied by U10-09 step 3. impl 09 translates its `--depth D` flag into the override `models.models.depth.default=<D>`. |
 | Tests | UT10-03, UT10-23, PT10-06 |
 
 #### U10-20 herness.core.config_validate.CROSS_CHECKS, run_cross_checks
@@ -473,8 +474,8 @@ Cross-check table (`CROSS_CHECKS`):
 | ID | Rule | Severity | Mode |
 |----|------|----------|------|
 | C01 | Every value of `models.models.roles` and every entry of every list in `models.models.fallback` (after the overlay) is a key of `models.models.clients` | error | offline |
-| C02 | If a value of `models.models.roles` names a client with `off_network: true`, `security.egress.enabled` is true and the profile's gate is set. Fallback entries are not checked (X:08 drops off-network entries at run time when egress is off) | error | offline |
-| C03 | `registry.get(kind, name)` resolves for every referenced name: `connector` ← keys of `sources.sources` with `enabled: true`; `monitoring_adapter` ← keys of `sources.sources.monitoring.adapters` with `enabled: true`; `llm_client` ← distinct `kind` values of `models.models.clients.*`; `decider` ← keys of `models.models.deciders` with `enabled: true` | error | registry |
+| C02 | If a value of `models.models.roles` names a client with `off_network: true`, `security.egress.enabled` is true and the profile's gate is set. Fallback entries are not checked (T08-09 (herness.core.resilience.ModelChain) drops off-network entries at run time when egress is off) | error | offline |
+| C03 | `registry.get(kind, name)` resolves for every referenced name: `connector` ← keys of `sources.sources` with `enabled: true`; `monitoring_adapter` ← keys of `sources.sources.monitoring.adapters` with `enabled: true`; `llm_client` ← distinct `kind` values of `models.models.clients.*`; `decider` ← keys of `models.deciders` (the top-level `deciders` section of `models.yaml`, U03-150, R-76) with `enabled: true` | error | registry |
 | C04 | Each `security.egress.destinations`, `security.network.extra_allowed_hosts` and `sources.sources.<name>.hosts` entry (R-06) matches `^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$` and is not an IP literal | error | offline |
 | C05 | `security.ui.bind` is a loopback address (the app always binds to loopback, R-50); `security.ui.expose.enabled` requires `trusted_proxy`; `trusted_proxy`, when set, is a loopback address (the proxy runs on the same host, so it is the only peer that can equal it) | error | offline |
 | C06 | Every secret reference returned by U10-34 exists (U10-30) | error | online |
@@ -487,7 +488,7 @@ Cross-check table (`CROSS_CHECKS`):
 | C12 | `security.secrets.backend: dotenv` only when the env has `HERNESS_ENV=dev` or the profile is `synth` | error | offline |
 | C13 | Deploy pins (U10-07 deploy-time rules) hold for `reasoning`, `openjev`, `large` | warn | offline |
 | C14 | `security.redaction.custom_patterns` names are unique case-insensitively | error | offline |
-| C16 | Plain-text credential sweep over the merged raw dict: every string under a key named in the U10-12 secret key list starts with `secret:`; every key ending in `_secret` holds a value matching `SECRET_NAME`; no string anywhere yields a `CREDENTIAL` span from U10-36's detectors | error | offline |
+| C16 | Plain-text credential sweep over the merged raw dict: every string under a key named in the U10-12 secret key list or ending in `_secret` is a `secret:` reference whose name matches `SECRET_NAME` (R-72; a bare name is an error with the hint "write secret:<name>"); no string anywhere yields a `CREDENTIAL` span from U10-36's detectors | error | offline |
 | C17 | Every enabled `sources.sources.*.base_url` (any depth) uses `https`, unless its host is loopback | error | offline |
 | C20 | Every enabled SDK source (`SDK_SOURCE_KINDS`, U10-58: `snowflake`, `mongodb`) and every enabled `dataverse` source with `auth.method: msal_client_credentials` has a non-empty `sources.sources.<name>.hosts` list; for `snowflake` it contains `<account>.snowflakecomputing.com`; for `dataverse` it contains `login.microsoftonline.com`. Nothing is derived from `base_url` for these sources (R-06) | error | offline |
 | C21 | `security.ui.expose.enabled` together with `roles.default_role: viewer` (D8 recommends `denied`) | warn | offline |
@@ -523,7 +524,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Field | Content |
 |-------|---------|
 | Kind | protocol and functions (start-up validation hook; port pattern of R-04) |
-| Purpose | Run the owner validators that design 10 §5.1 step 4 delegates (sources X:01, decisions X:03, metrics X:04, resilience X:08) after `load_config`, from the composition root, so validators that need the warehouse or other layers above L0 never run inside the L0 loader. |
+| Purpose | Run the owner validators that design 10 §5.1 step 4 delegates (decisions T03-02 (herness.enrich.settings.check_decider_refs), metrics T04-03 (herness.metrics.catalog.metrics_owner_validator), resilience and source schedules T08-02 (herness.core.jobs.validate.validate_resilience_config)) after `load_config`, from the composition root, so validators that need the warehouse or other layers above L0 never run inside the L0 loader. |
 | Signature | `OwnerValidator` (`typing.Protocol`): `__call__(self, cfg: HernessConfig, *, offline: bool) -> Iterable[ConfigIssue \| Mapping[str, str]]`. `register_owner_validator(name: str, fn: OwnerValidator) -> None` (`name` matches `^[a-z][a-z0-9_.-]{0,63}$`). `run_owner_validators(cfg: HernessConfig, *, offline: bool) -> list[ConfigIssue]`. `reset_owner_validators() -> None` (tests only, called by the `reset_core` fixture; `reset_config` keeps registrations so a re-initialised config is still validated). |
 | Preconditions | `register_owner_validator` is called only by a composition root (`herness.cli`, `app/common`), which imports the owner modules (L1–L5 may import them) and registers each validator before it calls `init_config`. A second registration of the same `name` with a different object raises `ConfigError("duplicate owner validator <name>")`; the same object is a no-op. |
 | Postconditions | `run_owner_validators` never raises for a validator problem; every result is a `ConfigIssue`. |
@@ -594,7 +595,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Kind | constant and function |
 | Purpose | Static table of built-in implementations; test reset. |
 | Signature | `_BUILTINS: dict[tuple[Kind, str], str]` of `"module:attr"`; `reset_registry() -> None` |
-| Algorithm | The table starts empty in T10-04. Each owner spec's task card adds its own rows (X:01 connectors and monitoring adapters, X:03 deciders and embedders, X:05 LLM clients and tools, X:09 renderers). `reset_registry` clears registrations and the entry-point flag, keeping `_BUILTINS`. |
+| Algorithm | The table starts empty in T10-04. Each owner spec's task card adds its own rows (impl 01 connectors and monitoring adapters, impl 03 deciders and embedders, impl 05 LLM clients and tools, impl 09 renderers). `reset_registry` clears registrations and the entry-point flag, keeping `_BUILTINS`. |
 | Side effects / Errors / Concurrency | module state / none / `_REG_LOCK` |
 | Complexity and limits | n/a |
 | Security notes | Built-ins are import strings, so the table creates no upward import edge for import-linter. |
@@ -608,7 +609,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 |-------|---------|
 | Kind | constant and types |
 | Purpose | Secret reference forms (design 10 §3.3). |
-| Signature | `SECRET_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")`. `class SecretRef(str)` with class method `parse(value: str) -> SecretRef` accepting `secret:<name>` or a bare name and property `name -> str` (lower-cased). `SecretRefStr = Annotated[str, AfterValidator(...)]` requiring `^secret:` + a `SECRET_NAME` match. `SecretNameStr = Annotated[str, AfterValidator(...)]` requiring a bare `SECRET_NAME` match. Settings modules cannot import this module (R-03), so owner settings models (and U10-04) declare `secret:` fields as `Annotated[str, StringConstraints(pattern=r"^secret:[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")]` and `*_secret` fields as `Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")]`, the same pattern texts as `SecretRefStr` and `SecretNameStr`; C16 (U10-20) re-checks every such value with `SECRET_NAME` at load, so a drifted local pattern cannot admit a plain-text credential. `SecretRefStr` and `SecretNameStr` remain for non-settings code. |
+| Signature | `SECRET_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")`. `class SecretRef(str)` with class method `parse(value: str) -> SecretRef` accepting `secret:<name>` or a bare name and property `name -> str` (lower-cased). `SecretRefStr = Annotated[str, AfterValidator(...)]` requiring `^secret:` + a `SECRET_NAME` match. `SecretNameStr = Annotated[str, AfterValidator(...)]` requiring a bare `SECRET_NAME` match. Settings modules cannot import this module (R-03), so owner settings models (and U10-04) declare every secret-reference field, including fields named `*_secret`, as `Annotated[str, StringConstraints(pattern=r"^secret:[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")]`, the same pattern text as `SecretRefStr` (R-72: settings models hold secret references as `secret:` strings and never import this module); C16 (U10-20) re-checks every such value with `SECRET_NAME` at load, so a drifted local pattern cannot admit a plain-text credential. `SecretRefStr` and `SecretNameStr` remain for non-settings code (`SecretNameStr` types the bare name argument of `secrets set`). |
 | Preconditions | none |
 | Postconditions | `SecretRef.name` is lower-case. |
 | Algorithm | `parse`: strip an optional `secret:` prefix, match `SECRET_NAME`, else `ConfigError("invalid secret name")` (the value is not echoed); store the lower-cased name. |
@@ -694,7 +695,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Signature | `known_values() -> frozenset[str]`; `scrub_secrets(logger: Any, method_name: str, event_dict: MutableMapping[str, Any]) -> MutableMapping[str, Any]` (structlog processor signature) |
 | Preconditions | none |
 | Postconditions | No string in the returned event contains a known value or a `CREDENTIAL`/`URL_TOKEN` span. |
-| Algorithm | `known_values`: snapshot of `_KNOWN`. `scrub_secrets`: 1. When `_KNOWN` changed since the last call, rebuild one compiled alternation of `re.escape(v)` for all known values, longest first. 2. Walk `event_dict` values recursively (dicts, lists, tuples; depth ≤ 6); for each string, replace alternation matches with `***`. 3. Run U10-36's `CREDENTIAL` and `URL_TOKEN` detectors on each string and replace their spans with `[SECRET]`. 4. Tracebacks are rendered to text by the X:00 logging pipeline before this processor, so they are scrubbed too. X:00 inserts this processor last before the renderer; X:05's trace writer applies the same function to every trace event. |
+| Algorithm | `known_values`: snapshot of `_KNOWN`. `scrub_secrets`: 1. When `_KNOWN` changed since the last call, rebuild one compiled alternation of `re.escape(v)` for all known values, longest first. 2. Walk `event_dict` values recursively (dicts, lists, tuples; depth ≤ 6); for each string, replace alternation matches with `***`. 3. Run U10-36's `CREDENTIAL` and `URL_TOKEN` detectors on each string and replace their spans with `[SECRET]`. 4. Tracebacks are rendered to text by the T00-06 (herness.core._log_pipeline) processors before this processor, so they are scrubbed too. T00-07 (herness.core.logging.configure_logging) inserts this processor last before the renderer; T05-11 (herness.harness.tracing.Tracer) applies the same function to every trace event. |
 | Side effects | none |
 | Errors | none raised; a failure inside the processor replaces the whole event with `{"event": "log.scrub.failed"}` so nothing unscrubbed is emitted |
 | Concurrency | `_KNOWN_LOCK` for the rebuild; the compiled pattern is swapped atomically |
@@ -725,7 +726,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Kind | function (pure) |
 | Purpose | All secret names referenced by a config, for C06, doctor and `secrets status`. |
 | Signature | `referenced_secret_names(cfg: HernessConfig) -> list[str]` |
-| Algorithm | Walk `effective_dict(cfg)`: collect names from strings starting with `secret:` and from values of keys ending in `_secret`; add `redact.hmac_key` and `ui_user_ref_key`; lower-case, de-duplicate, sort. Subtrees whose mapping has `enabled: false` are skipped. |
+| Algorithm | Walk `effective_dict(cfg)`: collect names from strings starting with `secret:` (R-72); add `redact.hmac_key` and `ui_user_ref_key`; lower-case, de-duplicate, sort. Subtrees whose mapping has `enabled: false` are skipped. |
 | Side effects / Errors / Concurrency | none / none / pure |
 | Complexity and limits | O(size of config) |
 | Security notes | none |
@@ -802,12 +803,12 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Kind | function |
 | Purpose | Persist user display names seen in lake `*_display` fields so `PERSON` covers them (design 10 §5.3). |
 | Signature | `update_display_names(names: Iterable[str], *, data_dir: Path) -> int` (new names added) |
-| Preconditions | Called by X:03 at the start of its text stage with the distinct values of user-reference `*_display` columns. |
+| Preconditions | Called by impl 03 at the start of its text stage with the distinct values of user-reference `*_display` columns. |
 | Postconditions | `<data_dir>/cache/redact/display_names.txt` holds the sorted union, one name per line. |
 | Algorithm | 1. Read the existing file (absent → empty). 2. Add stripped names with 2–8 tokens and 3–128 characters. 3. If the set grew, write atomically. 4. Return the count added. |
 | Side effects | one file write |
 | Errors | `OSError` → `StoreBusy("display_names write failed")` |
-| Concurrency | single writer: only the build pipeline job calls it (X:08 exclusive kinds) |
+| Concurrency | single writer: only the build pipeline job calls it (impl 08 exclusive kinds) |
 | Complexity and limits | ≤ 1,000,000 names |
 | Security notes | Personal data under `data/`, covered by the folder ACL. |
 | Tests | UT10-46 |
@@ -834,7 +835,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Field | Content |
 |-------|---------|
 | Kind | method |
-| Purpose | Detect spans without replacing (redaction, egress re-scan, fixture scanner, X:06 claim check). |
+| Purpose | Detect spans without replacing (redaction, egress re-scan, fixture scanner, impl 06 claim check). |
 | Signature | `scan(self, text: str, *, ner: bool = False) -> list[Span]` |
 | Preconditions | `len(text) ≤ 4,000,000`, else `RedactionFailed("text too long")`. |
 | Postconditions | Spans do not overlap, are sorted, and never cover an existing pseudonym token. |
@@ -911,7 +912,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Wrapper used by X:05 (trace payloads), X:07, X:08 (`last_error`), X:09 (chat input, Jira titles). |
+| Purpose | Wrapper used by impl 05 (trace payloads), impl 07, impl 08 (`last_error`), impl 09 (chat input, Jira titles). |
 | Signature | `redact_text(text: str \| None) -> str \| None` |
 | Algorithm | `None` → `None`. Else `get_redactor().redact(text).text`; on `RedactionFailed`, log `redact.record.failed` (no text) and return `None` (fail closed). |
 | Side effects | log on failure |
@@ -930,7 +931,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Signature | `redact_table(tbl: pa.Table, text_cols: Sequence[str], id_col: str = "record_id", workers: int \| None = None) -> pa.Table` |
 | Preconditions | `id_col` and every `text_cols` entry exist as string columns, else `SchemaViolation("redact_table: missing column <c>")`. |
 | Postconditions | Output schema `(<id_col>: string, text: string)`; same row order and count. |
-| Algorithm | 1. `workers` default = `get_config().sources.build.threads` (X:02 key), minimum 1. 2. Split into chunks of 20,000 rows. 3. With `workers == 1` or one chunk, run in-process; else `ProcessPoolExecutor(max_workers=workers, initializer=_init_worker, initargs=(profile, overrides, config_dir))`, where `_init_worker` calls `init_config` and builds its own redactor. Each chunk travels as built-in lists (`list[str]` IDs, `list[list[str \| None]]` texts) and returns `list[str \| None]` plus a failure count (standard-library process serialisation of built-in types only; ENG exception X-2 in §13). 4. Per row: redact each text column separately; join non-null results with `"\n\n"`; all null → null. A row whose redaction raises gets `text = NULL` and counts as failed; raw text is never substituted. 5. Assemble the table; log `redact.table.completed` (`rows`, `failed_rows`, `workers`, `duration_ms`); record metrics. |
+| Algorithm | 1. `workers` default = `get_config().sources.build.threads` (T02-01 (herness.model.settings.BuildSettings) key), minimum 1. 2. Split into chunks of 20,000 rows. 3. With `workers == 1` or one chunk, run in-process; else `ProcessPoolExecutor(max_workers=workers, initializer=_init_worker, initargs=(profile, overrides, config_dir))`, where `_init_worker` calls `init_config` and builds its own redactor. Each chunk travels as built-in lists (`list[str]` IDs, `list[list[str \| None]]` texts) and returns `list[str \| None]` plus a failure count (standard-library process serialisation of built-in types only; ENG exception X-2 in §13). 4. Per row: redact each text column separately; join non-null results with `"\n\n"`; all null → null. A row whose redaction raises gets `text = NULL` and counts as failed; raw text is never substituted. 5. Assemble the table; log `redact.table.completed` (`rows`, `failed_rows`, `workers`, `duration_ms`); record metrics. |
 | Side effects | worker processes; logs; metrics |
 | Errors | schema errors as above; a crashed worker → `StoreBusy("redaction worker crashed")` (retryable, so the build job retries) |
 | Concurrency | caller blocks; workers are processes |
@@ -960,7 +961,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Signature | `main(argv: Sequence[str] \| None = None) -> int` |
 | Preconditions | `herness/core/redact.py` ends with a `__main__` guard calling `sys.exit(redact_scan.main())`. |
 | Postconditions | Exit 0 no finding; 1 findings; 2 usage error. |
-| Algorithm | 1. Parse `--scan PATH` (repeatable) with `argparse`. 2. Build a `Redactor` with an all-zero 32-byte key (detection does not depend on the key), default `RedactionConfig` and no directory (no real directory in the repository). 3. Read `security.redaction.denylist_domains` from `config/herness.yaml` merged with `config/profiles/synth.yaml` (U10-15, no full load). 4. Walk files with suffix `.csv`, `.json`, `.jsonl`, `.yaml`, `.yml`, `.txt`, `.md`, `.sql`, `.parquet` (string columns via `pyarrow.parquet`); a file > 50 MiB is a finding "file too large to scan". 5. Allow rules (reserved synthetic ranges, spec 11 §5.1.4): `EMAIL` ending `@example.com` or `@example.org`; `PHONE` whose normalized form is `+120255501` plus two digits (the fictional form `+1-202-555-01xx`, R-56); `IP` in `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`; `EMPLOYEE_ID` any; `CARD` starting `4111`; `CREDENTIAL` and `URL_TOKEN` whose value starts (case-insensitive) with `synthetic`, `test`, `fake` or `dummy`; `NATIONAL_ID` starting with `9` or `000`. 6. A denylisted domain appearing as a host suffix (case-insensitive, label-bounded) is a finding. 7. Print `<path>:<line>:<col> <TYPE>` per finding (never the value); return the code. |
+| Algorithm | 1. Parse `--scan PATH` (repeatable) with `argparse`. 2. Build a `Redactor` with an all-zero 32-byte key (detection does not depend on the key), default `RedactionConfig` and no directory (no real directory in the repository). 3. Read `security.redaction.denylist_domains` from `config/herness.yaml` merged with `config/profiles/synth.yaml` (U10-15, no full load). 4. Walk files with suffix `.csv`, `.json`, `.jsonl`, `.yaml`, `.yml`, `.txt`, `.md`, `.sql`, `.parquet` (string columns via `pyarrow.parquet`); a file > 50 MiB is a finding "file too large to scan". 5. Allow rules (reserved synthetic ranges, spec 11 §5.1.4): `EMAIL` ending `@example.com` or `@example.org`; `PHONE` whose normalized form is `+120255501` plus two digits (the fictional form `+1-202-555-01xx`, R-56); `IP` in `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`; `EMPLOYEE_ID` any; `CARD` starting `4111`; `CREDENTIAL` and `URL_TOKEN` whose value starts (case-insensitive) with `synthetic` (R-67); `NATIONAL_ID` starting with `9` or `000`. 6. A denylisted domain appearing as a host suffix (case-insensitive, label-bounded) is a finding. 7. Print `<path>:<line>:<col> <TYPE>` per finding (never the value); return the code. |
 | Side effects | reads files; stdout |
 | Errors | unreadable file → finding "unreadable", exit 1 |
 | Concurrency | single-threaded |
@@ -1022,7 +1023,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Field | Content |
 |-------|---------|
 | Kind | method |
-| Purpose | Async twin used by the Anthropic adapter (X:05). |
+| Purpose | Async twin used by T05-08 (herness.harness.llm.anthropic_client.AnthropicClient). |
 | Signature | `async_http_client(self, purpose: Purpose, payload_class: PayloadClass, *, run_id: str \| None = None, task_id: str \| None = None, timeout: float = 120.0) -> httpx.AsyncClient` (the design's `**kw` are exactly these keywords) |
 | Algorithm | As U10-52 with `httpx.AsyncHTTPTransport` and `AsyncGuardedTransport`. |
 | Side effects / Errors | as U10-52 |
@@ -1042,7 +1043,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Postconditions | For every request that reached the inner transport, exactly one `completed` line with the same `egress_id` is written when the response closes or the send fails. |
 | Algorithm | 1. If `request.content` raises `httpx.RequestNotRead` (a streaming body), take the guard's blocked path with reason `streaming_body`. 2. `ticket = guard._check_and_log(str(request.url), request.content, ...)`; the async version runs it with `asyncio.to_thread`. 3. Call the inner transport. 4. Wrap the response stream in a counting stream that raises `EgressBlocked(... "response_too_large")` past `MAX_RESPONSE_BYTES`. 5. On close: when `content-type` starts with `application/json` and the body ≤ 10 MiB, read `usage.input_tokens`/`usage.output_tokens` (Anthropic) or `usage.prompt_tokens`/`usage.completion_tokens` (OpenAI-compatible); write the `completed` line with `status_code`, `bytes_in`, `latency_ms` (monotonic), `tokens_in` (provider figure or the estimate), `tokens_out` (figure or `null`). 6. On an inner exception, write the `completed` line with `status_code=null`, `reason=<exception class>`, then re-raise. |
 | Side effects | egress lines; metrics |
-| Errors | `EgressBlocked`; transport exceptions propagate (X:05 maps them) |
+| Errors | `EgressBlocked`; transport exceptions propagate (T05-08 (herness.harness.llm.anthropic_client.AnthropicClient) maps them) |
 | Concurrency | per-request state |
 | Complexity and limits | response ≤ 50 MiB |
 | Security notes | TH10-19 (allowed line precedes the socket), TH10-21. |
@@ -1055,7 +1056,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Kind | method (context manager; additive, delta D10-04) |
 | Purpose | Permit purpose `model_download` for `herness deploy pull --allow-download` only (design 10 §5.4). |
 | Signature | `download_window(self, *, allow_download: bool, actor: str) -> ContextManager[None]` |
-| Preconditions | `allow_download` true (else `EgressBlocked("deploy pull requires --allow-download")`); profile not `synth` (else `EgressBlocked("profile synth cannot download")`); `os.environ` lacks `HERNESS_WORKER=1`, which X:08 sets in worker processes (else `EgressBlocked("model_download is refused inside jobs")`). |
+| Preconditions | `allow_download` true (else `EgressBlocked("deploy pull requires --allow-download")`); profile not `synth` (else `EgressBlocked("profile synth cannot download")`); `os.environ` lacks `HERNESS_WORKER=1`, which T08-21 (herness.core.jobs.run_worker) sets in worker processes (else `EgressBlocked("model_download is refused inside jobs")`). |
 | Postconditions | The window flag is cleared on exit, including on exception. |
 | Algorithm | 1. Check preconditions. 2. Set the thread-local flag. 3. Log `egress.download_window.opened`; `audit("admin_action", actor, action="deploy_pull", target="download_window")`. 4. Yield. 5. Clear the flag; log `egress.download_window.closed`. |
 | Side effects | log and audit lines |
@@ -1142,7 +1143,7 @@ Removed (R-04): see U10-109. A table of lazy import strings run from L0 would ex
 | Preconditions | `source` is a key of `sources.sources` whose mapping does not have `enabled: false`, else `ConfigError("unknown or disabled source <source>")`. `base_url` parses with `httpx.URL`, has no user info, uses `https` (or `http` only when its host is in `LOOPBACK_HOSTS`), else `EgressBlocked("source client refused: <reason>", reason=...)` with reason `scheme_not_https` or `userinfo_present`. `verify` is `True` or an existing CA bundle file; any other value, including `False`, raises `ConfigError("TLS verification cannot be disabled for source <source>")`. `0 < timeout_s ≤ 600`; `1 ≤ max_connections ≤ 64`; `1 ≤ max_response_bytes ≤ 1,073,741,824`; else `ConfigError`. |
 | Postconditions | The client has `base_url=base_url`, transport `SourceHostTransport`, `follow_redirects=False`, `trust_env=False`, `timeout=httpx.Timeout(timeout_s, connect=min(timeout_s, 10.0))`, `limits=httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_connections)`, `auth=auth`, and the given `headers`. |
 | Invariants | Every request, including one with an absolute URL or a response-supplied next link, goes only to a host in the source allowlist and in the process egress allowlist, over verified TLS (except loopback `http`). |
-| Algorithm | 1. Source allowlist (R-06): the lower-cased entries of `sources.sources.<source>.hosts`, plus the host of `base_url` when `source` is not in `SDK_SOURCE_KINDS` (U10-58). The host of `base_url` must be in it, else `EgressBlocked(..., reason="host_not_allowed")`. 2. Process allowlist: the `allowed_hosts` of the installed `SocketPolicy` (U10-58), or, when none is installed, the allowlist U10-58 step 1 computes from `get_config()`; the `base_url` host must be in it too (fail closed). 3. TLS: `ssl_ctx = ssl.create_default_context(cafile=<verify path> if a path else certifi.where())`, `minimum_version = ssl.TLSVersion.TLSv1_2`, `check_hostname` true, `verify_mode = CERT_REQUIRED`. 4. `inner = httpx.HTTPTransport(verify=ssl_ctx, proxy=security.network.http_proxy, retries=0)` (retries belong to the caller's X:08 policy). 5. Wrap in `SourceHostTransport`, whose `handle_request` refuses, before the inner transport is called, any request whose host is not in both allowlists (`host_not_allowed`), whose scheme is not `https` for a non-loopback host (`scheme_not_https`), or whose URL has user info (`userinfo_present`); each refusal raises `EgressBlocked("source client refused: <reason>", reason=...)`, logs `egress.source.blocked` (source, host, reason) and increments `herness_socket_blocked_total{event="source_client"}`. 6. The response stream is wrapped in a counting stream that raises `EgressBlocked("source response too large", reason="response_too_large")` past `max_response_bytes`. 7. Return the client. Source traffic is on-network and is not egress under design 10 §3.5: it writes no egress JSONL line, passes no redaction re-scan, and needs no data-policy approval; the socket guard (U10-58) still applies underneath. |
+| Algorithm | 1. Source allowlist (R-06): the lower-cased entries of `sources.sources.<source>.hosts`, plus the host of `base_url` when `source` is not in `SDK_SOURCE_KINDS` (U10-58). The host of `base_url` must be in it, else `EgressBlocked(..., reason="host_not_allowed")`. 2. Process allowlist: the `allowed_hosts` of the installed `SocketPolicy` (U10-58), or, when none is installed, the allowlist U10-58 step 1 computes from `get_config()`; the `base_url` host must be in it too (fail closed). 3. TLS: `ssl_ctx = ssl.create_default_context(cafile=<verify path> if a path else certifi.where())`, `minimum_version = ssl.TLSVersion.TLSv1_2`, `check_hostname` true, `verify_mode = CERT_REQUIRED`. 4. `inner = httpx.HTTPTransport(verify=ssl_ctx, proxy=security.network.http_proxy, retries=0)` (retries belong to the caller's T08-04 (herness.core.resilience.policies.RetryPolicy)). 5. Wrap in `SourceHostTransport`, whose `handle_request` refuses, before the inner transport is called, any request whose host is not in both allowlists (`host_not_allowed`), whose scheme is not `https` for a non-loopback host (`scheme_not_https`), or whose URL has user info (`userinfo_present`); each refusal raises `EgressBlocked("source client refused: <reason>", reason=...)`, logs `egress.source.blocked` (source, host, reason) and increments `herness_socket_blocked_total{event="source_client"}`. 6. The response stream is wrapped in a counting stream that raises `EgressBlocked("source response too large", reason="response_too_large")` past `max_response_bytes`. 7. Return the client. Source traffic is on-network and is not egress under design 10 §3.5: it writes no egress JSONL line, passes no redaction re-scan, and needs no data-policy approval; the socket guard (U10-58) still applies underneath. |
 | Side effects | none until a request is sent; refused requests write one log line |
 | Errors | `ConfigError`, `EgressBlocked` (`host_not_allowed`, `scheme_not_https`, `userinfo_present`, `response_too_large`); transport errors propagate to the caller (impl 01 maps them) |
 | Concurrency | thread-safe (`httpx.Client`) |
@@ -1245,7 +1246,7 @@ Allowed fields per event (design 10 §4.6; action list extended by delta D10-07)
 
 ### 3.7 Operator commands, deployment, doctor and maintenance (`herness/admin/`)
 
-Impl 09 owns the CLI command table, options and rendering (R-47); this section specifies behavior only. Every `cmd_*` function is called by the X:09 Typer command of the same name after X:09 has checked the role of design 10 §3.7 (`admin`, `admin (OS)` or `any`) and raised `PermissionDenied` otherwise. "admin (OS)" also requires the process to run elevated (`ctypes.windll.shell32.IsUserAnAdmin()` on Windows, `os.geteuid() == 0` elsewhere), else `PermissionDenied("run from an elevated shell")`. Each `cmd_*` returns X:09's `CommandResult` (`ok`, `data`, `warnings`, `exit_code`) and never prints; X:09 renders it. Exit codes follow R-46: `0` success, `1` operation failed (including `PermissionDenied`, `EgressBlocked`, `ModelUnavailable` and `FatalError`), `2` usage error (Typer), `3` validation found problems (config validation errors, `config validate --strict` warnings, `ConfigError` at load, `doctor` FAIL). `actor` is the caller's `user_ref`, computed by X:09 from the OS user.
+Impl 09 owns the CLI command table, options and rendering (R-47); this section specifies behavior only. Every `cmd_*` function is called by the impl 09 Typer command of the same name (T09-24 (herness._cli.cmd_admin)) after T09-20 (herness._cli.identity.check_command_role) has checked the role of design 10 §3.7 (`admin`, `admin (OS)` or `any`) and raised `PermissionDenied` otherwise. "admin (OS)" also requires the process to run elevated (`ctypes.windll.shell32.IsUserAnAdmin()` on Windows, `os.geteuid() == 0` elsewhere), else `PermissionDenied("run from an elevated shell")`. Each `cmd_*` returns `T09-20 (herness._cli.output.CommandResult)` (`ok`, `data`, `warnings`, `exit_code`) and never prints; impl 09 renders it. Exit codes follow R-46 (corrected; design 09 §5.8 plus 14) and are mapped by T09-20 (herness._cli.output.exit_code_for): `0` success; `1` general failure, including a `doctor` FAIL, invalid config found by `config validate` (errors, or warnings with `--strict`) and `FatalError`; `2` usage error (Typer only); `3` `ConfigError` raised at load; `7` `NotFound`; `9` `ModelUnavailable`; `11` `PermissionDenied`; `13` `EgressBlocked`; the other codes of the R-46 table as mapped there. `actor` is the caller's `user_ref`, computed by T09-20 (herness._cli.identity.cli_actor) from the OS user.
 
 #### U10-65 herness.admin.commands_config.cmd_config_validate
 
@@ -1254,7 +1255,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Kind | function |
 | Purpose | `herness config validate` (design 10 §3.7, §5.1). |
 | Signature | `cmd_config_validate(*, config_dir: Path, profile: ProfileName \| None, offline: bool, strict: bool) -> CommandResult` |
-| Algorithm | 1. Resolve the profile as U10-09 step 1. 2. `issues = validate(config_dir, profile, offline=offline)`. 3. `data = {"profile", "config_hash", "issues": [str(i) ...]}`; `config_hash` uses `key_id="unresolved"` when offline, and then a `warn` issue "config_hash computed without key_id; not comparable to builds" is appended. 4. Exit 3 on any `error`; else 3 when `strict` and any `warn`; else 0 (R-46). |
+| Algorithm | 1. Resolve the profile as U10-09 step 1. 2. `issues = validate(config_dir, profile, offline=offline)`. 3. `data = {"profile", "config_hash", "issues": [str(i) ...]}`; `config_hash` uses `key_id="unresolved"` when offline, and then a `warn` issue "config_hash computed without key_id; not comparable to builds" is appended. 4. Exit 1 on any `error`; else 1 when `strict` and any `warn`; else 0 (R-46: invalid config found by `config validate` is a general failure; 3 is kept for a `ConfigError` raised at load). |
 | Side effects / Errors | as U10-13 / none raised for config problems |
 | Concurrency | single-threaded |
 | Complexity and limits | as U10-13 |
@@ -1269,7 +1270,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Purpose | `herness config show` (admin). |
 | Signature | `cmd_config_show(*, config_dir: Path, profile: ProfileName \| None) -> CommandResult` |
 | Algorithm | Load with U10-09; `data = effective_dict(cfg, redact_secrets=True)`. |
-| Side effects / Errors | reads config / `ConfigError` → exit 3 (X:09 mapping) |
+| Side effects / Errors | reads config / `ConfigError` → exit 3 (T09-20 (herness._cli.output.exit_code_for)) |
 | Concurrency / Complexity | single-threaded / n/a |
 | Security notes | TH10-07. |
 | Tests | ST10-16 |
@@ -1293,7 +1294,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 |-------|---------|
 | Kind | function |
 | Purpose | `herness secrets init` (admin (OS)): create `redact.hmac_key` and `ui_user_ref_key` if absent, with escrow confirmation (design 10 §3.7, §5.3). |
-| Signature | `cmd_secrets_init(*, actor: str, prompt: Callable[[str], str], show: Callable[[str], None]) -> CommandResult`; X:09 supplies `prompt` (console input) and `show` (console write that bypasses logging). |
+| Signature | `cmd_secrets_init(*, actor: str, prompt: Callable[[str], str], show: Callable[[str], None]) -> CommandResult`; impl 09 supplies `prompt` (console input) and `show` (console write that bypasses logging). |
 | Preconditions | Backend `keyring`. |
 | Postconditions | Both keys exist and were escrow-confirmed, or exit 1 with nothing new stored for the unconfirmed name. |
 | Algorithm | For each of `redact.hmac_key`, `ui_user_ref_key`: 1. `exists(name)` → report `present`, continue. 2. `value = secrets.token_hex(32)`. 3. `show` the name and value once with the instruction to store it in the corporate password vault. 4. `prompt("Type ESCROWED after storing <name> in the vault")`; any other answer → report `not created`, continue. 5. `set_secret(name, value, actor=actor)`. Exit 0 when both are present or created, else 1. |
@@ -1339,7 +1340,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Purpose | `herness secrets rekey` (admin (OS)): stage a new redaction key and plan the job (design 10 §5.3 step 1). |
 | Signature | `cmd_secrets_rekey(*, actor: str, prompt: Callable[[str], str], show: Callable[[str], None]) -> CommandResult` |
 | Preconditions | `redact.hmac_key.next` absent, else exit 1 "a rekey is already staged". |
-| Algorithm | 1. `value = secrets.token_hex(32)`; show and require `ESCROWED` as U10-68, else exit 1 storing nothing. 2. `set_secret("redact.hmac_key.next", value, actor=actor)`. 3. `X:08/herness.core.jobs.schedule_rekey()` → job ID and planned time. 4. `audit("admin_action", actor, action="redact_rekey", target="staged", detail=<planned ISO time>)`. 5. `data = {"job_id", "planned_at"}`. |
+| Algorithm | 1. `value = secrets.token_hex(32)`; show and require `ESCROWED` as U10-68, else exit 1 storing nothing. 2. `set_secret("redact.hmac_key.next", value, actor=actor)`. 3. `T08-14 (herness.core.jobs.schedule_rekey)()` → job ID and planned time. 4. `audit("admin_action", actor, action="redact_rekey", target="staged", detail=<planned ISO time>)`. 5. `data = {"job_id", "planned_at"}`. |
 | Side effects | keyring write, job enqueue, audit |
 | Errors | `ConfigError`, `StoreBusy` |
 | Concurrency / Complexity | single-threaded / n/a |
@@ -1354,7 +1355,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Purpose | The `deploy` rows of design 10 §3.7 plus `deploy install` (ENG E4; command row owned by impl 09, R-47; install path R-58). |
 | Signature | `cmd_deploy_render(*, cfg, actor)`; `cmd_deploy_pull(*, cfg, actor, allow_download: bool)`; `cmd_deploy_up(gpu_class: Literal["reasoning", "decider", "large"], *, cfg, actor)`; `cmd_deploy_down(gpu_class, *, cfg, actor)`; `cmd_deploy_rollback(gpu_class, *, cfg, actor)`; `cmd_deploy_prune(*, cfg, actor)`; `cmd_deploy_install(bundle_dir: Path, *, cfg, actor)`; all return `CommandResult`. Role `admin`; `pull` and `install` are admin (OS). |
 | Algorithm | render → U10-79; pull → U10-92; up/down → U10-84; rollback, prune → U10-85; install → U10-86 `load`, U10-87, U10-88. Each maps the unit's return value to `data`. |
-| Side effects / Errors | those of the called unit (X:09 maps errors to exit codes) |
+| Side effects / Errors | those of the called unit (impl 09 maps errors to exit codes) |
 | Concurrency / Complexity | single CLI process / n/a |
 | Security notes | TH10-01, TH10-31, TH10-36. |
 | Tests | UT10-60–UT10-66, ST10-45 |
@@ -1367,7 +1368,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Purpose | `herness privacy delete --record-id ID ... --reason-ref REF` (admin): one `maintenance` job per record (design 10 §5.5). |
 | Signature | `cmd_privacy_delete(record_ids: Sequence[str], *, reason_ref: str, actor: str) -> CommandResult` |
 | Preconditions | 1–100 IDs, each matching `^[a-z][a-z0-9_]{0,31}:[a-z][a-z0-9_]{0,63}:[A-Za-z0-9._:@/+-]{1,200}$` and without `..`; `reason_ref` matches `^[A-Za-z0-9._:/-]{1,64}$`. Violations → `ConfigError("invalid record_id at position <n>")` (value not echoed). |
-| Algorithm | Signature adds `inline: bool = False` (keyword-only; admin-only `--inline`, R-45). Per ID: `X:08/herness.core.jobs.enqueue("maintenance", {"action": "privacy_delete", "record_id", "reason_ref", "requested_by": actor}, "none", priority=80, idem_key="privacy_delete:" + id)`. `data = {"jobs": [{"record_id", "job_id"}]}`. When `X:08/herness.core.jobs.worker_alive()` is false (R-44), add the warning "no worker is running; start it with `herness worker` or rerun with `--inline`". With `inline`, each job runs in-process through `X:08/herness.core.jobs.run_inline` after the maintenance handler is registered (U10-75), and `data` also carries each job's outcome. |
+| Algorithm | Signature adds `inline: bool = False` (keyword-only; admin-only `--inline`, R-45). Per ID: `T08-12 (herness.core.jobs.enqueue)("maintenance", {"action": "privacy_delete", "record_id", "reason_ref", "requested_by": actor}, "none", priority=80, idem_key="privacy_delete:" + id)`. `data = {"jobs": [{"record_id", "job_id"}]}`. When `T08-12 (herness.core.jobs.worker_alive)()` is false (R-44), add the warning "no worker is running; start it with `herness worker` or rerun with `--inline`". With `inline`, each job runs in-process through `T08-22 (herness.core.jobs.run_inline)` after the maintenance handler is registered (U10-75), and `data` also carries each job's outcome. |
 | Side effects / Errors | job rows / `ConfigError`, `StoreBusy` |
 | Concurrency / Complexity | single-threaded / ≤ 100 IDs |
 | Security notes | TH10-42: input validated before it reaches file and SQL paths. |
@@ -1380,7 +1381,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Kind | function |
 | Purpose | `herness maintenance backup\|purge [--dry-run]` (admin). |
 | Signature | `cmd_maintenance(action: Literal["backup", "purge"], *, dry_run: bool, actor: str) -> CommandResult` |
-| Algorithm | Signature adds `inline: bool = False` (keyword-only, R-45). `enqueue("maintenance", {"action", "dry_run", "requested_by": actor}, "none", priority=80, idem_key="maintenance:<action>:manual:<UTC date>")`; `data = {"job_id"}`. No live worker (R-44) → the same warning as U10-73. With `inline`, run the job through `X:08/herness.core.jobs.run_inline`. |
+| Algorithm | Signature adds `inline: bool = False` (keyword-only, R-45). `enqueue("maintenance", {"action", "dry_run", "requested_by": actor}, "none", priority=80, idem_key="maintenance:<action>:manual:<UTC date>")`; `data = {"job_id"}`. No live worker (R-44) → the same warning as U10-73. With `inline`, run the job through `T08-22 (herness.core.jobs.run_inline)`. |
 | Side effects / Errors | job row / `StoreBusy` |
 | Concurrency / Complexity | single-threaded / n/a |
 | Security notes | none |
@@ -1391,9 +1392,9 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Field | Content |
 |-------|---------|
 | Kind | function |
-| Purpose | Register the `maintenance` job handler with X:08. |
-| Signature | `register_handlers(*, memory_purge: Callable[[str], int]) -> None`; `memory_purge(record_id)` is bound by the composition root to `X:07/herness.harness.memory.MemoryStore.purge` with `record_id=` (R-54) and returns the number of purged memory items. |
-| Algorithm | `X:08/herness.core.jobs.register_handler("maintenance", functools.partial(handle_maintenance, memory_purge=memory_purge))` (U10-104); X:08 calls the result with one argument, `ctx` (R-42). Called by `herness.cli` (composition root, R-04) when it starts the worker and before `run_inline`. |
+| Purpose | Register the `maintenance` job handler with T08-12 (herness.core.jobs.register_handler). |
+| Signature | `register_handlers(*, memory_purge: Callable[[str], int]) -> None`; `memory_purge(record_id)` is bound by the composition root to `T07-26 (herness.harness.memory.MemoryStore.purge)` with `record_id=` (R-54) and returns the number of purged memory items. |
+| Algorithm | `T08-12 (herness.core.jobs.register_handler)("maintenance", functools.partial(handle_maintenance, memory_purge=memory_purge))` (U10-104); impl 08 calls the result with one argument, `ctx` (R-42). Called by `herness.cli` (composition root, R-04) when it starts the worker and before `run_inline`. |
 | Side effects / Errors | handler registry entry / none |
 | Concurrency | once per process at start |
 | Complexity and limits | n/a |
@@ -1429,7 +1430,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Side effects / Errors | subprocess / `ConfigError` for unsafe input, others as U10-76 |
 | Concurrency | thread-safe |
 | Complexity and limits | as U10-76 |
-| Security notes | TH10-05. X:08's `compose_cmd` uses `--` (shell); delta D10-09 asks for `--exec`. |
+| Security notes | TH10-05. Impl 08's `compose_cmd` (T08-17 (herness.core.jobs.gpu_services.ComposeRunner)) uses `--` (shell); delta D10-09 asks for `--exec`. |
 | Tests | UT10-71, ST10-06 |
 
 #### U10-78 herness.admin.deploy.DeployHistory
@@ -1533,7 +1534,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Purpose | `herness deploy up\|down <class>` (design 10 §3.7). |
 | Signature | `class_up(cfg: HernessConfig, gpu_class: Literal["reasoning", "decider", "large"], *, actor: str, now: datetime) -> dict[str, str]`; `class_down(cfg, gpu_class, *, actor: str) -> dict[str, str]` |
 | Preconditions | `rendered.json.config_hash == config_hash(cfg)`, else `ConfigError("run herness deploy render first")`; pins valid. |
-| Algorithm | `class_up`: 1. `audit("admin_action", actor, action="deploy_up", target=<class>:<pinned digest or gguf sha>)`. 2. When `X:08/herness.core.jobs.worker_alive()` (heartbeat within 3 × `heartbeat_s`, R-44): set `worker.requested_class = <class>` through the X:08 requested-class setter; log `deploy.class.requested` with `via="worker"`; poll `X:08/herness.core.jobs.gpu_state().loaded_class()` every 5 s until it equals the class or `start_timeout_s + 300` s pass (timeout → `ModelUnavailable("worker did not load <class>")`). Containers are never started directly. 3. Otherwise: take the X:08 lock `data/locks/gpu.lock` without waiting (held → `StoreBusy("GPU lock held")`); stop services of the other classes with `resilience.gpu.compose_cmd + ["-f", compose_file, "--profile", <other>, "stop"]`; start `compose_cmd + ["-f", compose_file, "--profile", <class>, "up", "-d"] + <all services of the class>` (including `openjev`); poll each service's health URL from `resilience.resilience.gpu.classes.<class>.services` with `loopback_http_client(<service url>, timeout_s=10.0, bearer=...)` (bearer `resolve("secret:OPENJEV_API_KEY")` for OpenJev, R-53) every 5 s until healthy or `start_timeout_s` (→ `ModelUnavailable`); release the lock. 4. When healthy, `DeployHistory.record(...)`. `class_down`: audit `action="deploy_down"`; with a worker, request class `none`; else under the GPU lock run `compose_cmd + ["-f", compose_file, "--profile", <class>, "stop"]`. |
+| Algorithm | `class_up`: 1. `audit("admin_action", actor, action="deploy_up", target=<class>:<pinned digest or gguf sha>)`. 2. When `T08-12 (herness.core.jobs.worker_alive)()` (heartbeat within 3 × `heartbeat_s`, R-44): set `worker.requested_class = <class>` through T08-18 (herness.core.jobs.request_gpu_class); log `deploy.class.requested` with `via="worker"`; poll `T08-18 (herness.core.jobs.gpu_state)().loaded_class()` every 5 s until it equals the class or `start_timeout_s + 300` s pass (timeout → `ModelUnavailable("worker did not load <class>")`). Containers are never started directly. 3. Otherwise: take the T08-17 (herness.core.jobs.gpu_lock.GpuLock) lock `data/locks/gpu.lock` without waiting (held → `StoreBusy("GPU lock held")`); stop services of the other classes with `resilience.gpu.compose_cmd + ["-f", compose_file, "--profile", <other>, "stop"]`; start `compose_cmd + ["-f", compose_file, "--profile", <class>, "up", "-d"] + <all services of the class>` (including `openjev`); poll each service's health URL from `resilience.resilience.gpu.classes.<class>.services` with `loopback_http_client(<service url>, timeout_s=10.0, bearer=...)` (bearer `resolve("secret:OPENJEV_API_KEY")` for OpenJev, R-53) every 5 s until healthy or `start_timeout_s` (→ `ModelUnavailable`); release the lock. 4. When healthy, `DeployHistory.record(...)`. `class_down`: audit `action="deploy_down"`; with a worker, request class `none`; else under the GPU lock run `compose_cmd + ["-f", compose_file, "--profile", <class>, "stop"]`. |
 | Side effects | containers, audit, history |
 | Errors | `ConfigError`, `StoreBusy`, `ModelUnavailable` |
 | Concurrency | GPU lock or worker arbiter |
@@ -1562,10 +1563,10 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 |-------|---------|
 | Kind | class (frozen dataclass) with loader |
 | Purpose | A release bundle directory produced by release CI (ENG §5.6, R-58). |
-| Signature | Fields: `root: Path`; `wheel: Path` (`herness-<version>-py3-none-any.whl`); `version: str`; `requirements: Path` (`requirements.txt`, from `uv export --frozen --no-emit-project` with hashes); `sbom: Path` (`sbom.cdx.json`); `trusted_root: Path` (`trusted_root.jsonl`); `provenance_bundles: dict[str, Path]` (`<file>.provenance.sigstore.json` for the wheel and `requirements.txt`); `sbom_bundle: Path` (`<wheel>.sbom.sigstore.json`). Class method `load(root: Path) -> ReleaseBundle`. |
+| Signature | Fields: `root: Path`; `wheel: Path` (`herness-<version>-py3-none-any.whl`); `version: str`; `requirements: Path` (`requirements.txt`, from `uv export --frozen --no-emit-project` with hashes); `sbom: Path` (`sbom.cdx.json`); `trusted_root: Path` (`trusted_root.jsonl`); `provenance_bundles: dict[str, Path]` (`<file>.provenance.sigstore.json` for the wheel and `requirements.txt`); `sbom_bundle: Path` (`<wheel>.sbom.sigstore.json`); `duckdb_extensions: dict[str, Path]` (`duckdb/<name>.duckdb_extension` for the DuckDB version pinned in `requirements.txt` and platform `windows_amd64`, currently only `excel`; each with its provenance bundle in `provenance_bundles`). Class method `load(root: Path) -> ReleaseBundle`. |
 | Preconditions | `root` is a directory. |
 | Postconditions | All paths resolve inside `root`, none is a symlink, each file exists and is ≤ 200 MiB. |
-| Algorithm | 1. List `root` (non-recursive); exactly one wheel matching `^herness-(\d+\.\d+\.\d+[a-z0-9.+-]*)-py3-none-any\.whl$`. 2. Per expected file: `p.resolve()` is under `root.resolve()`, `p.is_symlink()` false, size ≤ 200 MiB. 3. A missing file or any extra non-hidden file → `ConfigError("release bundle invalid: <file>")`. |
+| Algorithm | 1. List `root` (non-recursive); exactly one wheel matching `^herness-(\d+\.\d+\.\d+[a-z0-9.+-]*)-py3-none-any\.whl$`. Files under `duckdb/` must match `^[a-z0-9_]{1,40}\.duckdb_extension$`. 2. Per expected file: `p.resolve()` is under `root.resolve()`, `p.is_symlink()` false, size ≤ 200 MiB. 3. A missing file or any extra non-hidden file → `ConfigError("release bundle invalid: <file>")`. |
 | Side effects / Errors | directory reads / `ConfigError` |
 | Concurrency | pure apart from reads |
 | Complexity and limits | n/a |
@@ -1581,7 +1582,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Signature | `verify_bundle(bundle: ReleaseBundle, cfg: HernessConfig) -> dict[str, Any]` (`version`, `wheel_sha256`, `components`, `licences_checked`) |
 | Preconditions | `deploy.release.repo` and `deploy.release.signer_workflow` set, else `ConfigError("deploy.release is not configured")`; `gh` on `PATH` (§14). |
 | Postconditions | Returns only when every check passed; otherwise raises and nothing is installed. |
-| Algorithm | 1. Provenance, for `f` in (wheel, requirements): `run_cmd(["gh", "attestation", "verify", f, "--bundle", <f provenance bundle>, "--repo", repo, "--signer-workflow", signer_workflow, "--deny-self-hosted-runners", "--custom-trusted-root", <trusted_root>, "--predicate-type", "https://slsa.dev/provenance/v1", "--format", "json"], timeout_s=120)`; non-zero → `FatalError("attestation verification failed: <file>")`, log `deploy.install.refused`. These flags verify offline against the bundled trusted root (verification V-22). 2. SBOM: the same command for the wheel with `--bundle <sbom bundle>` and `--predicate-type https://cyclonedx.org/bom`; take the verified predicate from the JSON output as the SBOM; the loose `sbom.cdx.json` must equal it after canonical JSON serialisation, else refuse. 3. Components: parse `requirements.txt` into `{name: version}` (normalised names, `==` pins); every SBOM component of type `library` has the same version as in requirements and every requirement appears in the SBOM; else refuse. 4. Licences: every component's licence (`licenses[].license.id` or `.expression`) is one of `MIT`, `BSD-2-Clause`, `BSD-3-Clause`, `Apache-2.0`, `PSF-2.0`, `Python-2.0`, `ISC`, `MPL-2.0` (ENG §5.6), or the component is in `deploy.release.licence_exceptions`; else refuse naming the components. 5. Log `deploy.install.verified`; return the summary with the wheel SHA-256. |
+| Algorithm | 1. Provenance, for `f` in (wheel, requirements, each DuckDB extension file): `run_cmd(["gh", "attestation", "verify", f, "--bundle", <f provenance bundle>, "--repo", repo, "--signer-workflow", signer_workflow, "--deny-self-hosted-runners", "--custom-trusted-root", <trusted_root>, "--predicate-type", "https://slsa.dev/provenance/v1", "--format", "json"], timeout_s=120)`; non-zero → `FatalError("attestation verification failed: <file>")`, log `deploy.install.refused`. These flags verify offline against the bundled trusted root (verification V-22). 2. SBOM: the same command for the wheel with `--bundle <sbom bundle>` and `--predicate-type https://cyclonedx.org/bom`; take the verified predicate from the JSON output as the SBOM; the loose `sbom.cdx.json` must equal it after canonical JSON serialisation, else refuse. 3. Components: parse `requirements.txt` into `{name: version}` (normalised names, `==` pins); every SBOM component of type `library` has the same version as in requirements and every requirement appears in the SBOM; else refuse. 4. Licences: every component's licence (`licenses[].license.id` or `.expression`) is one of `MIT`, `BSD-2-Clause`, `BSD-3-Clause`, `Apache-2.0`, `PSF-2.0`, `Python-2.0`, `ISC`, `MPL-2.0` (ENG §5.6), or the component is in `deploy.release.licence_exceptions`; else refuse naming the components. 5. Log `deploy.install.verified`; return the summary with the wheel SHA-256. |
 | Side effects | subprocesses |
 | Errors | `ConfigError`, `FatalError` |
 | Concurrency | single-threaded |
@@ -1597,7 +1598,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Purpose | Install a verified release into the Herness virtual environment. This is the only install path on the target box; development uses an editable install (R-58). |
 | Signature | `install_bundle(bundle: ReleaseBundle, summary: dict[str, Any], *, venv: Path, actor: str) -> dict[str, str]` |
 | Preconditions | The wheel's SHA-256 recomputed now equals `summary["wheel_sha256"]` (else `FatalError("bundle changed after verification")`). `worker_alive()` false (else `StoreBusy("stop the worker before installing")`). |
-| Algorithm | 1. Copy the bundle files to `<repo root>/.release/<version>/` (atomic per file) and re-hash the copied wheel against the summary; keep the two newest version directories, delete older ones. 2. `audit("admin_action", actor, action="deploy_install", target=<version>, detail="sha256:" + wheel_sha256)`. 3. `run_cmd(["uv", "pip", "sync", "--require-hashes", "--python", <venv python>, <copied requirements.txt>], timeout_s=1800, check=True)`. 4. `run_cmd(["uv", "pip", "install", "--no-deps", "--python", <venv python>, <copied wheel>], timeout_s=600, check=True)`. 5. Return `{"version", "wheel_sha256"}`. |
+| Algorithm | 1. Copy the bundle files to `<repo root>/.release/<version>/` (atomic per file) and re-hash the copied wheel against the summary; keep the two newest version directories, delete older ones. 2. `audit("admin_action", actor, action="deploy_install", target=<version>, detail="sha256:" + wheel_sha256)`. 3. `run_cmd(["uv", "pip", "sync", "--require-hashes", "--python", <venv python>, <copied requirements.txt>], timeout_s=1800, check=True)`. 4. `run_cmd(["uv", "pip", "install", "--no-deps", "--python", <venv python>, <copied wheel>], timeout_s=600, check=True)`. 4a. U10-112 installs and verifies the DuckDB extensions from the copied bundle. 5. Return `{"version", "wheel_sha256", "duckdb_extensions"}`. |
 | Side effects | venv changes, `.release/` files, audit |
 | Errors | `FatalError`, `StoreBusy` |
 | Concurrency | single CLI process |
@@ -1605,13 +1606,30 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Security notes | TH10-36, TH10-44. |
 | Tests | IT10-14, ST10-53 |
 
+#### U10-112 herness.admin.duckdb_ext.install_duckdb_extensions
+
+| Field | Content |
+|-------|---------|
+| Kind | function |
+| Purpose | Install and verify the DuckDB `excel` extension offline as part of `herness deploy install` (impl 01 O-3: the files connector reads `.xlsx` with `autoinstall_known_extensions` off, so the extension must already be installed). |
+| Signature | `install_duckdb_extensions(bundle: ReleaseBundle, cfg: HernessConfig, *, venv: Path) -> dict[str, str]` (extension name → installed version). Module constant `EXT_INSTALL_SCRIPT: str` (the fixed Python source run in the venv interpreter). |
+| Preconditions | U10-87 verified the bundle, including the extension's provenance; U10-88 installed the wheel, so the venv holds the pinned `duckdb`. `cfg.deploy.release.duckdb_extensions["excel"]` is set, else `ConfigError("deploy.release.duckdb_extensions.excel is not pinned")`. |
+| Postconditions | `excel` is installed in the DuckDB extension directory of the Herness service account and loads in a fresh connection with autoinstall and autoload off; no network was used. |
+| Algorithm | For each `name` in `cfg.deploy.release.duckdb_extensions` (sorted): 1. `path = bundle.duckdb_extensions[name]` (missing → `ConfigError("release bundle invalid: duckdb/<name>.duckdb_extension")`). 2. SHA-256 of `path` must equal the pin, else `FatalError("duckdb extension hash mismatch: <name>")` and log `deploy.install.refused` with `reason="extension_hash"`. 3. `run_cmd([<venv python>, "-I", "-c", EXT_INSTALL_SCRIPT, str(path), name], timeout_s=120, env={"HERNESS_ENV": <current>, "NO_PROXY": "*"})`. The script opens `duckdb.connect(":memory:", config={"autoinstall_known_extensions": False, "autoload_known_extensions": False, "allow_unsigned_extensions": False})`, runs `INSTALL '<path>'` (a local file, so DuckDB performs no download, and the signature check of official extensions stays on), then `LOAD <name>`, then prints as JSON the row of `duckdb_extensions()` for `name` (`loaded`, `installed`, `extension_version`, `install_path`); non-zero exit → `FatalError("duckdb extension install failed: <name>")`. 4. Re-hash the file at `install_path`; it must equal the pin, else `FatalError`. 5. Log `deploy.install.extension_installed` with `name`, `extension_version`, `sha256`; collect the version. The `deploy_install` audit line of U10-88 gains `detail` entries `ext:<name>=<sha256>`. |
+| Side effects | writes the DuckDB extension directory; subprocess; logs |
+| Errors | `ConfigError`, `FatalError` |
+| Concurrency | single CLI process (inside `deploy install`) |
+| Complexity and limits | < 30 s; extension file ≤ 200 MiB (U10-86) |
+| Security notes | TH10-52. No network: the extension comes only from the verified bundle, its hash is pinned in file-only config, and unsigned extensions stay refused. |
+| Tests | UT10-85, ST10-60 |
+
 #### U10-89 herness.admin.doctor_host.CheckResult, doctor_checks
 
 | Field | Content |
 |-------|---------|
 | Kind | class (frozen dataclass) and function |
-| Purpose | The checks design 10 §5.6.3 adds to X:09's `herness doctor`. |
-| Signature | `CheckResult(name: str, status: Literal["PASS", "WARN", "FAIL"], detail: str, fix: str)` (X:09 JSON `{"name", "status", "detail", "fix"}`); `doctor_checks(cfg: HernessConfig) -> list[CheckResult]` |
+| Purpose | The checks design 10 §5.6.3 adds to T09-22 (herness._cli.doctor.run_doctor). |
+| Signature | `CheckResult(name: str, status: Literal["PASS", "WARN", "FAIL"], detail: str, fix: str)` (impl 09 JSON `{"name", "status", "detail", "fix"}`); `doctor_checks(cfg: HernessConfig) -> list[CheckResult]` |
 | Algorithm | 1. Run every callable of `HOST_CHECKS + GPU_CHECKS` in a `ThreadPoolExecutor(max_workers=8)`; each has signature `(cfg) -> CheckResult` and its own timeouts. 2. A check raising a `HernessError` yields `FAIL` with `detail` = error class name. 3. On a non-Windows host, Windows-only checks return `WARN` "not applicable on this host". 4. Return results in table order. |
 | Side effects | per check |
 | Errors | none raised |
@@ -1711,7 +1729,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 |-------|---------|
 | Kind | configuration artifact |
 | Purpose | Profile overlays (design 10 §4.3). |
-| Signature | `local.yaml`: `version: 1` only. `hybrid.yaml`: `security.egress: {enabled: true, destinations: [api.anthropic.com], purposes: [reasoning_final]}` plus the X:05 `models` role and fallback overlay. `premium.yaml`: `security.egress: {enabled: true, destinations: [api.anthropic.com, api.typesafe.ai], purposes: [reasoning, reasoning_final, bulk_classification]}` plus the X:05 overlay and X:06 swarm caps. `synth.yaml`: `security.secrets.backend: dotenv`, `security.redaction.denylist_domains` (corporate domains supplied at Phase 1, open item O-8), plus X:11's `mappings` and `sources` content. |
+| Signature | `local.yaml`: `version: 1` only. `hybrid.yaml`: `security.egress: {enabled: true, destinations: [api.anthropic.com], purposes: [reasoning_final]}` plus the impl 05 `models` role and fallback overlay. `premium.yaml`: `security.egress: {enabled: true, destinations: [api.anthropic.com, api.typesafe.ai], purposes: [reasoning, reasoning_final, bulk_classification]}` plus the impl 05 overlay and impl 06 swarm caps. `synth.yaml`: `security.secrets.backend: dotenv`, `security.redaction.denylist_domains` (corporate domains supplied at Phase 1, open item O-8), plus impl 11's `mappings` and `sources` content. |
 | Invariants | No overlay sets `security.data_policy`; `synth.yaml` never enables egress. |
 | Algorithm / Side effects / Errors / Concurrency | n/a |
 | Complexity and limits | n/a |
@@ -1743,7 +1761,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Algorithm | 1. Ops: source `sqlite3.connect("file:<data>/ops.sqlite?mode=ro", uri=True)`; destination `<target>/ops/.ops-<YYYY-MM-DD>.sqlite.tmp`; `src.backup(dst, pages=4096, sleep=0.05)` (online, consistent under WAL); `PRAGMA integrity_check` on the copy must return the single row `ok`, else delete the temp file and raise `FatalError("backup integrity_check failed")`; `os.replace` to `ops-<date>.sqlite`. 2. Mirror copies (copy when absent at the target or size/mtime differ; never delete at the target; temp then `os.replace`): `data/config_snapshots/` → `<target>/config_snapshots/`; `data/models/` → `<target>/models/`; `data/reports/` → `<target>/reports/`; `data/logs/audit-*.jsonl`, `egress-*.jsonl` → `<target>/logs/`; `data/cache/decisions/` when `backup.include_cache`; `data/raw/` when `backup.include_lake`. `ctx.heartbeat()` every 100 files. 3. Delete `ops-*.sqlite` copies not selected by U10-97. 4. `audit("admin_action", "system", action="backup", target=<target>, counts=...)`. 5. With `dry_run`, count only. |
 | Side effects | files at the target; audit |
 | Errors | `FatalError`; `OSError` → `FatalError("backup copy failed: <relative path>")` |
-| Concurrency | exclusive job kind (X:08); ops writers continue during the copy |
+| Concurrency | exclusive job kind (impl 08); ops writers continue during the copy |
 | Complexity and limits | 1 GB ops store < 2 min (BT10-08) |
 | Security notes | TH10-43 (target drive BitLocker-checked by doctor). Secrets are not backed up. |
 | Tests | UT10-67, IT10-08, FT10-04, BT10-08 |
@@ -1768,7 +1786,7 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Kind | function |
 | Purpose | Nightly retention purge (design 10 §5.5 "Retention"). |
 | Signature | `run_purge(cfg: HernessConfig, ctx: JobContext, *, now: datetime, dry_run: bool = False) -> dict[str, int]` |
-| Algorithm | 1. Lake (one of the three permitted lake rewrites, R-57): `cutoff` = `now` minus `raw_lake_months` calendar months (year/month arithmetic, day clamped); call `X:02/herness.store.lake_purge.purge_partitions_before(cutoff, today=now.date())`, which deletes whole `dt=YYYY-MM-DD` partitions older than `cutoff`; its `deferred_locked` count is reported as `skipped_in_use`; with `dry_run` the partitions are counted without the call. 2. Traces: delete `data/traces/*.jsonl` with mtime older than `traces_days`. 3. `egress-<date>.jsonl`, `audit-<date>.jsonl`, `herness-<date>.jsonl`: delete when the name date is older than the respective days value; never today's file. 4. Reports: delete `data/reports/<run_id>/` and `data/reports/eval/<run_id>/` whose `manifest.json` mtime (directory mtime when absent) is older than `reports_days`. 5. Chat: `X:09/herness.store.ops.chat.purge_chat(before=now − chat_days)` (area `chat`, R-08). 6. Rekey cleanup: when `data/cache/rekey/SWAPPED` exists and the `CURRENT` build (X:02) is promoted with `started_at` after the marker's `swapped_at`, delete decision-cache files under `data/cache/decisions/` with mtime before `swapped_at`, then the marker (design 10 §5.3 step 4). 7. Every deleted path must resolve inside `paths.data` and not be a symlink. 8. `audit("admin_action", "system", action="purge", target="retention", counts=...)`. 9. `dry_run` counts only. `ctx.heartbeat()` every 100 deletions. |
+| Algorithm | 1. Lake (one of the three permitted lake rewrites, R-57): `cutoff` = `now` minus `raw_lake_months` calendar months (year/month arithmetic, day clamped); call `T02-03 (herness.store.lake_purge.purge_partitions_before)(cutoff, today=now.date())`, which deletes whole `dt=YYYY-MM-DD` partitions older than `cutoff`; its `deferred_locked` count is reported as `skipped_in_use`; with `dry_run` the partitions are counted without the call. 2. Traces: delete `data/traces/*.jsonl` with mtime older than `traces_days`. 3. `egress-<date>.jsonl`, `audit-<date>.jsonl`, `herness-<date>.jsonl`: delete when the name date is older than the respective days value; never today's file. 4. Reports: delete `data/reports/<run_id>/` and `data/reports/eval/<run_id>/` whose `manifest.json` mtime (directory mtime when absent) is older than `reports_days`. 5. Chat: `T09-03 (herness.store.ops.chat.purge_chat)(before=now − chat_days)` (area `chat`, R-08). 6. Rekey cleanup: when `data/cache/rekey/SWAPPED` exists and the `CURRENT` build (T02-09 (herness.store.warehouse.read_current)) is promoted with `started_at` after the marker's `swapped_at`, delete decision-cache files under `data/cache/decisions/` with mtime before `swapped_at`, then the marker (design 10 §5.3 step 4). 7. Every deleted path must resolve inside `paths.data` and not be a symlink. 8. `audit("admin_action", "system", action="purge", target="retention", counts=...)`. 9. `dry_run` counts only. `ctx.heartbeat()` every 100 deletions. |
 | Side effects | deletions; audit |
 | Errors | `PermissionError` (file in use) → skipped, counted `skipped_in_use`, retried next night |
 | Concurrency | exclusive job kind |
@@ -1785,17 +1803,17 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Signature | `run_privacy_delete(cfg: HernessConfig, ctx: JobContext, *, now: datetime, memory_purge: Callable[[str], int]) -> JobOutcome`; the payload is read from `ctx.job.payload` (R-42). |
 | Preconditions | The payload carries `record_id`, `reason_ref`, `requested_by` validated as U10-73 (re-validated here); optional `request_id` on continuation jobs. |
 | Postconditions | Request `done` after step 7, or `running` with the failed step recorded. |
-| Algorithm | Request rows go through `herness.store.ops.privacy` (U10-105, R-08). Step identifiers are the strings `1`, `2`, `3`, `3b`, `4`, `5`, `6`, `7`; each result is recorded with `record_deletion_step`, and a step already recorded `done` is skipped on retry. 1. `open_deletion_request(record_id)` returns the request in `pending`/`running`, else `create_deletion_request(...)` inserts `request_id = "del_" + new_ulid()` as `pending`; `set_deletion_status(request_id, "running")`. From here X:01 and X:02 drop the record (deletion set of `running`/`done` requests). 2. Lake pass 1: `X:02/herness.store.lake_purge.purge_record_ids([record_id])` (the permitted lake rewrite, R-57); store its counts. 3. `X:03/herness.enrich.purge_record(record_id)`; store its counts. 3b. Memory (R-54): `memory_purge(record_id)`, bound to `X:07/herness.harness.memory.MemoryStore.purge` with `record_id=` (U10-75); it removes memory items, memory vectors and FTS rows that cite the record; store the count. `ModelUnavailable` from a vector failure marks the step `failed` and is re-raised so X:08 retries. 4. `scrub_record_from_evidence(record_id)` and `scrub_record_from_findings(record_id)` (U10-106); delete `data/traces/*.jsonl` files whose bytes contain `record_id`. 5. First visit: `X:08/herness.core.jobs.enqueue("build_pipeline", <X:08 nightly payload>, "none", priority=60, idem_key="privacy_rebuild:" + request_id)` (`build_pipeline` starts with no GPU class, R-43); store the job ID; enqueue a continuation `maintenance` job (same payload plus `request_id`, `scheduled_for = now + 30 min`, `idem_key = "privacy_delete:<request_id>:wait:<n>"`); return `JobOutcome(status="done", result={"waiting_for": <job_id>})`. Continuation: build job `done` and a build newer than the step-5 time is `CURRENT` → `X:02/herness.model.promote.cleanup_builds(mode="post", keep_last=1, protect=frozenset(), layout=<data layout>, now=now)`; a non-empty `deferred` marks step 5 `failed` and the job is retried; build `failed` → re-enqueue it (at most 3 times, then request `failed`); still running → next continuation in 30 minutes. 6. `set_deletion_status(request_id, "done", completed_at=now)`; `audit("admin_action", "system", action="privacy_delete", target=record_id)`. 7. Lake pass 2: repeat step 2; if rows were removed, repeat steps 3 and 3b. A failing step records `failed` with the error class, leaves the request `running`, and re-raises so X:08 retries. |
+| Algorithm | Request rows go through `herness.store.ops.privacy` (U10-105, R-08). Step identifiers are the strings `1`, `2`, `3`, `3b`, `4`, `5`, `6`, `7`; each result is recorded with `record_deletion_step`, and a step already recorded `done` is skipped on retry. 1. `open_deletion_request(record_id)` returns the request in `pending`/`running`, else `create_deletion_request(...)` inserts `request_id = "del_" + new_ulid()` as `pending`; `set_deletion_status(request_id, "running")`. From here T01-05 (herness.connectors.deletion.DeletionFilter) and impl 02 staging drop the record (deletion set of `running`/`done` requests). 2. Lake pass 1: `T02-03 (herness.store.lake_purge.purge_record_ids)([record_id])` (the permitted lake rewrite, R-57); store its counts. 3. `T03-34 (herness.enrich.purge_record)(record_id)`; store its counts. 3b. Memory (R-54): `memory_purge(record_id)`, bound to `T07-26 (herness.harness.memory.MemoryStore.purge)` with `record_id=` (U10-75); it removes memory items, memory vectors and FTS rows that cite the record; store the count. `ModelUnavailable` from a vector failure marks the step `failed` and is re-raised so impl 08 retries. 4. `T05-12 (herness.store.ops.evidence.scrub_record_from_evidence)(record_id)` (impl 05 owns the `evidence` area, R-08, R-09) and `T06-06 (herness.store.ops.findings.scrub_record_from_findings)(record_id, conn=<connection>)` (impl 06 owns the `finding` table, R-77); delete `data/traces/*.jsonl` files whose bytes contain `record_id`. 5. First visit: `T08-12 (herness.core.jobs.enqueue)("build_pipeline", <impl 08 nightly payload>, "none", priority=60, idem_key="privacy_rebuild:" + request_id)` (`build_pipeline` starts with no GPU class, R-43); store the job ID; enqueue a continuation `maintenance` job (same payload plus `request_id`, `scheduled_for = now + 30 min`, `idem_key = "privacy_delete:<request_id>:wait:<n>"`); return `JobOutcome(status="done", result={"waiting_for": <job_id>})`. Continuation: build job `done` and a build newer than the step-5 time is `CURRENT` → `T02-21 (herness.model.promote.cleanup_builds)(mode="post", keep_last=1, protect=frozenset(), layout=<data layout>, now=now)`; a non-empty `deferred` marks step 5 `failed` and the job is retried; build `failed` → re-enqueue it (at most 3 times, then request `failed`); still running → next continuation in 30 minutes. 6. `set_deletion_status(request_id, "done", completed_at=now)`; `audit("admin_action", "system", action="privacy_delete", target=record_id)`. 7. Lake pass 2: repeat step 2; if rows were removed, repeat steps 3 and 3b. A failing step records `failed` with the error class, leaves the request `running`, and re-raises so impl 08 retries. |
 | Side effects | lake, decision cache, labels, vectors, memory store, ops rows, traces, warehouse files; audit |
 | Errors | step errors re-raised (`StoreBusy` and `ModelUnavailable` retryable; others `FatalError`) |
-| Concurrency | exclusive `maintenance` job kind; X:01 and X:02 drop the record from step 1 onward |
+| Concurrency | exclusive `maintenance` job kind; T01-05 (herness.connectors.deletion.DeletionFilter) and impl 02 staging drop the record from step 1 onward |
 | Complexity and limits | lake scan limited to the record's source/entity (impl 02 primitive) |
 | Security notes | TH10-42, TH10-50. |
 | Tests | UT10-69, IT10-06, FT10-03, ST10-50, ST10-57 |
 
 #### U10-100 herness.admin.privacy.purge_lake_record
 
-Removed (R-57, R-09): see `X:02/herness.store.lake_purge.purge_record_ids`, the impl 02 primitive that performs the permitted lake rewrite for privacy deletion. U10-99 steps 2 and 7 call it.
+Removed (R-57, R-09): see `T02-03 (herness.store.lake_purge.purge_record_ids)`, the impl 02 primitive that performs the permitted lake rewrite for privacy deletion. U10-99 steps 2 and 7 call it.
 
 #### U10-101 herness.admin.rekey.run_rekey
 
@@ -1809,7 +1827,7 @@ Removed (R-57, R-09): see `X:02/herness.store.lake_purge.purge_record_ids`, the 
 | Algorithm | State via `ctx.save_state`/`load_state` (`step`, `new_key_id`, `old_key_id`). 1. Load both keys and their ids (U10-40). If the active key's id equals a saved `new_key_id`, go to 4b. 2. `build_rekey_map` (U10-102) → `data/cache/rekey/<new_key_id>.parquet`; save `step=2`. 3. `rekey_labels` (U10-103); save `step=3`. 4. a. `set_secret("redact.hmac_key", <new value>, actor="system")`; b. `delete_secret("redact.hmac_key.next", actor="system")`; c. write `data/cache/rekey/SWAPPED` atomically (`swapped_at`, `old_key_id`, `new_key_id`); d. `audit("admin_action", "system", action="redact_rekey", target=new_key_id, detail="old=" + old_key_id)`; e. `reset_redactor()`. 5. Return `done`. A failure before 4a leaves the old key and `.next` in place (design 10 §6). |
 | Side effects | keyring, files, audit |
 | Errors | `FatalError` |
-| Concurrency | exclusive job in the X:08 planned slot |
+| Concurrency | exclusive job in the impl 08 planned slot |
 | Complexity and limits | ≈ 20 min for 6M records on 16 cores |
 | Security notes | Key values never logged; ids logged. |
 | Tests | UT10-70, IT10-07, FT10-02 |
@@ -1821,7 +1839,7 @@ Removed (R-57, R-09): see `X:02/herness.store.lake_purge.purge_record_ids`, the 
 | Kind | function |
 | Purpose | Map each record's old `content_hash` to its new one. |
 | Signature | `build_rekey_map(cfg: HernessConfig, new_redactor: Redactor, *, out_path: Path, ctx: JobContext) -> int` |
-| Algorithm | 1. Open the `CURRENT` warehouse read-only (X:02). 2. Stream `enrich.text_redacted` (`record_id`, `content_hash`) with the classifier text composed by X:03's text composer from `core.*`, in batches of 20,000. 3. Redact with `new_redactor` (failed record → `new_content_hash = NULL`, reported); `new_content_hash = sha256(redacted).hexdigest()[:32]` (spec 00 §5). 4. Write `(record_id, old_content_hash, new_content_hash)` atomically; `ctx.heartbeat()` per batch. |
+| Algorithm | 1. Open the `CURRENT` warehouse read-only (T02-09 (herness.store.warehouse.open_readonly)). 2. Stream `enrich.text_redacted` (`record_id`, `content_hash`) with the classifier text composed by T03-05 (herness.enrich.text.compose_text) from `core.*`, in batches of 20,000. 3. Redact with `new_redactor` (failed record → `new_content_hash = NULL`, reported); `new_content_hash = sha256(redacted).hexdigest()[:32]` (spec 00 §5). 4. Write `(record_id, old_content_hash, new_content_hash)` atomically; `ctx.heartbeat()` per batch. |
 | Side effects / Errors | one parquet file / `SchemaViolation` when tables are missing |
 | Concurrency | single job |
 | Complexity and limits | memory ≤ one batch |
@@ -1847,9 +1865,9 @@ Removed (R-57, R-09): see `X:02/herness.store.lake_purge.purge_record_ids`, the 
 | Field | Content |
 |-------|---------|
 | Kind | function (job handler) |
-| Purpose | Dispatch `maintenance` jobs by `payload.action` (X:08 §5.1). |
-| Signature | `handle_maintenance(ctx: JobContext, *, memory_purge: Callable[[str], int]) -> JobOutcome`; `memory_purge` is bound by U10-75 with `functools.partial`, so X:08 calls the handler with `ctx` only (R-42). |
-| Algorithm | Read `payload = ctx.job.payload` (R-42). `backup` → U10-96; `purge` → U10-98; `privacy_delete` → U10-99 with `memory_purge`; `rekey` → U10-101; other → `ConfigError("unknown maintenance action")`. `now` from X:00 time. Returns `JobOutcome(status="done", result=<counts>)` unless the unit returns its own outcome. Scheduled nightly runs (X:08) enqueue `backup` then `purge`. |
+| Purpose | Dispatch `maintenance` jobs by `payload.action` (impl 08 §5.1). |
+| Signature | `handle_maintenance(ctx: JobContext, *, memory_purge: Callable[[str], int]) -> JobOutcome`; `memory_purge` is bound by U10-75 with `functools.partial`, so impl 08 calls the handler with `ctx` only (R-42). |
+| Algorithm | Read `payload = ctx.job.payload` (R-42). `backup` → U10-96; `purge` → U10-98; `privacy_delete` → U10-99 with `memory_purge`; `rekey` → U10-101; other → `ConfigError("unknown maintenance action")`. `now` from T00-04 (herness.core.time.now). Returns `JobOutcome(status="done", result=<counts>)` unless the unit returns its own outcome. Scheduled nightly runs (impl 08) enqueue `backup` then `purge`. |
 | Side effects / Errors | as the called unit |
 | Concurrency | exclusive job kind |
 | Complexity and limits | n/a |
@@ -1870,7 +1888,7 @@ Every function here obtains its connection through `herness.store.ops.core.conne
 | Preconditions | `record_id` matches the U10-73 pattern; `requested_by` matches `^[0-9a-f]{32}$`; `reason_ref` matches `^[A-Za-z0-9._:/-]{1,64}$`; violations → `ConfigError` naming the field only. |
 | Postconditions | `create_deletion_request` inserts `status = 'pending'`, `steps = '{}'`, `created_at = now`. `record_deletion_step` stores `steps[step] = {"status", "at", "counts", "error"}`, replacing an earlier entry for the same step. |
 | Invariants | At most one request per `record_id` is in `pending`/`running`: `create_deletion_request` runs the `open_deletion_request` query inside the same `run_write` transaction and returns the existing row when one exists (idempotency key: `record_id` among open requests). Status moves only `pending → running → done` or `running → failed`; any other transition raises `ConfigError("invalid deletion status transition")`. |
-| Algorithm | Each write is one `run_write(op="privacy_<function>")` transaction: read the row (`read_one`), check the transition or merge the `steps` JSON in Python, write it back with one `UPDATE ... WHERE request_id = ?`. Times are fixed-width UTC text (X:00 time). |
+| Algorithm | Each write is one `run_write(op="privacy_<function>")` transaction: read the row (`read_one`), check the transition or merge the `steps` JSON in Python, write it back with one `UPDATE ... WHERE request_id = ?`. Times are fixed-width UTC text (T00-04 (herness.core.time.format_utc)). |
 | Side effects | `deletion_request` rows |
 | Errors | `ConfigError`, `NotFound`, `StoreBusy` (from the core API) |
 | Concurrency | serialised by the ops-store write path of impl 02; the exclusive `maintenance` job is the only writer |
@@ -1880,21 +1898,7 @@ Every function here obtains its connection through `herness.store.ops.core.conne
 
 #### U10-106 herness.store.ops.privacy.scrub_record_from_evidence, scrub_record_from_findings
 
-| Field | Content |
-|-------|---------|
-| Kind | function (two) |
-| Purpose | Remove a deleted record's values from the ops-store JSON columns that can quote it (design 10 §5.5 step 4): `evidence.result_sample` and `finding.numbers` (area table of impl 02 §2.3, R-08). |
-| Signature | `scrub_record_from_evidence(record_id: str) -> int` (rows changed); `scrub_record_from_findings(record_id: str) -> int` (rows changed) |
-| Preconditions | `record_id` validated as U10-73. |
-| Postconditions | No `evidence.result_sample` row object and no `finding.numbers` element contains a string equal to `record_id` or to its key part (the text after the second `:`). |
-| Invariants | `evidence.result_hash`, `row_count` and `query_id` are unchanged: the hash covers the full result, and the sample is only a preview. `finding.claim` text is not rewritten here; claims are generated from redacted text and carry pseudonyms, not record values. |
-| Algorithm | Evidence: 1. `read_all("SELECT query_id, result_sample FROM evidence WHERE instr(result_sample, ?) > 0 OR instr(result_sample, ?) > 0", (record_id, key))`. 2. For each row, `load_json` the list and drop every row object in which any string value equals `record_id` or `key` exactly. 3. Write the reduced list with `dump_json`, in one `run_write(op="privacy_scrub_evidence")` per 500 rows. Findings: the same over `finding.numbers`, dropping each element whose string values (at any depth ≤ 4) equal `record_id` or `key`. Return the number of rows changed. |
-| Side effects | `evidence`, `finding` rows |
-| Errors | `StoreBusy` |
-| Concurrency | exclusive `maintenance` job |
-| Complexity and limits | the `instr` pre-filter limits the rows parsed; ≤ 50 sample rows per evidence row |
-| Security notes | TH10-42. |
-| Tests | UT10-78, ST10-50 |
+Removed (R-09, R-77): see T05-12 (herness.store.ops.evidence.scrub_record_from_evidence) (U05-75) for the evidence scrub and T06-06 (herness.store.ops.findings.scrub_record_from_findings) (U06-144) for the finding scrub. Impls 05 and 06 own the `evidence` and `finding` tables; U10-99 step 4 calls both functions.
 
 #### U10-111 herness.store.ops.privacy.deleted_record_ids
 
@@ -1921,11 +1925,11 @@ Every function here obtains its connection through `herness.store.ops.core.conne
 | Field | Content |
 |-------|---------|
 | Kind | function (pure) |
-| Purpose | Tell X:09's chat mode selection whether chat `cloud` mode (model purpose `reasoning`, payload class `aggregated_evidence`) may run under the current profile (R-38). |
+| Purpose | Tell T08-19 (herness.core.jobs.chat_model_profile), which selects the chat mode (C08-06), whether chat `cloud` mode (model purpose `reasoning`, payload class `aggregated_evidence`) may run under the current profile (R-38). |
 | Signature | `cloud_chat_allowed(cfg: HernessConfig) -> bool` |
 | Preconditions | `cfg` passed U10-09. |
 | Postconditions | `True` exactly when a call with purpose `reasoning` and payload class `aggregated_evidence` would pass U10-51 steps 1–2. |
-| Algorithm | 1. `security.egress.enabled` false → `False`. 2. `reasoning` not in `security.egress.purposes` → `False`. 3. Profile `premium` → `True`. 4. Profile `hybrid` → `security.data_policy.chat_approved` (R-38). 5. Any other profile → `False`. When the result is `False`, X:09 runs chat on the local model; U10-51 step 2 enforces the same rule again at the guard (`chat_not_approved`). |
+| Algorithm | 1. `security.egress.enabled` false → `False`. 2. `reasoning` not in `security.egress.purposes` → `False`. 3. Profile `premium` → `True`. 4. Profile `hybrid` → `security.data_policy.chat_approved` (R-38). 5. Any other profile → `False`. When the result is `False`, T08-19 (herness.core.jobs.chat_model_profile) selects the local model; U10-51 step 2 enforces the same rule again at the guard (`chat_not_approved`). |
 | Side effects / Errors / Concurrency | none / none / pure |
 | Complexity and limits | O(1) |
 | Security notes | TH10-49. |
@@ -1943,14 +1947,14 @@ Every function here obtains its connection through `herness.store.ops.core.conne
 | Algorithm | Store the keyword arguments as attributes; `__str__` is the message only. |
 | Side effects / Errors / Concurrency | none / none / immutable after construction |
 | Complexity and limits | `issues` ≤ 1,000 entries |
-| Security notes | TH10-19 (the reason reaches X:08's fallback trace without payload). |
+| Security notes | TH10-19 (the reason reaches the fallback trace of T08-09 (herness.core.resilience.ModelChain) without payload). |
 | Tests | UT10-80 |
 
 ## 4. State and data
 
 ### 4.1 Ops store
 
-This spec owns the ops-store area `herness/store/ops/privacy.py` (R-08), which writes table `deletion_request` (design 02 §5.5) and the privacy rewrites of `evidence.result_sample` and `finding.numbers` (U10-105, U10-106). The table and its indexes `deletion_request_status` (`status`) and `deletion_request_record` (`record_id`) are created by impl 02 migration 005 (U02-53, R-11). No column or table exists only in this spec, so no migration in this spec's range 080–089 is needed.
+This spec owns the ops-store area `herness/store/ops/privacy.py` (R-08), which writes table `deletion_request` (design 02 §5.5) (U10-105, U10-111). The rewrites of `evidence.result_sample` and `finding.numbers` belong to the owners of those tables, `T05-12 (herness.store.ops.evidence.scrub_record_from_evidence)` (R-08, R-09) and `T06-06 (herness.store.ops.findings.scrub_record_from_findings)` (R-77); this spec only calls them. The table and its indexes `deletion_request_status` (`status`) and `deletion_request_record` (`record_id`) are created by impl 02 migration 005 (U02-53, R-11). No column or table exists only in this spec, so no migration in this spec's range 080–089 is needed.
 
 | Column | Type | Null | Constraint | Meaning |
 |--------|------|------|-----------|---------|
@@ -2010,32 +2014,32 @@ Indexes: those of U02-53 (no index is requested from impl 02 any more). Idempote
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|-----------|
-| 1 | X:09 `cli.main` calls U10-21 `load_bootstrap` | none | `ConfigError` → exit 3 before any socket opens |
+| 1 | T09-20 (herness.cli.main) calls U10-21 `load_bootstrap` | none | `ConfigError` → exit 3 before any socket opens |
 | 2 | U10-58 `install_socket_guard(bootstrap)` | audit hook, env vars | cannot fail except by programming error |
 | 3 | U10-10 `init_config` → U10-09 (sources U10-15–U10-19, checks U10-20 offline) | config cache | `ConfigError` → exit 3; doctor shows the issues |
 | 3a | Composition root registers owner validators (U10-109) before step 3, then calls `run_owner_validators(cfg, offline=True)` (skipped for `config validate`, `doctor`, `secrets *` and `deploy *`, which report instead) | none | any `error` issue → `ConfigError` → exit 3 (R-46); no job starts |
 | 4 | U10-58 `install_socket_guard(cfg)` (full source host list) | policy replaced | as step 2 |
 | 5 | U10-63 `record_config_change(cfg)` | snapshot, audit line, `LAST` | `FatalError` (audit) → exit 1; no job starts |
-| 6 | X:00 logging configured with U10-32 processor | logging | n/a |
+| 6 | T00-07 (herness.core.logging.configure_logging) configured with U10-32 processor | logging | n/a |
 
-### F10-02 Redaction of a build's text (called by X:03)
+### F10-02 Redaction of a build's text (called by impl 03)
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|-----------|
 | 1 | U10-39 `update_display_names` | display names file | `StoreBusy` → job retry |
 | 2 | U10-45 `get_redactor` (after `reset_redactor` so new names load) | cache | `ConfigError` (key missing) → job fails |
 | 3 | U10-47 `redact_table` | none (returns table) | row failure → NULL text and counter; worker crash → `StoreBusy` retry |
-| 4 | X:03 writes `enrich.text_redacted` and `content_hash` | warehouse | X:03 |
+| 4 | impl 03 writes `enrich.text_redacted` and `content_hash` | warehouse | impl 03 |
 
 ### F10-03 Guarded off-network call (hybrid or premium)
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|-----------|
-| 1 | X:05 adapter obtains `get_guard().async_http_client(purpose, payload_class, run_id, task_id)` (U10-53) | none | `EgressBlocked` for `model_download` |
+| 1 | T05-08 (herness.harness.llm.anthropic_client.AnthropicClient) obtains `get_guard().async_http_client(purpose, payload_class, run_id, task_id)` (U10-53) | none | `EgressBlocked` for `model_download` |
 | 2 | U10-54 transport reads request body | none | streaming body → blocked path |
-| 3 | U10-51 steps 1–6 under the egress lock | none | `EgressBlocked` with reason; blocked line and audit line written; X:08 falls back to a local model |
+| 3 | U10-51 steps 1–6 under the egress lock | none | `EgressBlocked` with reason; blocked line and audit line written; T08-09 (herness.core.resilience.ModelChain) falls back to a local model |
 | 4 | U10-51 step 7 writes `allowed` line | egress log | log write fails → `EgressBlocked("egress_log_failed")`; nothing sent |
-| 5 | Inner transport opens the socket; U10-58 allows the destination host | network | transport error → `completed` line with reason, error re-raised to X:05/X:08 |
+| 5 | Inner transport opens the socket; U10-58 allows the destination host | network | transport error → `completed` line with reason, error re-raised to T05-08 (herness.harness.llm.anthropic_client.AnthropicClient) and from there to T08-09 (herness.core.resilience.ModelChain) |
 | 6 | U10-54 response close writes `completed` line with usage | egress log | response > 50 MiB → `EgressBlocked("response_too_large")` |
 
 ### F10-04 Blocked socket (any profile)
@@ -2049,7 +2053,7 @@ Indexes: those of U02-53 (no index is requested from impl 02 any more). Idempote
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|-----------|
-| 1 | X:09 role check (admin (OS)) | none | `PermissionDenied` → exit 1 (R-46) |
+| 1 | T09-20 (herness._cli.identity.check_command_role) (admin (OS)) | none | `PermissionDenied` → exit 11 (R-46) |
 | 2 | U10-69 prompts twice | none | mismatch → exit 1 |
 | 3 | U10-31 audit `secret_set` | audit line | `FatalError` → secret not stored |
 | 4 | U10-33 backend write | Credential Manager | `ConfigError` (backend unavailable) → exit 3; audit line remains (records the attempt) |
@@ -2076,14 +2080,15 @@ Indexes: those of U02-53 (no index is requested from impl 02 any more). Idempote
 | 3 | U10-87 SBOM attestation, components, licences | none | `FatalError`; nothing installed |
 | 4 | U10-88 copy, re-hash, audit | `.release/`, audit | hash mismatch → `FatalError`; audit failure → nothing installed |
 | 5 | U10-88 `uv pip sync --require-hashes`, then wheel install | venv | `FatalError`; the operator re-runs install of the previous version from `.release/` |
+| 6 | U10-112 DuckDB `excel` extension: pinned hash, local `INSTALL`, `LOAD`, re-hash of the installed file | DuckDB extension directory | `FatalError`, `deploy.install.refused`; the wheel is installed but the files connector refuses `.xlsx` until the install is re-run |
 
 ### F10-08 Upgrade and rollback (design 10 §5.6.5)
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|-----------|
-| 1 | Operator edits `deploy.<class>` and the X:05 `models.yaml` entry on a branch | config | C07/C09/C13 issues in validate |
+| 1 | Operator edits `deploy.<class>` and the impl 05 `models.yaml` entry on a branch | config | C07/C09/C13 issues in validate |
 | 2 | F10-06 | images, weights | abort |
-| 3 | X:11 `herness eval` against the candidate | eval report | merge only when not worse on the golden set |
+| 3 | impl 11 `herness eval` against the candidate | eval report | merge only when not worse on the golden set |
 | 4 | U10-79 render, U10-84 up | env file, containers, history, audit (`config_change` via F10-01 step 5) | `ModelUnavailable` → rollback |
 | 5 | Rollback: revert config, U10-85 `rollback_class` | containers | target missing → `ConfigError` "run deploy pull" |
 
@@ -2091,27 +2096,27 @@ Indexes: those of U02-53 (no index is requested from impl 02 any more). Idempote
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|-----------|
-| 1 | X:09 `doctor` calls U10-89 with the loaded config (or a config-less run listing `config_valid` FAIL) | none | — |
+| 1 | T09-22 (herness._cli.doctor.run_doctor) calls U10-89 with the loaded config (or a config-less run listing `config_valid` FAIL) | none | — |
 | 2 | U10-90 and U10-91 checks in parallel | none | each check returns FAIL/WARN; none raises |
-| 3 | X:09 renders the table; exit 3 on any FAIL (R-46), else 0 | none | — |
+| 3 | T09-22 (herness._cli.doctor.run_doctor) renders the table; exit 1 on any FAIL (R-46), else 0 | none | — |
 
 ### F10-10 Rekey (design 10 §5.3)
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|-----------|
-| 1 | U10-71 stages `.next` and calls X:08 `schedule_rekey` | keyring, job | exit 1; no key staged without escrow |
-| 2 | X:08 runs `maintenance {"action": "rekey"}` before the Saturday `build_pipeline` | job | — |
+| 1 | U10-71 stages `.next` and calls `T08-14 (herness.core.jobs.schedule_rekey)` | keyring, job | exit 1; no key staged without escrow |
+| 2 | impl 08 runs `maintenance {"action": "rekey"}` before the Saturday `build_pipeline` | job | — |
 | 3 | U10-101 steps 2–3 (U10-102, U10-103) | map file, label files | `FatalError`; old key active; `.next` kept for retry |
 | 4 | U10-101 step 4 key swap, marker, audit | keyring, marker, audit | crash between 4a and 4b → retry detects the new key id and resumes at 4b |
-| 5 | Next `build_pipeline` re-embeds and re-classifies (X:03) | warehouse, cache | X:03 |
+| 5 | Next `build_pipeline` re-embeds and re-classifies (impl 03) | warehouse, cache | impl 03 |
 | 6 | U10-98 step 6 deletes the old decision cache after promotion | cache | skipped until promotion |
 
 ### F10-11 Nightly backup and F10-12 purge
 
 | Step | Unit | State change | On failure |
 |------|------|--------------|-----------|
-| 1 | X:08 scheduler enqueues `maintenance {"action": "backup"}` at `backup.nightly_at` then `{"action": "purge"}` | jobs | — |
-| 2 | U10-104 → U10-96 | backup target | `FatalError` → job retried per X:08 (`max_attempts` 2) |
+| 1 | T08-14 (herness.core.jobs.scheduler.run_scheduler) enqueues `maintenance {"action": "backup"}` at `backup.nightly_at` then `{"action": "purge"}` | jobs | — |
+| 2 | U10-104 → U10-96 | backup target | `FatalError` → job retried per impl 08 (`max_attempts` 2) |
 | 3 | U10-104 → U10-98 | deletions | files in use skipped |
 
 ### F10-13 Privacy deletion
@@ -2119,42 +2124,43 @@ Indexes: those of U02-53 (no index is requested from impl 02 any more). Idempote
 | Step | Unit | State change | On failure |
 |------|------|--------------|-----------|
 | 1 | U10-105 open or create request; status `running` | `deletion_request` | `StoreBusy` → job retry |
-| 2 | `X:02/herness.store.lake_purge.purge_record_ids` (R-57) | lake files | `StoreBusy` → step `failed`, job retry |
-| 3 | `X:03/herness.enrich.purge_record` | decision cache, labels, vectors | step `failed`, job retry |
-| 3b | `memory_purge` → `X:07/herness.harness.memory.MemoryStore.purge` (R-54) | memory items, memory vectors, FTS rows | `ModelUnavailable` or `StoreBusy` → step `failed`, job retry |
-| 4 | U10-106 scrubs; trace file deletion | `evidence`, `finding`, traces | `StoreBusy` → retry |
+| 2 | `T02-03 (herness.store.lake_purge.purge_record_ids)` (R-57) | lake files | `StoreBusy` → step `failed`, job retry |
+| 3 | `T03-34 (herness.enrich.purge_record)` | decision cache, labels, vectors | step `failed`, job retry |
+| 3b | `memory_purge` → `T07-26 (herness.harness.memory.MemoryStore.purge)` (R-54) | memory items, memory vectors, FTS rows | `ModelUnavailable` or `StoreBusy` → step `failed`, job retry |
+| 4 | U05-75 evidence scrub (impl 05) and U06-144 finding scrub (impl 06, R-77); trace file deletion | `evidence`, `finding`, traces | `StoreBusy` → retry |
 | 5 | rebuild with `build_pipeline` (no GPU class, R-43), then `cleanup_builds(mode="post", keep_last=1)` | warehouse files | build failure → re-enqueue ≤ 3 times, then request `failed`; deferred files → retry |
 | 6 | U10-105 status `done`; audit `privacy_delete` | request, audit | audit failure → `FatalError`, retry |
 | 7 | second lake pass; repeat 3 and 3b when rows were removed | lake, caches, memory | as steps 2, 3, 3b |
 
-Each step records its result in `deletion_request.steps`, and a failing step leaves the request `running` so the job retries from that step. Connectors (X:01) and staging (X:02) exclude the record from step 1 onward; the second lake pass (step 7) removes rows a running sync committed before its next checkpoint.
+Each step records its result in `deletion_request.steps`, and a failing step leaves the request `running` so the job retries from that step. Connectors (impl 01) and staging (impl 02) exclude the record from step 1 onward; the second lake pass (step 7) removes rows a running sync committed before its next checkpoint.
 
 ## 6. Error handling
 
 | Failure condition | Class raised | Caught where | Retry / fallback | User-visible effect | Log event |
 |-------------------|--------------|--------------|------------------|---------------------|-----------|
-| Invalid YAML, duplicate key, alias, unknown key, failed cross-check, gate missing | `ConfigError` | CLI entry (X:09), worker start | none | exit 3; doctor lists issues | `config.load.failed` |
+| Invalid YAML, duplicate key, alias, unknown key, failed cross-check, gate missing | `ConfigError` | CLI entry (impl 09), worker start | none | exit 3; doctor lists issues | `config.load.failed` |
 | `security.*` or `profile` from env or `--set` | `ConfigError` | CLI entry | none | exit 3 naming the variable | `config.load.failed` |
 | Secret missing | `ConfigError("secret not found: <name>")` | client construction site | none | exit 3; `secrets status` shows missing | `secrets.resolve.failed` |
 | Keyring backend unavailable | `ConfigError` | as above | none | hint: run as the owning account | `secrets.backend.unavailable` |
-| Egress refused by any rule | `EgressBlocked` (`FatalError`) | X:08 fallback chain | no retry; next local chain entry | exit 1 when surfaced to CLI (R-46); task records reason | `egress.call.blocked` |
-| Chat `cloud` mode in `hybrid` without `chat_approved` (R-38) | none (U10-107 returns `False`); `EgressBlocked("chat_not_approved")` if a caller bypasses it | X:09 chat mode selection | chat runs on the local model | answer from the local model | `egress.call.blocked` (bypass only) |
-| Loopback client given or sent to a non-loopback host | `EgressBlocked` (`not_loopback`) | caller (X:05, X:08, doctor) | none | health check or local call fails | `egress.loopback.blocked` |
-| Source client request to a host outside its allowlist, non-`https`, with user info, or oversized response; TLS verification disabled | `EgressBlocked`; `ConfigError` for `verify=False` | X:01 connector | none (X:01 maps it to a failed sync) | sync fails with the reason | `egress.source.blocked` |
+| Egress refused by any rule | `EgressBlocked` (`FatalError`) | T08-09 (herness.core.resilience.ModelChain) | no retry; next local chain entry | exit 13 when surfaced to CLI (R-46); task records reason | `egress.call.blocked` |
+| Chat `cloud` mode in `hybrid` without `chat_approved` (R-38) | none (U10-107 returns `False`); `EgressBlocked("chat_not_approved")` if a caller bypasses it | T08-19 (herness.core.jobs.chat_model_profile) | chat runs on the local model | answer from the local model | `egress.call.blocked` (bypass only) |
+| Loopback client given or sent to a non-loopback host | `EgressBlocked` (`not_loopback`) | caller (impl 05, impl 08, doctor) | none | health check or local call fails | `egress.loopback.blocked` |
+| Source client request to a host outside its allowlist, non-`https`, with user info, or oversized response; TLS verification disabled | `EgressBlocked`; `ConfigError` for `verify=False` | impl 01 connector | none (impl 01 maps it to a failed sync) | sync fails with the reason | `egress.source.blocked` |
 | Owner validator reports an `error` at start-up | `ConfigError` (U10-109) | composition root | none | exit 3 (R-46); `config validate` lists the issue | `config.validate.issue` |
 | Socket to a non-allowed host | `EgressBlocked` | caller's library | none | as above | `egress.socket.blocked` |
-| Egress log write fails | `EgressBlocked("egress_log_failed")` | X:08 | none | call not sent | `egress.call.blocked` |
-| Redaction exception on one record | `RedactionFailed`, caught inside U10-43/U10-47 | same unit | none | `text = NULL`; X:03 DQ warning | `redact.record.failed` |
-| Redaction worker process crash | `StoreBusy` | X:08 job runner | job retry | build delayed | `redact.table.failed` |
+| Egress log write fails | `EgressBlocked("egress_log_failed")` | T08-09 (herness.core.resilience.ModelChain) | none | call not sent | `egress.call.blocked` |
+| Redaction exception on one record | `RedactionFailed`, caught inside U10-43/U10-47 | same unit | none | `text = NULL`; impl 03 DQ warning | `redact.record.failed` |
+| Redaction worker process crash | `StoreBusy` | impl 08 job runner | job retry | build delayed | `redact.table.failed` |
 | Audit lock timeout or write error | `StoreBusy` inside, then `FatalError` | caller of `audit` | lock wait ≤ 10 s; no retry | the audited action does not happen | `audit.write.failed` |
 | Audit field would contain a secret | `SchemaViolation` | caller | none | action refused (programming defect) | `audit.write.failed` |
-| Model server unhealthy after `deploy up` | `ModelUnavailable` | CLI | X:08 retries swaps for the worker path | exit 1 (R-46) | `deploy.class.failed` |
+| Model server unhealthy after `deploy up` | `ModelUnavailable` | CLI | impl 08 retries swaps for the worker path | exit 9 (R-46) | `deploy.class.failed` |
 | Image digest or weight hash mismatch | `FatalError` | CLI | none | exit 1; firewall closed | `deploy.pull.failed` |
 | Firewall cannot be restored | `FatalError` | CLI | one re-set attempt | exit 1 with manual command | `deploy.firewall.restore_failed` (CRITICAL) |
 | Attestation or SBOM check fails | `FatalError` | CLI | none | exit 1; nothing installed | `deploy.install.refused` |
-| Rekey fails before key swap | `FatalError` | X:08 job runner | job retry (`max_attempts` 2) | old key active; `.next` kept | `rekey.failed` |
-| Deletion step fails (including memory purge step 3b) | step error (`StoreBusy`, `ModelUnavailable` or `FatalError`) | X:08 job runner | job retry from the failed step | request stays `running` | `privacy.delete.step_failed` |
-| Backup `integrity_check` fails | `FatalError` | X:08 job runner | job retry | no copy kept for that night | `maintenance.backup.failed` |
+| `deploy.install.extension_installed` | INFO | `name`, `extension_version`, `sha256` | U10-112 |
+| Rekey fails before key swap | `FatalError` | impl 08 job runner | job retry (`max_attempts` 2) | old key active; `.next` kept | `rekey.failed` |
+| Deletion step fails (including memory purge step 3b) | step error (`StoreBusy`, `ModelUnavailable` or `FatalError`) | impl 08 job runner | job retry from the failed step | request stays `running` | `privacy.delete.step_failed` |
+| Backup `integrity_check` fails | `FatalError` | impl 08 job runner | job retry | no copy kept for that night | `maintenance.backup.failed` |
 | Purge meets a file in use | none (counted) | U10-98 | next night | count `skipped_in_use` | `maintenance.purge.completed` |
 | Scrub processor fails | none | U10-32 | none | event replaced by `log.scrub.failed` | `log.scrub.failed` |
 
@@ -2168,7 +2174,7 @@ TB6 (host → off-network endpoints: egress guard, socket guard), TB8 (host ↔ 
 
 | ID | TB | STRIDE | Threat | L | I | Control | Reference | Test |
 |----|----|--------|--------|---|---|---------|-----------|------|
-| TH10-01 | TB10 | S | A non-admin OS user runs admin commands (`secrets set`, `privacy delete`, `deploy *`) | M | H | X:09 role check from `security.ui.roles`; admin (OS) elevation check; Credential Manager is per account; folder ACLs | ASVS v5.0.0-V8.2 | ST10-36 |
+| TH10-01 | TB10 | S | A non-admin OS user runs admin commands (`secrets set`, `privacy delete`, `deploy *`) | M | H | T09-20 (herness._cli.identity.check_command_role) from `security.ui.roles`; admin (OS) elevation check; Credential Manager is per account; folder ACLs | ASVS v5.0.0-V8.2 | ST10-36 |
 | TH10-02 | TB10 | T | A stray env variable or `--set` enables egress or changes security settings | M | H | `security.*` file-only (U10-09 step 3, U10-18) | ASVS v5.0.0-V13.1 | ST10-01, ST10-02 |
 | TH10-03 | TB10 | T | A profile overlay self-approves the data policy | L | H | Overlays may not set `security.data_policy` (U10-17); gate read only from `herness.yaml` | ASVS v5.0.0-V13.1 | ST10-03 |
 | TH10-04 | TB10 | T/D | Malicious YAML: alias bomb, duplicate keys hiding values, huge file | L | M | Alias/anchor rejection, duplicate-key rejection, 5 MiB cap (U10-15) | ASVS v5.0.0-V15 (safe deserialisation) | ST10-05 |
@@ -2179,16 +2185,16 @@ TB6 (host → off-network endpoints: egress guard, socket guard), TB8 (host ↔ 
 | TH10-09 | TB10 | T | Audit log edited, truncated or reordered to hide an action | L | H | SHA-256 hash chain; doctor `audit_chain`; folder ACL; nightly backup copy | ASVS v5.0.0-V16.4 | ST10-17 |
 | TH10-10 | TB10 | D | ReDoS-prone redaction pattern in config stalls builds and egress checks | L | M | Pattern length cap, nested-quantifier rejection (U10-04) | ASVS v5.0.0-V2.2 | ST10-37 |
 | TH10-11 | TB10 | E | `dotenv` secrets backend used in production to bypass Credential Manager protection | L | H | C12 and U10-33 refuse outside dev/`synth` | ASVS v5.0.0-V13.3 | ST10-26 |
-| TH10-12 | TB10 | E | Dashboard exposed on the LAN without the proxy, or identity header trusted from anywhere | M | H | Both identity checks of R-50: C05 at config time (loopback bind, `trusted_proxy` required with exposure and loopback); at request time X:09 trusts the header only when `expose.enabled`, `trusted_proxy` is set and the peer equals `trusted_proxy`; `.streamlit/config.toml` | ASVS v5.0.0-V13.2 | ST10-27 |
+| TH10-12 | TB10 | E | Dashboard exposed on the LAN without the proxy, or identity header trusted from anywhere | M | H | Both identity checks of R-50: C05 at config time (loopback bind, `trusted_proxy` required with exposure and loopback); at request time T09-13 (app.common.auth.resolve_identity) trusts the header only when `expose.enabled`, `trusted_proxy` is set and the peer equals `trusted_proxy`; `.streamlit/config.toml` | ASVS v5.0.0-V13.2 | ST10-27 |
 | TH10-13 | TB10 | I | `.env`, directory CSV or `data\` readable by other local users | M | H | Runbook ACLs; doctor `acl_data` | ASVS v5.0.0-V14.2 | ST10-38 |
-| TH10-14 | TB6 | I | Raw PII or secrets sent to a cloud model in a prompt | M | H | Redaction before any model (X:03, X:05); egress re-scan with JSON decoding and NFKC (U10-51 step 6) | LLM02; ASVS v5.0.0-V14.2 | ST10-10, ST10-11, IT10-03 |
+| TH10-14 | TB6 | I | Raw PII or secrets sent to a cloud model in a prompt | M | H | Redaction before any model (impl 03, impl 05); egress re-scan with JSON decoding and NFKC (U10-51 step 6) | LLM02; ASVS v5.0.0-V14.2 | ST10-10, ST10-11, IT10-03 |
 | TH10-15 | TB6 | I | A code path builds its own HTTP client and bypasses the guard | M | H | AST lint test; socket audit hook; `loopback_http_client` for local use | LLM02; ASVS v5.0.0-V15 | ST10-25, ST10-08 |
 | TH10-16 | TB6 | E/I | Off-network call in profile `local` | L | H | Profile gate (step 1) and socket guard allowlist | ASVS v5.0.0-V13.2 | ST10-07 |
 | TH10-17 | TB6 | S | Look-alike host, user-info trick, IP literal, non-443 port or redirect reaches another server | M | H | Exact host match, `https` + 443, no user info or IP, no redirects, each request checked | ASVS v5.0.0-V12.2 | ST10-09, ST10-32 |
 | TH10-18 | TB6 | T/I | TLS interception or downgrade on the cloud call | L | H | TLS ≥ 1.2, verification on, certifi CA, `trust_env=False` | ASVS v5.0.0-V12.1, V12.2 | ST10-39 |
 | TH10-19 | TB6 | R | Cannot prove what left the machine, or when | M | M | `allowed` line with `payload_sha256` written before the socket opens; `completed` line; `egress` audit for blocks | ASVS v5.0.0-V16.3 | ST10-40, ST10-33 |
 | TH10-20 | TB6 | D | Unbounded token spend or oversized requests | M | M | Per-request and daily token caps; body size cap | LLM10 | ST10-12 |
-| TH10-21 | TB6 | T/D | Malicious or huge response from the endpoint | L | M | 50 MiB response cap; timeouts; X:05 parses into schemas | LLM05; ASVS v5.0.0-V4 | ST10-41 |
+| TH10-21 | TB6 | T/D | Malicious or huge response from the endpoint | L | M | 50 MiB response cap; timeouts; impl 05 parses into schemas | LLM05; ASVS v5.0.0-V4 | ST10-41 |
 | TH10-22 | TB6 | I | Payload text leaks into egress or audit logs | L | H | Log line schema without payload; only hit counts | ASVS v5.0.0-V16.2 | ST10-13 |
 | TH10-23 | TB6 | E | A job or prompt-driven path uses `model_download` to exfiltrate | L | H | Purpose refused in `http_client`; window only for `deploy pull`, refused in workers and `synth` | LLM06 | ST10-35 |
 | TH10-24 | TB6 | I | Libraries phone home (telemetry, hub downloads) | M | M | Offline env variables; socket guard | LLM03 | ST10-29 |
@@ -2218,6 +2224,7 @@ TB6 (host → off-network endpoints: egress guard, socket guard), TB8 (host ↔ 
 | TH10-48 | TB6 | I | A vendor SDK (Snowflake, `pymongo`, `msal`) connects to a host the operator never listed, for example one derived from a tampered `base_url` or returned by the service | L | H | Socket-guard allowlist = source `hosts` lists ∪ egress allowlist ∪ loopback; nothing derived from `base_url` for SDK sources; C20 requires `hosts` for SDK sources (U10-21, U10-58, R-06) | ASVS v5.0.0-V13.2 | ST10-55 |
 | TH10-49 | TB6 | I | Chat `cloud` mode sends aggregated evidence to a cloud model in `hybrid` without the recorded D5 approval for chat | M | H | `security.data_policy.chat_approved` (file-only); C11, C25; `cloud_chat_allowed`; guard step 2 `chat_not_approved` (U10-03, U10-51, U10-107, R-38) | LLM02; ASVS v5.0.0-V13.2 | ST10-56 |
 | TH10-51 | TB6 | I/S | A source connector's client sends credentials to a host outside the source's allowlist (response-supplied next link, redirect, absolute URL, tampered `base_url`) or over TLS without verification | M | H | `source_http_client` checks every request host against the source `hosts` list and the process allowlist, refuses redirects, non-`https` and user info, and cannot disable TLS verification (U10-110, R-06) | ASVS v5.0.0-V12.2, ASVS v5.0.0-V12.3 | ST10-58, ST10-59 |
+| TH10-52 | TB9 | T | A tampered or unsigned DuckDB extension is installed, or the install downloads one from the network | L | H | Extension only from the verified bundle (U10-87 provenance), SHA-256 pinned in `deploy.release.duckdb_extensions`, local `INSTALL` with unsigned extensions refused, re-hash of the installed file (U10-112) | SLSA Build L2; ASVS v5.0.0-V15 | ST10-60 |
 | TH10-50 | TB10 | I | A deleted record survives in agent memory (memory items, memory vectors, FTS index) and is recalled into later prompts | M | H | Deletion step 3b `MemoryStore.purge(record_id)`, repeated after the second lake pass (U10-99, R-54) | ASVS v5.0.0-V14.2; LLM08 | ST10-57 |
 
 ### 7(c) ASVS 5.0 mapping (Level 2)
@@ -2230,7 +2237,7 @@ Requirement numbers are cited at section level because this spec does not confir
 | V11.2 Secure cryptography implementation | Vetted libraries, no custom crypto | `hashlib`, `hmac`, `secrets`, `ssl` only; constant-time comparison where a MAC is compared (`hmac.compare_digest` in U10-62 and U10-88) | U10-44, U10-62, U10-88 | UT10-59 |
 | V11.3 Encryption algorithms | Approved algorithms | Data at rest encrypted by BitLocker (doctor); no application-level encryption | U10-90 | ST10-49 |
 | V11.4 Hashing | Approved hash functions | SHA-256 everywhere; no MD5/SHA-1 for security | all | ruff `S324` |
-| V11.5 Random values | CSPRNG | `secrets.token_hex(32)` for keys; ULIDs from X:00 | U10-68, U10-71 | UT10-72 |
+| V11.5 Random values | CSPRNG | `secrets.token_hex(32)` for keys; ULIDs from T00-05 (herness.core.ids.new_ulid) | U10-68, U10-71 | UT10-72 |
 | V11.6 Public key cryptography | Signature verification | Sigstore attestation verification of releases | U10-87 | ST10-22 |
 | V12.1 General TLS | TLS ≥ 1.2, current ciphers | `ssl.create_default_context` with minimum TLS 1.2 | U10-52 | ST10-39 |
 | V12.2 HTTPS to external services | Certificate verification, no downgrade | Verification on, HTTPS and 443 only, no env proxies; source clients always verify TLS | U10-51, U10-52, U10-110 | ST10-09, ST10-39, ST10-59 |
@@ -2240,8 +2247,8 @@ Requirement numbers are cited at section level because this spec does not confir
 | V13.3 Secret management | Secrets in a vault, not in code or config | Credential Manager backend; `secret:` references; env file only for containers; rotation via `secrets set` | U10-27–U10-33, U10-79 | ST10-04, ST10-26, ST10-34 |
 | V13.4 Unintended information leakage | No debug or metadata leakage | `config show` references only; errors name identifiers only; Streamlit usage stats off | U10-12, U10-95 | ST10-16 |
 | V14.1 Data protection documentation | Classified data | §7(f) | — | — |
-| V14.2 General data protection | Minimisation, retention, deletion, no sensitive data in logs | Redaction; retention purge; privacy deletion including memory and ops-store scrubs; ACLs; BitLocker | U10-42, U10-98, U10-99, U10-106, U10-90 | IT10-06, UT10-68, ST10-50, ST10-57 |
-| V14.3 Client-side data protection | Browser storage | Not applicable here (X:09) | — | — |
+| V14.2 General data protection | Minimisation, retention, deletion, no sensitive data in logs | Redaction; retention purge; privacy deletion including memory and ops-store scrubs; ACLs; BitLocker | U10-42, U10-98, U10-99, U10-90 | IT10-06, UT10-68, ST10-50, ST10-57 |
+| V14.3 Client-side data protection | Browser storage | Not applicable here (impl 09) | — | — |
 | V16.1 Security logging documentation | Event inventory | §8 | — | — |
 | V16.2 General logging | Structured, UTC, no sensitive data | structlog JSON, scrubber | U10-32 | ST10-15 |
 | V16.3 Security events | Log admin actions, auth decisions, egress, config changes | Audit events and egress log | U10-60, U10-57 | ST10-17, ST10-40 |
@@ -2252,14 +2259,14 @@ Requirement numbers are cited at section level because this spec does not confir
 
 | Item | Control here | Tests |
 |------|--------------|-------|
-| LLM01 Prompt injection | Supplies redaction and the untrusted-data stance (design 10 §9.1); delimiting with `<untrusted_data source=... record_id=...>` is X:05 and X:07 (R-20) | owner tests |
+| LLM01 Prompt injection | Supplies redaction and the untrusted-data stance (design 10 §9.1); delimiting with `<untrusted_data source=... record_id=...>` is T05-15 (herness.harness.tools.wrap_untrusted) and T07-06 (herness.harness.memory.render.wrap_untrusted) (R-20) | owner tests |
 | LLM02 Sensitive information disclosure | Redaction, egress re-scan, socket guard, scrubber, chat approval gate | ST10-10, ST10-11, ST10-14, ST10-56 |
 | LLM03 Supply chain | Digest and revision pinning, hash checks, release attestation | ST10-19–ST10-24 |
 | LLM04 Data and model poisoning | Weight hashes; label re-key without loss | ST10-20, IT10-07 |
 | LLM05 Improper output handling | Response size cap | ST10-41 |
-| LLM06 Excessive agency | `model_download` unreachable from jobs; DuckDB lockdown is X:05 | ST10-35 |
+| LLM06 Excessive agency | `model_download` unreachable from jobs; DuckDB lockdown is T05-13 (herness.harness.warehouse.open_warehouse) | ST10-35 |
 | LLM07 System prompt leakage | Prompts hold no secrets (scrubber is the backstop) | ST10-14 |
-| LLM08 Vector and embedding weaknesses | Embeddings from redacted text; deletion purges enrichment vectors (X:03) and memory vectors (X:07, R-54) | IT10-06, ST10-57 |
+| LLM08 Vector and embedding weaknesses | Embeddings from redacted text; deletion purges enrichment vectors (T03-34 (herness.enrich.purge_record)) and memory vectors (T07-26 (herness.harness.memory.MemoryStore.purge), R-54) | IT10-06, ST10-57 |
 | LLM09 Misinformation | Not applicable to this component | — |
 | LLM10 Unbounded consumption | Token caps per request and day | ST10-12 |
 
@@ -2270,9 +2277,9 @@ AI RMF: Govern (data-policy gate, audit trail of config and admin actions), Mana
 | Name | Resolved by | Used in |
 |------|-------------|---------|
 | `redact.hmac_key`, `redact.hmac_key.next` | U10-45, U10-101 | Redaction and rekey |
-| `ui_user_ref_key` | X:09 via U10-28 | `user_ref` HMAC (audit actor) |
+| `ui_user_ref_key` | impl 09 via U10-28 | `user_ref` HMAC (audit actor) |
 | `vllm.api_key`, `OPENJEV_API_KEY` (reference `secret:OPENJEV_API_KEY`, R-53; also used by impl 08 health checks) | U10-79, U10-84, U10-91 | Env file for containers; health checks |
-| `anthropic.api_key`, `TYPESAFE_API_KEY`, source credentials | X:05, X:03, X:01 via U10-28/U10-29 | HTTP headers only |
+| `anthropic.api_key`, `TYPESAFE_API_KEY`, source credentials | impl 05, impl 03, impl 01 via U10-28/U10-29 | HTTP headers only |
 
 ### 7(f) Data classification
 
@@ -2352,7 +2359,7 @@ AI RMF: Govern (data-policy gate, audit trail of config and admin actions), Mana
 
 Component name for all events: `security` (core modules) or `admin` (`herness/admin`).
 
-### 8.2 Metrics (via the X:08 metric sink `herness.store.ops.metrics.record_metric_samples`, ENG E5, R-12)
+### 8.2 Metrics (via `T08-05 (herness.store.ops.metrics.record_metric_samples)`, ENG E5, R-12)
 
 | Metric | Type | Labels |
 |--------|------|--------|
@@ -2374,7 +2381,7 @@ Component name for all events: `security` (core modules) or `admin` (`herness/ad
 
 ### 8.3 Trace events
 
-This component writes no trace events (X:05's `Tracer` is the only trace writer). `EgressBlocked` carries `egress_id` and `reason`, which X:08 copies into its `fallback` trace event (reason `egress_blocked`). X:05 applies U10-32 to trace events.
+This component writes no trace events (T05-11 (herness.harness.tracing.Tracer) is the only trace writer). `EgressBlocked` carries `egress_id` and `reason`, which T08-09 (herness.core.resilience.ModelChain) copies into its `fallback` trace event (reason `egress_blocked`). T05-11 (herness.harness.tracing.Tracer) applies U10-32 to trace events.
 
 ### 8.4 Health
 
@@ -2399,7 +2406,7 @@ Keys owned here (all in `config/herness.yaml` or profile overlays; `security.*` 
 | `backup.*` | U10-06 | U10-06 | U10-06 | no | internal |
 | `deploy.*` (incl. `deploy.release.*`) | U10-07 | design 10 §7.4 | U10-07, C07, C08a, C09, C10, C13 | re-render and `deploy up` | internal |
 
-Keys read from other owners: `models.models.{roles, fallback, clients}` including `clients.*.context_window` (X:05; C10, R-52), `resilience.resilience.gpu.*` (X:08), `sources.sources.*.base_url`, `enabled`, `account`, `auth.method` and `sources.sources.<name>.hosts` (X:01; socket guard and C20, R-06), `sources.build.threads` (X:02), `memory.injection_patterns` (X:07, produced by the loader). Environment variables: `HERNESS_PROFILE`, `HERNESS_ENV`, `HERNESS_SYNTH_CONFIG`, `HERNESS_SECRET__*` (dev only), `HERNESS_WORKER` (set by X:08).
+Keys read from other owners: `models.models.{roles, fallback, clients}` including `clients.*.context_window` (impl 05; C10, R-52), `resilience.resilience.gpu.*` (impl 08), `sources.sources.*.base_url`, `enabled`, `account`, `auth.method` and `sources.sources.<name>.hosts` (impl 01; socket guard and C20, R-06), `sources.dq.*` and `sources.build.threads` (impl 02, composed per R-69), `models.deciders` (impl 03, composed per R-76), `memory.injection_patterns` (impl 07, produced by the loader). Environment variables: `HERNESS_PROFILE`, `HERNESS_ENV`, `HERNESS_SYNTH_CONFIG`, `HERNESS_SECRET__*` (dev only), `HERNESS_WORKER` (set by impl 08).
 
 ## 10. Performance and capacity
 
@@ -2418,7 +2425,7 @@ Enforced limits: config file 5 MiB; `--set` value 4,096 chars; redaction text 4,
 
 ## 11. Test specification
 
-Common fixtures (in `tests/support/`, X:11 layout): `tmp_config` (copies the repository `config/` templates plus minimal owner sections into `tmp_path`), `fake_keyring` (an in-memory `keyring` backend set with `keyring.set_keyring`), `frozen_now` (`freezegun` at `2026-09-24T12:00:00Z`), `reset_core` (calls `reset_config`, `reset_registry` and `reset_owner_validators` after each test), `fake_runner` (replaces U10-76 `run_cmd` with a table of argv prefix → `CmdResult`; the only permitted OS-level mock, ENG §6), `fake_socket` (monkeypatched `socket.socket.connect` recording calls), `respx` routes for `api.anthropic.com`. Test files: `tests/unit/test_config_*.py`, `test_registry.py`, `test_secrets.py`, `test_redact_*.py`, `test_egress_*.py`, `test_audit.py`, `test_admin_*.py`, `tests/integration/test_security_*.py`, `tests/fault/test_security_faults.py`, `tests/security/test_st10_*.py`, `tests/bench/test_bt10.py`.
+Common fixtures (in `tests/support/`, impl 11 layout): `tmp_config` (copies the repository `config/` templates plus minimal owner sections into `tmp_path`), `fake_keyring` (an in-memory `keyring` backend set with `keyring.set_keyring`), `frozen_now` (`freezegun` at `2026-09-24T12:00:00Z`), `reset_core` (calls `reset_config`, `reset_registry` and `reset_owner_validators` after each test), `fake_runner` (replaces U10-76 `run_cmd` with a table of argv prefix → `CmdResult`; the only permitted OS-level mock, ENG §6), `fake_socket` (monkeypatched `socket.socket.connect` recording calls), `respx` routes for `api.anthropic.com`. Test files: `tests/unit/test_config_*.py`, `test_registry.py`, `test_secrets.py`, `test_redact_*.py`, `test_egress_*.py`, `test_audit.py`, `test_admin_*.py`, `tests/integration/test_security_*.py`, `tests/fault/test_security_faults.py`, `tests/security/test_st10_*.py`, `tests/bench/test_bt10.py`.
 
 ### 11.1 Unit tests (marker `unit`)
 
@@ -2443,7 +2450,7 @@ Common fixtures (in `tests/support/`, X:11 layout): `tmp_config` (copies the rep
 | UT10-17 | U10-11 | fake keyring with sentinel values | capture canonical JSON input | contains `secret:` references; no sentinel |
 | UT10-18 | U10-12 | raw dict with `password: plain` bypassing validation | `effective_dict` | value `***`; references unchanged |
 | UT10-19 | U10-20, U10-03–U10-07, U10-109 | one parametrised case per C-rule (C01–C25, including C05 loopback bind and proxy, C10 context window, C11 and C25 chat approval, C20 SDK `hosts`) and per model validator (patterns, ports, pins); fake owner validators registered through U10-109 | `validate` | exactly the expected issue with severity and path |
-| UT10-20 | U10-65, U10-14 | configs with an error, only a warning, clean | `cmd_config_validate` with and without `strict` | exit 3 / 0 without strict and 3 with strict / 0 (R-46); issue line format `severity path file: message` |
+| UT10-20 | U10-65, U10-14 | configs with an error, only a warning, clean | `cmd_config_validate` with and without `strict` | exit 1 / 0 without strict and 1 with strict / 0 (R-46); issue line format `severity path file: message` |
 | UT10-21 | U10-63 | two starts with the same hash, then a changed hash | `record_config_change` ×3 | one `config_change` line after the change, `changed_paths` lists the key, snapshot file exists, `LAST` updated |
 | UT10-22 | U10-10 | none | `get_config` twice, `reset_config`, `get_config` | same object, then a new object; reset hooks called |
 | UT10-23 | U10-19 | `a.b`, `a.b.c=1` after `a.b=2`, `bad seg=1`, 13 segments | parse | `ConfigError` each with key path |
@@ -2487,24 +2494,26 @@ Common fixtures (in `tests/support/`, X:11 layout): `tmp_config` (copies the rep
 | UT10-61 | U10-07 | pins with placeholder, tag instead of digest, 39-hex revision | deploy-time validation | `ConfigError("deploy.<key> is not pinned")` each |
 | UT10-62 | U10-82, U10-83 | `fake_runner` returning RepoDigests and `sha256sum` output | `pull_images`, `verify_weights(full=True)` | ok on match; `FatalError` on mismatch |
 | UT10-63 | U10-81, U10-92 | `fake_runner`; body raises | enter window | `Allow` then `Block` set and read back; exception re-raised |
-| UT10-64 | U10-84 | worker alive (fake X:08) vs no worker | `class_up("reasoning")` | alive: requested class set, no compose call; not alive: GPU lock taken, other classes stopped, `up -d` argv, health polled; audit and history written |
+| UT10-64 | U10-84 | worker alive (fake impl 08) vs no worker | `class_up("reasoning")` | alive: requested class set, no compose call; not alive: GPU lock taken, other classes stopped, `up -d` argv, health polled; audit and history written |
 | UT10-65 | U10-85, U10-78 | history with 4 pin sets | `prune`; `rollback_class` without local image | removes only non-kept digests/revisions; `ConfigError` "run deploy pull" |
 | UT10-66 | U10-87 | `fake_runner` for `gh`; SBOM predicate fixtures | `verify_bundle` | exact `gh` argv (repo, signer workflow, `--deny-self-hosted-runners`, trusted root, predicate types); summary on success |
 | UT10-67 | U10-97, U10-96 | 60 daily dates | `select_backup_keep(14, 8)` | 14 newest plus newest per last 8 ISO weeks |
 | UT10-68 | U10-98, U10-104, U10-74, U10-75 | fixture data tree with old and new files | `handle_maintenance({"action": "purge", "dry_run": true})` then `false` | counts equal; files older than each retention deleted; today's logs kept; audit counts |
-| UT10-69 | U10-99, U10-104 | fake X:02, X:03 and `memory_purge` functions; step 4 raising once | run, then rerun | request `running` with step 4 `failed`; rerun skips steps 1–3b and completes; `memory_purge` called with the `record_id` after step 3 and again in step 7 when pass 2 removed rows; continuation job enqueued at step 5 with GPU class `none` |
+| UT10-69 | U10-99, U10-104 | fake impl 02, impl 03 and `memory_purge` functions; step 4 raising once | run, then rerun | request `running` with step 4 `failed`; rerun skips steps 1–3b and completes; `memory_purge` called with the `record_id` after step 3 and again in step 7 when pass 2 removed rows; continuation job enqueued at step 5 with GPU class `none` |
 | UT10-70 | U10-101–U10-103 | fixture warehouse and labels (one ambiguous hash) | run | map written; labels re-keyed; counts `ambiguous=1`; key swapped; marker written |
 | UT10-71 | U10-89–U10-91, U10-76, U10-77 | recorded outputs of `icacls`, `manage-bde`, `wsl -l -q` (UTF-16LE), `nvidia-smi`, `w32tm`, PowerShell JSON; psutil fake | each check | PASS/WARN/FAIL per fixture variant; unsafe argv rejected |
 | UT10-72 | U10-68, U10-70, U10-64, U10-34 | fake keyring; prompts answering `ESCROWED` and `no` | `cmd_secrets_init`; `cmd_secrets_status` | key created only when escrowed; status lists names, presence and last-set time from audit |
 | UT10-73 | U10-71 | `.next` present; absent | `cmd_secrets_rekey` | exit 1 "already staged"; stages and calls fake `schedule_rekey`, audit `redact_rekey` |
 | UT10-74 | U10-59 | none | `loopback_http_client("http://127.0.0.1:8000", timeout_s=5.0)` and `aloopback_http_client` with the same arguments; a `get("/health")` on each; both functions with `"http://10.0.0.5:8000"`; `timeout_s=0` | clients built with `follow_redirects` false and `trust_env` false, requests reach the transport; `EgressBlocked` with `reason="not_loopback"` before any client exists (both variants); `ConfigError` |
-| UT10-75 | U10-80, U10-20 C08a | repository `docker/compose.yaml`, X:08 default `resilience.yaml` | cross-check | no issues; altering a port gives C08a error |
+| UT10-75 | U10-80, U10-20 C08a | repository `docker/compose.yaml`, impl 08 default `resilience.yaml` | cross-check | no issues; altering a port gives C08a error |
 | UT10-76 | U10-93–U10-95 | repository templates | load `local`, `synth`, `hybrid` | `local`/`synth` load (C13 warnings only); `hybrid` fails the gate; `.env.example` has no values |
 | UT10-77 | U10-105 | migrated temporary ops store (impl 02 migrations) | create twice for one `record_id`; `record_deletion_step` for `3` then `3b`; `set_deletion_status` `pending → done`; `get_deletion_request` of an unknown ID | one row (second create returns it); `steps` holds keys `3` and `3b`; `ConfigError("invalid deletion status transition")`; `NotFound` |
-| UT10-78 | U10-106 | ops store with two evidence rows (one sample row citing the record by `record_id`, one by key only) and one finding whose `numbers` cite it | scrub both; scrub again | cited rows and elements removed; other rows, `result_hash`, `row_count` unchanged; second run changes 0 rows |
+| UT10-78 | Removed (R-77) | — | — | the evidence scrub is tested by UT05-126 and the finding scrub by impl 06's tests of U06-144 |
 | UT10-79 | U10-107, U10-51 step 2 | configs: `local`; `hybrid` without `chat_approved`; `hybrid` with it and `reasoning` in purposes; `premium` | `cloud_chat_allowed`; guard `check` with purpose `reasoning` in `hybrid` without approval | `False`, `False`, `True`, `True`; `EgressBlocked` with reason `chat_not_approved` |
 | UT10-80 | U10-108 | none | construct `EgressBlocked("x", egress_id="egr_01", reason="host_not_allowed")`, `ConfigError("y", issues=[issue])`, and both without keywords | attributes set; defaults `None` and `()`; `str()` is the message only; taxonomy parents unchanged |
 | UT10-82 | U10-110 | config with `servicenow` (`base_url` `https://corp.service-now.com`, `hosts: []`) and `snowflake` (`hosts: [acme.snowflakecomputing.com]`); fake socket policy | `source_http_client("servicenow", base_url, timeout_s=30.0)`; `source_http_client("snowflake", "https://acme.snowflakecomputing.com", timeout_s=30.0)`; disabled source; `timeout_s=0`; a response of `max_response_bytes + 1` from a respx route | clients built with `follow_redirects` false, `trust_env` false, the configured timeouts and limits; both allowed; `ConfigError` twice; `EgressBlocked` `response_too_large` |
+| UT10-84 | U10-08, U10-16 | `sources.yaml` with `sources`, `dq` and `build`; `models.yaml` with `models` (including `roles`), `harness` and `deciders`; variants with an unknown top-level key in each file | load | `cfg.sources.dq`, `cfg.sources.build.threads`, `cfg.sources.enabled_sources()`, `cfg.models.models.roles` and `cfg.models.deciders` are populated from the owners' models (R-69, R-76); each unknown key → `ConfigError` naming the file and key |
+| UT10-85 | U10-112 | fixture bundle with a small file as `duckdb/excel.duckdb_extension`; `fake_runner` for the venv interpreter returning recorded JSON | install with the right pin; with a wrong pin; with no pin; fake install whose `install_path` file differs | exact argv (`-I`, `EXT_INSTALL_SCRIPT`, path, `excel`); version returned and `deploy.install.extension_installed` logged; wrong pin → `FatalError` before any subprocess; no pin → `ConfigError`; differing installed file → `FatalError` |
 | UT10-83 | U10-111 | ops store with requests for `servicenow:incident:*` in `pending`, `running`, `done`, `failed` and one for `jira:issue:*` | `deleted_record_ids("servicenow", "incident")`; invalid `source` | sorted IDs of the `running` and `done` requests only; `ConfigError` |
 | UT10-81 | U10-109, F10-01 step 3a | fake owner validators: one returning a `ConfigIssue`, one a mapping, one an invalid object, one raising `RuntimeError("secret-ish text")`; a duplicate registration | `register_owner_validator`; `run_owner_validators`; start-up call with an `error` issue | issues converted and sorted; invalid object and exception each become one `error` issue whose message has no exception text; duplicate name with another object → `ConfigError`; start-up raises `ConfigError` with `issues` (exit 3) |
 
@@ -2526,16 +2535,16 @@ Common fixtures (in `tests/support/`, X:11 layout): `tmp_config` (copies the rep
 | ID | Flow | Setup | Action | Expected |
 |----|------|-------|--------|----------|
 | IT10-01 | F10-01 | full `tmp_config` with owner defaults, profile `synth` | `validate(offline=True)` | no errors |
-| IT10-02 | U10-41, U10-42 | X:11 corpus `tests/unit/test_redaction_corpus.py` (≥ 2,000 labelled sentences; size and thresholds owned here and used by impl 11, R-56; phones in the form `+1-202-555-01xx`) | redact | recall ≥ 0.99 per patterned type; names ≥ 0.95; precision ≥ 0.90; no `INC`/`CHG` masked |
+| IT10-02 | U10-41, U10-42 | impl 11 corpus `tests/unit/test_redaction_corpus.py` (≥ 2,000 labelled sentences; size and thresholds owned here and used by impl 11, R-56; phones in the form `+1-202-555-01xx`) | redact | recall ≥ 0.99 per patterned type; names ≥ 0.95; precision ≥ 0.90; no `INC`/`CHG` masked |
 | IT10-03 | F10-03 | hybrid with gate; respx | adapter-like call with aggregated evidence | allowed and completed lines; no payload text in any log file |
 | IT10-04 | F10-03, F10-04 | profile `local`; `fake_socket`; respx | every `http_client()` request | `EgressBlocked`; zero connects recorded |
-| IT10-05 | U10-60 with X:02 | fixture ops store | approve a `review_item` through `X:02/herness.store.ops.shared.decide_review_item` (R-33) | exactly one `review_decision` line |
-| IT10-06 | F10-13 | fixture lake, cache, labels, vectors, memory store (X:07, memory items citing the record), evidence, findings, traces, build (fake X:08 job completion) | privacy delete end to end, including a sync commit between steps 1 and 2 | record absent from all stores (memory included, R-54) and the next build; next fixture sync does not re-ingest; second lake pass removes the late row |
+| IT10-05 | U10-60 with impl 02 | fixture ops store | approve a `review_item` through `T02-07 (herness.store.ops.shared.decide_review_item)` (R-33) | exactly one `review_decision` line |
+| IT10-06 | F10-13 | fixture lake, cache, labels, vectors, memory store (impl 07, memory items citing the record), evidence, findings, traces, build (fake impl 08 job completion) | privacy delete end to end, including a sync commit between steps 1 and 2 | record absent from all stores (memory included, R-54) and the next build; next fixture sync does not re-ingest; second lake pass removes the late row |
 | IT10-07 | F10-10 | fixture labels (human, gold, teacher) | rekey job | every label mapped to its new hash; no loss |
 | IT10-08 | F10-11 | ops store with a writer thread | backup | copy passes `integrity_check` |
 | IT10-09 | F10-12 | data tree spanning 3 years | purge | per-key deletions exactly at the cut-offs |
-| IT10-10 | secrets e2e | fake pipeline (fixture connector sync, one chat turn with X:11 `FakeLLMClient` from `tests/support/fake_llm.py`, R-65) with sentinel secrets | run and grep | see ST10-14 |
-| IT10-11 | U10-65 via X:09 | `typer.testing.CliRunner` | `herness config validate --offline --strict` on a clean, a warning-only and an error config | exit codes 0/3/3 (R-46); JSON output validates |
+| IT10-10 | secrets e2e | fake pipeline (fixture connector sync, one chat turn with T11-23 (tests.support.fake_llm.FakeLLMClient) from `tests/support/fake_llm.py`, R-65) with sentinel secrets | run and grep | see ST10-14 |
+| IT10-11 | U10-65 via impl 09 | `typer.testing.CliRunner` | `herness config validate --offline --strict` on a clean, a warning-only and an error config | exit codes 0/1/1 (R-46); JSON output validates |
 | IT10-12 | F10-09 | Linux CI | doctor | Windows checks WARN "not applicable"; others evaluate |
 | IT10-13 | Phase 4 acceptance | target PC (marker `deploy`, manual plus scripted) | doctor; `deploy up` each class; `netstat -ano` | all PASS; each class healthy; only one GPU service running; loopback-only binds |
 | IT10-14 | F10-07 | fixture bundle with a fake `gh` script returning recorded JSON; temp venv | `cmd_deploy_install` | wheel installed; audit `deploy_install`; `.release/<version>/` created |
@@ -2594,7 +2603,7 @@ Common fixtures (in `tests/support/`, X:11 layout): `tmp_config` (copies the rep
 | ST10-33 | TH10-19 | Blocked call | audit `egress` line with `egress_id`, `reason`; no payload |
 | ST10-34 | TH10-28 | `deploy.env_file: /mnt/d/herness/docker.env`; fake stat returns `644` | `ConfigError`; doctor `env_file` FAIL |
 | ST10-35 | TH10-23 | `http_client("model_download", "none")`; window inside a worker process | `EgressBlocked` both |
-| ST10-36 | TH10-01 | CLI as a viewer runs `secrets set`, `privacy delete`, `deploy up` (X:09 CliRunner) | exit 1 (`PermissionDenied`, R-46); no keyring write, job or audit `admin_action` |
+| ST10-36 | TH10-01 | CLI as a viewer runs `secrets set`, `privacy delete`, `deploy up` (impl 09 CliRunner) | exit 11 (`PermissionDenied`, R-46); no keyring write, job or audit `admin_action` |
 | ST10-37 | TH10-10 | `custom_patterns: {bad: "(a+)+$"}`; 600-char pattern | `ConfigError` |
 | ST10-38 | TH10-13 | `icacls` output with `BUILTIN\Users:(RX)` and an `(I)` ACE | `acl_data` FAIL |
 | ST10-39 | TH10-18 | Local TLS server with a self-signed cert added to destinations (test-only override of the CA), server offering only TLS 1.0 | certificate error; handshake failure; `trust_env` ignores `HTTPS_PROXY` |
@@ -2617,6 +2626,7 @@ Common fixtures (in `tests/support/`, X:11 layout): `tmp_config` (copies the rep
 | ST10-56 | TH10-49 | Profile `hybrid` with `hybrid_approved` but `chat_approved: false`: (a) `reasoning` added to `security.egress.purposes`; (b) config built in the test with `reasoning` present to bypass C11, then a chat-style guarded call with purpose `reasoning` and `aggregated_evidence`; (c) `chat_approved: true` without `hybrid_approved` | (a) C11 error; (b) `cloud_chat_allowed` is `False` and the call raises `EgressBlocked` `chat_not_approved` with zero connects and an audit `egress` line; (c) C25 error |
 | ST10-58 | TH10-51 | Source client for `servicenow` (`base_url` `https://corp.service-now.com`): `get("https://evil.example.com/api")`; a response-supplied next link to `https://corp.service-now.com.evil.com/`; a 302 to another host; `base_url` `http://corp.service-now.com`; `base_url` `https://u:p@corp.service-now.com`; a `snowflake` client whose `base_url` host is not in its `hosts` | `EgressBlocked` with reasons `host_not_allowed`, `host_not_allowed`, redirect not followed, `scheme_not_https`, `userinfo_present`, `host_not_allowed`; zero connects to any other host (fake socket) |
 | ST10-59 | TH10-51, TH10-18 | Source client with `verify=False`; with a CA bundle path that does not exist; against a local TLS server with a self-signed certificate not in the bundle; with env `SSL_CERT_FILE` and `HTTPS_PROXY` set to attacker values | `ConfigError` "TLS verification cannot be disabled"; `ConfigError`; certificate verification error, no request body sent; env values ignored (`trust_env=False`) |
+| ST10-60 | TH10-52 | Bundle whose `excel.duckdb_extension` is altered after signing; separately, socket guard active in the install subprocess | install refused with `extension_hash` before any `INSTALL`; with the correct file the install completes with no socket opened |
 | ST10-57 | TH10-50 | After IT10-06, memory recall and FTS search for the record's unique description text and for its `record_id`; memory vector store lookup for the purged memory IDs; a deletion run whose step 3b fails once | zero memory items, FTS rows or vectors cite the record; the failed run leaves the request `running` with step `3b` `failed`, and the retry completes it |
 
 ### 11.6 Benchmarks
@@ -2632,7 +2642,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | `herness/core/settings.py` defines every `herness.yaml` section model. |
-| Depends on | X:00/herness.core.errors |
+| Depends on | T00-03 (herness.core.errors) |
 | Units | U10-02–U10-07 |
 | Files | `herness/core/settings.py` |
 | Tests | UT10-19 (model cases), UT10-61, ST10-37 |
@@ -2660,10 +2670,10 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | `load_config`, `init_config`/`get_config`/`reset_config`, `config_hash`, `effective_dict` and `ConfigIssue` work, and `EgressBlocked` and `ConfigError` carry the attributes of R-19. |
-| Depends on | T10-02; X:00/herness.core.ids.canonical_json; X:00/herness.core.errors (taxonomy with `hint`, `details`, R-19); X:00 import-linter settings exception (R-03); X:01–X:11 owner `settings.py` modules (stubs with `extra="forbid"` accepted until owners land) |
+| Depends on | T10-02; T00-05 (herness.core.ids.canonical_json); T00-03 (herness.core.errors) (taxonomy with `hint`, `details`, R-19); T00-09 (pyproject.toml import-linter contracts) settings exception (R-03); T01-02 (herness.connectors.settings.SourcesConfig), T02-01 (herness.model.settings.DqSettings), T02-01 (herness.model.settings.BuildSettings), T03-02 (herness.enrich.settings.DecidersSettings), T05-04 (herness.harness.llm.settings.ModelsConfig) (the composed sibling sections, R-69, R-76); impls 01–11 other owner `settings.py` modules (stubs with `extra="forbid"` accepted until owners land) |
 | Units | U10-01, U10-08–U10-12, U10-14, U10-108 |
 | Files | `herness/core/config.py`, `herness/core/errors.py` (the two attribute sets only) |
-| Tests | UT10-01–UT10-04, UT10-09, UT10-11, UT10-12, UT10-15–UT10-18, UT10-22, UT10-80, PT10-01, BT10-01, BT10-02, ST10-16 |
+| Tests | UT10-01–UT10-04, UT10-09, UT10-11, UT10-12, UT10-15–UT10-18, UT10-22, UT10-80, UT10-84, PT10-01, BT10-01, BT10-02, ST10-16 |
 | Threats | TH10-02, TH10-03, TH10-07 |
 | Acceptance checks | tests pass; `lint-imports` passes with the impl 00 settings exception and no new contract; `config_hash` equal on Windows and Linux CI |
 | Blocked by | none |
@@ -2674,7 +2684,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | `register`, `get`, `available`, `_BUILTINS`, `reset_registry` exist with entry-point loading. |
-| Depends on | X:00/herness.core.errors |
+| Depends on | T00-03 (herness.core.errors) |
 | Units | U10-23–U10-26 |
 | Files | `herness/core/registry.py` |
 | Tests | UT10-25–UT10-27, ST10-46 (registry part) |
@@ -2688,7 +2698,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | Hash-chained audit writing, locked append, chain verification, config-change recording and last-set lookup. |
-| Depends on | T10-03; X:00/herness.core.ids.new_ulid |
+| Depends on | T10-03; T00-05 (herness.core.ids.new_ulid) |
 | Units | U10-60–U10-64 |
 | Files | `herness/core/audit.py` |
 | Tests | UT10-21, UT10-57–UT10-59, PT10-08, FT10-01, ST10-17, ST10-18 |
@@ -2715,13 +2725,13 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 
 | Field | Content |
 |-------|---------|
-| Goal | `known_values` and `scrub_secrets` exist and X:00's logging pipeline can install the processor. |
-| Depends on | T10-06, T10-08; X:00/herness.core.logging |
+| Goal | `known_values` and `scrub_secrets` exist and T00-07 (herness.core.logging.configure_logging) can install the processor. |
+| Depends on | T10-06, T10-08; T00-07 (herness.core.logging) |
 | Units | U10-32 |
 | Files | `herness/core/secrets.py` |
 | Tests | UT10-34, UT10-35, ST10-15 |
 | Threats | TH10-07 |
-| Acceptance checks | tests pass; X:00's logging configuration test with the processor passes |
+| Acceptance checks | tests pass; the T00-07 (herness.core.logging.configure_logging) test with the processor passes |
 | Blocked by | none |
 | Size | S |
 
@@ -2777,7 +2787,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Files | `herness/core/redact.py`, `herness/core/redact_scan.py` |
 | Tests | UT10-43, UT10-44, UT10-47, FT10-07, ST10-30 |
 | Threats | TH10-06, TH10-14 |
-| Acceptance checks | tests pass; `python -m herness.core.redact --scan tests/fixtures` exits 0 on the X:11 fixtures |
+| Acceptance checks | tests pass; `python -m herness.core.redact --scan tests/fixtures` exits 0 on the impl 11 fixtures |
 | Blocked by | none (D10-15 resolved by R-56) |
 | Size | M |
 
@@ -2791,7 +2801,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Files | `herness/core/config_validate.py`, `herness/core/config.py` |
 | Tests | UT10-19, UT10-75, UT10-81, ST10-04, ST10-27 |
 | Threats | TH10-06, TH10-11, TH10-12, TH10-16, TH10-48, TH10-49 |
-| Acceptance checks | tests pass; offline validate of templates < 1 s; X:09's `cli.main` registers the owner validators before `init_config` and runs F10-01 step 3a |
+| Acceptance checks | tests pass; offline validate of templates < 1 s; T09-20 (herness.cli.main) registers the owner validators before `init_config` and runs F10-01 step 3a |
 | Blocked by | D10-05 (each owner registers its validator through U10-109) for the owner rows only |
 | Size | M |
 
@@ -2800,7 +2810,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | Repository `config/herness.yaml`, four profile overlays, `.env.example`, `.streamlit/config.toml`. |
-| Depends on | T10-12; X:05 profile role overlays; X:11 synth content |
+| Depends on | T10-12; T05-04 (herness.harness.llm.settings.ModelsConfig) role names for the profile overlays; T11-16 (synth profile agreement check) |
 | Units | U10-93, U10-94, U10-95 |
 | Files | `config/herness.yaml`, `config/profiles/*.yaml`, `.env.example`, `.streamlit/config.toml` |
 | Tests | UT10-76, IT10-01 |
@@ -2813,13 +2823,13 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 
 | Field | Content |
 |-------|---------|
-| Goal | `config validate|show|hash`, `secrets init|set|status` behavior for X:09. |
-| Depends on | T10-05, T10-06, T10-12; X:09/herness.cli command table |
+| Goal | `config validate|show|hash`, `secrets init|set|status` behavior for impl 09. |
+| Depends on | T10-05, T10-06, T10-12; T09-20 (herness.cli command table) |
 | Units | U10-65–U10-70 |
 | Files | `herness/admin/__init__.py`, `herness/admin/commands_config.py`, `herness/admin/commands_secrets.py` |
 | Tests | UT10-20, UT10-72, IT10-11, ST10-36 |
 | Threats | TH10-01, TH10-07 |
-| Acceptance checks | tests pass via X:09 CliRunner |
+| Acceptance checks | tests pass via impl 09 CliRunner |
 | Blocked by | none (D10-02 resolved by R-07) |
 | Size | M |
 
@@ -2828,7 +2838,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | Corpus recall/precision and throughput benchmarks run in CI and nightly. |
-| Depends on | T10-11; X:11 redaction corpus |
+| Depends on | T10-11; T11-15 (tools.synth.pii_corpus.write_pii_corpus) |
 | Units | U10-41, U10-42, U10-47 (tests only) |
 | Files | none (tests only) |
 | Tests | IT10-02, BT10-03, BT10-04, BT10-05 |
@@ -2847,7 +2857,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Files | `herness/core/egress.py`, `herness/core/egress_log.py` |
 | Tests | UT10-48–UT10-53, UT10-79, ST10-10–ST10-13, ST10-33, ST10-56, FT10-08, BT10-05 |
 | Threats | TH10-14, TH10-16, TH10-19, TH10-20, TH10-22, TH10-49 |
-| Acceptance checks | tests pass; X:09 chat mode selection calls `cloud_chat_allowed` |
+| Acceptance checks | tests pass; T08-19 (herness.core.jobs.chat_model_profile) calls `cloud_chat_allowed` |
 | Blocked by | none |
 | Size | M |
 
@@ -2861,7 +2871,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Files | `herness/core/egress.py`, `herness/core/egress_clients.py` |
 | Tests | UT10-54, UT10-55, UT10-74, ST10-07, ST10-09, ST10-25, ST10-32, ST10-35, ST10-39–ST10-41, ST10-54, IT10-03, IT10-04 |
 | Threats | TH10-15, TH10-17, TH10-18, TH10-21, TH10-23, TH10-47 |
-| Acceptance checks | tests pass; X:05's Anthropic adapter constructs with `http_client=get_guard().async_http_client(...)`; X:03, X:05 and X:08 local clients use `loopback_http_client(base_url, timeout_s=...)` or `aloopback_http_client` |
+| Acceptance checks | tests pass; T05-08 (herness.harness.llm.anthropic_client.AnthropicClient) constructs with `http_client=get_guard().async_http_client(...)`; impl 03, impl 05 and impl 08 local clients use `loopback_http_client(base_url, timeout_s=...)` or `aloopback_http_client` |
 | Blocked by | D10-04 (additive APIs other than `loopback_http_client`, which R-06 settles) |
 | Size | M |
 
@@ -2870,12 +2880,12 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | Audit-hook socket guard installed first in `cli.main`, with the allowlist of R-06. |
-| Depends on | T10-02, T10-16; X:01 `sources.<name>.hosts` field |
+| Depends on | T10-02, T10-16; T01-01 (herness.connectors.settings_base.SourceSettings) `hosts` field |
 | Units | U10-58 |
 | Files | `herness/core/egress_socket.py` |
 | Tests | UT10-56, PT10-07, ST10-08, ST10-29, ST10-55, IT10-15, BT10-06 |
 | Threats | TH10-15, TH10-16, TH10-24, TH10-48 |
-| Acceptance checks | tests pass; X:09's `cli.main` calls it before any other import that opens sockets |
+| Acceptance checks | tests pass; T09-20 (herness.cli.main) calls it before any other import that opens sockets |
 | Blocked by | none |
 | Size | S |
 
@@ -2884,7 +2894,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | `handle_maintenance`, `register_handlers`, `cmd_maintenance`, `cmd_privacy_delete` exist (dispatch only). |
-| Depends on | T10-14; X:08/herness.core.jobs.register_handler, X:08/herness.core.jobs.enqueue, X:08/herness.core.jobs.run_inline, X:08/herness.core.jobs.worker_alive |
+| Depends on | T10-14; T08-12 (herness.core.jobs.register_handler), T08-12 (herness.core.jobs.enqueue), T08-22 (herness.core.jobs.run_inline), T08-12 (herness.core.jobs.worker_alive) |
 | Units | U10-73, U10-74, U10-75, U10-104 |
 | Files | `herness/admin/commands_data.py`, `herness/admin/maintenance.py`, `herness/admin/__init__.py` |
 | Tests | ST10-31 |
@@ -2898,7 +2908,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | Nightly backup and retention purge jobs. |
-| Depends on | T10-19; X:09/herness.store.ops.chat.purge_chat; X:02/herness.store.lake_purge.purge_partitions_before; X:02 warehouse `CURRENT` reader |
+| Depends on | T10-19; T09-03 (herness.store.ops.chat.purge_chat); T02-03 (herness.store.lake_purge.purge_partitions_before); T02-09 (herness.store.warehouse.read_current) |
 | Units | U10-96, U10-97, U10-98 |
 | Files | `herness/admin/maintenance.py` |
 | Tests | UT10-67, UT10-68, IT10-08, IT10-09, FT10-04, BT10-08 |
@@ -2912,7 +2922,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | Sentinel secret-leak run and audit integration. |
-| Depends on | T10-07, T10-17; X:05 trace writer; X:11 fake LLM and fixture connector; X:02 review item approval |
+| Depends on | T10-07, T10-17; T05-11 (herness.harness.tracing.Tracer); T11-23 (tests.support.fake_llm.FakeLLMClient) and the impl 11 fixture connector; T02-07 (herness.store.ops.shared.decide_review_item) |
 | Units | U10-32, U10-60 (tests only) |
 | Files | none (tests only) |
 | Tests | IT10-05, IT10-10, ST10-14 |
@@ -2926,7 +2936,7 @@ Phase order: Phase 1 cards T10-01–T10-15, Phase 3 cards T10-16–T10-21 and T1
 | Field | Content |
 |-------|---------|
 | Goal | `herness.core.egress.source_http_client` exists for impl 01's `httpx`-based connectors (R-06). |
-| Depends on | T10-17, T10-18; X:01 `sources.<name>.hosts` field |
+| Depends on | T10-17, T10-18; T01-01 (herness.connectors.settings_base.SourceSettings) `hosts` field |
 | Units | U10-110 |
 | Files | `herness/core/egress_clients.py`, `herness/core/egress.py` (re-export only) |
 | Tests | UT10-82, ST10-58, ST10-59 |
@@ -2984,7 +2994,7 @@ T10-33 is a Phase 3 card placed here, after the Phase 3 cards it depends on (IDs
 | Field | Content |
 |-------|---------|
 | Goal | `class_up`, `class_down`, `rollback_class`, `prune` and their commands. |
-| Depends on | T10-23, T10-24; X:08/herness.core.jobs.worker_alive, X:08/herness.core.jobs.gpu_state, X:08 requested-class setter, X:08 `data/locks/gpu.lock` helper |
+| Depends on | T10-23, T10-24; T08-12 (herness.core.jobs.worker_alive), T08-18 (herness.core.jobs.gpu_state), T08-18 (herness.core.jobs.request_gpu_class), T08-17 (herness.core.jobs.gpu_lock.GpuLock) |
 | Units | U10-84, U10-85, U10-72 (up, down, rollback, prune, render) |
 | Files | `herness/admin/deploy.py`, `herness/admin/commands_deploy.py` |
 | Tests | UT10-64, UT10-65, ST10-45, ST10-52 |
@@ -2997,13 +3007,13 @@ T10-33 is a Phase 3 card placed here, after the Phase 3 cards it depends on (IDs
 
 | Field | Content |
 |-------|---------|
-| Goal | `ReleaseBundle`, `verify_bundle`, `install_bundle`, `cmd_deploy_install` (ENG E4). |
-| Depends on | T10-22; X:11 release CI producing the bundle |
-| Units | U10-86, U10-87, U10-88, U10-72 (install) |
-| Files | `herness/admin/attest.py`, `herness/admin/commands_deploy.py` |
-| Tests | UT10-66, IT10-14, ST10-22–ST10-24, ST10-48, ST10-53 |
-| Threats | TH10-36, TH10-37, TH10-40, TH10-44 |
-| Acceptance checks | tests pass; a real release bundle from CI verifies offline on the dev box |
+| Goal | `ReleaseBundle`, `verify_bundle`, `install_bundle`, the offline DuckDB `excel` extension install (impl 01 O-3), `cmd_deploy_install` (ENG E4). |
+| Depends on | T10-22; T00-15 (.github/workflows/release.yml) producing the bundle |
+| Units | U10-86, U10-87, U10-88, U10-112, U10-72 (install) |
+| Files | `herness/admin/attest.py`, `herness/admin/duckdb_ext.py`, `herness/admin/commands_deploy.py` |
+| Tests | UT10-66, UT10-85, IT10-14, ST10-22–ST10-24, ST10-48, ST10-53, ST10-60 |
+| Threats | TH10-36, TH10-37, TH10-40, TH10-44, TH10-52 |
+| Acceptance checks | tests pass; a real release bundle from CI verifies offline on the dev box, and afterwards `duckdb` in the venv loads `excel` with autoinstall off and the network disabled |
 | Blocked by | V-22 (`gh` flags) |
 | Size | M |
 
@@ -3017,7 +3027,7 @@ T10-33 is a Phase 3 card placed here, after the Phase 3 cards it depends on (IDs
 | Files | `herness/admin/doctor_host.py` |
 | Tests | UT10-71 (host rows), IT10-12, ST10-17 (doctor part), ST10-28, ST10-38, ST10-42, ST10-49 |
 | Threats | TH10-13, TH10-25, TH10-26, TH10-41, TH10-43 |
-| Acceptance checks | tests pass; X:09 `herness doctor` renders the rows |
+| Acceptance checks | tests pass; T09-22 (herness._cli.doctor.run_doctor) renders the rows |
 | Blocked by | none |
 | Size | M |
 
@@ -3039,11 +3049,11 @@ T10-33 is a Phase 3 card placed here, after the Phase 3 cards it depends on (IDs
 
 | Field | Content |
 |-------|---------|
-| Goal | `herness/store/ops/privacy.py` provides the `deletion_request` functions, the deletion-set read used by impl 01 and impl 02, and the evidence and finding scrubs (R-08). |
-| Depends on | X:02/herness.store.ops.core (`connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`); X:02 migration 005 (U02-53); X:00/herness.core.errors.NotFound (R-19) |
-| Units | U10-105, U10-106, U10-111 |
+| Goal | `herness/store/ops/privacy.py` provides the `deletion_request` functions and the deletion-set read used by impl 01 and impl 02 (R-08; the evidence and finding scrubs are `T05-12 (herness.store.ops.evidence.scrub_record_from_evidence)` and `T06-06 (herness.store.ops.findings.scrub_record_from_findings)`, R-09, R-77). |
+| Depends on | T02-04 (herness.store.ops.core) (`connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`); T02-06 (herness/store/migrations/005_review_chat_privacy.sql) (U02-53); T00-03 (herness.core.errors.NotFound) (R-19) |
+| Units | U10-105, U10-111; U10-106 removed (R-77) |
 | Files | `herness/store/ops/privacy.py`, `herness/store/ops/__init__.py` (the spec-10 `__all__` block only) |
-| Tests | UT10-77, UT10-78, UT10-83 |
+| Tests | UT10-77, UT10-83 |
 | Threats | TH10-42 |
 | Acceptance checks | tests pass; UT02-68 (no duplicate names across `__all__` blocks) passes, with `deleted_record_ids` exported only from the spec-10 block; `lint-imports` shows `herness.store.ops.privacy` imports nothing above L1 |
 | Blocked by | none |
@@ -3054,12 +3064,12 @@ T10-33 is a Phase 3 card placed here, after the Phase 3 cards it depends on (IDs
 | Field | Content |
 |-------|---------|
 | Goal | Privacy deletion with the seven design steps plus the memory purge step 3b (R-54). |
-| Depends on | T10-19, T10-32; X:02/herness.store.lake_purge.purge_record_ids; X:02/herness.model.promote.cleanup_builds; X:03/herness.enrich.purge_record; X:07/herness.harness.memory.MemoryStore.purge; X:01 deletion-set reload |
+| Depends on | T10-19, T10-32; T02-03 (herness.store.lake_purge.purge_record_ids); T02-21 (herness.model.promote.cleanup_builds); T03-34 (herness.enrich.purge_record); T05-12 (herness.store.ops.evidence.scrub_record_from_evidence); T06-06 (herness.store.ops.findings.scrub_record_from_findings); T07-26 (herness.harness.memory.MemoryStore.purge); T01-05 (herness.connectors.deletion.DeletionFilter) (deletion-set reload) |
 | Units | U10-99, U10-104 (memory binding), U10-75 (memory binding); U10-100 removed |
 | Files | `herness/admin/privacy.py`, `herness/admin/maintenance.py`, `herness/admin/__init__.py` |
 | Tests | UT10-69, IT10-06, FT10-03, ST10-50, ST10-57 |
 | Threats | TH10-42, TH10-50 |
-| Acceptance checks | tests pass; `herness.cli` binds `memory_purge` to the X:07 `MemoryStore.purge` when it registers the handler |
+| Acceptance checks | tests pass; `herness.cli` binds `memory_purge` to `T07-26 (herness.harness.memory.MemoryStore.purge)` when it registers the handler |
 | Blocked by | none |
 | Size | M |
 
@@ -3068,7 +3078,7 @@ T10-33 is a Phase 3 card placed here, after the Phase 3 cards it depends on (IDs
 | Field | Content |
 |-------|---------|
 | Goal | `secrets rekey` staging and the rekey job. |
-| Depends on | T10-10, T10-19; X:08/herness.core.jobs.schedule_rekey; X:03 classifier-text composer; X:02 warehouse reader |
+| Depends on | T10-10, T10-19; T08-14 (herness.core.jobs.schedule_rekey); T03-05 (herness.enrich.text.compose_text); T02-09 (herness.store.warehouse.open_readonly) |
 | Units | U10-71, U10-101, U10-102, U10-103 |
 | Files | `herness/admin/rekey.py`, `herness/admin/commands_secrets.py` |
 | Tests | UT10-70, UT10-73, IT10-07, FT10-02 |
@@ -3095,7 +3105,7 @@ T10-33 is a Phase 3 card placed here, after the Phase 3 cards it depends on (IDs
 
 ### 13.1 Design deltas
 
-Status values follow the consistency pass. The binding rulings are in [`DECISIONS.md`](DECISIONS.md) (R-01–R-66); where a ruling changes a design spec, that change is pending in `DECISIONS.md` §9 and this spec already implements the ruling.
+Status values follow the consistency pass. The binding rulings are in [`DECISIONS.md`](DECISIONS.md) (R-01–R-77); where a ruling changes a design spec, that change is pending in `DECISIONS.md` §9 and this spec already implements the ruling.
 
 | ID | Spec | Change | Reason | Status |
 |----|------|--------|--------|--------|
@@ -3106,14 +3116,14 @@ Status values follow the consistency pass. The binding rulings are in [`DECISION
 | D10-05 | 01, 03, 04, 08 | Each owner exposes a validator returning config issues, registered by the composition root through U10-109 and run after `load_config` (the `SECTION_VALIDATORS` import table is removed) | Design 10 §5.1 delegates these checks without an interface; validators such as impl 04's catalog check need layers above L0 | Still open (hook defined by U10-109 following R-04; owners must register) |
 | D10-06 | 00 §7 | `EgressBlocked` gains optional `egress_id` and `reason` attributes; `ConfigError` gains optional `issues` | Fallback traces and `validate` need them without string parsing | Resolved by R-19 (declared here as U10-108) |
 | D10-07 | 10 §4.6 | Extend `admin_action.action` with `deploy_down`, `deploy_pull`, `deploy_prune`, `deploy_install`, `deploy_render`, `redact_rekey` (already in §5.3); add optional `counts` and `detail` fields | Every admin action must be audited | Still open |
-| D10-08 | 10 §6 | Replace "`StoreBusy` retried 3×, then `FatalError`" for audit with "lock wait up to 10 s, then `FatalError`" | Audit is a Phase 1 JSONL file, not SQLite; the X:08 retry layer is Phase 3 and ENG §3.4 forbids local retries | Still open |
+| D10-08 | 10 §6 | Replace "`StoreBusy` retried 3×, then `FatalError`" for audit with "lock wait up to 10 s, then `FatalError`" | Audit is a Phase 1 JSONL file, not SQLite; the impl 08 retry layer is Phase 3 and ENG §3.4 forbids local retries | Still open |
 | D10-09 | 08 §7 | `resilience.gpu.compose_cmd` uses `wsl.exe -d herness --exec docker compose ...` instead of `--` | `--` passes arguments through the Linux shell (injection surface) | Still open |
 | D10-10 | 10 §5.6.2 | Add `security_opt: [no-new-privileges:true]`, `cap_drop: [ALL]`, read-only model volumes; verify at Phase 4 | Container hardening (ASVS V13.2); residual R-2 | Still open |
 | D10-11 | 05 §7 vs 10 §7.4 | Reconcile `models.clients.local-30b.context_window` (65536) with `deploy.reasoning.max_model_len` (32768, "≥ context_window") | Contradiction | Resolved by R-51, R-52: `context_window = 32768` ≤ `max_model_len`; C10 is an `error` check; Phase 4 verification on the real card |
-| D10-12 | 02 | `herness.store.ops` adds `create_deletion_request`, `get_deletion_request`, `set_deletion_status`, `record_deletion_step`, `scrub_record_from_evidence`, `scrub_record_from_findings`, and index `deletion_request(record_id, status)` | ENG §2.1: only `herness.store.ops` writes the ops store | Resolved by R-08, R-09: area `herness/store/ops/privacy.py` is owned here (U10-105, U10-106); the impl 02 indexes on `status` and `record_id` suffice, so no migration in 080–089 (R-11) |
+| D10-12 | 02 | `herness.store.ops` adds `create_deletion_request`, `get_deletion_request`, `set_deletion_status`, `record_deletion_step`, `scrub_record_from_evidence`, `scrub_record_from_findings`, and index `deletion_request(record_id, status)` | ENG §2.1: only `herness.store.ops` writes the ops store | Resolved by R-08, R-09: area `herness/store/ops/privacy.py` is owned here (U10-105, U10-111); `scrub_record_from_evidence` is U05-75 (T05-12) and `scrub_record_from_findings` is U06-144 (T06-06, R-77), both called by U10-99; the impl 02 indexes on `status` and `record_id` suffice, so no migration in 080–089 (R-11) |
 | D10-13 | 02 §3.1 | State that privacy deletion rewrites lake files (exception to "the lake is append-only") | Design 10 §5.5 step 2 | Resolved by R-57 (privacy deletion, retention purge and compaction are the exceptions; the rewrite is impl 02's `purge_record_ids`) |
 | D10-14 | 08 §7 | Health `bearer_secret: openjev.api_key` must be `OPENJEV_API_KEY` (design 10 §3.3 name) | Name mismatch; C06 would fail | Resolved by R-53 (`secret:OPENJEV_API_KEY`) |
-| D10-15 | 11 §5.1.4 | Synthetic phones in a form of ≥ 9 digits; synthetic credential and URL-token values start with `synthetic`/`test`/`fake`/`dummy` | `+1-555-01xx` has 8 digits, below the 9-digit phone rule; the fixture scanner allow rules need a marker | Resolved by R-56 (`+1-202-555-01xx`; thresholds and corpus size owned here); the credential-marker rule: Still open with impl 11 |
+| D10-15 | 11 §5.1.4 | Synthetic phones in a form of ≥ 9 digits; synthetic credential and URL-token values start with `synthetic` | `+1-555-01xx` has 8 digits, below the 9-digit phone rule; the fixture scanner allow rules need a marker | Resolved by R-56 (`+1-202-555-01xx`; thresholds and corpus size owned here) and R-67 (credential and token marker `synthetic`, applied by U10-49 step 5) |
 | D10-16 | 05 §7 vs 10 §5.6.2 | `local-large-offload.base_url` port 8080 must be 8200 (host port of `llamacpp-large`) | C09 fails on the defaults | Resolved by R-51 |
 | D10-17 | 09 §5.6 command table | Add `secrets rekey`, `deploy up`/`down`/`rollback large`, `config hash --profile`, `deploy install` | Rows missing from 09 | Resolved by R-47 |
 | D10-18 | 09 §9.1 vs 10 §5.1 | Settle whether a non-loopback `security.ui.bind` is ever allowed | Contradiction | Resolved by R-50: the app always binds to loopback; C05 and the request-time peer check are both stated (U10-05) |
@@ -3122,7 +3132,11 @@ Status values follow the consistency pass. The binding rulings are in [`DECISION
 | D10-21 | ENG §2.1, 01 | R-06 lets only `herness.core.egress` build `httpx` clients, but impl 01's `herness.connectors.http.http_client` (U01-58) built the host-guarded client for `httpx`-based sources | Gap in R-06 found in this pass | Resolved by R-06 through the factory `source_http_client` (U10-110, T10-33), requested by impl 01 (T01-14); ST10-25 keeps no connector allowance. Design 10 §3.5 gains the factory in the pending design edit |
 | D10-24 | 01 | `herness.store.ops.deleted_record_ids` reads `deletion_request`, which is in area `privacy`; it moves from impl 01 (U01-29) to this spec (U10-111) | R-08, R-09 | Accepted (R-08, R-09); impl 01 references U10-111 |
 | D10-22 | 07 | R-54 names `MemoryStore.purge(record_id)`; the earlier impl 07 draft had `MemoryLifecycle.purge(*, author_ref=None, record_id=None, now=None)`. This spec calls the purge with the keyword `record_id=` through the `memory_purge` binding (U10-75), which is valid for the R-54 form and the keyword form | Name difference between the ruling and the earlier impl 07 draft | Accepted (R-54); impl 07 publishes the public name |
-| D10-23 | 10 §5.1 | Exit codes follow R-46: `config validate` returns 3 on errors, and on warnings with `--strict`; `doctor` returns 3 on any FAIL; codes 9, 11 and 13 used by the previous draft are replaced by 1 | R-46 | Accepted (R-46) |
+| D10-23 | 10 §5.1 | Exit codes follow R-46 (corrected: design 09 §5.8 plus 14): `config validate` returns 1 on errors, and on warnings with `--strict`; `doctor` returns 1 on any FAIL; a `ConfigError` at load returns 3; `ModelUnavailable` 9, `PermissionDenied` 11 and `EgressBlocked` 13 (restored) | R-46 | Accepted (R-46, corrected) |
+| D10-25 | 10 §3.1, §4.2; 01; 02; 03; 05 | `sources.yaml` and `models.yaml` hold sibling top-level sections owned by different specs; the root config composes them (`SourcesFileConfig`, `ModelsFileConfig` in U10-08) | Settings modules may not import each other (R-03) | Accepted (R-69, R-76); impl 03 models the top-level `deciders` section of `models.yaml` as U03-150 (T03-02), read as `cfg.models.deciders` |
+| D10-26 | 10 §3.3 | Secret references in settings are `secret:<name>` strings only; the bare-name form for `*_secret` fields is withdrawn (U10-27, C16) | R-72 | Accepted (R-72); impl 03 U03-150 already uses `secret:` references |
+| D10-27 | 02 §2.3; 06 | `scrub_record_from_findings` rewrites `finding.numbers`, a table owned by impl 06 | R-08, R-09 | Resolved by R-77: impl 06 owns it as U06-144 (T06-06); U10-106 removed; U10-99 step 4 calls it |
+| D10-28 | 10 §3.7, §7.4; 00 (release workflow); 01 O-3 | `deploy install` also installs the DuckDB `excel` extension offline from the release bundle (U10-112, T10-26); new key `deploy.release.duckdb_extensions`; release CI (T00-15) adds `duckdb/excel.duckdb_extension` for the pinned DuckDB version with a provenance attestation | Impl 01's files connector reads `.xlsx` with autoinstall off (its O-3) | Resolved: impl 00 T00-15 (U00-60) adds the extension file, its `SHA256SUMS` and its provenance attestation to the release; design 10 §7.4 gains the key in the pending design edit |
 
 ENG exceptions this spec needs (listed per ENG §2.4 and §3):
 
@@ -3138,7 +3152,7 @@ ENG exceptions this spec needs (listed per ENG §2.4 and §3):
 | ID | Question | Default | Blocks |
 |----|----------|---------|--------|
 | O-1 | D5 hybrid/premium allowed | Not allowed; gates fail | nothing (tests use fixture approvals) |
-| O-2 | D7 OpenJev on non-Blackwell GPU | Verify at Phase 4; fallback teacher (X:03) | T10-31 |
+| O-2 | D7 OpenJev on non-Blackwell GPU | Verify at Phase 4; fallback teacher (impl 03) | T10-31 |
 | O-3 | Hosted Jev URL, auth, retention (D24) | `api.typesafe.ai` in `premium.yaml`; premium not configured | nothing |
 | O-4 | `wsl.exe` in service sessions; Hyper-V firewall cmdlets | Verify at Phase 4 (V-19, V-20); fallback auto-logon | T10-28, T10-31 |
 | O-5 | Name directory source (D10) | HR export CSV | nothing |
@@ -3187,14 +3201,14 @@ No new Python dependency is added beyond 00 §9 except `psutil` (already listed 
 
 | Spec | Units used from it |
 |------|--------------------|
-| 00 | `X:00/herness.core.errors` (taxonomy with `hint`, `details`, `NotFound`; R-19), `X:00/herness.core.ids.new_ulid`, `X:00/herness.core.ids.canonical_json` and `sha256_hex` (R-14), `X:00/herness.core.time` (UTC now), `X:00/herness.core.logging` (pipeline hosting `scrub_secrets`), the import-linter settings exception (R-03) |
-| 01 | `X:01/herness.connectors.settings` (source models with local secret-reference patterns, R-03, and the `hosts` list per source, R-06), X:01 source validator (registered through U10-109), X:01 deletion-set reload; impl 01 is the consumer of `source_http_client` (U10-110) and `deleted_record_ids` (U10-111) |
-| 02 | `X:02/herness.store.ops.core` (`connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`; R-10), migration 005 (`deletion_request`), `X:02/herness.store.lake_purge.purge_record_ids` and `purge_partitions_before` (R-57), `X:02/herness.model.promote.cleanup_builds`, X:02 `CURRENT` warehouse reader, `X:02/sources.build.threads` key |
-| 03 | `X:03/herness.enrich.purge_record`, X:03 classifier-text composer, X:03 question-set validator, caller of `update_display_names` and `redact_table` |
-| 04 | X:04 metric catalog validator |
-| 05 | `X:05/herness.harness.llm.settings.ModelsConfig`, Anthropic adapter using `async_http_client`, trace writer applying `scrub_secrets`, profile role overlays |
+| 00 | `T00-03 (herness.core.errors)` (taxonomy with `hint`, `details`, `NotFound`; R-19), `T00-05 (herness.core.ids.new_ulid)`, `T00-05 (herness.core.ids.canonical_json)` and `sha256_hex` (R-14), `T00-04 (herness.core.time)` (UTC now), `T00-07 (herness.core.logging)` (pipeline hosting `scrub_secrets`), the import-linter settings exception (R-03) |
+| 01 | `T01-02 (herness.connectors.settings.SourcesConfig)` (the connector sections of `sources.yaml`, composed by U10-08, R-69; source models with local secret-reference patterns, R-03, and the `hosts` list per source, R-06), `T01-05 (herness.connectors.deletion.DeletionFilter)` (deletion-set reload; source schedules are validated by impl 08's owner validator); impl 01 is the consumer of `source_http_client` (U10-110) and `deleted_record_ids` (U10-111) |
+| 02 | `T02-04 (herness.store.ops.core)` (`connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`; R-10), `T02-06 (herness/store/migrations/005_review_chat_privacy.sql)` (`deletion_request`), `T02-03 (herness.store.lake_purge.purge_record_ids)` and `purge_partitions_before` (R-57), `T02-21 (herness.model.promote.cleanup_builds)`, `T02-09 (herness.store.warehouse.read_current)` (`CURRENT` reader), `T02-01 (herness.model.settings.DqSettings)` and `T02-01 (herness.model.settings.BuildSettings)` (the `sources.yaml` sections `dq` and `build`, including the `sources.build.threads` key, composed by U10-08, R-69), `T02-01 (herness.model.settings.MappingsConfig)` |
+| 03 | `T03-34 (herness.enrich.purge_record)`, `T03-02 (herness.enrich.settings.DecidersSettings)` (U03-150; the top-level `models.yaml` section `deciders`, key path `models.deciders`, composed by U10-08, R-76), `T03-05 (herness.enrich.text.compose_text)`, `T03-02 (herness.enrich.settings.check_decider_refs)` (owner validator, R-71), caller of `update_display_names` and `redact_table` |
+| 04 | `T04-03 (herness.metrics.catalog.metrics_owner_validator)` (owner validator, R-71) |
+| 05 | `T05-04 (herness.harness.llm.settings.ModelsConfig)` (the `models.yaml` sections `models`, holding `roles`, and `harness`, R-76), `T05-12 (herness.store.ops.evidence.scrub_record_from_evidence)` (privacy deletion step 4, R-09), Anthropic adapter using `async_http_client`, trace writer applying `scrub_secrets`, profile role overlays |
 | 06 | Swarm caps in `premium.yaml`; `Blackboard.post` uses `Redactor.scan` |
-| 07 | `X:07` `MemoryConfig.injection_patterns` field; redaction before writes; `X:07/herness.harness.memory.MemoryStore.purge` (deletion step 3b, R-54) |
-| 08 | `X:08/herness.core.jobs.enqueue`, `register_handler`, `run_inline` (R-45), `worker_alive` (R-44), `gpu_state`, `schedule_rekey`, requested-class setter, `data/locks/gpu.lock` helper, `JobContext`, `JobOutcome`, metric sink (ENG E5), X:08 schedule validator, `HERNESS_WORKER` marker |
-| 09 | `X:09/herness.cli` command table (R-47) and `CommandResult`, role check, `doctor` command, exit-code mapping (R-46), `X:09/herness.store.ops.chat.purge_chat`, identity-header trust at request time (R-50), chat mode selection calling `cloud_chat_allowed` (R-38), composition-root registration of owner validators and of the `maintenance` handler |
+| 07 | `T07-02 (herness.harness.memory.settings.MemoryConfig)` (`injection_patterns` field); redaction before writes; `T07-26 (herness.harness.memory.MemoryStore.purge)` (deletion step 3b, R-54) |
+| 08 | `T08-12 (herness.core.jobs.enqueue)`, `register_handler`, `run_inline` (R-45), `worker_alive` (R-44), `gpu_state`, `schedule_rekey`, requested-class setter, `data/locks/gpu.lock` helper, `JobContext`, `JobOutcome`, metric sink (ENG E5), `T08-02 (herness.core.jobs.validate.validate_resilience_config)` (owner validator, R-71), `T08-09 (herness.core.resilience.ModelChain)` (fallback chain), `T08-19 (herness.core.jobs.chat_model_profile)` and `chat_policy` (chat mode selection calling `cloud_chat_allowed`, R-38, C08-06), `HERNESS_WORKER` marker |
+| 09 | `T09-20 (herness.cli command table)` (R-47) and `CommandResult`, role check, `doctor` command, exit-code mapping (R-46), `T09-03 (herness.store.ops.chat.purge_chat)`, `T09-13 (app.common.auth.resolve_identity)` (identity-header trust at request time, R-50), composition-root registration of owner validators and of the `maintenance` handler |
 | 11 | Redaction corpus (size and thresholds owned here, R-56), fixture scanner hook, `FakeLLMClient` (R-65), fixture connector, `synth` profile content, release CI bundle |
