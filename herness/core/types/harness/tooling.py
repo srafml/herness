@@ -15,8 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from herness.core.errors import ConfigError, HernessError
 from herness.core.types.harness.evidence import Evidence, _UtcDatetime
 
-# Max model-facing tool content (§3.9 TOOL_CONTENT_MAX_CHARS). Private because the type
-# ownership check (OWN011) admits only registered public names in this package.
+# Max model-facing tool content (§3.9). Private because the type ownership check (OWN011)
+# admits only registered public names here; the public TOOL_CONTENT_MAX_CHARS lives in
+# herness.harness.tools (U05-36).
 _TOOL_CONTENT_MAX_CHARS = 12_000
 _ERROR_MESSAGE_MAX_CHARS = 2_000
 _ERROR_HINT_MAX_CHARS = 500
@@ -89,7 +90,7 @@ class SqlLimits(_Frozen):
 
     return_rows: int = Field(default=200, ge=1, strict=True)
     scan_rows: int = Field(default=1_000_000, ge=1, strict=True)
-    timeout_s: float = Field(gt=0)
+    timeout_s: float = Field(gt=0, strict=True, allow_inf_nan=False)
     max_attempts_per_query: int = Field(default=3, ge=1, strict=True)
 
 
@@ -189,7 +190,7 @@ class VectorHit(_Frozen):
     entity: str
     service_id: str | None
     opened_at: _UtcDatetime | None
-    similarity: float
+    similarity: float = Field(allow_inf_nan=False)
 
 
 @runtime_checkable

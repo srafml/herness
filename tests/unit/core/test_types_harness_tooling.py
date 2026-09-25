@@ -1,5 +1,6 @@
 """Tests for herness.core.types.harness.tooling (U05-05, U05-06, U05-09)."""
 
+import inspect
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -9,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 from tests.support.harness_fakes import FakeLedger, FakeOps, FakeVectors, RecordingTracer
 
-from herness.core.errors import ConfigError, QueryError, RecoverableError
+from herness.core.errors import BudgetExceeded, ConfigError, QueryError, RecoverableError
 from herness.core.types import (
     AsyncTool,
     BudgetLedger,
@@ -153,8 +154,9 @@ def test_ut05_05_no_from_task_budget_and_sql_limits() -> None:
         1_000_000,
         3,
     )
-    with pytest.raises(ValidationError):
-        SqlLimits(timeout_s=0)
+    for timeout in (0, True, float("inf"), float("nan")):
+        with pytest.raises(ValidationError):
+            SqlLimits(timeout_s=timeout)
     with pytest.raises(ValidationError):
         _budgets().max_steps = 5  # type: ignore[misc]
 
@@ -226,6 +228,8 @@ def test_ut05_69_tool_context_build_mismatch_and_handles() -> None:
         _context(text_access="full")
     assert isinstance(ctx.task_tools["echo"], Tool)
     assert isinstance(ctx.task_tools["later"], AsyncTool)
+    assert not inspect.iscoroutinefunction(type(ctx.task_tools["echo"]).__call__)
+    assert inspect.iscoroutinefunction(type(ctx.task_tools["later"]).__call__)
     assert ctx.task_tools["echo"](ctx).content == "task_1"
     assert isinstance(ctx.warehouse, WarehouseHandle)
     assert isinstance(ctx.ops, OpsHandle)
@@ -239,7 +243,7 @@ def test_ut05_69_fakes_behave_like_handles() -> None:
     ledger = FakeLedger(max_cost_usd=Decimal("1.00"))
     ledger.charge(10, 5, Decimal("0.40"))
     assert ledger.snapshot() == {"tokens_in": 10, "tokens_out": 5, "cost_usd": "0.40"}
-    with pytest.raises(Exception, match="budget"):
+    with pytest.raises(BudgetExceeded, match="budget"):
         ledger.charge(1, 1, Decimal("0.70"))
     tracer = RecordingTracer("run_1", None)
     assert tracer.emit("tool_call", name="echo") == "sp_000001"
@@ -248,6 +252,10 @@ def test_ut05_69_fakes_behave_like_handles() -> None:
     hit = VectorHit(
         record_id="jira:issue:1", entity="issue", service_id=None, opened_at=None, similarity=0.9
     )
+    naive = datetime(2026, 9, 25)  # noqa: DTZ001 - naive on purpose
+    for bad in ({"opened_at": naive}, {"similarity": float("nan")}):
+        with pytest.raises(ValidationError):
+            VectorHit.model_validate({**hit.model_dump(), **bad})
     vectors = FakeVectors([hit])
     assert vectors.search_tickets([0.1, 0.2], 5, entity="issue", service_id=None) == [hit]
     assert vectors.calls == [([0.1, 0.2], 5, "issue", None)]

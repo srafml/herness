@@ -46,6 +46,11 @@ def test_ut05_06_valid_refs_pass() -> None:
     assert _ref(unit="usd", value="-3").value == "-3"
     assert _ref(unit="pct", value=12.5, row_key={"team": "a", "open": True}).value == 12.5
     assert type(_ref(value=7).value) is int
+    huge = _ref(value=10**400)
+    assert huge.value == 10**400
+    assert NumberRef.model_validate_json(huge.model_dump_json()) == huge
+    item = VerifiableItem(where="w", text="[[n1]]", numbers=[{**huge.model_dump()}])
+    assert item.numbers[0].value == 10**400
     with pytest.raises(ValidationError):
         _ref().value = 1  # type: ignore[misc]
 
@@ -195,6 +200,13 @@ def test_ut05_07_consistent_results_pass() -> None:
         duration_ms=5,
     )
     assert VerificationResult.model_validate_json(result.model_dump_json()) == result
+    with pytest.raises(ValidationError):
+        NumberCheck.model_validate({**_check().model_dump(), "claimed": True})
+    with pytest.raises(ValidationError):
+        NumberCheck.model_validate({**_check("mismatch").model_dump(), "actual": False})
+    for start, end in ((5, 2), (True, 3), (0, 1.0)):
+        with pytest.raises(ValidationError):
+            UncitedSpan(text="42", start=start, end=end)  # type: ignore[arg-type]
     empty = VerificationResult(
         build_id=BUILD,
         passed=True,

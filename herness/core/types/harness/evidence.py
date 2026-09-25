@@ -12,10 +12,10 @@ from typing import Annotated, Literal, Self
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     JsonValue,
-    field_validator,
     model_validator,
 )
 
@@ -33,10 +33,17 @@ def _utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _no_bool(value: object) -> object:
+    if isinstance(value, bool):
+        msg = "a cited value cannot be a boolean"
+        raise ValueError(msg)  # noqa: TRY004 - pydantic needs ValueError
+    return value
+
+
 type _UtcDatetime = Annotated[datetime, AfterValidator(_utc)]
 type _Scalar = str | int | Annotated[float, Field(allow_inf_nan=False)] | bool | None
 type _RowKey = Annotated[dict[str, _Scalar], Field(max_length=16)]
-type _Claimed = float | int | str
+type _Claimed = Annotated[float | int | str, BeforeValidator(_no_bool)]
 
 
 class _Frozen(BaseModel):
@@ -59,21 +66,15 @@ class NumberRef(_Frozen):
         Literal["usd", "usd_compact", "int", "pct1", "ratio2", "hours1", "minutes0", "prob2"] | None
     ) = None
 
-    @field_validator("value", mode="before")
-    @classmethod
-    def _no_bool(cls, value: object) -> object:
-        if isinstance(value, bool):
-            msg = "a cited value cannot be a boolean"
-            raise ValueError(msg)  # noqa: TRY004 - pydantic needs ValueError
-        return value
-
     @model_validator(mode="after")
     def _value_matches_unit(self) -> Self:
         if self.unit == "usd":
             if not isinstance(self.value, str) or _USD_RE.fullmatch(self.value) is None:
                 msg = "a usd value must be a decimal string"
                 raise ValueError(msg)
-        elif isinstance(self.value, str) or not math.isfinite(self.value):
+        elif isinstance(self.value, str) or (
+            isinstance(self.value, float) and not math.isfinite(self.value)
+        ):
             msg = f"a {self.unit} value must be a finite number"
             raise ValueError(msg)
         return self
@@ -125,8 +126,15 @@ class UncitedSpan(_Frozen):
     """A numeral in prose that no marker cites."""
 
     text: str
-    start: int = Field(ge=0)
-    end: int = Field(ge=0)
+    start: int = Field(ge=0, strict=True)
+    end: int = Field(ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.end < self.start:
+            msg = "uncited span end is before its start"
+            raise ValueError(msg)
+        return self
 
 
 class ItemResult(_Frozen):
