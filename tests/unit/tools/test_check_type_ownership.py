@@ -140,6 +140,28 @@ def test_ut00_73_settings_imports(tmp_path: Path, capsys: pytest.CaptureFixture[
         assert any(line.endswith(name) for line in lines)
 
 
+def test_ut00_73_private_sibling_settings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """UT00-73 `_*_settings.py` modules are scanned; a settings module may import its sibling."""
+    root = _tree(tmp_path)
+    _write(root, "herness/connectors/__init__.py", "")
+    _write(root, "herness/metrics/__init__.py", "")
+    body = (
+        "from herness.connectors._http_settings import X\n"
+        "from herness.metrics._other_settings import Y\n"
+        "import herness.connectors.client\n"
+    )
+    _write(root, "herness/connectors/settings.py", body)
+    _write(root, "herness/connectors/_http_settings.py", "import pydantic\nimport httpx\n")
+    _, out = _run(root, capsys)
+    lines = sorted(line for line in out.splitlines() if "OWN050" in line)
+    assert len(lines) == 3
+    assert any("_http_settings.py" in line and line.endswith("httpx") for line in lines)
+    assert any(line.endswith("herness.metrics._other_settings") for line in lines)
+    assert any(line.endswith("herness.connectors.client") for line in lines)
+
+
 def test_ut00_81_declared_module_or_package(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

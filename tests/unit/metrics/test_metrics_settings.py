@@ -331,8 +331,8 @@ def test_ut04_19_metrics_sections_invalid_values_give_paths(
 # --- U04-20: WEIGHT_USES and unconfirmed_blocks --------------------------------------------
 
 
-def test_ut04_20_weight_uses_table() -> None:
-    """UT04-20 WEIGHT_USES entries follow U04-20 (unions keep first-seen order)."""
+def test_ut04_99_weight_uses_table() -> None:
+    """UT04-99 (U04-20 part) WEIGHT_USES entries per consumer; unions keep first-seen order."""
     incident = (
         "cost_per_downtime_hour", "priority_impact_multiplier", "impact_fallback",
         "toil", "cost_per_engineer_hour",
@@ -359,8 +359,8 @@ def test_ut04_20_weight_uses_table() -> None:
         WEIGHT_USES["x"] = ()  # type: ignore[index]
 
 
-def test_ut04_20_unconfirmed_blocks() -> None:
-    """UT04-20 unconfirmed_blocks returns the named unconfirmed blocks, sorted and unique."""
+def test_ut04_68_unconfirmed_blocks() -> None:
+    """UT04-68 (U04-20 part) unconfirmed_blocks returns named unconfirmed blocks, sorted, unique."""
     weights = _weights(toil=False)
     names = ["toil", "cost_per_engineer_hour", "change", "cost_per_engineer_hour"]
     assert unconfirmed_blocks(weights, names) == ["change", "cost_per_engineer_hour"]
@@ -425,29 +425,52 @@ def test_ut04_119_weight_issue_constraints(severity: Any, path: str, message: st
         WeightIssue(severity=severity, path=path, message=message)
 
 
-_ALLOWED_THIRD_PARTY = {"pydantic", "pydantic_core", "typing_extensions", "annotated_types"}
+_SIBLING = "herness.metrics._weights_settings"
+_ALLOWED_HERNESS = {"herness.core.types", "herness.core.errors", _SIBLING}
 
 
-def test_ut04_119_settings_imports_are_restricted() -> None:
-    """UT04-119 settings.py imports only stdlib, pydantic, core.types and core.errors (R-03)."""
-    tree = ast.parse((ROOT / "herness" / "metrics" / "settings.py").read_text(encoding="utf-8"))
+def _imported_modules(path: Path) -> list[str]:
     modules: list[str] = []
-    for node in ast.walk(tree):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             modules += [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
             assert node.level == 0
             assert node.module is not None
             modules.append(node.module)
+    return modules
+
+
+@pytest.mark.parametrize("name", ["settings.py", "_weights_settings.py"])
+def test_ut04_119_settings_imports_are_restricted(name: str) -> None:
+    """UT04-119 settings modules import only stdlib, pydantic, core.types, core.errors (R-03).
+
+    settings.py may also import its private sibling _weights_settings, which obeys the same rule.
+    """
+    modules = _imported_modules(ROOT / "herness" / "metrics" / name)
     assert modules
     for module in modules:
         top = module.split(".")[0]
-        ok = (
-            top in sys.stdlib_module_names
-            or top in _ALLOWED_THIRD_PARTY
-            or module in {"herness.core.types", "herness.core.errors"}
-        )
+        ok = top in sys.stdlib_module_names or top == "pydantic" or module in _ALLOWED_HERNESS
         assert ok, module
+    assert (_SIBLING in modules) == (name == "settings.py")
+
+
+def test_ut04_19_loaded_config_is_read_only() -> None:
+    """UT04-19 frozen models expose read-only containers, so values cannot change after load."""
+    weights = _weights()
+    with pytest.raises(TypeError):
+        weights.toil.effort_factor[1] = 99.0  # type: ignore[index]
+    with pytest.raises(TypeError):
+        weights.strategic_weights.org["x"] = 1.0  # type: ignore[index]
+    assert isinstance(weights.portfolio.mandatory, tuple)
+    assert isinstance(weights.portfolio.scenarios, tuple)
+    defaults = MetricsDefaults()
+    with pytest.raises(TypeError):
+        defaults.windows["week"] = 1  # type: ignore[index]
+    assert isinstance(defaults.noise_severities, tuple)
+    metric = MetricDef.model_validate(_metric_raw())
+    assert isinstance(metric.grains, tuple)
 
 
 def test_st04_05_flip_without_or_with_wrong_approval_refused() -> None:

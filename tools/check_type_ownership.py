@@ -279,12 +279,24 @@ def _check_outside(src: Source, tables: Tables, report: Report) -> None:
             report.add(src.rel, line, "OWN041", f"import via submodule {module}")
 
 
+def _is_settings_file(path: Path) -> bool:
+    return path.name == "settings.py" or path.name.endswith("_settings.py")
+
+
+def _private_sibling_settings(src: Source, module: str) -> bool:
+    """A settings module may import a private `_*_settings` module of its own package."""
+    parent, _, leaf = module.rpartition(".")
+    package = src.module if src.is_package else src.module.rpartition(".")[0]
+    return parent == package and leaf.startswith("_") and leaf.endswith("_settings")
+
+
 def _check_settings(src: Source, tables: Tables, report: Report) -> None:
     for line, module in _imports(src, frozenset(tables.owner_modules.values())):
         ok = (
             _is_stdlib(module)
             or module.split(".", 1)[0] in _TYPE_THIRD_PARTY
             or module in _SETTINGS_HERNESS
+            or _private_sibling_settings(src, module)
         )
         if not ok:
             report.add(src.rel, line, "OWN050", f"forbidden import in settings module {module}")
@@ -308,7 +320,7 @@ def check(root: Path, tables: Tables) -> Report:
             if src is None:
                 continue
             _check_outside(src, tables, report)
-            if top == "herness" and path.name == "settings.py":
+            if top == "herness" and _is_settings_file(path):
                 _check_settings(src, tables, report)
     return report
 

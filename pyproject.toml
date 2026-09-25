@@ -269,7 +269,7 @@ forbidden_modules = ["herness.metrics"]
 # from Herness; the third-party part (stdlib and pydantic only) is OWN050 in check_type_ownership.
 name = "settings modules are leaves"
 type = "forbidden"
-source_modules = ["herness.metrics.settings"]
+source_modules = ["herness.metrics.settings", "herness.metrics._weights_settings"]
 forbidden_modules = [
     "herness.core.logging",
     "herness.core._log_pipeline",
