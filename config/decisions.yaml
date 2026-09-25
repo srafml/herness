@@ -1,0 +1,105 @@
+# Enrichment configuration (owner impl 03; validated by herness.enrich.settings.DecisionsConfig).
+# Every key and default: docs/impl/03-enrichment.impl.md §9. The decider backends are the
+# `deciders` section of config/models.yaml (R-76), never a key here.
+# Any change to a question's fields requires a new question_set_version.
+
+question_set_version: qs-2026-10-01.1
+primary_decider: laya            # per-question override allowed
+escalation_chain: [openjev, llm] # jev replaces openjev when the profile enables hosted Jev
+
+questions:
+  - id: root_cause
+    type: choice
+    applies_to: [incident, problem]
+    instructions: "Most likely root cause category of this IT incident, based on the description."
+    options:
+      software_defect: "application bug, code error, regression"
+      config_change: "misconfiguration, bad parameter, config drift"
+      capacity: "resource exhaustion, disk full, CPU/memory saturation, throttling"
+      infrastructure: "hardware, network, storage, datacenter failure"
+      dependency: "third-party or upstream service failure"
+      data_issue: "bad data, failed batch, integration payload error"
+      access_identity: "login, permissions, certificates, password, MFA"
+      user_error: "how-to, user mistake, training need"
+      unknown: "not enough information to tell"
+    threshold: 0.70
+  - id: change_caused
+    type: bool
+    applies_to: [incident]
+    instructions: "The description states or strongly implies the issue started after a deployment, release, patch or change."
+    threshold: 0.80
+  - id: repeat_issue
+    type: bool
+    applies_to: [incident]
+    instructions: "The description says this problem happened before or keeps recurring."
+    threshold: 0.80
+  - id: business_impact
+    type: score
+    applies_to: [incident]
+    instructions: "Business impact described in the text."
+    levels:
+      - "none or single user"
+      - "team or workaround available"
+      - "department or degraded service"
+      - "customer-facing outage or revenue loss"
+    threshold: 0.60
+  - id: owning_team
+    type: choice
+    options_source: core.team       # options = active core.team names (label = team_id, description = name)
+    applies_to: [incident]
+    instructions: "Which support team should own this issue?"
+    threshold: 0.60
+    scoring_use: false
+  - id: change_caused_pair          # asked only for incident/change pairs (design 03 §5.10 step 3)
+    type: bool
+    applies_to: [incident]
+    instructions: "The change described under CHANGE plausibly caused the incident described under INCIDENT."
+    threshold: 0.80
+    scoring_use: false
+
+acceptance:                          # per-type defaults; per-question override under questions[].acceptance
+  choice: {min_accuracy: 0.80, min_macro_f1: 0.60, max_ece: 0.05, min_coverage: 0.70, max_gap_to_teacher: 0.02}
+  bool:   {min_accuracy: 0.88, max_ece: 0.05, min_coverage: 0.75, max_gap_to_teacher: 0.02}
+  score:  {max_mae: 0.45, min_within_one: 0.92, max_ece: 0.06, min_coverage: 0.65}
+
+embedding: {model: BAAI/bge-m3, path: data/models/bge-m3/<rev>/, dtype: fp16, batch_size: 128, max_seq_length: 512}
+escalation: {max_rows_per_night: 150000, llm_max_rows_per_night: 20000, bootstrap_window_days: 90}
+spot_check: {nightly_rate: 0.001, nightly_max_per_question: 50, open_cap_per_question: 300}
+ensemble: {band: 0.90, max_rows: 300000, llm_max_rows: 20000, disagreement_review_cap: 500}
+distill:
+  sample_size: 30000
+  sample_size_llm_teacher: 20000
+  gold_size: 1500
+  init_from: base
+  spot_check_min: 200
+  spot_check_max: 500
+  block_disagreement: 0.15
+  active: {pool: 500000, candidates: 20000, per_round: 5000, per_round_llm_teacher: 2000, per_prototype: 5,
+           min_gain_pp: 0.5, patience: 2, max_rounds: 5}
+clustering:
+  window_days: 1095
+  pca_dims: 64
+  pca_sample: 200000
+  proto_per: 250
+  k_min: 1000
+  k_max: 20000
+  iters: 15
+  min_cluster_size: 5
+  min_samples: 3
+  assign_min_sim: 0.60
+  full_sim: 0.85
+  min_incidents: 25
+  match_cos: 0.85
+  revive_cos: 0.90
+  revive_days: 90
+  rename_cos: 0.95
+  full_every_days: 7
+  drift_share: 0.10
+  naming: {role: cluster_namer, max_llm_calls: 500, examples: 20, example_chars: 600}
+change_link: {before_h: 72, after_h: 1, tau_h: 12, ci_weight: 1.0, service_weight: 0.6, min_score: 0.30,
+              top_n: 3, use_decider: true, decider_band: [0.30, 0.70], decider_max_pairs: 30000}
+mapping_suggest:
+  min_score: 0.60
+  top_n: 3
+  weights: {fuzzy: 0.35, semantic: 0.45, cooccurrence: 0.20}
+  abbreviations: {pmt: payment, auth: authentication}

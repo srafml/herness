@@ -1,0 +1,31 @@
+# Model and decider configuration. Sections: `models` and `roles`/`harness` (owner impl 05,
+# added by its cards) and `deciders` (owner impl 03, R-76; validated by
+# herness.enrich.settings.DecidersSettings; keys and defaults: docs/impl/03-enrichment.impl.md §9).
+# Secrets are `secret:` references only, resolved by herness.core.secrets (R-72).
+
+deciders:
+  laya:
+    current_file: data/models/laya/CURRENT
+    device: cuda
+    dtype: bf16
+    fast: false            # true only after the parity test IT03-16 passed
+    call_batch: 256
+    batch_size: 64
+  openjev:
+    enabled: true
+    base_url: "http://127.0.0.1:8100"   # host port (container port 8080, R-51); loopback only
+    model: openjev-latest
+    concurrency: 64
+    timeout_s: 30
+    samples: {fast: 1, standard: null, deep: 5}
+    api_key: "secret:OPENJEV_API_KEY"   # R-53
+  jev:
+    enabled: false         # hosted Jev; the profile must allow egress (spec 10)
+    base_url: "https://api.typesafe.ai"
+    model: jev-latest
+    concurrency: 16
+    api_key: "secret:TYPESAFE_API_KEY"
+  llm:
+    role: enrich_decider
+    votes: {fast: 1, standard: 3, deep: 5}
+    temperature: 0.7
