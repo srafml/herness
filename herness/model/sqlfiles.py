@@ -50,26 +50,38 @@ _STAGES: Final[tuple[tuple[int, int, Stage], ...]] = (
     (900, 999, "dq"),
 )
 
+# The lake the ``raw`` and ``lake`` globals read during one render (per thread or task).
+_current_lake: contextvars.ContextVar[LakeInventory] = contextvars.ContextVar("herness_sql_lake")
+
+
+class _LakeProxy:
+    """Global ``lake`` for macro files imported without context: the current render's lake."""
+
+    __slots__ = ()
+
+    @property
+    def entities(self) -> Mapping[tuple[str, str], EntityInventory]:
+        return _current_lake.get().entities
+
+    @property
+    def from_synth(self) -> bool:
+        return _current_lake.get().from_synth
+
+    def get(self, source: str, entity: str) -> EntityInventory:
+        return _current_lake.get().get(source, entity)
+
+
 # Attribute allowlist of the sandbox (TH02-11): everything else is unsafe, including the
 # ``pathlib.Path`` behind ``lake.root`` (templates get ``raw_root`` as a string instead).
-_ALLOWED_ATTRS: Final[tuple[tuple[type, frozenset[str]], ...]] = (
-    (LakeInventory, frozenset({"get", "entities", "from_synth"})),
+_ALLOWED_ATTRS: Final[tuple[tuple[type | tuple[type, ...], frozenset[str]], ...]] = (
+    ((LakeInventory, _LakeProxy), frozenset({"get", "entities", "from_synth"})),
     (EntityInventory, frozenset(f.name for f in dataclasses.fields(EntityInventory))),
 )
 _MAPPING_READS: Final = frozenset({"get", "keys", "values", "items"})
 _JINJA_RUNTIME: Final = (LoopContext, Macro, TemplateModule, Namespace)
 # Runtime failures inside a render that become ConfigError (U02-85 Errors row).
-_RENDER_ERRORS: Final = (
-    jinja2.TemplateError,
-    ConfigError,
-    TypeError,
-    ValueError,
-    ArithmeticError,
-    LookupError,
-)
-
-# The lake the ``raw`` global reads during one render (per thread or task).
-_current_lake: contextvars.ContextVar[LakeInventory] = contextvars.ContextVar("herness_sql_lake")
+_RUNTIME_ERRORS: Final = (ConfigError, TypeError, ValueError, ArithmeticError, LookupError)
+_RENDER_ERRORS: Final = (jinja2.TemplateError, *_RUNTIME_ERRORS)
 
 
 def _stage_of(number: int) -> Stage | None:
@@ -204,7 +216,7 @@ def _environment(sql_dir: Path) -> SandboxedEnvironment:
         keep_trailing_newline=True,
     )
     env.filters.update(ident=_ident, sqlstr=_sqlstr, num=_num, sqldate=_sqldate)
-    env.globals["raw"] = _raw_global
+    env.globals.update(raw=_raw_global, lake=_LakeProxy())
     return env
 
 

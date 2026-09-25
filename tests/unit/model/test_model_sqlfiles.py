@@ -170,6 +170,42 @@ def test_ut02_57_macros_and_raw(tmp_path: Path) -> None:
     assert out == 'SELECT CAST(NULL AS VARCHAR), "gone";\n'
 
 
+def test_ut02_57_macro_reads_lake_without_context(tmp_path: Path) -> None:
+    """UT02-57 a macro imported without context (U02-106 style) reads the render's `lake`."""
+    sql_dir = tmp_path / "sql"
+    sql_dir.mkdir()
+    (sql_dir / "_macros.jinja").write_text(
+        "{% macro latest(source, entity) %}\n"
+        "{% if lake.get(source, entity).present %}\n"
+        "FROM read_parquet({{ lake.get(source, entity).glob | sqlstr }})"
+        " -- {{ lake.entities | length }} {{ lake.from_synth }}\n"
+        "{% else %}\n"
+        "FROM (SELECT NULL WHERE false)\n"
+        "{% endif %}\n"
+        "{% endmacro %}\n"
+        "{% macro root() %}{{ lake.root }}{% endmacro %}\n",
+        encoding="utf-8",
+    )
+    file = _sql_file(
+        tmp_path,
+        "100_stg.sql",
+        '{% import "_macros.jinja" as m %}\n'
+        "SELECT 1 {{ m.latest('servicenow', 'incident') }}"
+        "SELECT 2 {{ m.latest('jira', 'issue') }}",
+    )
+    root = tmp_path / "raw"
+    out = render_sql(file, _context(root, frozenset({"number"})))
+    glob = f"{root.as_posix()}/servicenow/incident/**/[!.]*.parquet"
+    assert out == (  # expected rendered text, not a query built here
+        f"SELECT 1 FROM read_parquet('{glob}') -- 1 False\n"  # noqa: S608
+        "SELECT 2 FROM (SELECT NULL WHERE false)\n"
+    )
+    assert "FROM (SELECT NULL" in render_sql(file, _context(root))
+    leak = _sql_file(tmp_path, "110_leak.sql", '{% import "_macros.jinja" as m %}{{ m.root() }}')
+    with pytest.raises(ConfigError, match=r"render failed for 110_leak\.sql"):
+        render_sql(leak, _context(root))
+
+
 def test_ut02_57_template_vars_keys(tmp_path: Path) -> None:
     """UT02-57 template_vars returns exactly the context fields plus raw_root."""
     ctx = _context(tmp_path / "raw")
