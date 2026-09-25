@@ -93,7 +93,7 @@ def test_ut03_04_question_set_get_and_for_entity() -> None:
 
 
 def test_ut03_04_question_set_limits() -> None:
-    """Supporting U03-03: duplicate ids and more than 64 questions both raise."""
+    """UT03-04 (supporting U03-03): duplicate ids and more than 64 questions both raise."""
     q1 = _question(id="dup")
     q2 = _question(id="dup")
     with pytest.raises(ValidationError):
@@ -134,14 +134,15 @@ def test_ut03_06_answer_distribution_rules() -> None:
 
 
 def test_ut03_06_answer_probability_mismatch() -> None:
-    """Supporting U03-07: probability must match distribution[answer] within 1e-6."""
+    """UT03-06 (supporting U03-07): probability must match distribution[answer]
+    within 1e-6."""
     with pytest.raises(ValidationError):
         d.Answer(answer="a", probability=0.4, distribution={"a": 0.5, "b": 0.5})
 
 
 def test_ut03_06_answer_out_of_range_values() -> None:
-    """Supporting U03-07: an out-of-range or non-finite distribution value raises,
-    independent of the probability field's own bounds."""
+    """UT03-06 (supporting U03-07): an out-of-range or non-finite distribution value
+    raises, independent of the probability field's own bounds."""
     with pytest.raises(ValidationError):
         d.Answer(answer="a", probability=0.5, distribution={"a": 0.5, "b": 1.5})
     with pytest.raises(ValidationError):
@@ -189,27 +190,30 @@ def test_ut03_07_decision_output_error_rules() -> None:
 
 
 _SUM_TOL = 1e-3
-_VALUE = st.floats(min_value=0.01, max_value=0.99, allow_nan=False, allow_infinity=False)
+_VALUE = st.floats(min_value=0.05, max_value=0.95, allow_nan=False, allow_infinity=False)
 _DELTA = st.floats(min_value=2e-3, max_value=0.3, allow_nan=False, allow_infinity=False)
+_SIGN = st.sampled_from([1.0, -1.0])
 
 
-@given(_VALUE, _DELTA)
-def test_pt03_01_distribution_sum_tolerance(value_a: float, delta: float) -> None:
+@given(_VALUE, _DELTA, _SIGN)
+def test_pt03_01_distribution_sum_tolerance(value_a: float, delta: float, sign: float) -> None:
     """PT03-01 any generated valid distribution constructs; any perturbation of the
-    sum beyond 1e-3 is rejected."""
+    sum beyond 1e-3, upward or downward, is rejected."""
     value_b = 1.0 - value_a
     distribution = {"a": value_a, "b": value_b}
     assert d.Answer(answer="a", probability=value_a, distribution=distribution).answer == "a"
 
-    assume(value_a + delta <= 1.0)
-    assume(abs((value_a + delta) + value_b - 1.0) > _SUM_TOL)
-    perturbed = {"a": value_a + delta, "b": value_b}
+    perturbed_a = value_a + sign * delta
+    assume(0.0 <= perturbed_a <= 1.0)
+    assume(abs(perturbed_a + value_b - 1.0) > _SUM_TOL)
+    perturbed = {"a": perturbed_a, "b": value_b}
     with pytest.raises(ValidationError):
-        d.Answer(answer="a", probability=perturbed["a"], distribution=perturbed)
+        d.Answer(answer="a", probability=perturbed_a, distribution=perturbed)
 
 
-def test_question_dynamic_options_and_descriptions() -> None:
-    """Supporting U03-02: dynamic option sources, description bounds and fingerprint."""
+def test_ut03_02_question_additional_shape_rules() -> None:
+    """UT03-02 (supporting U03-02): dynamic option sources, description bounds,
+    score-vs-bool levels, applies_to and fingerprint rules."""
     dynamic_none = _question(options_source="core.team", options=None)
     assert dynamic_none.options is None
     dynamic_ok = _question(

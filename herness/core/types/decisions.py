@@ -1,10 +1,8 @@
 """Shared decision types owned by impl 03 (design 03 §3.2; R-01, ENG §14 E6).
 
-The `decisions` submodule of the `herness.core.types` package; impl 00 owns the
-package skeleton and the re-export in `herness/core/types/__init__.py`. This module
-imports nothing from `herness` except `herness.core.errors`. All models are pydantic
-v2 with ``model_config = ConfigDict(frozen=True, extra="forbid", strict=True)`` and
-are the trust boundary for decider output (ENG §3.2, TH03-06).
+The `decisions` submodule of `herness.core.types` (impl 00 owns the package and its
+re-export). Imports only `herness.core.errors`. Every model is pydantic v2, frozen,
+strict, `extra="forbid"` -- the trust boundary for decider output (TH03-06).
 """
 
 from __future__ import annotations
@@ -28,33 +26,28 @@ _CONTENT_HASH_RE = r"^[0-9a-f]{32}$"
 _DECIDER_VERSION_RE = r"^[A-Za-z0-9._:/@+-]{1,128}$"
 _ERROR_CLASS_RE = re.compile(r"^[A-Za-z]{1,64}$")
 _BOOL_WORDS = frozenset({"true", "false", "yes", "no"})
-_MIN_STATIC_OPTIONS = 2
-_MAX_STATIC_OPTIONS = 255
-_MAX_QUESTIONS = 64
-_MAX_ANSWERS = 64
-_MAX_DISTRIBUTION = 255
-_SUM_TOL = 1e-3
-_PROB_TOL = 1e-6
-
-_CONFIG = ConfigDict(frozen=True, extra="forbid", strict=True)
+_MIN_OPTIONS, _MAX_OPTIONS, _MAX_QUESTIONS = 2, 255, 64
+_MAX_ANSWERS, _MAX_DISTRIBUTION = 64, 255
+_SUM_TOL, _PROB_TOL = 1e-3, 1e-6
 
 
-def _check_option_key(key: str) -> None:
-    if _OPTION_KEY_RE.fullmatch(key) is None or key.lower() in _BOOL_WORDS:
-        msg = f"bad option key {key!r}"
+def _raise_if(bad: bool, msg: str) -> None:
+    if bad:
         raise ValueError(msg)
 
 
 def _check_description(text: str, field: str) -> None:
-    if not 1 <= len(text) <= 500:  # noqa: PLR2004 - design 03 §3.2 bound
-        msg = f"bad description length in {field}"
-        raise ValueError(msg)
+    _raise_if(not 1 <= len(text) <= 500, f"bad description length in {field}")  # noqa: PLR2004
 
 
-class Question(BaseModel):
+class _Frozen(BaseModel):
+    """Shared strict, frozen, extra-forbid config for every type in this module."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+
+class Question(_Frozen):
     """One typed classification question (U03-02, design 03 §3.2)."""
-
-    model_config = _CONFIG
 
     id: str = Field(pattern=_QID_RE)
     type: QuestionType
@@ -71,47 +64,39 @@ class Question(BaseModel):
     def _check(self) -> Question:
         self._check_options()
         self._check_levels()
-        if not self.applies_to or len(set(self.applies_to)) != len(self.applies_to):
-            msg = "applies_to must be non-empty without duplicates"
-            raise ValueError(msg)
-        if self.fingerprint and _FINGERPRINT_RE.fullmatch(self.fingerprint) is None:
-            msg = "bad fingerprint"
-            raise ValueError(msg)
+        dupes = len(set(self.applies_to)) != len(self.applies_to)
+        _raise_if(not self.applies_to or dupes, "applies_to must be non-empty without duplicates")
+        bad_fp = bool(self.fingerprint) and _FINGERPRINT_RE.fullmatch(self.fingerprint) is None
+        _raise_if(bad_fp, "bad fingerprint")
         return self
 
     def _check_options(self) -> None:
+        count = 0 if self.options is None else len(self.options)
         if self.type == "choice":
-            count = 0 if self.options is None else len(self.options)
             if self.options_source == "static":
-                if not _MIN_STATIC_OPTIONS <= count <= _MAX_STATIC_OPTIONS:
-                    msg = "choice question needs 2-255 static options"
-                    raise ValueError(msg)
-            elif self.options is not None and count < _MIN_STATIC_OPTIONS:
-                msg = "dynamic options need at least 2 entries"
-                raise ValueError(msg)
-        elif self.options is not None or self.options_source != "static":
-            msg = "non-choice question must not have options"
-            raise ValueError(msg)
+                _raise_if(not _MIN_OPTIONS <= count <= _MAX_OPTIONS, "static options need 2-255")
+            else:
+                dynamic_too_few = self.options is not None and count < _MIN_OPTIONS
+                _raise_if(dynamic_too_few, "dynamic options need at least 2 entries")
+        else:
+            not_static = self.options is not None or self.options_source != "static"
+            _raise_if(not_static, "non-choice question must not have options")
         for key, description in (self.options or {}).items():
-            _check_option_key(key)
+            bad_key = _OPTION_KEY_RE.fullmatch(key) is None or key.lower() in _BOOL_WORDS
+            _raise_if(bad_key, f"bad option key {key!r}")
             _check_description(description, "options")
 
     def _check_levels(self) -> None:
         if self.type == "score":
-            if self.levels is None:
-                msg = "score question needs levels"
-                raise ValueError(msg)
-            for description in self.levels:
+            _raise_if(self.levels is None, "score question needs levels")
+            for description in self.levels or ():
                 _check_description(description, "levels")
-        elif self.levels is not None:
-            msg = "non-score question must not have levels"
-            raise ValueError(msg)
+        else:
+            _raise_if(self.levels is not None, "non-score question must not have levels")
 
 
-class QuestionSet(BaseModel):
+class QuestionSet(_Frozen):
     """Versioned, ordered set of questions (U03-03)."""
-
-    model_config = _CONFIG
 
     version: str = Field(pattern=_QS_VERSION_RE)
     questions: tuple[Question, ...]
@@ -120,13 +105,9 @@ class QuestionSet(BaseModel):
 
     @model_validator(mode="after")
     def _check_unique(self) -> QuestionSet:
-        if len(self.questions) > _MAX_QUESTIONS:
-            msg = "too many questions"
-            raise ValueError(msg)
         ids = [q.id for q in self.questions]
-        if len(set(ids)) != len(ids):
-            msg = "duplicate question id"
-            raise ValueError(msg)
+        _raise_if(len(self.questions) > _MAX_QUESTIONS, "too many questions")
+        _raise_if(len(set(ids)) != len(ids), "duplicate question id")
         return self
 
     def model_post_init(self, context: object, /) -> None:
@@ -146,10 +127,8 @@ class QuestionSet(BaseModel):
         return QuestionSet(version=self.version, questions=subset)
 
 
-class DecisionInput(BaseModel):
+class DecisionInput(_Frozen):
     """One item to classify (U03-06)."""
-
-    model_config = _CONFIG
 
     record_id: str = Field(min_length=1, max_length=256)
     entity: Entity
@@ -158,10 +137,8 @@ class DecisionInput(BaseModel):
     question_ids: tuple[str, ...] | None = None
 
 
-class Answer(BaseModel):
+class Answer(_Frozen):
     """Raw answer of one backend to one question (U03-07). Probabilities are RAW."""
-
-    model_config = _CONFIG
 
     answer: str
     probability: float = Field(ge=0.0, le=1.0)
@@ -172,41 +149,29 @@ class Answer(BaseModel):
     def _check(self) -> Answer:
         total = 0.0
         for value in self.distribution.values():
-            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
-                msg = "distribution value out of range"
-                raise ValueError(msg)
+            out_of_range = not math.isfinite(value) or not 0.0 <= value <= 1.0
+            _raise_if(out_of_range, "distribution value out of range")
             total += value
-        if abs(total - 1.0) > _SUM_TOL:
-            msg = "distribution does not sum to 1"
-            raise ValueError(msg)
-        if self.answer not in self.distribution:
-            msg = "answer not a key of distribution"
-            raise ValueError(msg)
-        if abs(self.probability - self.distribution[self.answer]) > _PROB_TOL:
-            msg = "probability does not match distribution[answer]"
-            raise ValueError(msg)
+        _raise_if(abs(total - 1.0) > _SUM_TOL, "distribution does not sum to 1")
+        _raise_if(self.answer not in self.distribution, "answer not a key of distribution")
+        mismatch = abs(self.probability - self.distribution[self.answer]) > _PROB_TOL
+        _raise_if(mismatch, "probability does not match distribution[answer]")
         return self
 
 
-class DecisionOutput(BaseModel):
+class DecisionOutput(_Frozen):
     """One backend's output for one input (U03-08)."""
-
-    model_config = _CONFIG
 
     record_id: str
     content_hash: str = Field(pattern=_CONTENT_HASH_RE)
     decider: Literal["laya", "openjev", "jev", "llm", "ensemble", "human"]
     decider_version: str = Field(pattern=_DECIDER_VERSION_RE)
-    answers: dict[str, Answer] = Field(default_factory=dict, max_length=_MAX_ANSWERS)
+    answers: dict[str, Answer] = Field(max_length=_MAX_ANSWERS)
     error: str | None = None
 
     @model_validator(mode="after")
     def _check_error(self) -> DecisionOutput:
         if self.error is not None:
-            if self.answers:
-                msg = "error set with non-empty answers"
-                raise ValueError(msg)
-            if _ERROR_CLASS_RE.fullmatch(self.error) is None:
-                msg = "error must be a bare error class name"
-                raise ValueError(msg)
+            _raise_if(bool(self.answers), "error set with non-empty answers")
+            _raise_if(_ERROR_CLASS_RE.fullmatch(self.error) is None, "error must be a class name")
         return self
