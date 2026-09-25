@@ -134,7 +134,7 @@ def test_st00_07_audit_gate_decisions(
     assert "AU011" not in out
 
 
-def test_check_audit_unused_ignore_and_osv_only_finding(
+def test_ut00_69_check_audit_unused_ignore_and_osv_only_finding(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """An osv-only finding with a fixed event counts as fixable; an unmatched entry warns."""
@@ -163,7 +163,7 @@ def test_check_audit_unused_ignore_and_osv_only_finding(
     ],
     ids=["missing-key", "bad-date", "not-a-list", "bad-toml"],
 )
-def test_check_audit_rejects_malformed_ignore_file(
+def test_ut00_69_check_audit_rejects_malformed_ignore_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], ignore_text: str
 ) -> None:
     """A malformed ignore file is an input error (exit 2)."""
@@ -177,7 +177,7 @@ def test_check_audit_rejects_malformed_ignore_file(
     assert "input error" in err
 
 
-def test_check_audit_rejects_malformed_json_and_usage(
+def test_ut00_69_check_audit_rejects_malformed_json_and_usage(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Malformed JSON, a missing file, a bad --today and a missing option all exit 2."""
@@ -198,7 +198,7 @@ def test_check_audit_rejects_malformed_json_and_usage(
     capsys.readouterr()
 
 
-def test_check_audit_defaults_to_ignore_file_and_clock_today(
+def test_ut00_69_check_audit_defaults_to_ignore_file_and_clock_today(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Without --ignore and --today it reads tools/audit_ignore.toml and the UTC day."""

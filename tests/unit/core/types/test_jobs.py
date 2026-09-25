@@ -109,13 +109,13 @@ def test_ut08_02_joboutcome_oversize_result_raises() -> None:
         JobOutcome(status="done", result=big)
 
 
-def test_joboutcome_keeps_a_valid_small_result() -> None:
+def test_ut08_02_joboutcome_keeps_a_valid_small_result() -> None:
     """Supplementary (T08-01): a small, JSON-safe result passes through unchanged."""
     outcome = JobOutcome(status="done", result={"count": 3, "note": "ok"})
     assert outcome.result == {"count": 3, "note": "ok"}
 
 
-def test_joboutcome_rejects_non_finite_number_in_result() -> None:
+def test_ut08_02_joboutcome_rejects_non_finite_number_in_result() -> None:
     """Supplementary (T08-01): a NaN inside result is not canonical-JSON encodable."""
     with pytest.raises(ValidationError):
         JobOutcome(status="done", result={"v": float("nan")})
@@ -130,7 +130,7 @@ def test_ut08_02_joboutcome_frozen_and_extra_forbidden() -> None:
         JobOutcome(status="done", nope=1)
 
 
-def test_metricsample_valid_round_trip() -> None:
+def test_ut08_01_metricsample_valid_round_trip() -> None:
     """Supplementary (T08-01): a valid MetricSample constructs and is frozen (U08-101)."""
     sample = MetricSample(
         ts=datetime(2026, 1, 1, tzinfo=UTC),
@@ -145,7 +145,7 @@ def test_metricsample_valid_round_trip() -> None:
         sample.value = 2.0  # type: ignore[misc]
 
 
-def test_metricsample_rejects_naive_ts() -> None:
+def test_ut08_01_metricsample_rejects_naive_ts() -> None:
     """Supplementary (T08-01): MetricSample.ts must be timezone-aware."""
     with pytest.raises(ValidationError):
         MetricSample(
@@ -157,7 +157,7 @@ def test_metricsample_rejects_naive_ts() -> None:
         )
 
 
-def test_metricsample_rejects_bad_name() -> None:
+def test_ut08_01_metricsample_rejects_bad_name() -> None:
     """Supplementary (T08-01): MetricSample.name must match the herness_* metric regex."""
     with pytest.raises(ValidationError):
         MetricSample(
@@ -169,7 +169,7 @@ def test_metricsample_rejects_bad_name() -> None:
         )
 
 
-def test_metricsample_rejects_negative_counter_value() -> None:
+def test_ut08_01_metricsample_rejects_negative_counter_value() -> None:
     """Supplementary (T08-01): counter and histogram values must be >= 0."""
     with pytest.raises(ValidationError):
         MetricSample(
@@ -181,7 +181,7 @@ def test_metricsample_rejects_negative_counter_value() -> None:
         )
 
 
-def test_metricsample_allows_negative_gauge_value() -> None:
+def test_ut08_01_metricsample_allows_negative_gauge_value() -> None:
     """Supplementary (T08-01): gauge values may be negative."""
     sample = MetricSample(
         ts=datetime(2026, 1, 1, tzinfo=UTC),
@@ -193,7 +193,7 @@ def test_metricsample_allows_negative_gauge_value() -> None:
     assert sample.value == -1.0
 
 
-def test_metricsample_rejects_non_finite_value() -> None:
+def test_ut08_01_metricsample_rejects_non_finite_value() -> None:
     """Supplementary (T08-01): non-finite values (nan, inf) are rejected."""
     with pytest.raises(ValidationError):
         MetricSample(
@@ -205,7 +205,7 @@ def test_metricsample_rejects_non_finite_value() -> None:
         )
 
 
-def test_metricsample_rejects_too_many_labels() -> None:
+def test_ut08_01_metricsample_rejects_too_many_labels() -> None:
     """Supplementary (T08-01): labels caps at 6 keys."""
     labels = {f"k{i}": "v" for i in range(7)}
     with pytest.raises(ValidationError):
@@ -219,7 +219,7 @@ def test_metricsample_rejects_too_many_labels() -> None:
         )
 
 
-def test_metricsample_rejects_bad_label_key_and_value() -> None:
+def test_ut08_01_metricsample_rejects_bad_label_key_and_value() -> None:
     """Supplementary (T08-01): label keys and values must match their regexes."""
     with pytest.raises(ValidationError):
         MetricSample(
@@ -241,7 +241,7 @@ def test_metricsample_rejects_bad_label_key_and_value() -> None:
         )
 
 
-def test_metricsample_rejects_bad_component() -> None:
+def test_ut08_01_metricsample_rejects_bad_component() -> None:
     """Supplementary (T08-01): component must match ^[a-z][a-z0-9_]{0,31}$."""
     with pytest.raises(ValidationError):
         MetricSample(
@@ -253,7 +253,7 @@ def test_metricsample_rejects_bad_component() -> None:
         )
 
 
-def test_jobspec_rejects_bad_idem_key() -> None:
+def test_ut08_01_jobspec_rejects_bad_idem_key() -> None:
     """Supplementary (T08-01): idem_key must match its allowlist regex."""
     with pytest.raises(ValidationError):
         JobSpec(**_BASE, idem_key="bad key with spaces")
@@ -261,7 +261,7 @@ def test_jobspec_rejects_bad_idem_key() -> None:
     assert spec.idem_key == "a.valid-key_1:2/3"
 
 
-def test_jobspec_max_attempts_bounds() -> None:
+def test_ut08_01_jobspec_max_attempts_bounds() -> None:
     """Supplementary (T08-01): max_attempts is None or in [1, 20]."""
     with pytest.raises(ValidationError):
         JobSpec(**_BASE, max_attempts=0)

@@ -638,7 +638,7 @@ Conventions for this section: "Errors" rows name the taxonomy class from spec 00
 | Kind | constant, function, pytest options and hooks |
 | Purpose | Extract ENG §6 test IDs from names and docstrings; write the ID index for the impl 00 traceability script; select tests by ID for gates |
 | Signature | `TEST_ID_PATTERN` = `(?<![A-Za-z0-9])(UT\|PT\|IT\|FT\|ST\|BT\|ET)(\d{2})[-_](\d{2,3})(?![0-9])` compiled case-insensitive; `extract_test_ids(name: str, docstring: str \| None) -> tuple[str, ...]` (normalized `UT11-01`, upper case, hyphen, sorted, unique). Options: `--collect-test-ids=PATH`, `--require-test-ids`, `--select-test-ids=ID[,ID...]` |
-| Algorithm | 1. For each collected item, IDs = `extract_test_ids(item.originalname or item.name, item.function.__doc__)`. 2. Index `{id: sorted nodeids}` (parametrized items share an ID). 3. Duplicate check: an ID attached to two different functions (distinct `originalname` or module) → `pytest.UsageError`. 4. `--require-test-ids`: any item without IDs → `pytest.UsageError` listing nodeids. 5. `--select-test-ids`: deselect items whose ID set does not intersect the list (reported through `config.hook.pytest_deselected`). 6. `--collect-test-ids=PATH`: after collection, write JSON `{"schema": 1, "ids": {...}, "untagged": [...]}` atomically; used with `--collect-only` by `T00-11 (tools/check_traceability.py)`. |
+| Algorithm | 1. For each collected item, IDs = `extract_test_ids(item.originalname or item.name, item.function.__doc__)`. 2. Index `{id: sorted nodeids}` (parametrized items share an ID). 3. Shared IDs: several test functions may carry the same ID (the index lists all their nodeids); this is not an error. A function named `test_rf_<slug>` (review focus) or `test_cv_<slug>` (controller verification) counts as carrying an ID. 4. `--require-test-ids`: any item without IDs → `pytest.UsageError` listing nodeids. 5. `--select-test-ids`: deselect items whose ID set does not intersect the list (reported through `config.hook.pytest_deselected`). 6. `--collect-test-ids=PATH`: after collection, write JSON `{"schema": 1, "ids": {...}, "untagged": [...]}` atomically; used with `--collect-only` by `T00-11 (tools/check_traceability.py)`. |
 | Errors | as above |
 | Tests | UT11-33, UT11-34, UT11-35, UT11-36 |
 
@@ -1329,7 +1329,7 @@ Tests call `bench_recorder.record(...)` → session end writes the file (U11-51)
 
 ### F11-14 Test-ID collection for traceability
 
-`pytest --collect-only --collect-test-ids=PATH --require-test-ids` → the plugin extracts IDs (U11-31) → duplicates or untagged tests → `UsageError` → JSON written → `T00-11 (tools/check_traceability.py)` compares the IDs cited in `docs/impl/*.impl.md` with the JSON in both directions and fails the merge on any difference.
+`pytest --collect-only --collect-test-ids=PATH --require-test-ids` → the plugin extracts IDs (U11-31) → untagged tests → `UsageError` (several tests may share one ID) → JSON written → `T00-11 (tools/check_traceability.py)` compares the IDs cited in `docs/impl/*.impl.md` with the JSON in both directions and fails the merge on any difference.
 
 ## 6. Error handling
 
@@ -1637,7 +1637,7 @@ Test files live under `tests/<type>/` mirroring the unit's package (`tests/unit/
 | UT11-31 | U11-30 | `pytester` file without a category marker | collect | `UsageError` naming the file |
 | UT11-32 | U11-30 | `pytester` file with `unit` and `integration` | collect | `UsageError` |
 | UT11-33 | U11-31 | none | `extract_test_ids("test_ut11_01_x", "Covers ST11-05.")` | `("ST11-05", "UT11-01")` |
-| UT11-34 | U11-31 | `pytester` two functions with the same ID; one parametrized function | collect | first raises `UsageError`; second succeeds with one ID |
+| UT11-34 | U11-31 | `pytester` two functions with the same ID plus a `test_rf_` and a `test_cv_` function; one parametrized function | collect | first succeeds with both nodeids under the ID and nothing untagged; second succeeds with one ID |
 | UT11-35 | U11-31 | `pytester` three tests | `--select-test-ids=UT99-01` | only the matching test runs |
 | UT11-36 | U11-31 | `pytester` tagged and untagged tests | `--collect-only --collect-test-ids=out.json --require-test-ids` | `UsageError` listing the untagged node; without `--require-test-ids` JSON lists it under `untagged` |
 | UT11-37 | U11-35 | none | inspect Hypothesis settings; register a dummy registry entry in one test and read it in the next | profiles `commit` (200) and `nightly` (10,000) exist; entry gone in the next test |
@@ -1758,7 +1758,7 @@ Test files live under `tests/<type>/` mirroring the unit's package (`tests/unit/
 | IT11-26 | F11-09 | same fixture with one metric changed by 0.01 | classifier eval | mismatch check fails; exit 14 | — |
 | IT11-27 | F11-09 | `tiny_build` with stub-decider decisions | classifier eval on synthetic | synthetic section has metrics per question; deciders `absent` where no cache | — |
 | IT11-30 | U11-73 | Phase 1 gate with `slow` checks replaced by tiny equivalents | `run_gate(1)` | report written; exit reflects results | — |
-| IT11-31 | F11-14 | repo | `pytest --collect-only --collect-test-ids=… --require-test-ids` | JSON written; no duplicates | — |
+| IT11-31 | F11-14 | repo | `pytest --collect-only --collect-test-ids=… --require-test-ids` | JSON written; nothing untagged (shared IDs allowed) | — |
 | IT11-32 | F11-07, U11-62 | `tiny_build`; `tests/eval/mock_scripts_writer_dead/` (R-49) | `herness eval --inline --mock-llm tests/eval/mock_scripts_writer_dead --ids O01` | the review run is `partial` with a `findings_only` draft; `results.jsonl` line has `draft_mode = "findings_only"`; O01 numeric and entity checks graded from the verified findings; `unsupported_number_rate = 0` | — |
 
 ### 11.4 Fault tests (marker `fault`)

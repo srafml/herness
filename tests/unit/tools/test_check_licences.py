@@ -97,7 +97,7 @@ def test_st00_16_licence_gate_enforce_and_report(
     assert "LC001 warning denied gpl-lib 1.0: GPL-3.0-only" in out
 
 
-def test_check_licences_alternatives_and_nested_expressions() -> None:
+def test_ut00_70_check_licences_alternatives_and_nested_expressions() -> None:
     """Separate licence entries are alternatives; nested groups and case-insensitive aliases."""
     component = {
         "name": "dual",
@@ -132,7 +132,7 @@ def test_check_licences_alternatives_and_nested_expressions() -> None:
     ],
     ids=["missing-table", "bad-allowed", "bad-json", "bad-components", "nameless"],
 )
-def test_check_licences_rejects_malformed_inputs(
+def test_ut00_70_check_licences_rejects_malformed_inputs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], pyproject_text: str, sbom_text: str
 ) -> None:
     """A malformed SBOM or licence table is an input error (exit 2)."""
@@ -149,7 +149,7 @@ def test_check_licences_rejects_malformed_inputs(
     capsys.readouterr()
 
 
-def test_check_licences_repository_table_is_valid(
+def test_ut00_70_check_licences_repository_table_is_valid(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The repository's own licence table loads and allows an MIT component."""
