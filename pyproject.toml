@@ -240,7 +240,7 @@ layers = [
     "herness.core.logging",
     "herness.core._log_pipeline | herness.core.types",
     "herness.core.ids",
-    "herness.core.time",
+    "herness.core.time | herness.core.numbers",
     "herness.core.errors",
 ]
 
