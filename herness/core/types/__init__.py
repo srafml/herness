@@ -4,7 +4,7 @@ This file defines nothing. Each owner card (T03-01, T05-01, T06-01, T07-01, T08-
 T09-01) adds one import line for its submodule and its names to __all__.
 """
 
-from herness.core.types.decisions import (
+from herness.core.types.decisions import (  # noqa: I001 - compact swarm block
     Answer,
     DecisionInput,
     DecisionOutput,
@@ -64,18 +64,33 @@ from herness.core.types.jobs import (
     ServiceName,
 )
 
-__all__: tuple[str, ...] = (
+from herness.core.types.swarm import (
+    SKEPTIC_CHECKS, Banner, Challenge, CheckResult, CrossCheck, Depth, EntityScope, Finding,
+    FindingStatus, PlannedTask, RejectReason, Role, RunKind, ScopeEntityType, SectionId,
+    SkepticCheck, Specialty, SwarmTaskState, TaskBudget, TaskInputs, TaskSpec,
+    VerificationRecord,
+)  # fmt: skip
+
+__all__: tuple[str, ...] = (  # noqa: RUF022 - OWN032 needs plain sorted order
     "AgentResult",
     "Answer",
     "AsyncTool",
+    "Banner",
     "BreakerState",
     "BudgetLedger",
     "Budgets",
+    "Challenge",
     "ChatMode",
+    "CheckResult",
+    "CrossCheck",
     "DecisionInput",
     "DecisionOutput",
+    "Depth",
     "Entity",
+    "EntityScope",
     "Evidence",
+    "Finding",
+    "FindingStatus",
     "GpuClass",
     "ItemResult",
     "JobKind",
@@ -92,15 +107,28 @@ __all__: tuple[str, ...] = (
     "NumberCheck",
     "NumberRef",
     "OpsHandle",
+    "PlannedTask",
     "PolicyName",
     "Question",
     "QuestionSet",
     "QuestionType",
     "ReasoningPart",
+    "RejectReason",
     "RequestMeta",
+    "Role",
+    "RunKind",
+    "SKEPTIC_CHECKS",
+    "ScopeEntityType",
+    "SectionId",
     "ServiceName",
+    "SkepticCheck",
+    "Specialty",
     "SqlLimits",
+    "SwarmTaskState",
     "SystemBlock",
+    "TaskBudget",
+    "TaskInputs",
+    "TaskSpec",
     "TextPart",
     "Tool",
     "ToolCall",
@@ -116,6 +144,7 @@ __all__: tuple[str, ...] = (
     "VectorHandle",
     "VectorHit",
     "VerifiableItem",
+    "VerificationRecord",
     "VerificationResult",
     "WarehouseHandle",
 )
