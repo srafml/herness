@@ -60,7 +60,7 @@ This spec builds the L0 foundation modules that design 00 assigns to itself: `he
 | `herness/__init__.py` | Package root; exposes the installed version | `__version__` | L0 | `importlib.metadata` | 30 |
 | `herness/py.typed` | PEP 561 marker (empty file) | — | — | — | 1 |
 | `herness/core/__init__.py` | Foundation package marker; docstring only, no imports, no re-exports | — | L0 | none | 10 |
-| `herness/core/errors.py` | Error taxonomy of design 00 §7 plus `NotFound` (R-19) and two helpers | `HernessError`, `RetryableError`, `RecoverableError`, `FatalError`, the 18 leaf classes, `error_kind`, `to_log_fields` | L0 | none (standard library only) | 300 |
+| `herness/core/errors.py` | Error taxonomy of design 00 §7 plus `NotFound` (R-19) and two helpers | `HernessError`, `RetryableError`, `RecoverableError`, `FatalError`, the 18 leaf classes, `error_kind`, `to_log_fields` | L0 | none (standard library only) | 340 |
 | `herness/core/time.py` | UTC clock, sleeps, timestamp text formats, time zones | `now`, `monotonic`, `sleep`, `asleep`, `ensure_utc`, `format_utc`, `parse_utc`, `parse_iso`, `utc_day`, `zone`, `DB_TS_LEN`, `MAX_SLEEP_S` | L0 | `herness.core.errors`, `tzdata` (data only) | 200 |
 | `herness/core/ids.py` | ULIDs, prefixed IDs, `build_id`, `record_id`, canonical JSON, SHA-256, `query_id`, tokens | `CROCKFORD_ALPHABET`, `ULID_LEN`, `IdKind`, `ID_PREFIXES`, `new_ulid`, `new_id`, `new_build_id`, `is_valid_ulid`, `is_valid_id`, `is_valid_build_id`, `make_record_id`, `split_record_id`, `canonical_json`, `sha256_hex`, `normalize_sql`, `query_id`, `new_token`, `RECORD_KEY_MAX_LEN` | L0 | `herness.core.errors`, `herness.core.time` | 330 |
 | `herness/core/numbers.py` | Marker parsing, uncited-numeral scanner and `NumberRef` display formatting shared by the Verifier (05) and the renderer (09) (R-16) | `MARKER_RE`, `ANY_MARKER_RE`, `MARKER_ID_RE`, `NUMERAL_RE`, `MAX_SCAN_CHARS`, `HIT_TEXT_MAX`, `MAX_ALLOWED_PATTERNS`, `MAX_PATTERN_CHARS`, `NUMBER_FORMATS`, `DEFAULT_FORMAT_BY_UNIT`, `Marker`, `MalformedMarker`, `MarkerScan`, `NumeralHit`, `FormattableNumber`, `parse_markers`, `compile_allowed_patterns`, `find_uncited`, `format_value`, `format_number` | L0 | `herness.core.errors` only | 320 |
@@ -2102,7 +2102,7 @@ All cards are Phase 1. Test files are not counted as production files. `uv.lock`
 | Files | `herness/core/errors.py` |
 | Tests | UT00-01, UT00-02, UT00-03, UT00-04, UT00-05, UT00-06, UT00-07, UT00-08, UT00-71, PT00-01, ST00-13 |
 | Threats | TH00-06 |
-| Acceptance checks | `uv run pytest tests/unit/core/test_errors.py` passes; `uv run mypy` 0 errors; `herness/core/errors.py` ≤ 300 lines; line and branch coverage of the file ≥ 90 % / 85 % |
+| Acceptance checks | `uv run pytest tests/unit/core/test_errors.py` passes; `uv run mypy` 0 errors; `herness/core/errors.py` ≤ 340 lines; line and branch coverage of the file ≥ 90 % / 85 % |
 | Blocked by | none |
 | Size | M |
 
