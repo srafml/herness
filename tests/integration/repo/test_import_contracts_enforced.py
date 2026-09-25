@@ -18,26 +18,31 @@ def test_st00_10_upward_import_rejected(tmp_path: Path) -> None:
     """ST00-10 lint-imports fails naming 'herness layers' and 'core base is closed'."""
     shutil.copytree(ROOT / "herness", tmp_path / "herness")
     shutil.copytree(ROOT / "tools", tmp_path / "tools")
-    (tmp_path / "herness" / "harness").mkdir()
-    (tmp_path / "herness" / "harness" / "__init__.py").write_text("", encoding="utf-8")
+    harness_init = tmp_path / "herness" / "harness" / "__init__.py"
+    if not harness_init.exists():  # T05-04 creates the real package
+        harness_init.parent.mkdir()
+        harness_init.write_text("", encoding="utf-8")
     errors = tmp_path / "herness" / "core" / "errors.py"
     errors.write_text(
         errors.read_text(encoding="utf-8") + "\nimport herness.harness\n", encoding="utf-8"
     )
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     # Put herness.harness on top of C1 and into C4, whatever packages later cards added.
-    text = text.replace(
-        'name = "herness layers"\ntype = "layers"\nlayers = [\n',
-        'name = "herness layers"\ntype = "layers"\nlayers = [\n    "herness.harness",\n',
-        1,
-    )
-    text = re.sub(
-        r'(name = "core base is closed"[^\[]*?\nsource_modules = \[[^\]]*\]\s*'
-        r"forbidden_modules = \[)",
-        r'\1"herness.harness", ',
-        text,
-        count=1,
-    )
+    current = {c["name"]: c for c in tomllib.loads(text)["tool"]["importlinter"]["contracts"]}
+    if current["herness layers"]["layers"][0] != "herness.harness":
+        text = text.replace(
+            'name = "herness layers"\ntype = "layers"\nlayers = [\n',
+            'name = "herness layers"\ntype = "layers"\nlayers = [\n    "herness.harness",\n',
+            1,
+        )
+    if "herness.harness" not in current.get("core base is closed", {}).get("forbidden_modules", []):
+        text = re.sub(
+            r'(name = "core base is closed"[^\[]*?\nsource_modules = \[[^\]]*\]\s*'
+            r"forbidden_modules = \[)",
+            r'\1"herness.harness", ',
+            text,
+            count=1,
+        )
     config = tomllib.loads(text)["tool"]["importlinter"]
     layers = next(c for c in config["contracts"] if c["name"] == "herness layers")["layers"]
     assert layers[0] == "herness.harness"
