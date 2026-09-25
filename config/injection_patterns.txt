@@ -1,0 +1,17 @@
+# Memory injection scan patterns (impl 07 U07-19, TH07-01). One case-insensitive regex per line;
+# lines starting with # and blank lines are skipped. At most 500 patterns of 500 chars each.
+# Reviewers may add patterns; a change needs a restart. Trailing spaces are significant.
+ignore (all|any|the)? ?(previous|prior|above) (instructions|rules|prompts?)
+disregard (all|any|the)? ?(previous|prior|above)
+you are now
+new instructions?:
+system prompt
+(act|behave) as (an?|the) 
+do not (verify|cite|check)
+rank [^.]{0,40} (first|highest|top)
+always (recommend|rank|fund|choose)
+</?(memory_context|record|scratchpad|untrusted_data|ticket_text)
+\[\[n[0-9]+\]\]\s*=
+(call|use|run) the [a-z_]+ tool
+(override|bypass) (the )?(verifier|policy|guard)
+(begin|end) (system|assistant) (message|prompt)

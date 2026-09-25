@@ -325,6 +325,7 @@ source_modules = [
     "herness.connectors.settings",
     "herness.connectors.settings_base",
     "herness.connectors.settings_entities",
+    "herness.harness.memory.settings",
 ]
 forbidden_modules = [
     "herness.core.logging",
