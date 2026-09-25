@@ -279,7 +279,13 @@ source_modules = [
     "herness.core.numbers",
     "herness.core.errors",
 ]
-forbidden_modules = ["herness.store", "herness.model", "herness.connectors"]
+forbidden_modules = [
+    "herness.core.registry",
+    "herness.core.settings",
+    "herness.store",
+    "herness.model",
+    "herness.connectors",
+]
 
 [[tool.importlinter.contracts]]
 name = "types import only errors and ids"
@@ -291,7 +297,7 @@ allow_indirect_imports = true
 [[tool.importlinter.contracts]]
 name = "settings modules are leaves"
 type = "forbidden"
-source_modules = ["herness.model.settings"]
+source_modules = ["herness.core.settings", "herness.model.settings"]
 forbidden_modules = [
     "herness.core.logging",
     "herness.core._log_pipeline",
