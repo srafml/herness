@@ -22,7 +22,7 @@ class _Unprintable:
 
 
 def test_ut00_47_normalize_values() -> None:
-    """UT00-47 values become JSON-native; deep values and unprintables are stringified."""
+    """UT00-47 values become JSON-native; too-deep containers become a placeholder."""
     deep = {"a": {"b": {"c": {"d": {"e": {"f": 1}}}}}}
     event: dict[str, Any] = {
         "dec": decimal.Decimal("1.5"),
@@ -39,7 +39,9 @@ def test_ut00_47_normalize_values() -> None:
     assert out["secret"] == "**********"  # noqa: S105
     assert out["naive"] == "2026-09-24T10:00:00 naive"
     assert out["set"] == ["a", "b"]
-    assert out["deep"]["a"]["b"]["c"]["d"] == str({"e": {"f": 1}})
+    assert out["deep"]["a"]["b"]["c"]["d"] == lp.TOO_DEEP
+    leaf = lp.normalize_values(None, "info", {"v": {"a": {"b": {"c": {"d": 5}}}}})
+    assert leaf["v"]["a"]["b"]["c"]["d"] == "5"
     assert out["bad"] == "<unprintable _Unprintable>"
 
 
@@ -62,6 +64,21 @@ def test_st00_02_guard_processor_level() -> None:
     debug = lp.guard_sensitive(None, "debug", event("debug"))
     assert (debug["prompt"], debug["description"]) == ("p", "d")
     assert debug["api_key"] == debug["nested"]["access_token"] == lp.OMITTED
+
+
+def test_st00_02_guard_lists_and_deep_keys() -> None:
+    """ST00-02 (processor level) keys inside lists and at nesting level 5 are guarded."""
+    event: dict[str, Any] = {
+        "level": "info",
+        "event": "core.test.guard",
+        "users": [{"api_key": "k"}, ["x", {"token": "t"}]],
+        "items": [{"description": "d", "id": 1}],
+        "a": {"b": {"c": {"d": {"password": "p", "e": {"secret": "s"}}}}},
+    }
+    out = lp.guard_sensitive(None, "info", lp.normalize_values(None, "info", event))
+    assert out["users"] == [{"api_key": lp.OMITTED}, ["x", {"token": lp.OMITTED}]]
+    assert out["items"] == [{"description": lp.OMITTED, "id": 1}]
+    assert out["a"]["b"]["c"]["d"] == {"password": lp.OMITTED, "e": lp.TOO_DEEP}
 
 
 def test_st00_03_render_json_no_line_forging() -> None:

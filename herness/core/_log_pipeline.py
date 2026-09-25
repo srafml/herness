@@ -14,8 +14,11 @@ import pathlib
 import re
 import sys
 from collections.abc import Mapping
-from typing import Final, TextIO
+from typing import Final, TextIO, cast
 
+from structlog.exceptions import DropEvent
+from structlog.processors import ExceptionRenderer
+from structlog.tracebacks import ExceptionDictTransformer
 from structlog.typing import EventDict, Processor
 
 from herness.core import time as clock
@@ -40,6 +43,7 @@ EVENT_NAME_RE: Final = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}")
 FILE_RETRY_S: Final = 60.0
 LOG_FILE_PREFIX: Final = "herness-"
 OMITTED: Final = "[omitted]"
+TOO_DEEP: Final = "[too deep]"
 _SECRET_SUFFIXES: Final = ("_password", "_secret", "_token", "_api_key")
 _NEVER_GUARDED: Final = frozenset({"event", "component", "level", "ts"})
 _META_KEYS: Final = frozenset({"_record", "_from_structlog"})
@@ -110,7 +114,8 @@ def _normalize_leaf(value: object, depth: int) -> object:
 
 def _normalize(value: object, depth: int) -> object:
     if depth > MAX_DEPTH:
-        result: object = _safe_str(value)
+        is_container = isinstance(value, Mapping | list | tuple | set | frozenset)
+        result: object = TOO_DEEP if is_container else _safe_str(value)
     elif value is None or isinstance(value, str | int):
         result = value
     elif isinstance(value, float):
@@ -134,22 +139,52 @@ def normalize_values(logger: object, method_name: str, event_dict: EventDict) ->
     return event_dict
 
 
-def _guard(key: str, value: object, is_debug: bool, depth: int) -> object:
-    lowered = key.lower()
+def _guard(key: str, value: object, is_debug: bool) -> object:
+    lowered = key.lower()  # list items pass "" and are only walked, never omitted
     if _is_secret_key(lowered) or (lowered in TEXT_KEYS and not is_debug):
         return OMITTED
-    if isinstance(value, dict) and depth < MAX_DEPTH:
-        return {str(k): _guard(str(k), v, is_debug, depth + 1) for k, v in value.items()}
+    if isinstance(value, dict):
+        return {str(k): _guard(str(k), v, is_debug) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_guard("", item, is_debug) for item in value]
     return value
 
 
-def guard_sensitive(logger: object, method_name: str, event_dict: EventDict) -> EventDict:
-    """Drop secret-named fields always and free-text fields above DEBUG (ENG §3.6)."""
-    is_debug = event_dict.get("level") == "debug"
+def _guard_all(event_dict: EventDict, is_debug: bool) -> EventDict:
     for key in list(event_dict):
         if key not in _NEVER_GUARDED:
-            event_dict[key] = _guard(key, event_dict[key], is_debug, 1)
+            event_dict[key] = _guard(key, event_dict[key], is_debug)
     return event_dict
+
+
+def guard_sensitive(logger: object, method_name: str, event_dict: EventDict) -> EventDict:
+    """Drop secret-named fields always, free text above DEBUG; walks all dicts and lists."""
+    return _guard_all(event_dict, event_dict.get("level") == "debug")
+
+
+EXC_RENDERER: Final = ExceptionRenderer(ExceptionDictTransformer(show_locals=False, max_frames=20))
+
+
+def clean_early(scrubber: Processor | None) -> Processor:
+    """Return the structlog-side step: render exception, normalise, guard, scrub (TH00-01).
+
+    A foreign root handler then formats an already clean ``record.msg``. A failing scrubber
+    drops the event with one emit_failed line; nothing is raised.
+    """
+
+    def _clean(logger: object, method_name: str, event_dict: EventDict) -> EventDict:
+        rendered = EXC_RENDERER(logger, method_name, event_dict)
+        normalized = normalize_values(logger, method_name, rendered)
+        event_dict = _guard_all(normalized, method_name == "debug")
+        if scrubber is None:
+            return event_dict
+        try:
+            return cast("EventDict", scrubber(logger, method_name, event_dict))
+        except Exception:  # noqa: BLE001 - a scrubber failure must never raise or echo fields
+            _write_emit_failed(str(getattr(logger, "name", "unknown")))
+        raise DropEvent
+
+    return _clean
 
 
 def check_event_name(strict: bool) -> Processor:
@@ -225,30 +260,25 @@ def _open_append(path: pathlib.Path) -> TextIO:
 
 
 def _status_line(level: str, event: str, path: pathlib.Path, **fields: object) -> str:
-    body: dict[str, object] = {
-        "ts": clock.format_utc(clock.now()),
-        "level": level,
-        "event": event,
-        "component": "core.logging",
-        "path": path.as_posix(),
-    }
-    body.update(fields)
+    body: dict[str, object] = {"ts": clock.format_utc(clock.now()), "level": level, "event": event}
+    body |= {"component": "core.logging", "path": path.as_posix(), **fields}
     return json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+
+
+def _write_emit_failed(logger_name: str) -> None:
+    """Write core.logging.emit_failed: logger name and error type only (TH00-01)."""
+    with contextlib.suppress(Exception):
+        error_type = getattr(sys.exc_info()[0], "__name__", "Unknown")
+        body = {"event": "core.logging.emit_failed", "component": "core.logging"}
+        body |= {"logger": logger_name[:64], "error_type": error_type}
+        sys.stderr.write(json.dumps(body, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 class _SafeHandleErrorMixin:
     """Safe handleError: reports core.logging.emit_failed only, never msg/args/traceback."""
 
     def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802 - overrides Handler
-        with contextlib.suppress(Exception):
-            exc_type = sys.exc_info()[0]
-            body = {
-                "event": "core.logging.emit_failed",
-                "component": "core.logging",
-                "logger": record.name[:64],
-                "error_type": "Unknown" if exc_type is None else exc_type.__name__,
-            }
-            sys.stderr.write(json.dumps(body, ensure_ascii=False, separators=(",", ":")) + "\n")
+        _write_emit_failed(record.name)
 
 
 class SafeStreamHandler(_SafeHandleErrorMixin, logging.StreamHandler[TextIO]):
@@ -313,13 +343,8 @@ class DailyJsonlHandler(_SafeHandleErrorMixin, logging.Handler):
             self._close_stream()
             self._failed_at = clock.monotonic()
             self._dropped += 1
-            failed = _status_line(
-                "error",
-                "core.logging.sink_failed",
-                path,
-                error_type=type(exc).__name__,
-                retry_in_s=FILE_RETRY_S,
-            )
+            fields = {"error_type": type(exc).__name__, "retry_in_s": FILE_RETRY_S}
+            failed = _status_line("error", "core.logging.sink_failed", path, **fields)
             sys.stderr.write(failed + "\n")
 
     def close(self) -> None:

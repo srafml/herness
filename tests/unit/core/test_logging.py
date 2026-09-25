@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import io
 import json
 import logging
 import os
@@ -223,6 +224,41 @@ def test_st00_01_sentinel_never_written(
     assert SENTINEL not in text
     assert SENTINEL not in capsys.readouterr().err
     assert "***" in text
+
+
+def test_st00_02_nested_secrets_never_written(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ST00-02 secret and free-text keys in lists, at level 5 and deeper never reach a sink."""
+    configure_logging("INFO", log_dir=tmp_path, scrubber=_passthrough)
+    log = get_logger("core.test")
+    log.info("core.test.list", users=[{"api_key": SENTINEL}], items=[{"description": SENTINEL}])
+    log.info("core.test.level5", a={"b": {"c": {"d": {"password": SENTINEL}}}})
+    log.info("core.test.deep", a={"b": {"c": {"d": {"e": {"api_key": SENTINEL}}}}})
+    err = capsys.readouterr().err
+    text = "".join(p.read_text(encoding="utf-8") for p in tmp_path.glob("*.jsonl"))
+    for output in (err, text):
+        assert SENTINEL not in output
+        assert "core.test.deep" in output
+    deep = _event([json.loads(line) for line in text.splitlines()], "core.test.deep")
+    assert deep["a"]["b"]["c"]["d"]["e"] == "[too deep]"
+
+
+def test_st00_01_foreign_root_handler_sees_no_secret(configured_logging: Path) -> None:
+    """ST00-01 a root handler Herness did not install gets an already guarded, scrubbed record."""
+    stream = io.StringIO()
+    foreign = logging.StreamHandler(stream)
+    logging.getLogger().addHandler(foreign)
+    try:
+        get_logger("core.test").info(
+            "core.test.foreign", api_key=SENTINEL, value="x " + SENTINEL, nested=[{"token": "t"}]
+        )
+    finally:
+        logging.getLogger().removeHandler(foreign)
+    seen = stream.getvalue()
+    assert "core.test.foreign" in seen
+    assert SENTINEL not in seen
+    assert "'t'" not in seen
 
 
 def _raising_scrubber(logger: object, method_name: str, event_dict: Any) -> Any:

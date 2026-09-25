@@ -16,13 +16,12 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Final, Literal
 
 import structlog
-from structlog.processors import ExceptionRenderer
-from structlog.tracebacks import ExceptionDictTransformer
 from structlog.typing import Processor
 
 from herness.core._log_pipeline import (
     CONTEXT_ID_KEYS,
     EVENT_NAME_RE,
+    EXC_RENDERER,
     FILE_RETRY_S,
     LOG_FILE_PREFIX,
     MAX_DEPTH,
@@ -37,6 +36,7 @@ from herness.core._log_pipeline import (
     add_component,
     add_timestamp,
     check_event_name,
+    clean_early,
     guard_sensitive,
     limit_sizes,
     normalize_values,
@@ -109,7 +109,7 @@ def _formatter(scrubber: Processor | None) -> logging.Formatter:
         structlog.stdlib.ProcessorFormatter.remove_processors_meta,
         structlog.stdlib.add_log_level,
         add_timestamp,
-        ExceptionRenderer(ExceptionDictTransformer(show_locals=False, max_frames=20)),
+        EXC_RENDERER,
         normalize_values,
         guard_sensitive,
     ]
@@ -129,7 +129,9 @@ def _remove_handlers() -> None:
     _STATE.handlers = []
 
 
-def _install(lvl: str, handlers: list[logging.Handler], strict: bool) -> None:
+def _install(
+    lvl: str, handlers: list[logging.Handler], strict: bool, scrubber: Processor | None
+) -> None:
     root = logging.getLogger()
     for handler in handlers:
         root.addHandler(handler)
@@ -142,6 +144,7 @@ def _install(lvl: str, handlers: list[logging.Handler], strict: bool) -> None:
             structlog.stdlib.filter_by_level,
             structlog.contextvars.merge_contextvars,
             check_event_name(strict),
+            clean_early(scrubber),  # record.msg is clean for foreign root handlers too
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
@@ -187,7 +190,7 @@ def configure_logging(
             handlers.append(DailyJsonlHandler(log_dir))
         for handler in handlers:
             handler.setFormatter(formatter)
-        _install(lvl, handlers, strict_event_names)
+        _install(lvl, handlers, strict_event_names, scrubber)
     get_logger("core.logging").info(
         "core.logging.configured",
         level=lvl,
