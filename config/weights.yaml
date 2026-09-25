@@ -1,0 +1,31 @@
+# Weights and portfolio settings (design 04 §7.2; impl 04 U04-19). Sensitivity: confidential.
+# Every block with a dollar or effort meaning carries `unconfirmed`. Setting it to false needs an
+# approved `weight_change` review item that references the new config_hash (U04-22, TH04-05).
+version: 1
+business_timezone: America/New_York
+cost_per_downtime_hour: {unconfirmed: true, by_criticality: {1: 50000, 2: 10000, 3: 2000, 4: 500}, default: 500}
+cost_per_engineer_hour: {unconfirmed: true, value: 95}
+hours_per_story_point: {unconfirmed: true, value: 6}
+priority_impact_multiplier: {unconfirmed: true, values: {1: 1.0, 2: 0.5, 3: 0.1, 4: 0.0, 5: 0.0}}
+impact_fallback: {unconfirmed: true, enabled: true, max_priority: 2, outage_fraction: {1: 1.0, 2: 0.5}, cap_hours: 24}
+toil:
+  unconfirmed: true
+  effort_factor: {1: 1.5, 2: 0.5, 3: 0.2, 4: 0.1, 5: 0.05}
+  business_share: 0.33
+  max_hours_per_incident: 40
+  triage_minutes_per_alert: 3
+  reassignment_hours: 0.5
+  reopen_rework_factor: 0.5
+change: {unconfirmed: true, backout_effort_hours: 4}
+sla_penalty_usd: {unconfirmed: true, value: 0}
+strategic_weights: {unconfirmed: true, default: 1.0, clip: [0.5, 2.0], portfolio: {"PLAT-1": 1.5}, org: {"servicenow:org:ops": 1.2}}
+expected_reduction: {unconfirmed: true, epic: 0.25, feature: 0.15, initiative: 0.25, cluster_fix: 0.40, overrides: {"PAY-123": 0.6}}
+cluster_fix: {unconfirmed: true, effort_hours: 160, min_incidents_12m: 50, min_annual_pain_usd: 50000, max_linked_share: 0.2}
+team_capacity_points_per_quarter: {unconfirmed: true, default: 120, teams: {}}
+portfolio:
+  horizon_quarters: 1
+  scenarios: [{name: lean, budget_usd: 1000000}, {name: base, budget_usd: 2000000}, {name: stretch, budget_usd: 4000000}]
+  mandatory: []
+  excluded: []
+  enforce_team_capacity: true
+  solver: {num_workers: 1, random_seed: 20260924, max_deterministic_time: 20, max_time_in_seconds: 60}

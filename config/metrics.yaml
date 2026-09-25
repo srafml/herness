@@ -1,0 +1,44 @@
+# Metric catalog (design 04 §4.1, §7.1; impl 04 U04-16…U04-18, U04-48). Sensitivity: internal.
+version: 1
+defaults:
+  min_sample_size: 10
+  windows: {week: 26, month: 24, quarter: 8}
+  exclude_incident_states: [canceled]
+  exclude_close_codes: ["Duplicate", "Cancelled", "Not an incident"]
+  max_resolve_days: 365            # durations above this are excluded (data errors)
+  cluster_min_membership: 0.5
+  change_link_min_score: 0.7
+  repeat_window_days: 30
+  noise_severities: [critical, major, minor, warning]   # info excluded from noise ratio
+  failure_outcomes: [unsuccessful, backed_out]
+  compute_timeout_s: 30.0          # interactive compute timeout (DD04-06)
+# The 28 catalog entries (U04-48) are added by T04-08 (#1-#4), T04-09 (#5-#14),
+# T04-10 (#15-#19, #27, #28) and T04-11 (#20-#26). The root model needs at least one entry,
+# so this file loads as a whole only once T04-08 lands.
+metrics: []
+scoring:
+  as_of: null                     # null = build date in business_timezone
+  funding:
+    tier_weights: {cluster_weight: 0.8, root_cause_weight: 0.6, service_weight: 0.3}
+    min_direct_links: 1
+    window_days: 365
+  org:
+    min_peer_group: 5
+    trend_weight: 0.5
+    min_weight_coverage: 0.5
+    metrics: {mttr_hours: 0.15, repeat_incident_rate: 0.15, change_failure_rate: 0.15,
+              sla_breach_rate: 0.10, reopen_rate: 0.05, reassignment_rate: 0.05,
+              alert_noise_ratio: 0.10, cycle_time_days: 0.10, unplanned_work_ratio: 0.10,
+              epic_predictability: 0.05}
+  peer_group:
+    min_service_peers: 3          # below this, service/work_item peer_group() returns fallback "prior_year"
+  levers:
+    top_entities: 50
+    templates:
+      mttr: "Moving {metric_label} for {entity_name} from {current_value} to the {target_kind} of {target_value} {unit} is worth about {delta_usd} per year, based on {n_basis} records in the last 12 months."
+      repeat: "Moving {metric_label} for {entity_name} from {current_value} to the {target_kind} of {target_value} {unit} is worth about {delta_usd} per year, based on {n_basis} records in the last 12 months."
+      reopen: "Moving {metric_label} for {entity_name} from {current_value} to the {target_kind} of {target_value} {unit} is worth about {delta_usd} per year, based on {n_basis} records in the last 12 months."
+      reassign: "Moving {metric_label} for {entity_name} from {current_value} to the {target_kind} of {target_value} {unit} is worth about {delta_usd} per year, based on {n_basis} records in the last 12 months."
+      sla: "Moving {metric_label} for {entity_name} from {current_value} to the {target_kind} of {target_value} {unit} is worth about {delta_usd} per year, based on {n_basis} records in the last 12 months."
+      cfr: "Moving {metric_label} for {entity_name} from {current_value} to the {target_kind} of {target_value} {unit} is worth about {delta_usd} per year, based on {n_basis} records in the last 12 months."
+      noise: "Moving {metric_label} for {entity_name} from {current_value} to the {target_kind} of {target_value} {unit} is worth about {delta_usd} per year, based on {n_basis} records in the last 12 months."
