@@ -34,13 +34,15 @@ _OLLAMA_PORT: Final = 11434
 # Secret-reference shape of U10-27, restated locally (R-03, R-72); plain-text keys fail.
 _REF_PATTERN: Final = r"^secret:[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$"
 _BLOCKED_COLUMN: Final = r"^(core|enrich|metrics|score|meta)\.[a-z_]+\.[a-z_]+$"
-# fmt: off
 _DEFAULT_BLOCKED_COLUMNS: Final = (
-    "core.incident.short_description", "core.incident.description", "core.incident.close_notes",
-    "core.change.short_description", "core.change.description", "core.problem.root_cause_text",
+    "core.incident.short_description",
+    "core.incident.description",
+    "core.incident.close_notes",
+    "core.change.short_description",
+    "core.change.description",
+    "core.problem.root_cause_text",
     "core.work_item.description",
 )
-# fmt: on
 
 
 def _fail(path: str, rule: str) -> NoReturn:
@@ -212,6 +214,8 @@ class RoleParams(_Section):
 
 
 class DepthOverride(_Section):
+    """``models.depth_overrides.<depth>``: role-to-client overrides for one depth."""
+
     roles: dict[str, str] = {}
 
 
@@ -223,6 +227,8 @@ class AnthropicSettings(_Section):
 
 
 class DepthDefault(_Section):
+    """``models.depth``: the default run depth."""
+
     default: _Depth = "standard"
 
 
@@ -274,6 +280,8 @@ class ModelsSection(_Section):
 
 
 class ToolsSettings(_Section):
+    """``harness.tools``: tool dispatch limits."""
+
     max_parallel: int = Field(default=4, ge=1, le=16)
 
 
@@ -292,6 +300,8 @@ class SqlSettings(_Section):
 
 
 class LoopSettings(_Section):
+    """``harness.loop``: agent-loop guards."""
+
     wrap_up_ratio: float = Field(default=0.9, ge=0.5, le=0.99)
     no_progress_steps: int = Field(default=4, ge=2, le=20)
     error_streak: int = Field(default=3, ge=2, le=20)
@@ -305,6 +315,8 @@ class VerifierSettings(_Section):
 
 
 class TraceSettings(_Section):
+    """``harness.trace``: payload sampling per run kind."""
+
     payload_sample_rate: dict[_TraceKind, Annotated[float, Field(ge=0, le=1)]] = Field(
         default={"eval": 1.0, "chat": 0.0, "review": 0.1}, min_length=3
     )

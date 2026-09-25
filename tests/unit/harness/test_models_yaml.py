@@ -92,6 +92,28 @@ def test_ut05_125_clients_equal_design_table() -> None:
     assert clients["local-30b"].context_window == 32768
 
 
+# design §7: timeout_s, gpu_class, reasoning_parser, thinking_mode (Claude timeout 600 per impl §9)
+CLIENT_EXTRAS: dict[str, tuple[float, str | None, str | None, str | None]] = {
+    "local-30b": (300, "reasoning", "qwen3", None),
+    "local-lora-14b": (300, "reasoning", None, None),
+    "local-large-offload": (3600, "large", None, None),
+    "local-small-cpu": (300, None, None, None),
+    "local-judge": (300, None, None, None),
+    "claude-opus": (600, None, None, "adaptive_always"),
+    "claude-sonnet": (600, None, None, "adaptive_optional"),
+    "claude-haiku": (600, None, None, "budget"),
+}
+
+
+def test_ut05_125_client_runtime_fields_equal_design() -> None:
+    """UT05-125 timeout_s, gpu_class, reasoning_parser and thinking_mode equal design §7."""
+    clients = _load().models.clients
+    for key, (timeout, gpu, parser, thinking) in CLIENT_EXTRAS.items():
+        client = clients[key]
+        got = (client.timeout_s, client.gpu_class, client.reasoning_parser, client.thinking_mode)
+        assert got == (timeout, gpu, parser, thinking), key
+
+
 def test_ut05_125_ports_and_network() -> None:
     """UT05-125 local ports are 8000 (vLLM) and 8200 (llama.cpp) per R-51; Claude off-network."""
     clients = _load().models.clients
