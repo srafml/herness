@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from herness.core import ids
+from herness.core import ids, numbers
 from herness.core.logging import configure_logging, get_logger, reset_logging
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -50,3 +50,31 @@ def test_bt00_03_file_logging_throughput(tmp_path: Any) -> None:
     elapsed = time.perf_counter() - start
     reset_logging()
     assert elapsed < 1.0
+
+
+def _bench_text() -> str:
+    parts: list[str] = []
+    for i in range(1000):
+        parts.append(f"metric [[n{i}]] rose")
+        if i % 2 == 0:
+            parts.append(f"in {1990 + i % 30}")
+        if i % 20 == 0:
+            parts.append(f"by {i + 3} units")
+    text = " ".join(parts)
+    return (text + " " + "padding " * 20_000)[:100_000]
+
+
+def test_bt00_05_find_uncited_median(benchmark: Any) -> None:
+    """BT00-05 find_uncited on a 100,000-character text: median under 100 ms."""
+    allowed = numbers.compile_allowed_patterns(
+        [
+            r"\b(19|20)\d{2}\b",
+            r"\d{4}-\d{2}-\d{2}",
+            r"Q[1-4] \d{4}",
+            r"(INC|CHG|PRB)\d+",
+            r"[A-Z][A-Z0-9]+-\d+",
+        ]
+    )
+    text = _bench_text()
+    benchmark.pedantic(numbers.find_uncited, args=(text, allowed), rounds=100, iterations=1)
+    assert benchmark.stats.stats.median < 0.1
