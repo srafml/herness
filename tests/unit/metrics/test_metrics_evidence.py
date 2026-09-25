@@ -13,6 +13,7 @@ import pyarrow as pa
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from tests.support.result_hash_vectors import VECTORS as VECTOR_SOURCES
 
 from herness.core import ids
 from herness.core.errors import ConfigError, SchemaViolation
@@ -51,6 +52,8 @@ def test_ut04_02_vector_file_has_enough_vectors() -> None:
     vectors = _load_vectors()
     assert len(vectors) >= 12
     assert len({v["id"] for v in vectors}) == len(vectors)
+    generated = [(vid, name, sql) for vid, name, sql in VECTOR_SOURCES]
+    assert [(v["id"], v["name"], v["sql"]) for v in vectors] == generated
 
 
 @pytest.mark.parametrize("vector", _load_vectors(), ids=lambda v: v["id"])
@@ -131,6 +134,13 @@ def test_ut04_11_tolerance_compare() -> None:
     assert not rows_equivalent(cols, a, [("x", 1.0, D("2.00")), ("z", 5.0, None)])
     special = [("n", math.nan, None), ("i", math.inf, None)]
     assert rows_equivalent(cols, special, list(reversed(special)))
+    one = [("x", 1.0, None)]
+    for left, right in ((math.inf, 1.0), (math.inf, -math.inf), (math.nan, 1.0), (1e308, math.inf)):
+        a_row, b_row = [("x", left, None)], [("x", right, None)]
+        assert not rows_equivalent(cols, a_row, b_row)
+        assert not rows_equivalent(cols, b_row, a_row)
+    assert rows_equivalent(cols, [("x", -math.inf, None)], [("x", -math.inf, None)])
+    assert rows_equivalent(cols, one, one)
     with pytest.raises(SchemaViolation, match="row width 2 != column count 3"):
         rows_equivalent(cols, [("x", 1.0)], [("x", 1.0)])
 
@@ -142,8 +152,8 @@ def test_ut04_12_iter_batch_rows() -> None:
     assert list(iter_batch_rows([b1, b2])) == [(1, "x"), (2, None), (3, "z")]
 
 
-def test_ut04_13_constants() -> None:
-    """U04-13 limits and allowlists are fixed at import."""
+def test_ut04_09_constants() -> None:
+    """UT04-09 (U04-13 part) limits and allowlists are fixed at import; core.* not writable."""
     assert evidence.RESULT_SAMPLE_LIMIT == 50
     assert evidence.MAX_RESULT_ROWS == 1_000_000
     assert evidence.HASH_PARALLEL_MIN_ROWS == 200_000
@@ -250,13 +260,22 @@ def test_pt04_01_hash_invariant_under_permutation(rows: list[tuple[Any, ...]], r
     assert result_hash(PCOLS, shuffled) == result_hash(PCOLS, rows)
 
 
-@given(ROWS, ROWS, st.randoms(use_true_random=False))
+PERTURB = st.sampled_from([0.0, 1e-12, 1e-7, 1e-3])
+
+
+def _perturb(f: float | None, delta: float) -> float | None:
+    return f if f is None or not math.isfinite(f) else f * (1 + delta) + delta
+
+
+@given(ROWS, ROWS, st.data())
 def test_pt04_11_rows_equivalent_symmetric_reflexive(
-    a: list[tuple[Any, ...]], b: list[tuple[Any, ...]], rnd: Any
+    a: list[tuple[Any, ...]], other: list[tuple[Any, ...]], data: Any
 ) -> None:
-    """PT04-11 rows_equivalent is symmetric and reflexive."""
-    shuffled = list(a)
-    rnd.shuffle(shuffled)
+    """PT04-11 rows_equivalent is symmetric and reflexive (b near a, and b independent)."""
+    deltas = data.draw(st.lists(PERTURB, min_size=len(a), max_size=len(a)))
+    near = [(i, _perturb(f, d), s) for (i, f, s), d in zip(a, deltas, strict=True)]
+    b = data.draw(st.permutations(near))
     assert rows_equivalent(PCOLS, a, a)
-    assert rows_equivalent(PCOLS, a, shuffled)
+    assert rows_equivalent(PCOLS, a, data.draw(st.permutations(a)))
     assert rows_equivalent(PCOLS, a, b) == rows_equivalent(PCOLS, b, a)
+    assert rows_equivalent(PCOLS, a, other) == rows_equivalent(PCOLS, other, a)

@@ -21,6 +21,7 @@ import pyarrow as pa
 
 from herness.core import time as clock
 from herness.core.errors import SchemaViolation
+from herness.metrics._encode_nested import COMPOUND_PREFIXES, encode_nested
 
 MAX_SAMPLE_LIMIT: Final[int] = 1000
 _SIGNED: Final = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT")
@@ -36,7 +37,7 @@ _OPEN_SPACE_RE: Final = re.compile(r"\(\s+")
 _CLOSE_SPACE_RE: Final = re.compile(r"\s+\)")
 _DECIMAL_CONTEXT: Final = decimal.Context(prec=100)  # DECIMAL(38, s) quantizes exactly
 _SEP: Final = (",", ":")
-_CONVERSION_ERRORS: Final = (TypeError, ValueError, ArithmeticError, AttributeError)
+_CONVERSION_ERRORS: Final = (TypeError, ValueError, ArithmeticError, AttributeError, LookupError)
 
 
 def normalize_type(duckdb_type: str) -> str:
@@ -121,21 +122,15 @@ def _unsupported(value: object, duckdb_type: str) -> SchemaViolation:
     return SchemaViolation(msg)
 
 
-def _dict_key(key: object, duckdb_type: str) -> str:
-    text = key if isinstance(key, str) else _encode_python(key, duckdb_type)
-    return json.dumps(text, ensure_ascii=False)
-
-
-def _encode_python(value: object, duckdb_type: str) -> str:
-    """Step 14: encode by Python type (STRUCT, MAP, UNION and any other column type)."""
+def _encode_python(value: object, kind: str) -> str:
+    """Step 14: encode by Python type (column types without a type-driven rule)."""
     if value is None:
         return "null"
-    kind = duckdb_type
     if isinstance(value, dict):
-        items = (_dict_key(k, kind) + ":" + _encode_python(v, kind) for k, v in value.items())
+        pairs = ((json.dumps(str(k), ensure_ascii=False), v) for k, v in value.items())
+        items = (key + ":" + _encode_python(v, kind) for key, v in pairs)
         return "{" + ",".join(items) + "}"
-    # Arrow's MonthDayNano is a named tuple with a nanoseconds field.
-    if isinstance(value, datetime.timedelta) or hasattr(value, "nanoseconds"):
+    if isinstance(value, datetime.timedelta) or hasattr(value, "nanoseconds"):  # MonthDayNano
         return _interval(value)
     if isinstance(value, list | tuple):
         return "[" + ",".join(_encode_python(e, kind) for e in value) + "]"
@@ -164,8 +159,7 @@ def _encode_typed(value: object, norm: str, duckdb_type: str) -> str:
         if not isinstance(value, list | tuple):
             raise _unsupported(value, duckdb_type)
         el = norm[: norm.rindex("[")]
-        parts = ("null" if e is None else _encode_typed(e, el, el) for e in value)
-        return "[" + ",".join(parts) + "]"
+        return "[" + ",".join(_member(e, el) for e in value) + "]"
     encoder = _SCALAR_ENCODERS.get(norm)
     if encoder is not None:
         return encoder(value)
@@ -174,10 +168,13 @@ def _encode_typed(value: object, norm: str, duckdb_type: str) -> str:
         return _decimal_text(value, int(match.group(2)))
     if norm.startswith("ENUM("):
         return _text(value)
-    if norm.startswith("MAP(") and isinstance(value, list):
-        # Arrow gives MAP values as (key, value) pairs; fetchall gives a dict.
-        value = dict(cast("list[tuple[object, object]]", value))
+    if norm.startswith(COMPOUND_PREFIXES):
+        return encode_nested(value, norm, _member, _encode_python)
     return _encode_python(value, duckdb_type)
+
+
+def _member(value: object, norm: str) -> str:
+    return "null" if value is None else _encode_typed(value, norm, norm)
 
 
 def encode_cell(value: object, duckdb_type: str) -> str:

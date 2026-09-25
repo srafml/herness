@@ -106,9 +106,10 @@ def _numbers_match(a: object, b: object) -> bool:
     if a is None or b is None:
         return a is None and b is None
     x, y = float(cast("float", a)), float(cast("float", b))
-    if x == y or (math.isnan(x) and math.isnan(y)):
-        return True
-    return abs(x - y) <= _ABS_TOL + _REL_TOL * max(abs(x), abs(y))
+    if not (math.isfinite(x) and math.isfinite(y)):
+        # Non-finite values match only themselves (NaN matches NaN); no tolerance applies.
+        return x == y or (math.isnan(x) and math.isnan(y))
+    return x == y or abs(x - y) <= _ABS_TOL + _REL_TOL * max(abs(x), abs(y))
 
 
 def _rows_match(

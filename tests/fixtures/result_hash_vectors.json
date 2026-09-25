@@ -402,6 +402,67 @@
         "{\"org\":\"o1\",\"n\":2,\"mean_v\":1.875,\"cost\":\"375.00\"}"
       ],
       "result_hash": "a370d5ec0c64bdd1c9c7dc1b32f6d69843f2feb1bdaa666637c5a3831c8a84d1"
+    },
+    {
+      "id": "V18",
+      "name": "HUGEINT and MAP nested in STRUCT (fetchall int/dict vs Arrow Decimal/pairs)",
+      "sql": "SELECT {'h': 5::HUGEINT, 'u': 7::UHUGEINT, 'm': MAP {'k': 1}} AS st, MAP {'k': 5::HUGEINT} AS mh",
+      "columns": [
+        [
+          "st",
+          "STRUCT(h HUGEINT, u UHUGEINT, m MAP(VARCHAR, INTEGER))"
+        ],
+        [
+          "mh",
+          "MAP(VARCHAR, HUGEINT)"
+        ]
+      ],
+      "row_json": [
+        "{\"st\":{\"h\":5,\"u\":7,\"m\":{\"k\":1}},\"mh\":{\"k\":5}}"
+      ],
+      "result_hash": "3b9c7dca7223309d3f3e93bebf87c68aa53409f3e633a92ee587708901d81e15"
+    },
+    {
+      "id": "V19",
+      "name": "UNION with a MAP member and a two-member UNION list",
+      "sql": "SELECT union_value(m := MAP {'k': 1}) AS um, [union_value(n := 1)::UNION(n INTEGER, s VARCHAR), union_value(s := 'x')::UNION(n INTEGER, s VARCHAR)] AS ul",
+      "columns": [
+        [
+          "um",
+          "UNION(m MAP(VARCHAR, INTEGER))"
+        ],
+        [
+          "ul",
+          "UNION(n INTEGER, s VARCHAR)[]"
+        ]
+      ],
+      "row_json": [
+        "{\"um\":{\"k\":1},\"ul\":[1,\"x\"]}"
+      ],
+      "result_hash": "7f54468f406fca472f46fc420cd23ccb5ac79cf16b33ce7ef0115e3469a21745"
+    },
+    {
+      "id": "V20",
+      "name": "MAP with list and STRUCT keys, quoted STRUCT field names",
+      "sql": "SELECT MAP {[1]: 'a'} AS lk, MAP {{'a': 1}: 'b'} AS sk, {'my field': 1, 'x': [MAP {1: 2::HUGEINT}]} AS q",
+      "columns": [
+        [
+          "lk",
+          "MAP(INTEGER[], VARCHAR)"
+        ],
+        [
+          "sk",
+          "MAP(STRUCT(a INTEGER), VARCHAR)"
+        ],
+        [
+          "q",
+          "STRUCT(\"my field\" INTEGER, x MAP(INTEGER, HUGEINT)[])"
+        ]
+      ],
+      "row_json": [
+        "{\"lk\":{\"[1]\":\"a\"},\"sk\":{\"{\\\"a\\\":1}\":\"b\"},\"q\":{\"my field\":1,\"x\":[{\"1\":2}]}}"
+      ],
+      "result_hash": "325b30dbf423d874b1028abc47c26d0b49bbfa0ecc9180be44e7ac3e5597926e"
     }
   ]
 }

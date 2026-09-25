@@ -95,6 +95,22 @@ CASES: list[tuple[object, str, str]] = [
     ([(1, "a")], "MAP(INTEGER, VARCHAR)", '{"1":"a"}'),
     ({"k": [1, None]}, "MAP(VARCHAR, INTEGER[])", '{"k":[1,null]}'),
     (2, "UNION(num INTEGER)", "2"),
+    (1, "UNION(n INTEGER, s VARCHAR)", "1"),
+    ({"h": 5}, "STRUCT(h HUGEINT)", '{"h":5}'),
+    ({"h": D("5")}, "STRUCT(h HUGEINT)", '{"h":5}'),
+    ({"m": {"k": 1}}, "STRUCT(m MAP(VARCHAR, INTEGER))", '{"m":{"k":1}}'),
+    ({"m": [("k", 1)]}, "STRUCT(m MAP(VARCHAR, INTEGER))", '{"m":{"k":1}}'),
+    ([("k", 1)], "UNION(m MAP(VARCHAR, INTEGER))", '{"k":1}'),
+    ({"my field": 1, "x": 2}, 'STRUCT("my ""f"", x" INTEGER, x BIGINT)', '{"my field":1,"x":2}'),
+    ({"e": "b"}, "STRUCT(e ENUM('a, b', 'b'))", '{"e":"b"}'),
+    ({"key": [[1]], "value": ["a"]}, "MAP(INTEGER[], VARCHAR)", '{"[1]":"a"}'),
+    ([([1], "a")], "MAP(INTEGER[], VARCHAR)", '{"[1]":"a"}'),
+    (
+        {uuid.UUID(int=1): D("2")},
+        "MAP(UUID, HUGEINT)",
+        '{"00000000-0000-0000-0000-000000000001":2}',
+    ),
+    ({"a": None}, "STRUCT(a INTEGER)", '{"a":null}'),
     (
         {
             "t": True,
@@ -110,7 +126,7 @@ CASES: list[tuple[object, str, str]] = [
             "n": None,
             "a": (1, "z"),
         },
-        "STRUCT(...)",
+        "VARIANT",
         '{"t":true,"f":0,"d":"0.0","e":"100","ts":"2026-01-01T00:00:00.000000Z",'
         '"dt":"2026-01-01","tm":"01:00:00.000000","iv":1,'
         '"u":"00000000-0000-0000-0000-000000000000","b":"","n":null,"a":[1,"z"]}',
@@ -155,8 +171,8 @@ def test_ut04_01_fetchall_and_arrow_encode_equally() -> None:
 @pytest.mark.parametrize(
     ("value", "duckdb_type"),
     [
-        (object(), "STRUCT(a INTEGER)"),
-        ({"a": object()}, "STRUCT(a INTEGER)"),
+        (object(), "VARIANT"),
+        ({"a": object()}, "VARIANT"),
         (5, "INTEGER[]"),
     ],
 )
@@ -173,7 +189,13 @@ def test_ut04_01_unsupported_type_raises(value: object, duckdb_type: str) -> Non
         ("abc", "INTEGER"),
         ("abc", "DECIMAL(18,2)"),
         (D("NaN"), "DECIMAL(18,2)"),
-        (D("Infinity"), "STRUCT(a DECIMAL(9,0))"),
+        ({"a": D("Infinity")}, "STRUCT(a DECIMAL(9,0))"),
+        (object(), "STRUCT(a INTEGER)"),
+        ({"a": 1, "b": 2}, "STRUCT(a INTEGER)"),
+        (5, "MAP(VARCHAR, INTEGER)"),
+        ({"k": [1]}, "MAP(INTEGER[], VARCHAR)"),
+        ([(1, 2, 3)], "MAP(INTEGER, INTEGER)"),
+        ({"a": 1}, 'STRUCT("a INTEGER)'),
         ("x", "DOUBLE"),
         ("2026-01-01", "TIMESTAMP"),
         (5, "BLOB"),
@@ -185,6 +207,33 @@ def test_ut04_01_conversion_failure_raises(value: object, duckdb_type: str) -> N
     with pytest.raises(SchemaViolation, match="column type") as info:
         encode_cell(value, duckdb_type)
     assert info.value.__cause__ is not None
+
+
+@pytest.mark.parametrize("value", [{"k": 1}, [("k", 1)], (1,), D("1")])
+def test_ut04_01_ambiguous_union_fails_closed(value: object) -> None:
+    """UT04-01 multi-member UNION values that encode differently per path raise."""
+    with pytest.raises(SchemaViolation, match="ambiguous UNION member value"):
+        encode_cell(value, "UNION(a DECIMAL(9,0), m MAP(VARCHAR, INTEGER))")
+
+
+NESTED_SQL = """SELECT {'h': 5::HUGEINT} h, {'u': 5::UHUGEINT} u, {'m': MAP {'k': 1}} m,
+ union_value(m := MAP {'k': 1}) um, {'my field': 1, 'x': [MAP {1: 2::HUGEINT}]} q,
+ MAP {[1]: 'a'} lk, MAP {{'a': 1}: 'b'} sk, MAP {'k': 5::HUGEINT} mh,
+ [union_value(n := 1)::UNION(n INTEGER, s VARCHAR),
+  union_value(s := 'x')::UNION(n INTEGER, s VARCHAR)] un,
+ {'e': 'b'::ENUM('a, b', 'b'), 'd': 1.5::DECIMAL(9,2), 'i': INTERVAL 1 MONTH} st"""
+
+
+def test_ut04_01_nested_fetchall_and_arrow_encode_equally() -> None:
+    """UT04-01 HUGEINT and MAP nested in STRUCT, MAP, UNION and lists encode equally."""
+    con = duckdb.connect()
+    rel = con.sql(NESTED_SQL)
+    types = [str(t) for t in rel.types]
+    fetched = rel.fetchall()[0]
+    arrowed = arrow_rows(con, NESTED_SQL)[0]
+    tokens = [encode_cell(v, k) for v, k in zip(fetched, types, strict=True)]
+    assert tokens == [encode_cell(v, k) for v, k in zip(arrowed, types, strict=True)]
+    assert tokens[:4] == ['{"h":5}', '{"u":5}', '{"m":{"k":1}}', '{"k":1}']
 
 
 def test_ut04_01_empty_type_raises() -> None:
@@ -213,8 +262,14 @@ def test_ut04_02_row_digest_text_and_width() -> None:
         row_digest(["a", "b"], ["INTEGER", "INTEGER"], [1])
 
 
-def test_ut04_05_accumulator_limits_and_finish() -> None:
-    """UT04-05 sample limit bounds and single use of the accumulator."""
+def test_ut04_05_accumulator_sample_of_120_rows() -> None:
+    """UT04-05 the accumulator samples 50 of 120 rows ascending; limits; single use (U04-03)."""
+    big = HashAccumulator([("n", "BIGINT")], sample_limit=50)
+    big.add_rows([(i,) for i in range(120)])
+    _, big_count, big_sample = big.finish()
+    digests = [row_digest(["n"], ["BIGINT"], (s["n"],))[0] for s in big_sample]
+    assert big_count == 120
+    assert digests == sorted(row_digest(["n"], ["BIGINT"], (i,))[0] for i in range(120))[:50]
     for bad in (-1, 1001, True):
         with pytest.raises(SchemaViolation, match="sample limit"):
             HashAccumulator([("a", "INTEGER")], sample_limit=bad)
