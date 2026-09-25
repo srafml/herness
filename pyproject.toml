@@ -256,7 +256,7 @@ source_modules = [
     "herness.core.numbers",
     "herness.core.errors",
 ]
-forbidden_modules = ["herness.core.settings"]
+forbidden_modules = ["herness.core.registry", "herness.core.settings"]
 
 [[tool.importlinter.contracts]]
 name = "settings modules are leaves"
