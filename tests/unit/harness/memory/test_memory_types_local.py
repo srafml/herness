@@ -1,7 +1,7 @@
-"""Type-level tests for herness.harness.memory.types (impl 07 U07-11 … U07-17).
+"""Type-level review-focus tests for herness.harness.memory.types (impl 07 U07-11 … U07-17).
 
-The behavioural tests named by those units (UT07-24, 32, 44, 52, 68, 78, 80, 81) belong to
-later cards; these functions carry the same IDs and check only the type contracts.
+The behavioural tests those units name (UT07-24, 32, 44, 52, 68, 78, 80, 81) belong to later
+cards; these supplementary `test_rf_` functions check only the type contracts.
 """
 
 import pickle  # noqa: TID251 - proves multiprocessing transport, as UT00-08 does
@@ -23,8 +23,8 @@ ULID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 NOW = datetime(2026, 9, 1, tzinfo=UTC)
 
 
-def test_ut07_44_recall_filters_limits() -> None:
-    """UT07-44 RecallFilters defaults and limits (type-level part of U07-11)."""
+def test_rf_recall_filters_limits() -> None:
+    """RF RecallFilters defaults and limits (type-level part of U07-11)."""
     filters = mt.RecallFilters()
     assert filters.kinds is None
     assert filters.entity_ids == []
@@ -45,8 +45,8 @@ def test_ut07_44_recall_filters_limits() -> None:
             mt.RecallFilters(**bad)
 
 
-def test_ut07_24_propose_result_merge_rule() -> None:
-    """UT07-24 ProposeResult: merged_into implies memory_id == merged_into (U07-12)."""
+def test_rf_propose_result_merge_rule() -> None:
+    """RF ProposeResult: merged_into implies memory_id == merged_into (U07-12)."""
     mem = f"mem_{ULID}"
     merged = mt.ProposeResult(
         memory_id=mem, status="active", review_item_id=None, merged_into=mem, flags=["conflict"]
@@ -62,8 +62,8 @@ def test_ut07_24_propose_result_merge_rule() -> None:
         )
 
 
-def test_ut07_81_session_context_and_chat_turn() -> None:
-    """UT07-81 SessionContext holds ChatTurn messages (type-level part of U07-13)."""
+def test_rf_session_context_and_chat_turn() -> None:
+    """RF SessionContext holds ChatTurn messages (type-level part of U07-13)."""
     turn = mt.ChatTurn(message_id="m1", role="user", content="hi", created_at=NOW, query_ids=[])
     ctx = mt.SessionContext(session_id="s1", summary=None, messages=[turn], memory_ids=[])
     assert ctx.messages[0].role == "user"
@@ -71,8 +71,8 @@ def test_ut07_81_session_context_and_chat_turn() -> None:
         mt.ChatTurn(message_id="m1", role="system", content="x", created_at=NOW, query_ids=[])
 
 
-def test_ut07_78_promotion_report_counts() -> None:
-    """UT07-78 PromotionReport counts are non-negative (type-level part of U07-14)."""
+def test_rf_promotion_report_counts() -> None:
+    """RF PromotionReport counts are non-negative (type-level part of U07-14)."""
     fields: dict[str, Any] = {
         "run_id": "run_1",
         "queries_seen": 3,
@@ -89,8 +89,8 @@ def test_ut07_78_promotion_report_counts() -> None:
         mt.PromotionReport(**{**fields, "templates_created": -1})
 
 
-def test_ut07_80_export_report_counts() -> None:
-    """UT07-80 ExportReport counts are non-negative (type-level part of U07-15)."""
+def test_rf_export_report_counts() -> None:
+    """RF ExportReport counts are non-negative (type-level part of U07-15)."""
     fields: dict[str, Any] = {
         "export_id": ULID,
         "out_dir": Path("exports"),
@@ -107,8 +107,8 @@ def test_ut07_80_export_report_counts() -> None:
         mt.ExportReport(**{**fields, "val_count": -1})
 
 
-def test_ut07_52_context_stats_ordering() -> None:
-    """UT07-52 ContextStats requires 0 < target < soft < hard < budget (U07-16)."""
+def test_rf_context_stats_ordering() -> None:
+    """RF ContextStats requires 0 < target < soft < hard < budget (U07-16)."""
     stats = mt.ContextStats(tokens=10, exact=True, budget=100, soft=70, hard=85, target=50)
     assert stats.hard == 85
     bad_orders = [(100, 70, 85, 0), (100, 70, 85, 70), (100, 90, 85, 50), (85, 70, 85, 50)]
@@ -119,8 +119,8 @@ def test_ut07_52_context_stats_ordering() -> None:
             )
 
 
-def test_ut07_32_memory_not_found_fields() -> None:
-    """UT07-32 MemoryNotFound message, attributes, details and pickling (U07-17)."""
+def test_rf_memory_not_found_fields() -> None:
+    """RF MemoryNotFound message, attributes, details and pickling (U07-17)."""
     exc = mt.MemoryNotFound("memory_item", f"mem_{ULID}")
     assert isinstance(exc, NotFound)
     assert isinstance(exc, RecoverableError)
@@ -131,8 +131,8 @@ def test_ut07_32_memory_not_found_fields() -> None:
     assert (clone.kind, clone.ident, str(clone)) == (exc.kind, exc.ident, str(exc))
 
 
-def test_ut07_68_id_patterns_and_reexports() -> None:
-    """UT07-68 ID patterns match the shared types and the shared names are re-exported."""
+def test_rf_id_patterns_and_reexports() -> None:
+    """RF ID patterns match the shared types and the shared names are re-exported."""
     assert mt.MEMORY_ID_RE.fullmatch(f"mem_{ULID}")
     assert mt.REC_ID_RE.fullmatch(f"rec_{ULID}")
     assert mt.FINDING_ID_RE.fullmatch(f"fnd_{ULID}")

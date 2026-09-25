@@ -30,6 +30,7 @@ _FINDING_ID = Annotated[str, Field(pattern=rf"^fnd_{_ULID}$")]
 _MARKER = Annotated[str, Field(pattern=r"^n[0-9]+$")]
 _UNIT = Annotated[float, Field(ge=0, le=1)]
 _SHORT_CONTENT_MAX: Final = 2_000
+_COMPONENT_KEYS: Final = frozenset({"sim", "kw", "ent", "rec", "conf", "final"})
 _TALLY_KEYS: Final = ("accepted", "paid_off", "no_effect", "worse", "inconclusive", "pending")
 _OUTCOME_KEYS: Final = frozenset(
     {"outcome_id", "measurement", "verdict", "baseline", "actual", "delta", "rel", "query_id"}
@@ -146,7 +147,7 @@ class RecallHit(_Frozen):
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
-        if len(self.components) != 6 or self.components["final"] != self.score:  # noqa: PLR2004
+        if set(self.components) != _COMPONENT_KEYS or self.components["final"] != self.score:
             msg = "components need all six keys and final == score"
             raise ValueError(msg)
         if self.unconfirmed != (self.item.status == "pending_approval"):
