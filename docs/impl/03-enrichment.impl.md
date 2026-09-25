@@ -71,7 +71,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design spec's module t
 
 | Path | Purpose | Public symbols | Layer | Extra imports | Line budget |
 |------|---------|----------------|-------|---------------|-------------|
-| `herness/core/types/decisions.py` | Shared decision types owned by 03 (submodule of the `herness.core.types` package, re-exported from it; R-01, ENG §14 E6) | `QuestionType`, `Entity`, `Question`, `QuestionSet`, `DecisionInput`, `Answer`, `DecisionOutput` | L0 | none (only `herness.core.errors`, `herness.core.ids`) | 130 |
+| `herness/core/types/decisions.py` | Shared decision types owned by 03 (submodule of the `herness.core.types` package, re-exported from it; R-01, ENG §14 E6) | `QuestionType`, `Entity`, `Question`, `QuestionSet`, `DecisionInput`, `Answer`, `DecisionOutput` | L0 | none (only `herness.core.errors`, `herness.core.ids`) | 180 |
 | `herness/enrich/__init__.py` | Package facade | `purge_record`, `embed_query`, `health` | L3 | — | 20 |
 | `herness/enrich/settings.py` | pydantic models of `config/decisions.yaml` and of the `deciders` section of `config/models.yaml` (R-76) | `DecisionsConfig` and section models (U03-09), `DecidersSettings` (U03-150), `check_decider_refs` (U03-151) | L3 | only the standard library, `pydantic`, `herness.core.types` and `herness.core.errors` (settings exception, R-03; imported by `herness.core.config`) | 320 |
 | `herness/enrich/questions.py` | Question set loading, fingerprints, dynamic options, acceptance lookup | `question_fingerprint`, `load_question_set`, `check_fingerprint_registry`, `resolve_dynamic_options`, `shortlist_options`, `acceptance_for`, `PAIR_QUESTIONS` | L3 | `duckdb`, `numpy` | 300 |

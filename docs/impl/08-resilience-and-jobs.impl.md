@@ -64,7 +64,7 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 
 | Path | Purpose | Public symbols | Layer | Extra imports | Line budget |
 |------|---------|----------------|-------|---------------|-------------|
-| `herness/core/types/jobs.py` | 08-owned shared data types (R-01) | `GpuClass`, `JobKind`, `ServiceName`, `ChatMode`, `BreakerState`, `PolicyName`, `JobSpec`, `JobOutcome`, `MetricSample` | L0 | `herness.core.types.harness` only (impl 00 §3.5) | 150 |
+| `herness/core/types/jobs.py` | 08-owned shared data types (R-01) | `GpuClass`, `JobKind`, `ServiceName`, `ChatMode`, `BreakerState`, `PolicyName`, `JobSpec`, `JobOutcome`, `MetricSample` | L0 | `herness.core.types.harness` only (impl 00 §3.5) | 160 |
 | `herness/core/types/__init__.py` (08 import line) | Re-export of the 08 names (impl 00 U00-44) | the names above | L0 | none | +2 |
 | `herness/core/types/_ownership.py` (08 entries) | `TYPE_OWNERS` entries for the 08 helper types (impl 00 U00-45) | none new | L0 | none | +6 |
 | `herness/core/errors.py` (08 section) | 08 taxonomy subclass (R-19) | `JobStateError` | L0 | none | +12 |
