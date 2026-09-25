@@ -47,6 +47,8 @@ def test_st00_10_upward_import_rejected(tmp_path: Path) -> None:
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         timeout=300,
         env={**os.environ, "PYTHONPATH": str(tmp_path)},
