@@ -17,9 +17,9 @@ from typing import Any, Final, Literal, TypeVar
 from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
 
-__all__ = ["Kind", "available", "get", "register", "reset_registry"]
+__all__ = ["RegistryKind", "available", "get", "register", "reset_registry"]
 
-Kind = Literal[
+RegistryKind = Literal[
     "connector", "monitoring_adapter", "decider", "llm_client", "tool", "embedder", "renderer"
 ]
 _KINDS: Final[frozenset[str]] = frozenset(
@@ -33,7 +33,7 @@ _T = TypeVar("_T")
 # Module-level registry state (accepted ENG §2.3 exception, mirrors herness.core.logging._State).
 _REG_LOCK: Final = threading.RLock()
 _REGISTRY: dict[tuple[str, str], object] = {}
-_BUILTINS: dict[tuple[Kind, str], str] = {}
+_BUILTINS: dict[tuple[RegistryKind, str], str] = {}
 _entry_points_loaded = False
 
 _logger = get_logger("core.registry")
@@ -58,7 +58,7 @@ def _store(kind: str, name: str, obj: object) -> None:
         _REGISTRY[key] = obj
 
 
-def register(kind: Kind, name: str) -> Callable[[_T], _T]:
+def register(kind: RegistryKind, name: str) -> Callable[[_T], _T]:
     """Register the decorated object under (kind, name). Raises ConfigError."""
     _validate(kind, name)
 
@@ -96,7 +96,7 @@ def _load_entry_points() -> None:
     _entry_points_loaded = True
 
 
-def get(kind: Kind, name: str) -> Any:  # noqa: ANN401 - resolves to an arbitrary class or factory
+def get(kind: RegistryKind, name: str) -> Any:  # noqa: ANN401 - an arbitrary class or factory
     """Resolve the class or factory registered under (kind, name). Raises ConfigError."""
     _validate(kind, name)
     with _REG_LOCK:
@@ -122,7 +122,7 @@ def get(kind: Kind, name: str) -> Any:  # noqa: ANN401 - resolves to an arbitrar
         raise ConfigError(msg, kind=kind, name=name)
 
 
-def available(kind: Kind) -> list[str]:
+def available(kind: RegistryKind) -> list[str]:
     """List resolvable names for kind: registered, built-in and plugin-provided."""
     with _REG_LOCK:
         _load_entry_points()
