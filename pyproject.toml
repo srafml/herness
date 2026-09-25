@@ -165,7 +165,7 @@ line-ending = "lf"
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["herness"]
+files = ["herness", "tools"]
 plugins = ["pydantic.mypy"]
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
