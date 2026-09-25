@@ -277,6 +277,7 @@ forbidden_modules = [
     "herness.core.time",
     "herness.core.numbers",
     "herness.metrics._encode",
+    "herness.metrics._encode_nested",
     "herness.metrics.evidence",
 ]
 allow_indirect_imports = true

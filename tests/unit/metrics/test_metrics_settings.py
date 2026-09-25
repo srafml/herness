@@ -456,21 +456,21 @@ def test_ut04_119_settings_imports_are_restricted(name: str) -> None:
     assert (_SIBLING in modules) == (name == "settings.py")
 
 
-def test_ut04_19_loaded_config_is_read_only() -> None:
-    """UT04-19 frozen models expose read-only containers, so values cannot change after load."""
-    weights = _weights()
-    with pytest.raises(TypeError):
-        weights.toil.effort_factor[1] = 99.0  # type: ignore[index]
-    with pytest.raises(TypeError):
-        weights.strategic_weights.org["x"] = 1.0  # type: ignore[index]
-    assert isinstance(weights.portfolio.mandatory, tuple)
-    assert isinstance(weights.portfolio.scenarios, tuple)
-    defaults = MetricsDefaults()
-    with pytest.raises(TypeError):
-        defaults.windows["week"] = 1  # type: ignore[index]
-    assert isinstance(defaults.noise_severities, tuple)
-    metric = MetricDef.model_validate(_metric_raw())
-    assert isinstance(metric.grains, tuple)
+@pytest.mark.filterwarnings("error")
+def test_ut04_19_models_round_trip_json_and_deepcopy() -> None:
+    """UT04-19 loaded configs survive model_dump_json/model_validate_json and deepcopy unchanged."""
+    weights = WeightsConfig.model_validate(_weights_raw())
+    assert WeightsConfig.model_validate_json(weights.model_dump_json()) == weights
+    assert weights.model_dump(mode="json")["cost_per_engineer_hour"]["value"] == "95"
+    raw = _yaml("metrics.yaml")
+    raw["metrics"] = [_metric_raw() | {"requires_columns": ["core.incident.team_id"]}]
+    catalog = MetricsCatalogConfig.model_validate(raw)
+    assert MetricsCatalogConfig.model_validate_json(catalog.model_dump_json()) == catalog
+    payload = _payload(["toil"])
+    assert WeightChangePayload.model_validate_json(payload.model_dump_json()) == payload
+    for model in (weights, catalog, catalog.defaults, catalog.scoring, payload):
+        assert copy.deepcopy(model) == model
+        assert model.model_copy(deep=True) == model
 
 
 def test_st04_05_flip_without_or_with_wrong_approval_refused() -> None:

@@ -162,6 +162,23 @@ def test_ut00_73_private_sibling_settings(
     assert any(line.endswith("herness.connectors.client") for line in lines)
 
 
+def test_ut00_73_private_settings_package_is_scanned(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """UT00-73 every file of a private settings package (`_x_settings/`) is scanned too."""
+    root = _tree(tmp_path)
+    _write(root, "herness/metrics/__init__.py", "")
+    _write(root, "herness/metrics/settings.py", "from herness.metrics._x_settings import A\n")
+    _write(root, "herness/metrics/_x_settings/__init__.py", "import httpx\n")
+    _write(root, "herness/metrics/_x_settings/models.py", "import duckdb\n")
+    _write(root, "herness/metrics/other.py", "import duckdb\n")
+    _, out = _run(root, capsys)
+    lines = sorted(line for line in out.splitlines() if "OWN050" in line)
+    assert len(lines) == 2
+    assert any("__init__.py" in line and line.endswith("httpx") for line in lines)
+    assert any("models.py" in line and line.endswith("duckdb") for line in lines)
+
+
 def test_ut00_81_declared_module_or_package(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

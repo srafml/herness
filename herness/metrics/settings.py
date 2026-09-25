@@ -85,15 +85,14 @@ _WEIGHT_VALUE = r"^(true|false|-?[0-9]+(\.[0-9]+)?)$"
 _UNIQUE = rule(lambda v: len(set(v)) == len(v), "items must be unique")
 _WindowKey = Literal["week", "month", "quarter"]
 _Windows = Annotated[
-    Mapping[_WindowKey, Annotated[int, Field(ge=1, le=520)]],
+    dict[_WindowKey, Annotated[int, Field(ge=1, le=520)]],
     rule(lambda v: set(v) == set(get_args(_WindowKey)), "windows needs week, month and quarter"),
 ]
-_DEFAULT_WINDOWS: Final[Mapping[_WindowKey, int]] = types.MappingProxyType(
-    {"week": 26, "month": 24, "quarter": 8}
-)
+_Severity = Literal["critical", "major", "minor", "warning", "info"]
+_Outcome = Literal["unsuccessful", "backed_out", "successful_with_issues"]
 _TierWeight = Annotated[float, Field(gt=0, le=1)]
 _Templates = Annotated[
-    Mapping[UsdModel, Annotated[str, Field(min_length=1, max_length=500)]],
+    dict[UsdModel, Annotated[str, Field(min_length=1, max_length=500)]],
     rule(lambda v: set(v) == set(get_args(UsdModel)), "templates needs every usd_model"),
 ]
 
@@ -104,39 +103,48 @@ class MetricDef(Model):
     name: str = Field(pattern=r"^[a-z][a-z0-9_]{2,63}$")
     description: str = Field(min_length=1, max_length=300)
     domain: Domain
-    grains: Annotated[tuple[EntityType, ...], Field(min_length=1, max_length=5), _UNIQUE]
+    grains: Annotated[list[EntityType], Field(min_length=1, max_length=5), _UNIQUE]
     unit: Unit
     better: Better
     aggregation: Aggregation
     min_sample_size: int = Field(ge=1, le=100_000)
     owner: str = Field(pattern=r"^[a-z0-9_-]{1,64}$")
     estimate: bool
-    uses_weights: tuple[str, ...]
+    uses_weights: list[str]
     usd_model: UsdModel | None
-    filters: Annotated[tuple[FilterKey, ...], _UNIQUE]
+    filters: Annotated[list[FilterKey], _UNIQUE]
     enabled: bool
-    requires_columns: tuple[Annotated[str, Field(pattern=r"^core\.[a-z_]+\.[a-z_]+$")], ...]
+    requires_columns: list[Annotated[str, Field(pattern=r"^core\.[a-z_]+\.[a-z_]+$")]]
     sql: str = Field(min_length=1, max_length=20_000)
+
+
+def _default_windows() -> dict[_WindowKey, int]:
+    return {"week": 26, "month": 24, "quarter": 8}
+
+
+def _default_severities() -> list[_Severity]:
+    return ["critical", "major", "minor", "warning"]
+
+
+def _default_outcomes() -> list[_Outcome]:
+    return ["unsuccessful", "backed_out"]
 
 
 class MetricsDefaults(Model):
     """`metrics.yaml: defaults` (design 04 §4.1)."""
 
     min_sample_size: int = Field(default=10, ge=1, le=100_000)
-    windows: _Windows = Field(default_factory=lambda: _DEFAULT_WINDOWS)
-    exclude_incident_states: tuple[str, ...] = ("canceled",)
-    exclude_close_codes: tuple[str, ...] = ("Duplicate", "Cancelled", "Not an incident")
+    windows: _Windows = Field(default_factory=_default_windows)
+    exclude_incident_states: list[str] = Field(default_factory=lambda: ["canceled"])
+    exclude_close_codes: list[str] = Field(
+        default_factory=lambda: ["Duplicate", "Cancelled", "Not an incident"]
+    )
     max_resolve_days: int = Field(default=365, ge=1, le=3650)
     cluster_min_membership: Fraction = 0.5
     change_link_min_score: Fraction = 0.7
     repeat_window_days: int = Field(default=30, ge=1, le=365)
-    noise_severities: Annotated[
-        tuple[Literal["critical", "major", "minor", "warning", "info"], ...], Field(min_length=1)
-    ] = ("critical", "major", "minor", "warning")
-    failure_outcomes: Annotated[
-        tuple[Literal["unsuccessful", "backed_out", "successful_with_issues"], ...],
-        Field(min_length=1),
-    ] = ("unsuccessful", "backed_out")
+    noise_severities: list[_Severity] = Field(default_factory=_default_severities, min_length=1)
+    failure_outcomes: list[_Outcome] = Field(default_factory=_default_outcomes, min_length=1)
     compute_timeout_s: float = Field(default=30.0, ge=1, le=300)
 
 
@@ -162,7 +170,7 @@ class OrgScoring(Model):
     min_peer_group: int = Field(default=5, ge=2, le=100)
     trend_weight: float = Field(default=0.5, ge=0, le=5)
     min_weight_coverage: Fraction = 0.5
-    metrics: Mapping[str, Positive] = Field(min_length=1, max_length=40)
+    metrics: dict[str, Positive] = Field(min_length=1, max_length=40)
 
 
 class PeerGroupScoring(Model):
@@ -193,7 +201,7 @@ class MetricsCatalogConfig(Model):
 
     version: Literal[1]
     defaults: MetricsDefaults
-    metrics: tuple[MetricDef, ...] = Field(min_length=1, max_length=200)
+    metrics: list[MetricDef] = Field(min_length=1, max_length=200)
     scoring: ScoringConfig
 
     @model_validator(mode="after")
@@ -262,12 +270,12 @@ class WeightChangePayload(Model):
     """Schema of `review_item.payload` for kind `weight_change`; no free-text field."""
 
     blocks: Annotated[
-        tuple[str, ...],
+        list[str],
         Field(min_length=1, max_length=20),
         rule(lambda v: set(v) <= set(WEIGHT_BLOCKS), "unknown weight block"),
     ]
     proposed_config_hash: str | None = Field(default=None, pattern=_CONFIG_HASH)
-    changes: tuple[WeightChange, ...] = Field(default=(), max_length=100)
+    changes: list[WeightChange] = Field(default_factory=list, max_length=100)
     origin: Literal["operator", "memory"]
     memory_id: str | None = Field(default=None, pattern=r"^mem_[0-9A-HJKMNP-TV-Z]{26}$")
 

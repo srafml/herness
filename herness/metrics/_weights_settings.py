@@ -5,9 +5,8 @@ standard library, pydantic, herness.core.types and herness.core.errors.
 """
 
 import re
-import types
 import zoneinfo
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Annotated, Any, Final, Literal, Self
 
@@ -17,7 +16,6 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
-    field_validator,
     model_validator,
 )
 
@@ -65,29 +63,15 @@ Money = Annotated[Decimal, BeforeValidator(_to_decimal)]
 Fraction = Annotated[float, Field(ge=0, le=1)]
 Positive = Annotated[float, Field(gt=0)]
 _PriorityMap = Annotated[
-    Mapping[int, Annotated[float, Field(ge=0, le=10)]],
+    dict[int, Annotated[float, Field(ge=0, le=10)]],
     rule(lambda v: set(v) == _PRIORITIES, "keys must be exactly 1..5"),
 ]
 
 
 class Model(BaseModel):
-    """Frozen, strict, closed section model whose containers are read-only too.
+    """Frozen, strict, closed section model (R-03 settings base)."""
 
-    YAML lists arrive as tuples and mappings are wrapped in MappingProxyType, so a loaded
-    config cannot be changed after its config_hash is computed (TH04-05).
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True, validate_default=True)
-
-    @field_validator("*", mode="before")
-    @classmethod
-    def _lists_to_tuples(cls, value: object) -> object:
-        return tuple(value) if isinstance(value, list) else value
-
-    @field_validator("*", mode="after")
-    @classmethod
-    def _read_only_maps(cls, value: object) -> object:
-        return types.MappingProxyType(value) if isinstance(value, dict) else value
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
 class WeightBlock(Model):
@@ -98,7 +82,7 @@ class WeightBlock(Model):
 
 class CostPerDowntimeHour(WeightBlock):
     by_criticality: Annotated[
-        Mapping[int, Annotated[Money, Field(ge=0)]],
+        dict[int, Annotated[Money, Field(ge=0)]],
         rule(lambda v: set(v) <= {1, 2, 3, 4}, "criticality keys must be within 1..4"),
     ]
     default: Annotated[Money, Field(ge=0)]
@@ -119,7 +103,7 @@ class PriorityImpactMultiplier(WeightBlock):
 class ImpactFallback(WeightBlock):
     enabled: bool
     max_priority: int = Field(ge=1, le=5)
-    outage_fraction: Mapping[int, Fraction]
+    outage_fraction: dict[int, Fraction]
     cap_hours: Positive
 
     @model_validator(mode="after")
@@ -146,10 +130,12 @@ class ChangeWeights(WeightBlock):
 class StrategicWeights(WeightBlock):
     default: Positive
     clip: Annotated[
-        tuple[Positive, Positive], rule(lambda v: v[0] <= v[1], "clip needs min <= max")
+        tuple[Positive, Positive],
+        BeforeValidator(lambda v: tuple(v) if isinstance(v, list) else v),
+        rule(lambda v: v[0] <= v[1], "clip needs min <= max"),
     ]
-    portfolio: Mapping[str, Positive]
-    org: Mapping[str, Positive]
+    portfolio: dict[str, Positive]
+    org: dict[str, Positive]
 
 
 class ExpectedReduction(WeightBlock):
@@ -157,7 +143,7 @@ class ExpectedReduction(WeightBlock):
     feature: Fraction
     initiative: Fraction
     cluster_fix: Fraction
-    overrides: Mapping[str, Fraction]
+    overrides: dict[str, Fraction]
 
 
 class ClusterFix(WeightBlock):
@@ -169,7 +155,7 @@ class ClusterFix(WeightBlock):
 
 class TeamCapacity(WeightBlock):
     default: Positive
-    teams: Mapping[str, Positive]
+    teams: dict[str, Positive]
 
 
 class ScenarioConfig(Model):
@@ -188,7 +174,7 @@ class SolverConfig(Model):
     max_time_in_seconds: float = Field(ge=1, le=600)
 
 
-def _scenario_names_ok(scenarios: tuple[ScenarioConfig, ...]) -> bool:
+def _scenario_names_ok(scenarios: list[ScenarioConfig]) -> bool:
     names = [scenario.name for scenario in scenarios]
     return len(set(names)) == len(names) and "unconstrained" not in names
 
@@ -198,12 +184,12 @@ class PortfolioConfig(Model):
 
     horizon_quarters: int = Field(ge=1, le=8)
     scenarios: Annotated[
-        tuple[ScenarioConfig, ...],
+        list[ScenarioConfig],
         Field(max_length=20),
         rule(_scenario_names_ok, "scenario names must be unique and not unconstrained"),
     ]
-    mandatory: tuple[str, ...]
-    excluded: tuple[str, ...]
+    mandatory: list[str]
+    excluded: list[str]
     enforce_team_capacity: bool
     solver: SolverConfig
 

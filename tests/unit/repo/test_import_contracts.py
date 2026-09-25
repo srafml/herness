@@ -59,8 +59,11 @@ def test_ut00_58_contracts_match_repository() -> None:
         assert "core base is closed" not in contracts
     settings = sorted(
         ".".join(p.relative_to(ROOT).with_suffix("").parts)
-        for p in (ROOT / "herness").rglob("*settings.py")
-        if p.name == "settings.py" or p.name.endswith("_settings.py")
+        for p in (ROOT / "herness").rglob("*settings*")
+        if (p.name == "settings.py" or p.name.endswith("_settings.py"))
+        or (
+            (p.name == "settings" or p.name.endswith("_settings")) and (p / "__init__.py").is_file()
+        )
     )
     assert ("settings modules are leaves" in contracts) == bool(settings)
     if settings:

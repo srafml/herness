@@ -279,8 +279,11 @@ def _check_outside(src: Source, tables: Tables, report: Report) -> None:
             report.add(src.rel, line, "OWN041", f"import via submodule {module}")
 
 
-def _is_settings_file(path: Path) -> bool:
-    return path.name == "settings.py" or path.name.endswith("_settings.py")
+def _is_settings_file(rel: Path) -> bool:
+    """A settings module, or any file of a settings package (`settings/`, `_x_settings/`)."""
+    return any(
+        part == "settings" or part.endswith("_settings") for part in rel.with_suffix("").parts
+    )
 
 
 def _private_sibling_settings(src: Source, module: str) -> bool:
@@ -320,7 +323,7 @@ def check(root: Path, tables: Tables) -> Report:
             if src is None:
                 continue
             _check_outside(src, tables, report)
-            if top == "herness" and _is_settings_file(path):
+            if top == "herness" and _is_settings_file(path.relative_to(root)):
                 _check_settings(src, tables, report)
     return report
 
