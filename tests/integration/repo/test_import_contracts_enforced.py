@@ -24,15 +24,17 @@ def test_st00_10_upward_import_rejected(tmp_path: Path) -> None:
         errors.read_text(encoding="utf-8") + "\nimport herness.harness\n", encoding="utf-8"
     )
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    text = text.replace(
-        'layers = [\n    "herness.core",\n]',
-        'layers = [\n    "herness.harness",\n    "herness.core",\n]',
-        1,
-    )
+    # C1 is the first layers contract: put the planted package on top of it.
+    text = text.replace("layers = [\n", 'layers = [\n    "herness.harness",\n', 1)
     config = tomllib.loads(text)["tool"]["importlinter"]
     base = next(c for c in config["contracts"] if c["name"] == "core base order")["layers"]
     sources = [name.strip() for layer in base for name in layer.split("|")]
-    if not any(c["name"] == "core base is closed" for c in config["contracts"]):
+    closed = 'name = "core base is closed"'
+    if closed in text:
+        head, tail = text.split(closed, 1)
+        tail = tail.replace("forbidden_modules = [", 'forbidden_modules = ["herness.harness", ', 1)
+        text = head + closed + tail
+    else:
         text += (
             '\n[[tool.importlinter.contracts]]\nname = "core base is closed"\n'
             'type = "forbidden"\n'
