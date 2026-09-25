@@ -218,7 +218,7 @@ include_external_packages = false
 name = "herness layers"
 type = "layers"
 layers = [
-    "herness.model",
+    "herness.connectors | herness.model",
     "herness.store",
     "herness.core",
 ]
@@ -247,13 +247,6 @@ layers = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "types import only errors and ids"
-type = "forbidden"
-source_modules = ["herness.core.types"]
-forbidden_modules = ["herness.core.time", "herness.core.logging", "herness.core._log_pipeline"]
-allow_indirect_imports = true
-
-[[tool.importlinter.contracts]]
 name = "core base is closed"
 type = "forbidden"
 source_modules = [
@@ -265,7 +258,14 @@ source_modules = [
     "herness.core.numbers",
     "herness.core.errors",
 ]
-forbidden_modules = ["herness.store", "herness.model"]
+forbidden_modules = ["herness.store", "herness.model", "herness.connectors"]
+
+[[tool.importlinter.contracts]]
+name = "types import only errors and ids"
+type = "forbidden"
+source_modules = ["herness.core.types"]
+forbidden_modules = ["herness.core.time", "herness.core.logging", "herness.core._log_pipeline"]
+allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "settings modules are leaves"
