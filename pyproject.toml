@@ -245,6 +245,33 @@ layers = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "core base is closed"
+type = "forbidden"
+source_modules = [
+    "herness.core.logging",
+    "herness.core._log_pipeline",
+    "herness.core.types",
+    "herness.core.ids",
+    "herness.core.time",
+    "herness.core.numbers",
+    "herness.core.errors",
+]
+forbidden_modules = ["herness.core.settings"]
+
+[[tool.importlinter.contracts]]
+name = "settings modules are leaves"
+type = "forbidden"
+source_modules = ["herness.core.settings"]
+forbidden_modules = [
+    "herness.core.logging",
+    "herness.core._log_pipeline",
+    "herness.core.ids",
+    "herness.core.time",
+    "herness.core.numbers",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
 name = "types import only errors and ids"
 type = "forbidden"
 source_modules = ["herness.core.types"]
