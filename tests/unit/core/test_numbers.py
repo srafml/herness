@@ -167,6 +167,13 @@ def test_pt00_07_single_inserted_numeral(
     assert hits[0].start == len(" ".join(new_words[:position])) + (1 if position else 0)
 
 
+def test_ut00_79_overflowing_values_are_not_available() -> None:
+    """UT00-79 overflowing exponents and oversized ints give n/a for every format, never raise."""
+    for value in ("1e9999999", "-1e9999999", "1e999999999999999999", 10**5000):
+        for fmt in sorted(nm.NUMBER_FORMATS):
+            assert nm.format_value(value, "usd", fmt) == nm.NOT_AVAILABLE
+
+
 def test_st00_18_evasions_are_caught() -> None:
     """ST00-18 each evasion text yields a hit, never inside a valid marker."""
     texts = [

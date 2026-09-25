@@ -212,8 +212,8 @@ def _to_decimal(value: object) -> decimal.Decimal | None:
     if isinstance(value, bool) or not isinstance(value, int | float | str | decimal.Decimal):
         return None
     try:
-        number = _CTX.create_decimal(str(value))
-    except decimal.InvalidOperation:
+        number = decimal.Decimal(str(value))
+    except (decimal.DecimalException, ValueError):  # ValueError: int beyond the str digit limit
         return None
     return number if number.is_finite() else None
 
@@ -278,7 +278,7 @@ def format_value(value: object, unit: str, fmt: str | None) -> str:
             return _plain(number)
         places, prefix, suffix = _SIMPLE[chosen]
         return _render(_quantize(number, places), prefix, suffix)
-    except decimal.InvalidOperation:
+    except decimal.DecimalException:  # Overflow is not an InvalidOperation; raise nothing
         return NOT_AVAILABLE
 
 
