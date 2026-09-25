@@ -24,12 +24,15 @@ def test_st00_10_upward_import_rejected(tmp_path: Path) -> None:
         errors.read_text(encoding="utf-8") + "\nimport herness.harness\n", encoding="utf-8"
     )
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    text = text.replace(
-        'layers = [\n    "herness.core",\n]',
-        'layers = [\n    "herness.harness",\n    "herness.core",\n]',
-        1,
-    )
+    # The first layers list is C1 ("herness layers"); plant harness as its top layer.
+    text = text.replace("layers = [\n", 'layers = [\n    "herness.harness",\n', 1)
+    closed = text.find('name = "core base is closed"')
+    if closed >= 0:
+        at = text.index("forbidden_modules = [", closed) + len("forbidden_modules = [")
+        text = text[:at] + '"herness.harness", ' + text[at:]
     config = tomllib.loads(text)["tool"]["importlinter"]
+    c1 = next(c for c in config["contracts"] if c["name"] == "herness layers")
+    assert c1["layers"][0] == "herness.harness"
     base = next(c for c in config["contracts"] if c["name"] == "core base order")["layers"]
     sources = [name.strip() for layer in base for name in layer.split("|")]
     if not any(c["name"] == "core base is closed" for c in config["contracts"]):

@@ -174,6 +174,11 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 module = ["app.*", "tools.*"]
 disallow_untyped_decorators = false
 
+[[tool.mypy.overrides]]
+# pyarrow ships no type information and the lock has no stubs package.
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true
@@ -218,6 +223,7 @@ include_external_packages = false
 name = "herness layers"
 type = "layers"
 layers = [
+    "herness.metrics",
     "herness.core",
 ]
 ignore_imports = [
@@ -243,6 +249,20 @@ layers = [
     "herness.core.time | herness.core.numbers",
     "herness.core.errors",
 ]
+
+[[tool.importlinter.contracts]]
+name = "core base is closed"
+type = "forbidden"
+source_modules = [
+    "herness.core.logging",
+    "herness.core._log_pipeline",
+    "herness.core.types",
+    "herness.core.ids",
+    "herness.core.time",
+    "herness.core.numbers",
+    "herness.core.errors",
+]
+forbidden_modules = ["herness.metrics"]
 
 [[tool.importlinter.contracts]]
 name = "types import only errors and ids"

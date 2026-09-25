@@ -1,0 +1,407 @@
+{
+  "description": "Golden vectors for herness.metrics.evidence.result_hash (impl 04 U04-05, R-15, DD04-07). columns freeze str() of DuckDB relation column types on the pinned DuckDB (VI04-02); row_json lists the canonical row texts in ascending SHA-256 digest order; result_hash = sha256(header + newline + newline-joined sorted row digest hex).",
+  "duckdb_version": "1.5.5",
+  "vectors": [
+    {
+      "id": "V01",
+      "name": "empty result",
+      "sql": "SELECT 1::INTEGER AS a, 'x' AS b WHERE false",
+      "columns": [
+        [
+          "a",
+          "INTEGER"
+        ],
+        [
+          "b",
+          "VARCHAR"
+        ]
+      ],
+      "row_json": [],
+      "result_hash": "b094f29717b20c9f224d91c50412fa02c72402fa5543150adc4074caa919c2ed"
+    },
+    {
+      "id": "V02",
+      "name": "integer family with negatives and NULL",
+      "sql": "SELECT * FROM (VALUES (1::TINYINT, -2::SMALLINT, 3::INTEGER, -9223372036854775807::BIGINT, 170141183460469231731687303715884105727::HUGEINT, 255::UTINYINT, 18446744073709551615::UBIGINT, 1::UHUGEINT), (NULL, 0, -3, 42, -1, 0, 0, NULL)) t(ti, si, i, bi, hi, uti, ubi, uhi)",
+      "columns": [
+        [
+          "ti",
+          "TINYINT"
+        ],
+        [
+          "si",
+          "SMALLINT"
+        ],
+        [
+          "i",
+          "INTEGER"
+        ],
+        [
+          "bi",
+          "BIGINT"
+        ],
+        [
+          "hi",
+          "HUGEINT"
+        ],
+        [
+          "uti",
+          "UTINYINT"
+        ],
+        [
+          "ubi",
+          "UBIGINT"
+        ],
+        [
+          "uhi",
+          "UHUGEINT"
+        ]
+      ],
+      "row_json": [
+        "{\"ti\":null,\"si\":0,\"i\":-3,\"bi\":42,\"hi\":-1,\"uti\":0,\"ubi\":0,\"uhi\":null}",
+        "{\"ti\":1,\"si\":-2,\"i\":3,\"bi\":-9223372036854775807,\"hi\":170141183460469231731687303715884105727,\"uti\":255,\"ubi\":18446744073709551615,\"uhi\":1}"
+      ],
+      "result_hash": "816b21d49adc87aa8609e234f66d471027a7e6277c3fb7221d2ce5d2949d6674"
+    },
+    {
+      "id": "V03",
+      "name": "DOUBLE specials: -0.0, nan, inf, tiny, huge, NULL",
+      "sql": "SELECT * FROM (VALUES (1.5::DOUBLE), (-0.0::DOUBLE), (0.1::DOUBLE), (1e20::DOUBLE), (1e-7::DOUBLE), ('nan'::DOUBLE), ('inf'::DOUBLE), ('-inf'::DOUBLE), (1.0/3), (NULL::DOUBLE)) t(x)",
+      "columns": [
+        [
+          "x",
+          "DOUBLE"
+        ]
+      ],
+      "row_json": [
+        "{\"x\":\"nan\"}",
+        "{\"x\":0.1}",
+        "{\"x\":1.5}",
+        "{\"x\":0}",
+        "{\"x\":\"inf\"}",
+        "{\"x\":0.333333333}",
+        "{\"x\":1e+20}",
+        "{\"x\":\"-inf\"}",
+        "{\"x\":null}",
+        "{\"x\":1e-07}"
+      ],
+      "result_hash": "0b6c4834fc0eb99053c666d04c390a77497d726805b1e458f0da5df781b6ee70"
+    },
+    {
+      "id": "V04",
+      "name": "FLOAT single precision",
+      "sql": "SELECT 1.1::FLOAT AS f, -2.5::REAL AS r",
+      "columns": [
+        [
+          "f",
+          "FLOAT"
+        ],
+        [
+          "r",
+          "FLOAT"
+        ]
+      ],
+      "row_json": [
+        "{\"f\":1.10000002,\"r\":-2.5}"
+      ],
+      "result_hash": "67b549f96e625b7f83c39d73849502d94378a0a9966c13a2cdb88180e3d63cd3"
+    },
+    {
+      "id": "V05",
+      "name": "DECIMAL money: cast rounding, negative zero, NULL, DECIMAL(38,4)",
+      "sql": "SELECT CAST(x AS DECIMAL(18,2)) AS money, CAST(y AS DECIMAL(38,4)) AS big FROM (VALUES (12.345::DOUBLE, 1234567890123456789012345678901234.5678::DECIMAL(38,4)), (-0.001, 0), (NULL, -1.5)) t(x, y)",
+      "columns": [
+        [
+          "money",
+          "DECIMAL(18,2)"
+        ],
+        [
+          "big",
+          "DECIMAL(38,4)"
+        ]
+      ],
+      "row_json": [
+        "{\"money\":null,\"big\":\"-1.5000\"}",
+        "{\"money\":\"0.00\",\"big\":\"0.0000\"}",
+        "{\"money\":\"12.35\",\"big\":\"1234567890123456789012345678901234.5678\"}"
+      ],
+      "result_hash": "f89082559a14dece1863ef8c7dcb34f8c78800b660919a24789d97867ccb8df5"
+    },
+    {
+      "id": "V06",
+      "name": "DATE and naive timestamps of every precision",
+      "sql": "SELECT DATE '2026-01-02' AS d, TIMESTAMP '2026-01-02 03:04:05.123456' AS ts, TIMESTAMP_S '2026-01-01 00:00:00' AS ts_s, TIMESTAMP_MS '2026-01-01 00:00:00.123' AS ts_ms, TIMESTAMP_NS '2026-01-01 00:00:00.123456789' AS ts_ns",
+      "columns": [
+        [
+          "d",
+          "DATE"
+        ],
+        [
+          "ts",
+          "TIMESTAMP"
+        ],
+        [
+          "ts_s",
+          "TIMESTAMP_S"
+        ],
+        [
+          "ts_ms",
+          "TIMESTAMP_MS"
+        ],
+        [
+          "ts_ns",
+          "TIMESTAMP_NS"
+        ]
+      ],
+      "row_json": [
+        "{\"d\":\"2026-01-02\",\"ts\":\"2026-01-02T03:04:05.123456Z\",\"ts_s\":\"2026-01-01T00:00:00.000000Z\",\"ts_ms\":\"2026-01-01T00:00:00.123000Z\",\"ts_ns\":\"2026-01-01T00:00:00.123456Z\"}"
+      ],
+      "result_hash": "9479145e3d5e6476a84488f06c15a552eb206ee362317d554598dea22793ef72"
+    },
+    {
+      "id": "V07",
+      "name": "TIMESTAMP WITH TIME ZONE from several offsets",
+      "sql": "SELECT * FROM (VALUES (TIMESTAMPTZ '2026-01-02 03:04:05+02'), (TIMESTAMPTZ '2026-06-30 23:59:59.999999-05'), (TIMESTAMPTZ '2026-03-29 01:30:00+00')) t(happened_at)",
+      "columns": [
+        [
+          "happened_at",
+          "TIMESTAMP WITH TIME ZONE"
+        ]
+      ],
+      "row_json": [
+        "{\"happened_at\":\"2026-07-01T04:59:59.999999Z\"}",
+        "{\"happened_at\":\"2026-01-02T01:04:05.000000Z\"}",
+        "{\"happened_at\":\"2026-03-29T01:30:00.000000Z\"}"
+      ],
+      "result_hash": "e0ff2004670979d08817a78bf8b129046cf03acda0f334630f5878a3d000571a"
+    },
+    {
+      "id": "V08",
+      "name": "TIME and INTERVAL including months and negatives",
+      "sql": "SELECT TIME '01:02:03.5' AS t, INTERVAL '1 month 2 days 3.5 seconds' AS i1, -INTERVAL 90 MINUTE AS i2",
+      "columns": [
+        [
+          "t",
+          "TIME"
+        ],
+        [
+          "i1",
+          "INTERVAL"
+        ],
+        [
+          "i2",
+          "INTERVAL"
+        ]
+      ],
+      "row_json": [
+        "{\"t\":\"01:02:03.500000\",\"i1\":2764803.5,\"i2\":-5400}"
+      ],
+      "result_hash": "3fa09f87b3faea558988b7e5337f277ac58ed9e9f1b5ded457afbb935adb0fff"
+    },
+    {
+      "id": "V09",
+      "name": "text types: unicode, quotes, newline, empty, UUID, JSON, ENUM",
+      "sql": "SELECT * FROM (VALUES ('héllo \"q\"' || chr(10) || 'x', '00000000-0000-0000-0000-000000000001'::UUID, '{\"a\": 1}'::JSON, 'b'::ENUM('a', 'b')), ('', '00000000-0000-0000-0000-00000000000f'::UUID, '[]'::JSON, 'a'::ENUM('a', 'b'))) t(s, u, j, e)",
+      "columns": [
+        [
+          "s",
+          "VARCHAR"
+        ],
+        [
+          "u",
+          "UUID"
+        ],
+        [
+          "j",
+          "JSON"
+        ],
+        [
+          "e",
+          "ENUM('a', 'b')"
+        ]
+      ],
+      "row_json": [
+        "{\"s\":\"\",\"u\":\"00000000-0000-0000-0000-00000000000f\",\"j\":\"[]\",\"e\":\"a\"}",
+        "{\"s\":\"héllo \\\"q\\\"\\nx\",\"u\":\"00000000-0000-0000-0000-000000000001\",\"j\":\"{\\\"a\\\": 1}\",\"e\":\"b\"}"
+      ],
+      "result_hash": "8ca12fa96acc9d54e4c1a69cacd39907df5a578d883fc4df56047b6a971182c8"
+    },
+    {
+      "id": "V10",
+      "name": "BOOLEAN and BLOB",
+      "sql": "SELECT * FROM (VALUES (true, '\\x00\\xFF'::BLOB), (false, ''::BLOB), (NULL, NULL::BLOB)) t(b, bl)",
+      "columns": [
+        [
+          "b",
+          "BOOLEAN"
+        ],
+        [
+          "bl",
+          "BLOB"
+        ]
+      ],
+      "row_json": [
+        "{\"b\":null,\"bl\":null}",
+        "{\"b\":false,\"bl\":\"\"}",
+        "{\"b\":true,\"bl\":\"AP8=\"}"
+      ],
+      "result_hash": "80d78bb0a358c8c9c6dd132d68645fb44840654889fc208fc1345d36084b8423"
+    },
+    {
+      "id": "V11",
+      "name": "lists and fixed arrays with NULL elements",
+      "sql": "SELECT ['a', NULL] AS vs, [1, 2]::INTEGER[2] AS arr, [1.5, NULL, -0.0]::DOUBLE[] AS ds, [1.25::DECIMAL(10,1)] AS decs, [[1], []]::BIGINT[][] AS nested",
+      "columns": [
+        [
+          "vs",
+          "VARCHAR[]"
+        ],
+        [
+          "arr",
+          "INTEGER[2]"
+        ],
+        [
+          "ds",
+          "DOUBLE[]"
+        ],
+        [
+          "decs",
+          "DECIMAL(10,1)[]"
+        ],
+        [
+          "nested",
+          "BIGINT[][]"
+        ]
+      ],
+      "row_json": [
+        "{\"vs\":[\"a\",null],\"arr\":[1,2],\"ds\":[1.5,null,0],\"decs\":[\"1.3\"],\"nested\":[[1],[]]}"
+      ],
+      "result_hash": "5b0f4b2740aa8ebf009a76e2fceed9a8bdf380026774898371985d280ffac171"
+    },
+    {
+      "id": "V12",
+      "name": "STRUCT, MAP and UNION",
+      "sql": "SELECT {'b': 1, 'a': 'x', 'u': '00000000-0000-0000-0000-000000000002'::UUID, 'm': 2.50::DECIMAL(9,2), 'arr': [1, 2]::INTEGER[2]} AS st, MAP {'k': 1, 'j': 2} AS mp, union_value(num := 2) AS un, [MAP {'a': 1}] AS lm",
+      "columns": [
+        [
+          "st",
+          "STRUCT(b INTEGER, a VARCHAR, u UUID, m DECIMAL(9,2), arr INTEGER[2])"
+        ],
+        [
+          "mp",
+          "MAP(VARCHAR, INTEGER)"
+        ],
+        [
+          "un",
+          "UNION(num INTEGER)"
+        ],
+        [
+          "lm",
+          "MAP(VARCHAR, INTEGER)[]"
+        ]
+      ],
+      "row_json": [
+        "{\"st\":{\"b\":1,\"a\":\"x\",\"u\":\"00000000-0000-0000-0000-000000000002\",\"m\":\"2.50\",\"arr\":[1,2]},\"mp\":{\"k\":1,\"j\":2},\"un\":2,\"lm\":[{\"a\":1}]}"
+      ],
+      "result_hash": "63a23f032929503b71b3f9970ef4fcf91f7f23126183f84a377b5e58165826c7"
+    },
+    {
+      "id": "V13",
+      "name": "duplicate column names keep order",
+      "sql": "SELECT 1 AS a, 2 AS a",
+      "columns": [
+        [
+          "a",
+          "INTEGER"
+        ],
+        [
+          "a",
+          "INTEGER"
+        ]
+      ],
+      "row_json": [
+        "{\"a\":1,\"a\":2}"
+      ],
+      "result_hash": "8f6a7e9f1720956e9ca0838036f79c25fc7a35908da0a651b138a0f06c0cd097"
+    },
+    {
+      "id": "V14",
+      "name": "ST04-12 string one",
+      "sql": "SELECT '1'::VARCHAR AS c",
+      "columns": [
+        [
+          "c",
+          "VARCHAR"
+        ]
+      ],
+      "row_json": [
+        "{\"c\":\"1\"}"
+      ],
+      "result_hash": "f0149988b8e6cf47ddfd743f17b8492bffcaa7fea1b69f04073be1a2cd5bcb2e"
+    },
+    {
+      "id": "V15",
+      "name": "ST04-12 integer one",
+      "sql": "SELECT 1::INTEGER AS c",
+      "columns": [
+        [
+          "c",
+          "INTEGER"
+        ]
+      ],
+      "row_json": [
+        "{\"c\":1}"
+      ],
+      "result_hash": "f06f547df628df1b543f3341b71429420b8314b7b2bda0bdf1856ed4e3832b53"
+    },
+    {
+      "id": "V16",
+      "name": "duplicate rows form a multiset",
+      "sql": "SELECT 'x' AS k, 1::BIGINT AS n FROM range(3)",
+      "columns": [
+        [
+          "k",
+          "VARCHAR"
+        ],
+        [
+          "n",
+          "BIGINT"
+        ]
+      ],
+      "row_json": [
+        "{\"k\":\"x\",\"n\":1}",
+        "{\"k\":\"x\",\"n\":1}",
+        "{\"k\":\"x\",\"n\":1}"
+      ],
+      "result_hash": "8c2c65a2e4827dd6515ec1051acd9e39a555864c061131d8fc7a4125c07b0838"
+    },
+    {
+      "id": "V17",
+      "name": "aggregate metric shape: grouped counts, ratios and money",
+      "sql": "SELECT org, count(*)::BIGINT AS n, avg(v) AS mean_v, CAST(sum(v) * 100 AS DECIMAL(18,2)) AS cost FROM (VALUES ('o1', 1.25), ('o1', 2.5), ('o2', 0.125)) t(org, v) GROUP BY org ORDER BY org",
+      "columns": [
+        [
+          "org",
+          "VARCHAR"
+        ],
+        [
+          "n",
+          "BIGINT"
+        ],
+        [
+          "mean_v",
+          "DOUBLE"
+        ],
+        [
+          "cost",
+          "DECIMAL(18,2)"
+        ]
+      ],
+      "row_json": [
+        "{\"org\":\"o2\",\"n\":1,\"mean_v\":0.125,\"cost\":\"12.50\"}",
+        "{\"org\":\"o1\",\"n\":2,\"mean_v\":1.875,\"cost\":\"375.00\"}"
+      ],
+      "result_hash": "a370d5ec0c64bdd1c9c7dc1b32f6d69843f2feb1bdaa666637c5a3831c8a84d1"
+    }
+  ]
+}
