@@ -174,6 +174,11 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 module = ["app.*", "tools.*"]
 disallow_untyped_decorators = false
 
+[[tool.mypy.overrides]]
+# pyarrow ships neither inline types nor a py.typed marker; no stub package is locked.
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true
