@@ -1,7 +1,8 @@
 """Error taxonomy of design 00 §7, plus NotFound, hint and details (R-19).
 
 Every error Herness raises is one of these classes, so the resilience layer (impl 08)
-decides by class, never by string matching. No other spec adds classes to this file.
+decides by class, never by string matching. Spec-local subclasses are declared by their
+owners, each in its own section at the end of this file (R-19).
 """
 
 from __future__ import annotations
@@ -275,6 +276,39 @@ class PermissionDenied(FatalError):
 
 class EgressBlocked(FatalError):
     """The egress guard refused an off-network call."""
+
+
+# --- 08 (resilience and jobs) ---
+
+
+class JobStateError(FatalError):
+    """A job or task is not in the state the operation needs (R-19).
+
+    Unknown job_id, retry of a non-failed job, checkpoint or completion of a task that
+    is not running, or an inline run of a job that cannot be claimed.
+    """
+
+    _extra_attrs: ClassVar[tuple[str, ...]] = ("job_id", "task_id", "run_id")
+    job_id: str | None
+    task_id: str | None
+    run_id: str | None
+
+    def __init__(
+        self,
+        message: str,
+        /,
+        *,
+        job_id: str | None = None,
+        task_id: str | None = None,
+        run_id: str | None = None,
+        hint: str | None = None,
+        details: Mapping[str, str] | None = None,
+        **context: Scalar,
+    ) -> None:
+        super().__init__(message, hint=hint, details=details, **context)
+        self.job_id = job_id
+        self.task_id = task_id
+        self.run_id = run_id
 
 
 def error_kind(exc: BaseException) -> ErrorKind:
