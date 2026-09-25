@@ -3,12 +3,18 @@
 The remaining `tests.support` plugins of U11-35 (`fake_clock`, `builds`, `bench`,
 `truth`, `ops_store`) are appended here by the cards that create them (T11-03,
 T11-40 and later). `pytester` is loaded for the plugin's own tests (UT11-31..UT11-37).
+T08-03 registers the opt-in `reset_process_state` fixture (impl 08 §11).
 """
 
+import random
+from collections.abc import Iterator
 from datetime import timedelta
 
 import pytest
 from hypothesis import settings
+
+from herness.core.resilience import ProcessState
+from herness.core.resilience import reset_process_state as _reset
 
 pytest_plugins = ["pytester", "tests.support.plugin"]
 
@@ -23,6 +29,10 @@ settings.register_profile("nightly", max_examples=10_000, derandomize=True, dead
 settings.load_profile("commit")
 
 
+async def _no_asleep(_seconds: float) -> None:
+    return None
+
+
 @pytest.fixture(autouse=True)
 def reset_herness_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Give every test `HERNESS_ENV=test` and no inherited `HERNESS_FAULTS`.
@@ -32,3 +42,14 @@ def reset_herness_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("HERNESS_ENV", "test")
     monkeypatch.delenv("HERNESS_FAULTS", raising=False)
+
+
+@pytest.fixture
+def reset_process_state() -> Iterator[ProcessState]:
+    """Fresh 08 `ProcessState` with a seeded `rng` and no-op sleeps; reset again afterwards."""
+    state = _reset()
+    state.rng = random.Random(0)
+    state.sleep = lambda _seconds: None
+    state.asleep = _no_asleep
+    yield state
+    _reset()

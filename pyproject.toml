@@ -289,6 +289,8 @@ source_modules = [
 forbidden_modules = [
     "herness.core.registry",
     "herness.core.settings",
+    "herness.core.resilience",
+    "herness.core.jobs",
     "herness.store",
     "herness.model",
     "herness.connectors",
@@ -314,6 +316,7 @@ name = "settings modules are leaves"
 type = "forbidden"
 source_modules = [
     "herness.core.settings",
+    "herness.core.resilience.settings",
     "herness.metrics._weights_settings",
     "herness.metrics.settings",
     "herness.model.settings",
@@ -361,3 +364,30 @@ type = "forbidden"
 # impl 02 §2.2: herness.store imports nothing from L2 and above; later cards append packages.
 source_modules = ["herness.store"]
 forbidden_modules = ["herness.model"]
+
+[[tool.importlinter.contracts]]
+name = "herness.core must not import herness.store or herness.harness"
+type = "forbidden"
+# R-04: L0 reaches the ops store only through ports bound at the composition root; impl 05
+# appends "herness.harness" when it creates that package (UT00-58 lists existing modules only).
+source_modules = ["herness.core"]
+forbidden_modules = ["herness.store"]
+
+[[tool.importlinter.contracts]]
+name = "resilience-settings-light"
+type = "forbidden"
+# impl 08 §2 / R-03: herness.core.resilience.settings imports only stdlib, pydantic,
+# herness.core.types and herness.core.errors (third-party part checked by
+# tools.check_type_ownership). The wildcard matches that module once T08-26 creates it.
+source_modules = ["herness.core.*.settings"]
+forbidden_modules = [
+    "herness.core.logging",
+    "herness.core._log_pipeline",
+    "herness.core.ids",
+    "herness.core.time",
+    "herness.core.numbers",
+    "herness.core.jobs",
+    "herness.store",
+    "herness.model",
+]
+allow_indirect_imports = true

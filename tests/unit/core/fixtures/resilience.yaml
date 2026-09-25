@@ -1,0 +1,84 @@
+# Design 08 §7 config/resilience.yaml with the R-43 (nightly job gpu_class none) and
+# R-53 (secret:OPENJEV_API_KEY) amendments; loaded by the cfg_default fixture (T08-26).
+resilience:
+  retry:
+    policies:
+      source_http_page: {attempts: 6, base_s: 1,   cap_s: 60,  max_elapsed_s: 600,  connect_timeout_s: 10, retry_after_cap_s: 300}
+      llm_local:        {attempts: 4, base_s: 2,   cap_s: 30,  max_elapsed_s: 900,  retry_after_cap_s: 60}
+      llm_large:        {attempts: 2, base_s: 30,  cap_s: 120, max_elapsed_s: 7200, retry_after_cap_s: 60}
+      llm_cloud:        {attempts: 5, base_s: 2,   cap_s: 60,  max_elapsed_s: 900,  retry_after_cap_s: 120}
+      decider_local:    {attempts: 3, base_s: 2,   cap_s: 20,  max_elapsed_s: 300,  timeout_s: 30, retry_after_cap_s: 30}
+      decider_cloud:    {attempts: 3, base_s: 2,   cap_s: 30,  max_elapsed_s: 300,  timeout_s: 30, retry_after_cap_s: 120}
+      embed_batch:      {attempts: 3, base_s: 2,   cap_s: 20,  max_elapsed_s: 300,  timeout_s: 120}
+      tool_store:       {attempts: 3, base_s: 0.5, cap_s: 4,   max_elapsed_s: 30}
+      warehouse_read:   {attempts: 3, base_s: 1,   cap_s: 10,  max_elapsed_s: 60,   timeout_s: 600}
+      sqlite_write:     {attempts: 6, base_s: 0.2, cap_s: 5,   max_elapsed_s: 30}
+    job_backoff: {base_s: 60, cap_s: 3600}
+  breakers:
+    source:  {failure_threshold: 8, cooldown_s: 300, cooldown_max_s: 3600}
+    model:   {failure_threshold: 5, cooldown_s: 60,  cooldown_max_s: 900}
+    decider: {failure_threshold: 5, cooldown_s: 60,  cooldown_max_s: 900}
+    restart_max_per_hour: 1
+  fallback:
+    max_repairs: 2
+    decider_chain:                        # per active profile; model chains live in models.yaml
+      local:   [laya, openjev, llm]
+      hybrid:  [laya, openjev, jev, llm]
+      premium: [jev, llm]
+  loop: {checkpoint_min_interval_s: 5, stop_on_signal_no: 2}
+  tasks: {max_task_attempts: 3}
+  jobs:
+    lease_s: 300
+    heartbeat_s: 30
+    reaper_interval_s: 30
+    tick_s: 2
+    cancel_grace_s: 60
+    shutdown_grace_s: 120
+    stall_timeout_s: 1800
+    stall_timeout_large_s: 7200
+    cpu_slots: 2
+    exclusive_kinds: [build_pipeline, distill, maintenance]
+    max_attempts: {sync: 3, reconcile: 2, build_pipeline: 2, distill: 2, review: 3, chat: 2,
+                   outcome_measure: 3, memory_maintenance: 2, maintenance: 2, eval: 2}
+  gpu:
+    compose_cmd: [wsl.exe, -d, herness, --, docker, compose, --env-file, /opt/herness/docker.env]
+    compose_file: /mnt/d/herness/docker/compose.yaml     # WSL path (spec 10 §5.6.4)
+    vram_check_cmd: [nvidia-smi, --query-gpu=memory.used, --format=csv,noheader,nounits]   # Windows nvidia-smi
+    vram_free_threshold_mb: 2000
+    stop_timeout_s: 120
+    warmup_timeout_s: 120
+    classes:                              # compose profile = class name (spec 10 §5.6.2)
+      reasoning:
+        services:
+          vllm-reasoning: {url: "http://127.0.0.1:8000", health: {path: /health}, start_timeout_s: 900}
+      decider:
+        services:                         # not started at class entry; ctx.services.start("openjev")
+          openjev: {url: "http://127.0.0.1:8100", health: {path: /v1/models, bearer_secret: "secret:OPENJEV_API_KEY"},
+                    start_timeout_s: 900, start_on_entry: false}
+      large:
+        services:
+          llamacpp-large: {url: "http://127.0.0.1:8200", health: {path: /health}, start_timeout_s: 1200}
+schedule:
+  windows:
+    - {name: morning_prep, start: "06:00", end: "08:00", classes: [reasoning], preload: reasoning}
+    - {name: chat,         start: "08:00", end: "19:00", classes: [reasoning], preload: reasoning, hard_start: true}
+    - {name: enrichment,   start: "19:00", end: "21:00", classes: [decider], overrun_max_min: 120}
+    - {name: reviews,      start: "21:00", end: "06:00", days: [MON, TUE, WED, THU, FRI, SAT], classes: [decider, reasoning], overrun_max_min: 60}
+    - {name: deep,         start: "21:00", end: "06:00", days: [SUN], classes: [decider, reasoning, large], overrun_max_min: 60}
+  preempt_grace_min: 15
+  batch_in_chat_min_priority: 70
+  chat:
+    off_hours: small_model                # small_model | defer | cloud   (D4 default small_model)
+    in_hours_unavailable: small_model     # small_model | defer | cloud
+  rekey: {cron: "0 19 * * SAT", min_notice_h: 12}
+  jobs:
+    - {name: nightly, cron: "0 19 * * *", catch_up_max: 6h,
+       job: {kind: build_pipeline, gpu_class: none, payload: {stages: [build, enrich, score, dq, promote]}},
+       then: [{kind: review, gpu_class: reasoning, payload: {pipeline: funding_review, depth: standard}, skip_on: [SUN]},
+              {kind: review, gpu_class: reasoning, payload: {pipeline: org_review, depth: standard}, skip_on: [SUN]},
+              {kind: eval, gpu_class: reasoning, payload: {suite: golden}, enabled: false}]}
+    - {name: weekly_deep, cron: "0 21 * * SUN", catch_up_max: 12h,
+       job: {kind: review, gpu_class: reasoning, payload: {pipelines: [funding_review, org_review], depth: deep}}}
+    - {name: memory_maintenance, cron: "0 5 * * *", catch_up_max: 24h, job: {kind: memory_maintenance, gpu_class: none}}
+    - {name: outcomes, cron: "0 6 * * MON", catch_up_max: 48h, job: {kind: outcome_measure, gpu_class: none, payload: {sweep: true}}}
+  maintenance: {catch_up_max: 12h}        # time comes from backup.nightly_at (spec 10)
