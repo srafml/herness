@@ -90,10 +90,14 @@ def test_ut02_56_duplicate_number(tmp_path: Path) -> None:
         discover_sql_files(sql_dir=tmp_path)
 
 
-def test_ut02_56_default_package_dir() -> None:
-    """UT02-56 the default directory is herness/model/sql (empty or absent is an empty list)."""
-    files = discover_sql_files()
-    assert all(f.path.parent == Path(sqlfiles.__file__).parent / "sql" for f in files)
+def test_ut02_56_default_package_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT02-56 with no argument the package directory herness/model/sql is listed."""
+    assert Path(sqlfiles.__file__).parent / "sql" == sqlfiles._SQL_DIR
+    (tmp_path / "000_setup.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    monkeypatch.setattr(sqlfiles, "_SQL_DIR", tmp_path)
+    assert [f.path for f in discover_sql_files()] == [tmp_path / "000_setup.sql"]
+    monkeypatch.setattr(sqlfiles, "_SQL_DIR", tmp_path / "absent")
+    assert discover_sql_files() == []
 
 
 def test_ut02_56_sqlfile_number_range() -> None:
@@ -240,7 +244,15 @@ def test_ut02_58_sqlstr_bad(value: object) -> None:
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(5, "5"), (-3, "-3"), (0.05, "0.05"), (1e-7, "1e-07"), (Decimal("1.50"), "1.50")],
+    [
+        (5, "5"),
+        (-3, "(-3)"),
+        (0.05, "0.05"),
+        (-0.5, "(-0.5)"),
+        (1e-7, "1e-07"),
+        (Decimal("1.50"), "1.50"),
+        (Decimal("-2"), "(-2)"),
+    ],
 )
 def test_ut02_58_num_ok(value: object, expected: str) -> None:
     """UT02-58 num renders int, float and Decimal."""
@@ -298,6 +310,57 @@ def test_st02_11_sandbox_escape(tmp_path: Path, body: str) -> None:
     """ST02-11 template code reaching for dunder attributes raises ConfigError (SecurityError)."""
     file = _sql_file(tmp_path, "100_stg.sql", body + "\n")
     with pytest.raises(ConfigError, match=r"SecurityError at line 1$"):
+        render_sql(file, _context(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{{ lake.root }}",
+        "{{ lake.root.read_text() }}",
+        "{{ lake.root.joinpath('pwned.txt').write_text('owned') }}",
+        "{{ lake.root.parent.joinpath('x').unlink() }}",
+        "{{ dq.model_dump() }}",
+        "{{ build_id.upper() }}",
+        "{{ lake.get('servicenow', 'incident').columns.union }}",
+    ],
+)
+def test_st02_11_non_dunder_escape(tmp_path: Path, body: str) -> None:
+    """ST02-11 public methods outside the allowlist (Path I/O included) are SecurityError."""
+    file = _sql_file(tmp_path, "100_stg.sql", body + "\n")
+    with pytest.raises(ConfigError, match=r"SecurityError at line 1$"):
+        render_sql(file, _context(tmp_path / "raw"))
+    assert not (tmp_path / "raw").exists()
+    assert not (tmp_path / "pwned.txt").exists()
+
+
+def test_st02_11_allowlisted_reads(tmp_path: Path) -> None:
+    """ST02-11 the allowlist keeps mapping reads, entity fields, loops and namespaces working."""
+    body = (
+        "{% set ns = namespace(n=0) %}\n"
+        "{% for key, ent in lake.entities.items() %}\n"
+        "{% set ns.n = ns.n + ent.files %}\n"
+        "{{ loop.index }} {{ key[1] }} {{ ent.present }} {{ custom_fields.jira.team is none }}\n"
+        "{% endfor %}\n"
+        "{{ ns.n }} {{ extra_entities.get('files') | join(',') }} {{ lake.from_synth }}\n"
+    )
+    file = _sql_file(tmp_path, "100_stg.sql", body)
+    out = render_sql(file, _context(tmp_path, frozenset({"number"})))
+    assert out == "1 incident True True\n1 budget False\n"
+
+
+@pytest.mark.parametrize(
+    ("body", "cls"),
+    [
+        ("{{ raw('a') }}", "TypeError"),
+        ("{{ 1 // 0 }}", "ZeroDivisionError"),
+        ("{{ range(10 ** 9) | list }}", "OverflowError"),
+    ],
+)
+def test_ut02_57_runtime_errors_mapped(tmp_path: Path, body: str, cls: str) -> None:
+    """UT02-57 runtime failures inside a render become ConfigError naming the class and line."""
+    file = _sql_file(tmp_path, "100_stg.sql", "SELECT 1;\n" + body + "\n")
+    with pytest.raises(ConfigError, match=rf"^render failed for 100_stg\.sql: {cls} at line 2$"):
         render_sql(file, _context(tmp_path))
 
 

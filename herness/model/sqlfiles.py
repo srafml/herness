@@ -16,17 +16,21 @@ import functools
 import math
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
 from typing import Final, Literal
 
 import jinja2
+from jinja2.environment import TemplateModule
+from jinja2.runtime import LoopContext, Macro
 from jinja2.sandbox import SandboxedEnvironment
+from jinja2.utils import Namespace
+from pydantic import BaseModel
 
 from herness.core.errors import ConfigError
-from herness.model.lakeinfo import LakeInventory
+from herness.model.lakeinfo import EntityInventory, LakeInventory
 from herness.model.render_context import RenderContext
 
 type Stage = Literal["setup", "staging", "core", "attach", "facts", "dq"]
@@ -44,6 +48,24 @@ _STAGES: Final[tuple[tuple[int, int, Stage], ...]] = (
     (300, 399, "attach"),
     (400, 499, "facts"),
     (900, 999, "dq"),
+)
+
+# Attribute allowlist of the sandbox (TH02-11): everything else is unsafe, including the
+# ``pathlib.Path`` behind ``lake.root`` (templates get ``raw_root`` as a string instead).
+_ALLOWED_ATTRS: Final[tuple[tuple[type, frozenset[str]], ...]] = (
+    (LakeInventory, frozenset({"get", "entities", "from_synth"})),
+    (EntityInventory, frozenset(f.name for f in dataclasses.fields(EntityInventory))),
+)
+_MAPPING_READS: Final = frozenset({"get", "keys", "values", "items"})
+_JINJA_RUNTIME: Final = (LoopContext, Macro, TemplateModule, Namespace)
+# Runtime failures inside a render that become ConfigError (U02-85 Errors row).
+_RENDER_ERRORS: Final = (
+    jinja2.TemplateError,
+    ConfigError,
+    TypeError,
+    ValueError,
+    ArithmeticError,
+    LookupError,
 )
 
 # The lake the ``raw`` global reads during one render (per thread or task).
@@ -119,13 +141,16 @@ def _sqlstr(value: object) -> str:
 
 def _num(value: object) -> str:
     if isinstance(value, int) and not isinstance(value, bool):
-        return str(int(value))
-    if isinstance(value, float) and math.isfinite(value):
-        return repr(float(value))
-    if isinstance(value, Decimal) and value.is_finite():
-        return str(value)
-    msg = "invalid number"
-    raise ConfigError(msg)
+        text = str(int(value))
+    elif isinstance(value, float) and math.isfinite(value):
+        text = repr(float(value))
+    elif isinstance(value, Decimal) and value.is_finite():
+        text = str(value)
+    else:
+        msg = "invalid number"
+        raise ConfigError(msg)
+    # a bare negative after a minus would start a ``--`` comment: ``5 -{{ -3|num }}``
+    return f"({text})" if text.startswith("-") else text
 
 
 def _sqldate(value: object) -> str:
@@ -152,9 +177,25 @@ def _raw_global(source: str, entity: str, column: str, sqltype: str) -> str:
 # --- rendering (U02-85) ------------------------------------------------------------------
 
 
+class _SqlSandbox(SandboxedEnvironment):
+    """``SandboxedEnvironment`` that also denies every attribute not on the allowlist."""
+
+    def is_safe_attribute(self, obj: object, attr: str, value: object) -> bool:
+        if not super().is_safe_attribute(obj, attr, value):
+            return False
+        if isinstance(obj, _JINJA_RUNTIME):
+            return True
+        if isinstance(obj, BaseModel):
+            return attr in type(obj).model_fields
+        for kind, names in _ALLOWED_ATTRS:
+            if isinstance(obj, kind):
+                return attr in names
+        return isinstance(obj, Mapping) and attr in _MAPPING_READS
+
+
 @functools.cache
 def _environment(sql_dir: Path) -> SandboxedEnvironment:
-    env = SandboxedEnvironment(
+    env = _SqlSandbox(
         loader=jinja2.FileSystemLoader(sql_dir),
         undefined=jinja2.StrictUndefined,
         autoescape=False,
@@ -195,7 +236,7 @@ def render_sql(file: SqlFile, context: RenderContext) -> str:
     try:
         with _bound_lake(context.lake):
             return env.get_template(file.name).render(context.template_vars())
-    except (jinja2.TemplateError, ConfigError) as exc:
+    except _RENDER_ERRORS as exc:
         if isinstance(exc, jinja2.TemplateSyntaxError):
             line = exc.lineno
         else:

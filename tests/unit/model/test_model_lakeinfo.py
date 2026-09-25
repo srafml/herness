@@ -125,6 +125,8 @@ def test_ut02_55_get_unknown_entity_absent(tmp_path: Path) -> None:
     )
     with pytest.raises(ConfigError):
         inv.get("Bad", "x")
+    synth = LakeInventory(root=inv.root, entities={}, from_synth=True)
+    assert synth.get("files", "budget").from_synth is True
     with pytest.raises(TypeError):
         inv.entities[("x", "y")] = other  # type: ignore[index]
 
@@ -189,6 +191,22 @@ def test_ut02_55_unreadable_file(tmp_path: Path) -> None:
     bad = layout.raw / "jira" / "issue" / "dt=2026-09-01" / "part-bad.parquet"
     bad.parent.mkdir(parents=True)
     bad.write_bytes(b"garbage")
+    with pytest.raises(SchemaViolation, match=r"unreadable lake file jira/issue/"):
+        scan_lake(layout)
+
+
+def test_ut02_55_vanished_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT02-55 a file removed between listing and stat is an unreadable file, not OSError."""
+    layout = DataLayout.from_root(tmp_path / "data")
+    _commit(layout.raw, "jira", "issue", {"a": ["1"]})
+    real = lakeinfo.pq.read_schema
+
+    def read_then_remove(path: Path) -> pa.Schema:
+        schema = real(path)
+        path.unlink()
+        return schema
+
+    monkeypatch.setattr(lakeinfo.pq, "read_schema", read_then_remove)
     with pytest.raises(SchemaViolation, match=r"unreadable lake file jira/issue/"):
         scan_lake(layout)
 

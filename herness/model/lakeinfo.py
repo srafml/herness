@@ -78,7 +78,7 @@ class LakeInventory:
         found = self.entities.get((source, entity))
         if found is not None:
             return found
-        return _absent(self.root, source, entity, from_synth=False)
+        return _absent(self.root, source, entity, from_synth=self.from_synth)
 
 
 def _absent(raw: Path, source: str, entity: str, *, from_synth: bool) -> EntityInventory:
@@ -115,9 +115,10 @@ def _committed_files(raw: Path, source: str, entity: str) -> list[Path]:
     return sorted(files)
 
 
-def _read_names(raw: Path, path: Path) -> list[str]:
+def _read_file(raw: Path, path: Path) -> tuple[list[str], int]:
+    """Column names and size of one file; a file that vanished or fails to parse is unreadable."""
     try:
-        return list(pq.read_schema(path).names)
+        return list(pq.read_schema(path).names), path.stat().st_size
     except (OSError, ValueError) as exc:  # ArrowInvalid is a ValueError subclass
         rel = path.relative_to(raw).as_posix()
         msg = f"unreadable lake file {rel}"
@@ -134,8 +135,9 @@ def _scan_entity(layout: DataLayout, source: str, entity: str) -> EntityInventor
     size = 0
     synth = layout.synth_marker
     for path in files:
-        columns.update(_read_names(raw, path))
-        size += path.stat().st_size
+        names, file_size = _read_file(raw, path)
+        columns.update(names)
+        size += file_size
         synth = synth or _has_synth_pair(path.resolve())
     return EntityInventory(
         source=source,
