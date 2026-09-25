@@ -57,13 +57,15 @@ def test_ut00_58_contracts_match_repository() -> None:
         assert set(contracts["core base is closed"]["forbidden_modules"]) == forbidden
     else:
         assert "core base is closed" not in contracts
+
+    def _settings_name(name: str) -> bool:
+        return name == "settings" or name.startswith("settings_") or name.endswith("_settings")
+
     settings = sorted(
         ".".join(p.relative_to(ROOT).with_suffix("").parts)
         for p in (ROOT / "herness").rglob("*settings*")
-        if (p.name == "settings.py" or p.name.endswith("_settings.py"))
-        or (
-            (p.name == "settings" or p.name.endswith("_settings")) and (p / "__init__.py").is_file()
-        )
+        if (p.suffix == ".py" and _settings_name(p.stem))
+        or (p.is_dir() and _settings_name(p.name) and (p / "__init__.py").is_file())
     )
     assert ("settings modules are leaves" in contracts) == bool(settings)
     if settings:

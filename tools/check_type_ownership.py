@@ -290,18 +290,23 @@ def _check_outside(src: Source, tables: Tables, report: Report) -> None:
             report.add(src.rel, line, "OWN041", f"import via submodule {module}")
 
 
+def _is_settings_name(name: str) -> bool:
+    """Settings names are ``settings``, ``settings_<part>`` and ``_<part>_settings`` (R-03)."""
+    return name == "settings" or name.startswith("settings_") or name.endswith("_settings")
+
+
 def _is_settings_file(rel: Path) -> bool:
-    """A settings module, or any file of a settings package (`settings/`, `_x_settings/`)."""
-    return any(
-        part == "settings" or part.endswith("_settings") for part in rel.with_suffix("").parts
-    )
+    """A settings module (`settings.py`, `settings_*.py`, `_x_settings.py`), or any file of a
+    settings package (`settings/`, `_x_settings/`)."""
+    return any(_is_settings_name(part) for part in rel.with_suffix("").parts)
 
 
-def _private_sibling_settings(src: Source, module: str) -> bool:
-    """A settings module may import a private `_*_settings` module of its own package."""
+def _sibling_settings(src: Source, module: str) -> bool:
+    """A settings module may import another settings module of its own package (including a
+    private `_*_settings` one)."""
     parent, _, leaf = module.rpartition(".")
     package = src.module if src.is_package else src.module.rpartition(".")[0]
-    return parent == package and leaf.startswith("_") and leaf.endswith("_settings")
+    return parent == package and _is_settings_name(leaf)
 
 
 def _check_settings(src: Source, tables: Tables, report: Report) -> None:
@@ -310,7 +315,7 @@ def _check_settings(src: Source, tables: Tables, report: Report) -> None:
             _is_stdlib(module)
             or module.split(".", 1)[0] in _TYPE_THIRD_PARTY
             or module in _SETTINGS_HERNESS
-            or _private_sibling_settings(src, module)
+            or _sibling_settings(src, module)
         )
         if not ok:
             report.add(src.rel, line, "OWN050", f"forbidden import in settings module {module}")
