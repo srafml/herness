@@ -10,9 +10,9 @@ import ipaddress
 import math
 import re
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Annotated, ClassVar, Final, Self
+from typing import Annotated, Any, ClassVar, Final, NoReturn, Self
 from urllib.parse import urlsplit
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
@@ -55,51 +55,34 @@ _HOST: Final = re.compile(
     r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
 )
 _LOOPBACK: Final = frozenset({"127.0.0.1", "localhost", "::1"})
-_MAX_HOSTS: Final = 50
-_BACKFILL_DAYS: Final = 1096
 _EPOCH: Final = datetime.date(1970, 1, 1)
 _TLS_MSG: Final = "TLS verification cannot be disabled; set verify to a CA bundle path"
 _URL_MSG: Final = "base_url must be https (http only on loopback) without userinfo, query, fragment"
 
 
+def _rule(ok: Callable[[Any], bool], msg: str) -> AfterValidator:
+    """After-validator raising `ValueError(msg)` when a non-None value fails `ok`."""
+
+    def check(value: object) -> object:
+        if value is not None and not ok(value):
+            raise ValueError(msg)
+        return value
+
+    return AfterValidator(check)
+
+
 def _range(
     key: str, low: float, high: float = math.inf, *, open_low: bool = False
 ) -> AfterValidator:
-    """Bounds check (inclusive, or open at `low`) whose message names `key`."""
-
-    def check(value: float | None) -> float | None:
-        if value is not None and not (
-            (low < value if open_low else low <= value) and value <= high
-        ):
-            msg = f"{key} must be {'>' if open_low else '>='} {low:g} and <= {high:g}"
-            raise ValueError(msg)
-        return value
-
-    return AfterValidator(check)
+    lower = f"{key} must be {'>' if open_low else '>='} {low:g}"
+    return _rule(
+        lambda v: (low < v if open_low else low <= v) and v <= high,
+        lower if high == math.inf else f"{lower} and <= {high:g}",
+    )
 
 
 def _schedule(key: str) -> AfterValidator:
-    def check(value: str | None) -> str | None:
-        if value is not None and _CRON.fullmatch(value) is None:
-            msg = f"{key} must have five cron fields"
-            raise ValueError(msg)
-        return value
-
-    return AfterValidator(check)
-
-
-def _check_credentials(value: str | None) -> str | None:
-    if value is not None and SECRET_REF_PATTERN.fullmatch(value) is None:
-        msg = "auth.credentials must be a secret:<name> reference"
-        raise ValueError(msg)
-    return value
-
-
-def _check_start(value: datetime.date | None) -> datetime.date | None:
-    if value is not None and value < _EPOCH:
-        msg = "backfill.start must be on or after 1970-01-01"
-        raise ValueError(msg)
-    return value
+    return _rule(lambda v: _CRON.fullmatch(v) is not None, f"{key} must have five cron fields")
 
 
 def _check_base_url(value: str | None) -> str | None:
@@ -130,8 +113,8 @@ def _check_verify(value: object) -> object:
 def _check_hosts(value: object) -> object:
     if not isinstance(value, list | tuple):
         return value  # strict tuple[str, ...] validation reports the type error
-    if len(value) > _MAX_HOSTS:
-        msg = f"hosts has more than {_MAX_HOSTS} entries"
+    if len(value) > 50:  # noqa: PLR2004 - R-06 limit
+        msg = "hosts has more than 50 entries"
         raise ValueError(msg)
     hosts: list[object] = []
     for index, entry in enumerate(value):
@@ -148,10 +131,20 @@ def _check_hosts(value: object) -> object:
 
 def _is_ip(host: str) -> bool:
     try:
-        ipaddress.ip_address(host)
+        return bool(ipaddress.ip_address(host))
     except ValueError:
         return False
-    return True
+
+
+class _ReadOnlyDict(dict[str, Any]):
+    """A dict that refuses mutation; serializes like a plain dict."""
+
+    def _refuse(self, *args: object, **kwargs: object) -> NoReturn:
+        msg = "settings mappings are read-only"
+        raise TypeError(msg)
+
+    __setitem__ = __delitem__ = __ior__ = _refuse
+    clear = pop = popitem = setdefault = update = _refuse
 
 
 class AuthSettings(BaseModel):
@@ -160,25 +153,29 @@ class AuthSettings(BaseModel):
     model_config = _CONFIG
 
     method: str
-    credentials: Annotated[str | None, AfterValidator(_check_credentials)] = None
+    credentials: Annotated[
+        str | None,
+        _rule(
+            lambda v: SECRET_REF_PATTERN.fullmatch(v) is not None,
+            "auth.credentials must be a secret:<name> reference",
+        ),
+    ] = None
     tenant_id: str | None = None
 
     @model_validator(mode="after")
-    def _check_presence(self) -> Self:
+    def _check_rules(self) -> Self:
+        msal = self.method == "msal_client_credentials"
         if self.method == "none" and self.credentials is not None:
             msg = "auth.credentials must be empty for method none"
-            raise ValueError(msg)
-        if self.method != "none" and self.credentials is None:
+        elif self.method != "none" and self.credentials is None:
             msg = "auth.credentials is required"
-            raise ValueError(msg)
-        msal = self.method == "msal_client_credentials"
-        if not msal and self.tenant_id is not None:
+        elif not msal and self.tenant_id is not None:
             msg = "auth.tenant_id is only allowed for method msal_client_credentials"
-            raise ValueError(msg)
-        if msal and (self.tenant_id is None or _GUID.fullmatch(self.tenant_id) is None):
+        elif msal and (self.tenant_id is None or _GUID.fullmatch(self.tenant_id) is None):
             msg = "auth.tenant_id must be a GUID for method msal_client_credentials"
-            raise ValueError(msg)
-        return self
+        else:
+            return self
+        raise ValueError(msg)
 
 
 class ReconcileSettings(BaseModel):
@@ -197,7 +194,10 @@ class BackfillSettings(BaseModel):
 
     model_config = _CONFIG
 
-    start: Annotated[datetime.date | None, AfterValidator(_check_start)] = None
+    start: Annotated[
+        datetime.date | None,
+        _rule(lambda v: v >= _EPOCH, "backfill.start must be on or after 1970-01-01"),
+    ] = None
     slice_days: Annotated[int, _range("backfill.slice_days", 1, 366)] = 30
 
     def resolve_start(self, now: datetime.datetime) -> datetime.datetime:
@@ -205,9 +205,7 @@ class BackfillSettings(BaseModel):
         if now.utcoffset() is None:
             msg = "naive datetime"
             raise ConfigError(msg)
-        day = self.start
-        if day is None:
-            day = (now.astimezone(datetime.UTC) - datetime.timedelta(days=_BACKFILL_DAYS)).date()
+        day = self.start or (now.astimezone(datetime.UTC) - datetime.timedelta(days=1096)).date()
         result = datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.UTC)
         if result >= now:
             msg = "backfill.start is in the future"
@@ -240,40 +238,46 @@ class SourceSettings(BaseModel):
     checkpoint_rows: Annotated[int, _range("checkpoint_rows", 1000, 5_000_000)] = 500_000
     overlap_minutes: Annotated[int, _range("overlap_minutes", 0, 1440)] = 30
     settle_seconds: Annotated[int, _range("settle_seconds", 0, 3600)] = 60
-    max_concurrency: int = 0  # placeholder: _default_concurrency fills the per-source default
+    max_concurrency: int  # default CONCURRENCY_DEFAULTS[SOURCE], set per subclass below
     schedule: Annotated[str | None, _schedule("schedule")] = None
     reconcile: ReconcileSettings = Field(default_factory=ReconcileSettings)
     backfill: BackfillSettings = Field(default_factory=BackfillSettings)
     timeout_s: Annotated[float, _range("timeout_s", 1, 600)] = 60.0
     verify: Annotated[Path | None, BeforeValidator(_check_verify)] = None
-    entities: Mapping[str, EntitySettings] = Field(default_factory=dict)
+    entities: Mapping[str, EntitySettings] = Field(default_factory=_ReadOnlyDict)
     hosts: Annotated[tuple[str, ...], BeforeValidator(_check_hosts)] = ()
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: object) -> None:
+        """Give `max_concurrency` the default of the subclass's `SOURCE`."""
+        super().__pydantic_init_subclass__(**kwargs)
+        source = cls.__dict__.get("SOURCE")
+        if isinstance(source, str) and source in CONCURRENCY_DEFAULTS:
+            cls.model_fields["max_concurrency"].default = CONCURRENCY_DEFAULTS[source]
+            cls.model_rebuild(force=True)
 
     @model_validator(mode="before")
     @classmethod
-    def _default_concurrency(cls, data: object) -> object:
-        source: object = getattr(cls, "SOURCE", None)
-        if not isinstance(source, str) or source not in CONCURRENCY_CAPS:
+    def _check_source(cls, data: object) -> object:
+        if getattr(cls, "SOURCE", None) not in CONCURRENCY_CAPS:
             msg = "source model must set SOURCE to a known connector name"
             raise ValueError(msg)
-        if isinstance(data, Mapping) and "max_concurrency" not in data:
-            return {**data, "max_concurrency": CONCURRENCY_DEFAULTS[source]}
         return data
 
     @model_validator(mode="after")
     def _check_common(self) -> Self:
         cap = CONCURRENCY_CAPS[self.SOURCE]
+        allowed = AUTH_METHODS.get(self.auth_key(), frozenset())
         if self.checkpoint_rows < self.batch_rows:
             msg = "checkpoint_rows must be >= batch_rows"
         elif not 1 <= self.max_concurrency <= cap:
             msg = f"max_concurrency must be >= 1 and <= {cap} for {self.SOURCE}"
         elif self.auth is not None and self.auth.method == "oauth_3lo":
             msg = "auth.method oauth_3lo is not supported in v1"
-        elif self.auth is not None and self.auth.method not in AUTH_METHODS.get(
-            self.auth_key(), frozenset()
-        ):
+        elif self.auth is not None and self.auth.method not in allowed:
             msg = f"auth.method is not allowed for {self.auth_key()}"
         else:
+            object.__setattr__(self, "entities", _ReadOnlyDict(self.entities))
             return self
         raise ValueError(msg)
 
