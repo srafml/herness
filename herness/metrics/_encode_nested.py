@@ -7,7 +7,6 @@ Python type, because ``fetchall`` and Arrow give different Python values for the
 
 from __future__ import annotations
 
-import decimal
 import json
 from collections.abc import Callable, Sequence
 from typing import Final
@@ -18,7 +17,20 @@ from herness.core.errors import SchemaViolation
 Encoder = Callable[[object, str], str]
 
 COMPOUND_PREFIXES: Final = ("STRUCT(", "MAP(", "UNION(")
-_AMBIGUOUS: Final = (dict, list, tuple, decimal.Decimal)
+# No common encoding exists: fetchall gives BIT and BIGNUM as text but Arrow as DuckDB-internal
+# bytes, and Arrow drops the TIME WITH TIME ZONE offset. These fail closed at any depth.
+UNSUPPORTED_TYPES: Final = frozenset(
+    {"BIT", "BITSTRING", "BIGNUM", "VARINT", "TIME WITH TIME ZONE", "TIMETZ"}
+)
+# UNION values carry no member tag, so a multi-member UNION is encoded by Python type; these
+# member types give different Python values from fetchall and Arrow (int vs Decimal, ...).
+_PATH_DEPENDENT: Final = UNSUPPORTED_TYPES | {"HUGEINT", "UHUGEINT", "INTERVAL"}
+
+
+def unsupported_type(duckdb_type: str) -> SchemaViolation:
+    """The fail-closed error for a column or member type without a path-independent encoding."""
+    msg = f"unsupported column type {duckdb_type}: fetchall and Arrow values differ"
+    return SchemaViolation(msg)
 
 
 def split_top(inner: str) -> list[str]:
@@ -100,10 +112,9 @@ def _union(value: object, norm: str, encode: Encoder, by_python: Encoder) -> str
     types = member_types(norm)
     if len(types) == 1:
         return encode(value, types[0])
-    if isinstance(value, _AMBIGUOUS):
-        # The member tag is not in the value; these types encode differently per path.
-        msg = f"ambiguous UNION member value {type(value).__name__} for column type {norm}"
-        raise SchemaViolation(msg)
+    for member in types:
+        if member in _PATH_DEPENDENT or member.startswith("DECIMAL(") or _is_compound(member):
+            raise unsupported_type(norm)
     return by_python(value, norm)
 
 

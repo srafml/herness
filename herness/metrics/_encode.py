@@ -21,7 +21,7 @@ import pyarrow as pa
 
 from herness.core import time as clock
 from herness.core.errors import SchemaViolation
-from herness.metrics._encode_nested import COMPOUND_PREFIXES, encode_nested
+from herness.metrics import _encode_nested as nested
 
 MAX_SAMPLE_LIMIT: Final[int] = 1000
 _SIGNED: Final = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT")
@@ -160,16 +160,16 @@ def _encode_typed(value: object, norm: str, duckdb_type: str) -> str:
             raise _unsupported(value, duckdb_type)
         el = norm[: norm.rindex("[")]
         return "[" + ",".join(_member(e, el) for e in value) + "]"
-    encoder = _SCALAR_ENCODERS.get(norm)
+    encoder = _SCALAR_ENCODERS.get("VARCHAR" if norm.startswith("ENUM(") else norm)
     if encoder is not None:
         return encoder(value)
     match = _DECIMAL_RE.fullmatch(norm)
     if match is not None:
         return _decimal_text(value, int(match.group(2)))
-    if norm.startswith("ENUM("):
-        return _text(value)
-    if norm.startswith(COMPOUND_PREFIXES):
-        return encode_nested(value, norm, _member, _encode_python)
+    if norm in nested.UNSUPPORTED_TYPES:
+        raise nested.unsupported_type(duckdb_type)
+    if norm.startswith(nested.COMPOUND_PREFIXES):
+        return nested.encode_nested(value, norm, _member, _encode_python)
     return _encode_python(value, duckdb_type)
 
 

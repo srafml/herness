@@ -209,11 +209,48 @@ def test_ut04_01_conversion_failure_raises(value: object, duckdb_type: str) -> N
     assert info.value.__cause__ is not None
 
 
-@pytest.mark.parametrize("value", [{"k": 1}, [("k", 1)], (1,), D("1")])
-def test_ut04_01_ambiguous_union_fails_closed(value: object) -> None:
-    """UT04-01 multi-member UNION values that encode differently per path raise."""
-    with pytest.raises(SchemaViolation, match="ambiguous UNION member value"):
-        encode_cell(value, "UNION(a DECIMAL(9,0), m MAP(VARCHAR, INTEGER))")
+FAIL_CLOSED_SQL = """SELECT union_value(h := 5::HUGEINT)::UNION(h HUGEINT, s VARCHAR) uh,
+ union_value(u := 5::UHUGEINT)::UNION(u UHUGEINT, s VARCHAR) uu,
+ union_value(i := INTERVAL 1 MONTH)::UNION(i INTERVAL, s VARCHAR) ui,
+ [union_value(h := 5::HUGEINT)::UNION(h HUGEINT, s VARCHAR)] luh,
+ union_value(d := 1.5::DECIMAL(9,2))::UNION(d DECIMAL(9,2), s VARCHAR) ud,
+ union_value(l := [1])::UNION(l INTEGER[], s VARCHAR) ul,
+ union_value(m := MAP {'k': 1})::UNION(m MAP(VARCHAR, INTEGER), s VARCHAR) um,
+ '101'::BIT b, 123456789012345678901234567890::VARINT v, TIMETZ '12:00:00+02' tz,
+ {'b': '11'::BIT} sb, [TIMETZ '12:00:00+05'] ltz"""
+
+
+def test_ut04_01_path_dependent_types_fail_closed_on_both_paths() -> None:
+    """UT04-01 types without a path-independent encoding raise from fetchall and from Arrow."""
+    con = duckdb.connect()
+    rel = con.sql(FAIL_CLOSED_SQL)
+    types = [str(t) for t in rel.types]
+    assert types[7:10] == ["BIT", "BIGNUM", "TIME WITH TIME ZONE"]
+    fetched = rel.fetchall()[0]
+    arrowed = arrow_rows(con, FAIL_CLOSED_SQL)[0]
+    for row in (fetched, arrowed):
+        for value, kind in zip(row, types, strict=True):
+            with pytest.raises(SchemaViolation, match="unsupported column type"):
+                encode_cell(value, kind)
+    for value in (5, D("5"), "x"):
+        with pytest.raises(SchemaViolation, match="unsupported column type"):
+            encode_cell(value, "UNION(h HUGEINT, s VARCHAR)")
+
+
+def test_ut04_01_stable_multi_member_union_encodes_equally() -> None:
+    """UT04-01 a multi-member UNION of path-independent members encodes equally."""
+    con = duckdb.connect()
+    sql = (
+        "SELECT * FROM (VALUES (union_value(n := 1)::UNION(n INTEGER, s VARCHAR, t TIMESTAMPTZ)),"
+        " (union_value(s := 'x')::UNION(n INTEGER, s VARCHAR, t TIMESTAMPTZ)),"
+        " (union_value(t := TIMESTAMPTZ '2026-01-01 00:00:00+00')"
+        "::UNION(n INTEGER, s VARCHAR, t TIMESTAMPTZ))) v(u)"
+    )
+    rel = con.sql(sql)
+    kind = str(rel.types[0])
+    fetched = [encode_cell(r[0], kind) for r in rel.fetchall()]
+    assert fetched == [encode_cell(r[0], kind) for r in arrow_rows(con, sql)]
+    assert fetched == ["1", '"x"', '"2026-01-01T00:00:00.000000Z"']
 
 
 NESTED_SQL = """SELECT {'h': 5::HUGEINT} h, {'u': 5::UHUGEINT} u, {'m': MAP {'k': 1}} m,
