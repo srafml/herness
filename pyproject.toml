@@ -239,6 +239,7 @@ include_external_packages = false
 name = "herness layers"
 type = "layers"
 layers = [
+    "herness.harness",
     "herness.connectors | herness.model",
     "herness.store",
     "herness.core",
@@ -285,6 +286,7 @@ forbidden_modules = [
     "herness.store",
     "herness.model",
     "herness.connectors",
+    "herness.harness",
 ]
 
 [[tool.importlinter.contracts]]
