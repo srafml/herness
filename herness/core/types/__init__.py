@@ -4,4 +4,26 @@ This file defines nothing. Each owner card (T03-01, T05-01, T06-01, T07-01, T08-
 T09-01) adds one import line for its submodule and its names to __all__.
 """
 
-__all__: tuple[str, ...] = ()
+from herness.core.types.jobs import (
+    BreakerState,
+    ChatMode,
+    GpuClass,
+    JobKind,
+    JobOutcome,
+    JobSpec,
+    MetricSample,
+    PolicyName,
+    ServiceName,
+)
+
+__all__: tuple[str, ...] = (
+    "BreakerState",
+    "ChatMode",
+    "GpuClass",
+    "JobKind",
+    "JobOutcome",
+    "JobSpec",
+    "MetricSample",
+    "PolicyName",
+    "ServiceName",
+)
