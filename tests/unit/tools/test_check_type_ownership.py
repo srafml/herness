@@ -163,3 +163,29 @@ def test_st00_15_redefinition_outside(tmp_path: Path, capsys: pytest.CaptureFixt
     code, out = _run(root, capsys)
     assert code == 1
     assert "herness/metrics/x.py:1: OWN040" in out
+
+
+def test_cv_4_broken_ownership_table_is_input_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CV-4 a broken _ownership.py gives an input-error message and exit 2 (R-73)."""
+    root = _tree(tmp_path)
+    _write(root, "herness/core/types/_ownership.py", "TYPE_OWNERS = {" + chr(10))
+    code = main(["--root", str(root)])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.err.startswith("input error:")
+    assert "Traceback" not in captured.err
+
+
+def test_cv_5_unreadable_source_is_input_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CV-5 a source path that cannot be read gives an input-error message and exit 2 (R-73)."""
+    root = _tree(tmp_path)
+    (root / "herness" / "metrics" / "odd.py").mkdir(parents=True)
+    code = main(["--root", str(root)])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert captured.err.startswith("input error:")
+    assert "herness/metrics/odd.py" in captured.err

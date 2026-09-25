@@ -1,8 +1,8 @@
 """Check shared-type ownership, core.types import rules and settings imports (U00-47).
 
 Run: python -m tools.check_type_ownership [--root PATH]
-Exit codes (R-73): 0 pass, 1 violations, 2 usage or input error. Files are parsed with
-ast and never imported.
+Exit codes (R-73): 0 pass, 1 violations, 2 usage or input error. Source files are parsed
+with ast and never imported; only the ownership tables file is executed (runpy).
 """
 
 from __future__ import annotations
@@ -20,6 +20,10 @@ _TYPES_DIR = "herness/core/types"
 _TYPE_THIRD_PARTY = frozenset({"pydantic", "pydantic_core", "typing_extensions", "annotated_types"})
 _TYPE_CORE = frozenset({"herness.core.errors", "herness.core.ids"})
 _SETTINGS_HERNESS = frozenset({"herness.core.types", "herness.core.errors"})
+
+
+class InputError(Exception):
+    """An input file cannot be read or loaded; main() reports it and exits 2 (R-73)."""
 
 
 @dataclass(frozen=True, order=True)
@@ -70,6 +74,9 @@ def _parse(root: Path, path: Path, report: Report) -> Source | None:
     except (SyntaxError, UnicodeDecodeError, ValueError):
         report.add(rel, 0, "OWN090", "syntax error")
         return None
+    except OSError as exc:
+        msg = f"cannot read {rel} ({type(exc).__name__})"
+        raise InputError(msg) from exc
     return Source(rel, module, is_package, tree)
 
 
@@ -135,10 +142,14 @@ def _owner_names(tables: Tables, owner: str) -> set[str]:
 
 
 def _load_tables(path: Path) -> Tables:
-    ns = runpy.run_path(str(path))
-    return Tables(
-        ns["TYPE_OWNERS"], ns["OWNER_MODULES"], ns["OWNER_IMPORTS"], ns["DECLARED_ELSEWHERE"]
-    )
+    try:
+        ns = runpy.run_path(str(path))
+        return Tables(
+            ns["TYPE_OWNERS"], ns["OWNER_MODULES"], ns["OWNER_IMPORTS"], ns["DECLARED_ELSEWHERE"]
+        )
+    except Exception as exc:  # any failure of the executed tables file is an input error
+        msg = f"cannot load {path.as_posix()} ({type(exc).__name__})"
+        raise InputError(msg) from exc
 
 
 def _check_tables(tables: Tables, report: Report) -> None:
@@ -326,7 +337,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not ownership.is_file():
         sys.stderr.write(f"input error: {ownership.as_posix()} not found\n")
         return 2
-    report = check(root, _load_tables(ownership))
+    try:
+        report = check(root, _load_tables(ownership))
+    except InputError as exc:
+        sys.stderr.write(f"input error: {exc}\n")
+        return 2
     for info in report.infos:
         sys.stdout.write(info + "\n")
     for violation in sorted(report.violations):
