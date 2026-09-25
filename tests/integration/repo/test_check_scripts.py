@@ -11,20 +11,26 @@ pytestmark = pytest.mark.integration
 ROOT = Path(__file__).resolve().parents[3]
 
 
+class TraceabilityDebtError(AssertionError):
+    """check_traceability found violations in the repository's docs or tests."""
+
+
 @pytest.mark.xfail(
     strict=True,
+    raises=TraceabilityDebtError,
     reason=(
         "check_traceability still reports doc defects in specs 01-11 (TR001, TR002, TR004, "
-        "TR005) and reused test IDs in tests/unit/tools/test_check_module_size.py (TR007); "
-        "remove this marker once the consistency pass has cleaned them"
+        "TR005); remove this marker once the consistency pass has cleaned them"
     ),
 )
 def test_it00_02_check_scripts_pass_on_repo(capsys: pytest.CaptureFixture[str]) -> None:
     """IT00-02 check_type_ownership, check_module_size and check_traceability each return 0."""
-    codes = {
-        module.__name__: module.main(["--root", str(ROOT)])
-        for module in (check_type_ownership, check_module_size, check_traceability)
-    }
-    out = capsys.readouterr().out
+    root = ["--root", str(ROOT)]
+    assert check_type_ownership.main(root) == 0, capsys.readouterr().out
+    assert check_module_size.main(root) == 0, capsys.readouterr().out
+    capsys.readouterr()
 
-    assert codes == dict.fromkeys(codes, 0), out
+    code = check_traceability.main(root)
+
+    if code != 0:
+        raise TraceabilityDebtError(capsys.readouterr().out)

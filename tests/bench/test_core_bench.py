@@ -86,6 +86,8 @@ def test_bt00_04_traceability_on_repo(capsys: pytest.CaptureFixture[str]) -> Non
     """BT00-04 check_traceability.main on the repository finishes in under 5 s."""
     root = Path(__file__).resolve().parents[2]
     start = time.perf_counter()
+    # The exit code is deliberately ignored: BT00-04 measures run time only, and the repo still
+    # carries doc defects from specs 01-11 (IT00-02 tracks the result).
     check_traceability.main(["--root", str(root)])
     elapsed = time.perf_counter() - start
     assert "defined=" in capsys.readouterr().out

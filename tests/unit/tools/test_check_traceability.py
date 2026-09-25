@@ -47,7 +47,8 @@ def test_ut00_61_undefined_reference(tmp_path: Path, capsys: pytest.CaptureFixtu
     """UT00-61 a reference to an undefined unit ID gives TR001; fenced lines are skipped."""
     undefined = _id("U", "00", "99")
     fenced = _id("U", "00", "98")
-    _doc(tmp_path, "00-a.impl.md", f"# Spec\n\nSee {undefined}.\n\n```\n{fenced}\n```\n")
+    # The ~~~ line inside the ``` block must not close it early.
+    _doc(tmp_path, "00-a.impl.md", f"# Spec\n\nSee {undefined}.\n\n```\n~~~\n{fenced}\n```\n")
 
     code, out = _run(tmp_path, capsys)
 
@@ -105,12 +106,22 @@ def test_ut00_65_test_not_on_a_card(tmp_path: Path, capsys: pytest.CaptureFixtur
     """UT00-65 a test row on no card's Tests row gives TR005; card ranges count as listed."""
     listed, in_range, orphan = _id("UT", "00", "01"), _id("UT", "00", "04"), _id("UT", "00", "07")
     unit_only = _id("UT", "00", "08")
-    card_tests = f"{listed}, {_id('UT', '00', '03')}\N{HORIZONTAL ELLIPSIS}{_id('UT', '00', '05')}"
+    en_dash, dots, padded = _id("UT", "00", "31"), _id("UT", "00", "41"), _id("UT", "00", "099")
+    mixed_kind, mixed_spec = _id("UT", "00", "51"), _id("UT", "00", "61")
+    ranges = [
+        f"{_id('UT', '00', '03')}\N{HORIZONTAL ELLIPSIS}{_id('UT', '00', '05')}",
+        f"{_id('UT', '00', '30')} \N{EN DASH} {_id('UT', '00', '32')}",
+        f"{_id('UT', '00', '40')}...{_id('UT', '00', '42')}",
+        f"{_id('UT', '00', '098')}\N{EN DASH}{_id('UT', '00', '100')}",
+        f"{_id('UT', '00', '50')}\N{EN DASH}{_id('ST', '00', '52')}",
+        f"{_id('UT', '00', '60')}...{_id('UT', '01', '62')}",
+    ]
     text = (
-        _card(_id("T", "00", "01"), card_tests)
+        _card(_id("T", "00", "01"), ", ".join([listed, *ranges]))
         + f"#### {_id('U', '00', '01')} unit\n\n| Field | Content |\n|---|---|\n"
         + f"| Tests | {unit_only} |\n\n"
-        + _test_rows(listed, in_range, orphan, unit_only)
+        + _test_rows(listed, in_range, orphan, unit_only, en_dash, dots, padded)
+        + _test_rows(mixed_kind, mixed_spec)
     )
     _doc(tmp_path, "00-a.impl.md", text)
 
@@ -118,7 +129,8 @@ def test_ut00_65_test_not_on_a_card(tmp_path: Path, capsys: pytest.CaptureFixtur
 
     assert code == 1
     tr005 = [line for line in out.splitlines() if " TR005 " in line]
-    assert sorted(line.rsplit(" ", 1)[1] for line in tr005) == [orphan, unit_only]
+    found = sorted(line.rsplit(" ", 1)[1] for line in tr005)
+    assert found == sorted([mixed_kind, mixed_spec, orphan, unit_only])
 
 
 def test_ut00_66_code_ids(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

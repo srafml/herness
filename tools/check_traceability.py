@@ -109,12 +109,15 @@ def _card_test_ids(line: str) -> set[str]:
     """IDs of a card's Tests row; a range ``A<sep>B`` of one kind and spec is expanded.
 
     ``<sep>`` is an en dash, an ellipsis or three dots, as the specs write ranges.
+    Deliberate deviation from U00-56 (T00-11 ruling, recorded in the group ledger): the
+    algorithm counts only literal IDs; expansion applies to TR005 and nothing else.
     """
     found = set(_ids_in(line))
     for m in _RANGE_RE.finditer(line):
-        kind, spec, start, end = m.group(1), m.group(2), int(m.group(3)), int(m.group(6))
+        kind, spec, first, end = m.group(1), m.group(2), m.group(3), int(m.group(6))
         if (m.group(4), m.group(5)) == (kind, spec):
-            found.update(f"{kind}{spec}-{n:02d}" for n in range(start, end + 1))
+            width = len(first)
+            found.update(f"{kind}{spec}-{n:0{width}d}" for n in range(int(first), end + 1))
     return found
 
 
@@ -136,15 +139,20 @@ class _DocScanner:
     def __init__(self, rel: str, index: DocIndex) -> None:
         self.rel = rel
         self.index = index
-        self.in_fence = False
+        self.fence = ""
         self.card_level = 0
 
     def scan(self, lines: list[str]) -> None:
         for number, line in enumerate(lines, start=1):
-            if line.lstrip().startswith(("```", "~~~")):
-                self.in_fence = not self.in_fence
+            marker = line.lstrip()[:3]
+            if marker in ("```", "~~~"):
+                # A fence closes only on the marker that opened it.
+                if not self.fence:
+                    self.fence = marker
+                elif marker == self.fence:
+                    self.fence = ""
                 continue
-            if not self.in_fence:
+            if not self.fence:
                 self._line((self.rel, number), line)
 
     def _line(self, loc: Loc, line: str) -> None:
