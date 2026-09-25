@@ -43,6 +43,7 @@ META_COLUMNS: Final[tuple[tuple[str, pa.DataType, bool], ...]] = (
     ("_payload", pa.string(), True),
 )
 _TIME_COLUMNS: Final = ("_source_updated_at", "_fetched_at")
+_US_RANGE: Final = (-62_135_596_800_000_000, 253_402_300_799_999_999)  # datetime min/max, us
 _META_NAMES: Final = frozenset(name for name, _, _ in META_COLUMNS)
 _TARGET_RANGE: Final = (2**20, 2**30)
 _MAX_OPEN_RANGE: Final = (1, 86_400)
@@ -111,11 +112,12 @@ def _type_ok(name: str, dtype: pa.DataType) -> bool:
 
 
 def _cast_time(name: str, array: pa.Array, where: tuple[str, str]) -> pa.Array:
-    """Cast to ``timestamp[us, UTC]``; out-of-range values fail ``type`` with a row count."""
-    factor = {"s": 10**6, "ms": 10**3}.get(array.type.unit)
+    """Cast to ``timestamp[us, UTC]``; values outside the datetime range fail ``type``."""
+    factor = {"s": 10**6, "ms": 10**3, "us": 1}.get(array.type.unit)  # ns always fits
     if factor is not None:
-        ints, limit = pc.cast(array, pa.int64()), (2**63 - 1) // factor
-        bad = _count_true(pc.or_(pc.greater(ints, limit), pc.less(ints, -limit)))
+        low, high = -(-_US_RANGE[0] // factor), _US_RANGE[1] // factor
+        ints = pc.cast(array, pa.int64())
+        bad = _count_true(pc.or_(pc.greater(ints, high), pc.less(ints, low)))
         if bad:
             _fail(*where, "type", name, bad)
     return pc.cast(array, options=pc.CastOptions(_UTC_US, allow_time_truncate=True))
@@ -220,6 +222,7 @@ class LakeWriter:
         self.rows = 0
         self.max_source_updated_at: datetime.datetime | None = None
         self._temp_files: list[tuple[Path, Path]] = []
+        self._discard: list[Path] = []  # temps of failed opens: deleted, never renamed
         self._buffer: list[pa.RecordBatch] = []
         self._buffer_rows = self._buffer_bytes = 0
         self._key: tuple[datetime.date, pa.Schema] | None = None  # dt and schema of buffer/file
@@ -292,14 +295,15 @@ class LakeWriter:
         directory.mkdir(parents=True, exist_ok=True)
         name = f"part-{new_ulid()}.parquet"
         temp = directory / f".{name}.tmp-{new_ulid()}"
-        self._temp_files.append((temp, directory / name))  # recorded first: abort can unlink it
         try:
             writer = pq.ParquetWriter(temp, schema, **_PARQUET_OPTIONS)
         except BaseException:
-            with contextlib.suppress(OSError):  # a kept entry lets abort retry the unlink
+            try:
                 temp.unlink(missing_ok=True)
-                self._temp_files.pop()
+            except OSError:  # never published; abort and commit retry the unlink
+                self._discard.append(temp)
             raise
+        self._temp_files.append((temp, directory / name))
         self._opened_at, self._file_rows = self._clock(), 0
         return writer
 
@@ -337,6 +341,9 @@ class LakeWriter:
                     continue
                 _fsync(temp, os.O_RDWR | getattr(os, "O_BINARY", 0))
                 os.replace(temp, final)
+            for temp in self._discard:
+                with contextlib.suppress(OSError):
+                    temp.unlink(missing_ok=True)
             if os.name != "nt":  # directory fsync is POSIX-only
                 for directory in {final.parent for _, final in self._temp_files}:
                     _fsync(directory, os.O_RDONLY)
@@ -345,17 +352,11 @@ class LakeWriter:
         except OSError as exc:
             raise self._os_error(exc) from exc
         self._state = "committed"
-        _log.info(
-            "store.lake.committed",
-            **self._ids,
-            files=len(files),
-            rows=self.rows,
-            bytes=size,
-            duration_ms=round((clock.monotonic() - started) * 1000),
-        )
-        return LakeFileSet(
-            files=files, rows=self.rows, max_source_updated_at=self.max_source_updated_at
-        )
+        fields = {"files": len(files), "rows": self.rows, "bytes": size}
+        duration_ms = round((clock.monotonic() - started) * 1000)
+        _log.info("store.lake.committed", **self._ids, **fields, duration_ms=duration_ms)
+        rows, max_at = self.rows, self.max_source_updated_at
+        return LakeFileSet(files=files, rows=rows, max_source_updated_at=max_at)
 
     def abort(self) -> None:
         """Discard everything not committed; idempotent, a no-op after ``commit()``."""
@@ -366,7 +367,7 @@ class LakeWriter:
                 self._pq.close()
             self._pq, self._opened_at = None, None
         leftover = 0
-        for temp, _ in self._temp_files:
+        for temp in [*(t for t, _ in self._temp_files), *self._discard]:
             try:
                 temp.unlink(missing_ok=True)
             except OSError:  # abort never raises (U02-17); spec 01 sweeps old temps

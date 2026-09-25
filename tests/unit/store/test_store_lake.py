@@ -228,6 +228,29 @@ def test_ut02_05_timestamp_overflow_is_type_error(writer: LakeWriter) -> None:
     assert str(2**62) not in str(info.value)
 
 
+@pytest.mark.parametrize("unit", ["s", "ms", "us"])
+def test_ut02_05_timestamp_past_datetime_range_is_type_error(writer: LakeWriter, unit: str) -> None:
+    """UT02-05 a time value past year 9999 or before year 1 fails type, nothing buffered."""
+    per_s = {"s": 1, "ms": 10**3, "us": 10**6}[unit]
+    beyond = [253_402_300_800 * per_s, 0, -62_135_596_801 * per_s]
+    batch = with_column(
+        make_batch(3), "_source_updated_at", pa.array(beyond, pa.timestamp(unit, "UTC"))
+    )
+    with pytest.raises(LakeContractError) as info:
+        writer.write(batch)
+    assert (info.value.rule, info.value.column, info.value.bad_rows) == (
+        "type",
+        "_source_updated_at",
+        2,
+    )
+    assert writer.rows == 0
+    assert writer.max_source_updated_at is None
+    edge = [253_402_300_799 * per_s, -62_135_596_800 * per_s]
+    ok = with_column(make_batch(2), "_source_updated_at", pa.array(edge, pa.timestamp(unit, "UTC")))
+    writer.write(ok)
+    assert writer.rows == 2
+
+
 def test_ut02_05_timestamp_overflow_checked_after_value_rules(writer: LakeWriter) -> None:
     """UT02-05 the time cast runs after rules 4-8, so an earlier rule wins."""
     batch = make_batch(1, source="servicenow")
@@ -398,6 +421,32 @@ def test_ut02_10_parquet_writer_failure_abort_unlinks_temp(
     assert Path.unlink is real_unlink
     assert len(temp_files(lake_root)) == 1
     w.abort()
+    assert temp_files(lake_root) == []
+
+
+def test_ut02_10_parquet_writer_failure_junk_never_published(
+    lake_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT02-10 an undeletable failed temp is never renamed; a retried write commits clean files."""
+    monkeypatch.setattr(lake, "BUFFER_ROWS", 1)
+    w = LakeWriter("jira", "issue", root=lake_root)
+
+    def locked(self: Path, missing_ok: bool = False) -> None:
+        raise PermissionError(13, "locked")
+
+    with monkeypatch.context() as mp:
+        mp.setattr(lake.pq, "ParquetWriter", _FailingParquetWriter)
+        mp.setattr(Path, "unlink", locked)
+        with pytest.raises(SchemaViolation):
+            w.write(make_batch(1))
+    (junk,) = temp_files(lake_root)
+    w.write(make_batch(1, start=1))
+    result = w.commit()
+    assert result.rows == 2
+    assert len(result.files) == 1
+    assert committed_files(lake_root) == list(result.files)
+    assert pq.read_table(result.files[0]).num_rows == 2
+    assert not junk.exists()
     assert temp_files(lake_root) == []
 
 
