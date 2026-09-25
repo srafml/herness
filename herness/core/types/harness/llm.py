@@ -4,7 +4,7 @@ Design 05 §4.2 and §4.3. Every model is frozen so the loop and the compactor n
 edit an earlier turn in place (design §5.2.3). No field holds a secret (TH05-15).
 """
 
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from itertools import pairwise
 from typing import Annotated, Literal, Self
 
@@ -116,7 +116,7 @@ class RequestMeta(_Frozen):
     task_id: str | None
     role: str
     model_role: str
-    step: int = Field(ge=0)
+    step: int = Field(ge=0, strict=True)
     request_key: str = Field(max_length=200)
 
 
@@ -162,11 +162,11 @@ class LLMRequest(_Frozen):
 class Usage(_Frozen):
     """Token usage of one or more calls."""
 
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
-    cache_read_tokens: int = Field(default=0, ge=0)
-    cache_write_tokens: int = Field(default=0, ge=0)
-    reasoning_tokens: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0, strict=True)
+    output_tokens: int = Field(default=0, ge=0, strict=True)
+    cache_read_tokens: int = Field(default=0, ge=0, strict=True)
+    cache_write_tokens: int = Field(default=0, ge=0, strict=True)
+    reasoning_tokens: int = Field(default=0, ge=0, strict=True)
 
     def plus(self, other: "Usage") -> "Usage":
         """Return the field-wise sum of both usages."""
@@ -207,4 +207,8 @@ class LLMResponse(_Frozen):
     @field_validator("cost_usd")
     @classmethod
     def _quantize_cost(cls, value: Decimal) -> Decimal:
-        return value.quantize(_COST_QUANTUM, rounding=ROUND_HALF_EVEN)
+        try:
+            return value.quantize(_COST_QUANTUM, rounding=ROUND_HALF_EVEN)
+        except InvalidOperation as exc:
+            msg = "cost_usd is too large to quantize to 6 decimal places"
+            raise ValueError(msg) from exc

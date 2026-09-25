@@ -209,6 +209,8 @@ def test_ut05_02_defaults_and_limits() -> None:
     with pytest.raises(ValidationError):
         RequestMeta.model_validate({**META.model_dump(), "step": -1})
     with pytest.raises(ValidationError):
+        RequestMeta.model_validate({**META.model_dump(), "step": True})
+    with pytest.raises(ValidationError):
         RequestMeta.model_validate({**META.model_dump(), "request_key": "k" * 201})
     with pytest.raises(ValidationError):
         req.client = "other"  # type: ignore[misc]
@@ -245,6 +247,8 @@ def test_ut05_03_usage_plus_and_prompt_total() -> None:
     assert Usage().prompt_total() == 0
     with pytest.raises(ValidationError):
         Usage(output_tokens=-1)
+    with pytest.raises(ValidationError):
+        Usage(input_tokens=True)
 
 
 @pytest.mark.parametrize(
@@ -268,6 +272,9 @@ def test_ut05_03_response_rules() -> None:
     """UT05-03 negative cost raises, the response is frozen and round-trips JSON."""
     with pytest.raises(ValidationError):
         _response(Decimal("-0.000001"))
+    for huge in (Decimal("1e22"), Decimal("1e30")):
+        with pytest.raises(ValidationError):
+            _response(huge)
     resp = _response(Decimal("0.1234567"))
     assert resp.batch is False
     assert LLMResponse.model_validate_json(resp.model_dump_json()) == resp
