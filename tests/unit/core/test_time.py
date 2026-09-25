@@ -90,8 +90,14 @@ def test_ut00_15_parse_utc() -> None:
 
 
 def test_ut00_16_parse_iso() -> None:
-    """UT00-16 lenient ISO parsing that still rejects naive values."""
+    """UT00-16 lenient ISO parsing that still rejects naive values.
+
+    RF-3: operator input with surrounding whitespace and a lowercase z parses.
+    """
     assert clock.parse_iso("2026-09-24") == datetime.datetime(2026, 9, 24, tzinfo=UTC)
+    assert clock.parse_iso(" 2026-09-24T10:00:00z ") == datetime.datetime(
+        2026, 9, 24, 10, tzinfo=UTC
+    )
     assert clock.parse_iso("2026-09-24T10:00:00Z") == datetime.datetime(2026, 9, 24, 10, tzinfo=UTC)
     assert clock.parse_iso("2026-09-24T10:00:00+02:00") == datetime.datetime(
         2026, 9, 24, 8, tzinfo=UTC
@@ -102,9 +108,14 @@ def test_ut00_16_parse_iso() -> None:
 
 
 def test_ut00_17_utc_day() -> None:
-    """UT00-17 utc_day of 23:30 at -02:00 is the next day's date."""
+    """UT00-17 utc_day of 23:30 at -02:00 is the next day's date.
+
+    RF-2: utc_day of an aware +05:30 time just after midnight is the previous UTC day.
+    """
     value = datetime.datetime(2026, 9, 24, 23, 30, tzinfo=_tz(-2))
     assert clock.utc_day(value) == "2026-09-25"
+    value = datetime.datetime(2026, 9, 25, 0, 10, tzinfo=_tz(5.5))
+    assert clock.utc_day(value) == "2026-09-24"
 
 
 def test_ut00_18_zone() -> None:
@@ -147,16 +158,3 @@ def test_st00_14_hostile_timestamps() -> None:
             with pytest.raises(SchemaViolation) as info:
                 parse(text)
             assert all(text not in str(v) for v in info.value.context.values())
-
-
-def test_rf_utc_day_non_utc_input() -> None:
-    """RF-2 utc_day of an aware +05:30 time just after midnight is the previous UTC day."""
-    value = datetime.datetime(2026, 9, 25, 0, 10, tzinfo=_tz(5.5))
-    assert clock.utc_day(value) == "2026-09-24"
-
-
-def test_rf_parse_iso_whitespace_and_lowercase_z() -> None:
-    """RF-3 operator input with surrounding whitespace and a lowercase z parses."""
-    assert clock.parse_iso(" 2026-09-24T10:00:00z ") == datetime.datetime(
-        2026, 9, 24, 10, tzinfo=UTC
-    )

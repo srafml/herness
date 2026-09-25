@@ -115,13 +115,19 @@ def test_ut00_23_prefixed_ids() -> None:
 
 
 def test_ut00_24_build_id() -> None:
-    """UT00-24 build_id has the stamp, 22 characters and a Crockford suffix."""
+    """UT00-24 build_id has the stamp, 22 characters and a Crockford suffix.
+
+    RF-2: a +05:30 time just after local midnight gives the UTC (previous) date.
+    """
     value = ids.new_build_id(datetime.datetime(2026, 9, 24, 21, 14, 3, tzinfo=UTC))
     assert value.startswith("20260924-211403-")
     assert len(value) == 22
     assert all(char in ids.CROCKFORD_ALPHABET for char in value[-6:])
     with pytest.raises(SchemaViolation):
         ids.new_build_id(datetime.datetime(2026, 9, 24))  # noqa: DTZ001
+    tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    value = ids.new_build_id(datetime.datetime(2026, 9, 25, 0, 10, tzinfo=tz))
+    assert value.startswith("20260924-184000-")
 
 
 def test_ut00_25_is_valid_ulid() -> None:
@@ -329,10 +335,3 @@ def test_st00_17_query_id_distinguishes_types_and_order() -> None:
     assert ids.query_id("SELECT 1", {"a": [1, 2]}, BUILD) != ids.query_id(
         "SELECT 1", {"a": [2, 1]}, BUILD
     )
-
-
-def test_rf_build_id_uses_utc_date() -> None:
-    """RF-2 a +05:30 time just after local midnight gives the UTC (previous) date."""
-    tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-    value = ids.new_build_id(datetime.datetime(2026, 9, 25, 0, 10, tzinfo=tz))
-    assert value.startswith("20260924-184000-")

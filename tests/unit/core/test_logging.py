@@ -51,7 +51,13 @@ def _event(lines: list[dict[str, Any]], name: str) -> dict[str, Any]:
 
 
 def test_ut00_35_json_line_to_stderr(capsys: pytest.CaptureFixture[str]) -> None:
-    """UT00-35 one JSON line with the required keys and the extra field."""
+    """UT00-35 one JSON line with the required keys and the extra field.
+
+    CV-3: stderr=False with no log_dir installs a NullHandler, so lastResort can't fire.
+    pytest attaches its own root handler for log capture, which already hides lastResort's
+    fallback text from stderr; the direct, deterministic check is that Herness's own
+    NullHandler is present on root (found > 0 in Logger.callHandlers keeps lastResort unused).
+    """
     configure_logging("INFO")
     get_logger("core.test").info("core.test.done", n=1)
     line = _event(_err_lines(capsys), "core.test.done")
@@ -60,6 +66,12 @@ def test_ut00_35_json_line_to_stderr(capsys: pytest.CaptureFixture[str]) -> None
     assert len(line["ts"]) == 27
     assert isinstance(line["pid"], int)
     assert line["n"] == 1
+    reset_logging()
+    configure_logging("WARNING", stderr=False)
+    root = logging.getLogger()
+    assert any(isinstance(h, logging.NullHandler) for h in root.handlers)
+    get_logger("core.test").warning("core.test.warn", value=SENTINEL)
+    assert SENTINEL not in capsys.readouterr().err
 
 
 def test_ut00_36_day_rollover(configured_logging: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,12 +135,19 @@ def test_ut00_39_bind_ids_rejects(configured_logging: Path) -> None:
     assert all("run_bad" not in str(value) for value in info.value.context.values())
 
 
-def test_ut00_40_get_logger_component() -> None:
-    """UT00-40 invalid component names are refused."""
+def test_ut00_40_get_logger_component(capsys: pytest.CaptureFixture[str]) -> None:
+    """UT00-40 invalid component names are refused.
+
+    RF-5: a logger created at import time still emits configured JSON lines.
+    """
     for bad in ("Harness", "a" * 65):
         with pytest.raises(SchemaViolation):
             get_logger(bad)
     assert get_logger("harness.tool") is not None
+    configure_logging("INFO")
+    _EARLY.info("core.early.ready")
+    line = _event(_err_lines(capsys), "core.early.ready")
+    assert line["component"] == "core.early"
 
 
 def test_ut00_41_key_order(configured_logging: Path) -> None:
@@ -211,7 +230,10 @@ def test_ut00_46_configured_event(configured_logging: Path) -> None:
 def test_st00_01_sentinel_never_written(
     capsys: pytest.CaptureFixture[str], configured_logging: Path
 ) -> None:
-    """ST00-01 the scrubber removes the sentinel from values, exceptions and long strings."""
+    """ST00-01 the scrubber removes the sentinel from values, exceptions and long strings.
+
+    CV-2: a scrubber that raises never echoes the record; log.info does not raise either.
+    """
     log = get_logger("core.test")
     log.info("core.test.value", value="x " + SENTINEL)
     try:
@@ -223,46 +245,20 @@ def test_st00_01_sentinel_never_written(
     assert SENTINEL not in text
     assert SENTINEL not in capsys.readouterr().err
     assert "***" in text
+    reset_logging()
+    raising_dir = configured_logging / "raising"
+    configure_logging("INFO", log_dir=raising_dir, scrubber=_raising_scrubber)
+    get_logger("core.test").info("core.test.value", value=SENTINEL)
+    err = capsys.readouterr().err
+    assert SENTINEL not in err
+    err_lines = [json.loads(line) for line in err.splitlines() if line.strip()]
+    failed = [line for line in err_lines if line.get("event") == "core.logging.emit_failed"]
+    assert failed
+    assert failed[0]["component"] == "core.logging"
+    for path in raising_dir.glob("*.jsonl"):
+        assert SENTINEL not in path.read_text(encoding="utf-8")
 
 
 def _raising_scrubber(logger: object, method_name: str, event_dict: Any) -> Any:
     msg = "scrubber boom"
     raise RuntimeError(msg)
-
-
-def test_cv_2_scrubber_failure_never_leaks(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """CV-2 a scrubber that raises never echoes the record; log.info does not raise either."""
-    configure_logging("INFO", log_dir=tmp_path, scrubber=_raising_scrubber)
-    get_logger("core.test").info("core.test.value", value=SENTINEL)
-    err = capsys.readouterr().err
-    assert SENTINEL not in err
-    err_lines = [json.loads(text) for text in err.splitlines() if text.strip()]
-    failed = [line for line in err_lines if line.get("event") == "core.logging.emit_failed"]
-    assert failed
-    assert failed[0]["component"] == "core.logging"
-    for path in tmp_path.glob("*.jsonl"):
-        assert SENTINEL not in path.read_text(encoding="utf-8")
-
-
-def test_cv_3_no_handlers_avoids_last_resort(capsys: pytest.CaptureFixture[str]) -> None:
-    """CV-3 stderr=False with no log_dir installs a NullHandler, so lastResort can't fire.
-
-    pytest attaches its own root handler for log capture, which already hides lastResort's
-    fallback text from stderr; the direct, deterministic check is that Herness's own
-    NullHandler is present on root (found > 0 in Logger.callHandlers keeps lastResort unused).
-    """
-    configure_logging("WARNING", stderr=False)
-    root = logging.getLogger()
-    assert any(isinstance(h, logging.NullHandler) for h in root.handlers)
-    get_logger("core.test").warning("core.test.warn", value=SENTINEL)
-    assert SENTINEL not in capsys.readouterr().err
-
-
-def test_rf_logger_created_before_configure(capsys: pytest.CaptureFixture[str]) -> None:
-    """RF-5 a logger created at import time still emits configured JSON lines."""
-    configure_logging("INFO")
-    _EARLY.info("core.early.ready")
-    line = _event(_err_lines(capsys), "core.early.ready")
-    assert line["component"] == "core.early"

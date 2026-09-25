@@ -51,7 +51,10 @@ def test_ut00_75_compile_allowed_patterns() -> None:
 
 
 def test_ut00_76_find_uncited_defaults() -> None:
-    """UT00-76 only the uncited numerals are reported; allowed ones and markers are exempt."""
+    """UT00-76 only the uncited numerals are reported; allowed ones and markers are exempt.
+
+    RF-4: the hit text keeps the currency sign, minus sign and attached percent.
+    """
     text = (
         "In Q3 2026 cost rose to [[n1]] from 1,200 on 2026-09-24 for INC0012345 and "
         "PAY-123 (up 12 %) in 2025."
@@ -60,6 +63,8 @@ def test_ut00_76_find_uncited_defaults() -> None:
     assert [h.text for h in hits] == ["1,200", "12 %"]
     assert hits[0].start == text.index("1,200")
     assert hits[1].start == text.index("12 %")
+    hits = nm.find_uncited("pay $1,200 or -5 now, 12% more", ALLOWED)
+    assert [h.text for h in hits] == ["$1,200", "-5", "12%"]
 
 
 def test_ut00_77_unicode_and_long_text() -> None:
@@ -105,7 +110,12 @@ def test_ut00_78_format_value() -> None:
 
 
 def test_ut00_79_format_edge_cases() -> None:
-    """UT00-79 default formats, tier promotion, invalid input, negative zero, no exponent."""
+    """UT00-79 default formats, tier promotion, invalid input, negative zero, no exponent.
+
+    RF-1: display strings passed as values format as n/a, never as a number.
+    """
+    for value in ("1,250", "$5", "12%", ""):
+        assert nm.format_value(value, "usd", "usd") == nm.NOT_AVAILABLE
     assert nm.format_value(7.5, "score", None) == "7.5"
     assert nm.format_value(999960, "usd", "usd_compact") == "$1.00M"
     assert nm.format_value(999.6, "usd", "usd_compact") == "$1.0K"
@@ -186,15 +196,3 @@ def test_st00_18_evasions_are_caught() -> None:
         for hit in hits:
             assert not any(m.start <= hit.start < m.end for m in markers)
     assert nm.find_uncited(texts[-1], ALLOWED)[-1].text == nm.TOO_LONG_TEXT
-
-
-def test_rf_display_strings_are_not_numbers() -> None:
-    """RF-1 display strings passed as values format as n/a, never as a number."""
-    for value in ("1,250", "$5", "12%", ""):
-        assert nm.format_value(value, "usd", "usd") == nm.NOT_AVAILABLE
-
-
-def test_rf_hits_keep_sign_and_symbol() -> None:
-    """RF-4 the hit text keeps the currency sign, minus sign and attached percent."""
-    hits = nm.find_uncited("pay $1,200 or -5 now, 12% more", ALLOWED)
-    assert [h.text for h in hits] == ["$1,200", "-5", "12%"]
