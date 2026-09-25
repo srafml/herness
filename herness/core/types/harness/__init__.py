@@ -5,7 +5,10 @@ This file defines nothing; each harness types module adds its import line here.
 
 # Compact layout keeps this file within its 60-line budget (impl 05 §2); names stay sorted.
 # fmt: off
-from herness.core.types.harness.evidence import (  # noqa: I001 - compact re-export layout
+from herness.core.types.harness.agent import (  # noqa: I001 - compact re-export layout
+    AgentResult, LoopCheckpoint, LoopLimits, LoopSignal, LoopState,
+)
+from herness.core.types.harness.evidence import (
     Evidence, ItemResult, NumberCheck, NumberRef, UncitedSpan, VerifiableItem,
     VerificationResult,
 )
@@ -19,11 +22,11 @@ from herness.core.types.harness.tooling import (
 )
 
 __all__: tuple[str, ...] = (
-    "AsyncTool", "BudgetLedger", "Budgets", "Evidence", "ItemResult", "LLMRequest",
-    "LLMResponse", "Message", "NumberCheck", "NumberRef", "OpsHandle", "ReasoningPart",
-    "RequestMeta", "SqlLimits", "SystemBlock", "TextPart", "Tool", "ToolCall", "ToolCallPart",
-    "ToolContext", "ToolErrorInfo", "ToolResult", "ToolResultPart", "ToolSpec", "TraceEmitter",
-    "UncitedSpan", "Usage", "VectorHandle", "VectorHit", "VerifiableItem",
-    "VerificationResult", "WarehouseHandle",
+    "AgentResult", "AsyncTool", "BudgetLedger", "Budgets", "Evidence", "ItemResult", "LLMRequest",
+    "LLMResponse", "LoopCheckpoint", "LoopLimits", "LoopSignal", "LoopState", "Message",
+    "NumberCheck", "NumberRef", "OpsHandle", "ReasoningPart", "RequestMeta", "SqlLimits",
+    "SystemBlock", "TextPart", "Tool", "ToolCall", "ToolCallPart", "ToolContext", "ToolErrorInfo",
+    "ToolResult", "ToolResultPart", "ToolSpec", "TraceEmitter", "UncitedSpan", "Usage",
+    "VectorHandle", "VectorHit", "VerifiableItem", "VerificationResult", "WarehouseHandle",
 )
 # fmt: on

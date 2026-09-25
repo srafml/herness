@@ -5,6 +5,7 @@ T09-01) adds one import line for its submodule and its names to __all__.
 """
 
 from herness.core.types.harness import (
+    AgentResult,
     AsyncTool,
     BudgetLedger,
     Budgets,
@@ -12,6 +13,10 @@ from herness.core.types.harness import (
     ItemResult,
     LLMRequest,
     LLMResponse,
+    LoopCheckpoint,
+    LoopLimits,
+    LoopSignal,
+    LoopState,
     Message,
     NumberCheck,
     NumberRef,
@@ -40,6 +45,7 @@ from herness.core.types.harness import (
 )
 
 __all__: tuple[str, ...] = (
+    "AgentResult",
     "AsyncTool",
     "BudgetLedger",
     "Budgets",
@@ -47,6 +53,10 @@ __all__: tuple[str, ...] = (
     "ItemResult",
     "LLMRequest",
     "LLMResponse",
+    "LoopCheckpoint",
+    "LoopLimits",
+    "LoopSignal",
+    "LoopState",
     "Message",
     "NumberCheck",
     "NumberRef",
