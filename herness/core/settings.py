@@ -25,7 +25,7 @@ _NESTED_QUANTIFIER: Final = re.compile(r"\((?:[^()\\]|\\.)*[*+](?:[^()\\]|\\.)*\
 _HOSTNAME: Final = re.compile(
     r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
 )
-_ISO_DATE: Final = re.compile(r"\d{4}-\d{2}-\d{2}")
+_ISO_DATE: Final = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _POSIX_PATH: Final = re.compile(r"/[A-Za-z0-9._/-]{1,200}")
 # U10-07 load-time rule: argv-safe characters, or a whole-value <placeholder>.
 _ARGV_SAFE: Final = r"^(?:[A-Za-z0-9._:/@+-]{1,256}|<[^<>\s]{1,64}>)$"
@@ -100,7 +100,8 @@ def _is_ip(value: str) -> bool:
 
 def _is_posix_path(value: str) -> bool:
     parts = [part for part in value.split("/") if part]
-    return bool(_POSIX_PATH.fullmatch(value)) and ".." not in parts and parts[:1] != ["mnt"]
+    ok = bool(_POSIX_PATH.fullmatch(value)) and bool(parts) and ".." not in parts
+    return ok and parts[0] != "mnt"
 
 
 def _must(test: Callable[[str], bool], msg: str) -> AfterValidator:
@@ -186,7 +187,7 @@ class NetworkConfig(_Section):
     """Operator socket-guard additions and outbound proxy (U10-03, R-06)."""
 
     extra_allowed_hosts: _Hosts = ()
-    http_proxy: Annotated[str, _re(r"^https?://[A-Za-z0-9.-]+:\d{1,5}$")] | None = None
+    http_proxy: Annotated[str, _re(r"^https?://[A-Za-z0-9.-]+:[0-9]{1,5}$")] | None = None
 
 
 class RedactionConfig(_Section):
@@ -263,7 +264,7 @@ class RetentionConfig(_Section):
 class BackupConfig(_Section):
     """The ``backup`` section (U10-06)."""
 
-    nightly_at: Annotated[str, _re(r"^([01]\d|2[0-3]):[0-5]\d$")] = "01:30"
+    nightly_at: Annotated[str, _re(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")] = "01:30"
     keep_daily: Annotated[int, Field(ge=1, le=365)] = 14
     keep_weekly: Annotated[int, Field(ge=0, le=520)] = 8
     include_lake: bool = False
@@ -352,7 +353,7 @@ class DeployConfig(_Section):
             section: BaseModel = getattr(self, name)
             fields = type(section).model_fields
             for field, rule in _PIN_RULES.items():
-                if field in fields and not rule.fullmatch(str(getattr(section, field))):
+                if field in fields and not rule.fullmatch(getattr(section, field)):
                     keys.append(f"{name}.{field}")
         return tuple(keys)
 

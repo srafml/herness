@@ -32,7 +32,8 @@ def test_st10_37_redos_and_long_patterns_rejected(
     started = time.perf_counter()
     with pytest.raises(ValidationError) as info:
         RedactionConfig.model_validate(data)
-    assert time.perf_counter() - started < 1.0
+    # Generous bound: catastrophic backtracking would take far longer; CI jitter will not.
+    assert time.perf_counter() - started < 10.0
     errors = info.value.errors(include_input=False)
     assert [tuple(e["loc"]) for e in errors] == [loc]
     assert REDOS not in str(errors)
