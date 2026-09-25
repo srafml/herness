@@ -140,6 +140,31 @@ def test_ut00_73_settings_imports(tmp_path: Path, capsys: pytest.CaptureFixture[
         assert any(line.endswith(name) for line in lines)
 
 
+def test_ut00_73_settings_modules_include_settings_parts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """UT00-73 `settings_*.py` modules are checked; sibling settings imports are allowed."""
+    root = _tree(tmp_path)
+    _write(root, "herness/connectors/settings_base.py", "import httpx\nimport pydantic\n")
+    sibling = (
+        "import herness.connectors.settings_base as sb\n"
+        "from herness.connectors.settings_entities import X\n"
+        "import herness.model.settings\nimport herness.connectors.runner\n"
+    )
+    _write(root, "herness/connectors/settings.py", sibling)
+    _write(root, "herness/connectors/settings_extra.py", "import pydantic\n")
+    _write(root, "herness/connectors/runner.py", "import httpx\n")
+    _, out = _run(root, capsys)
+    lines = sorted(line for line in out.splitlines() if "OWN050" in line)
+    assert len(lines) == 3
+    assert lines[0].startswith("herness/connectors/settings.py:")
+    assert lines[0].endswith("herness.model.settings")
+    assert lines[1].startswith("herness/connectors/settings.py:")
+    assert lines[1].endswith("herness.connectors.runner")
+    assert lines[2].startswith("herness/connectors/settings_base.py:")
+    assert lines[2].endswith("httpx")
+
+
 def test_ut00_81_declared_module_or_package(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -270,7 +270,17 @@ allow_indirect_imports = true
 [[tool.importlinter.contracts]]
 name = "settings modules are leaves"
 type = "forbidden"
-source_modules = ["herness.model.settings"]
+# R-03, ENG §2.1: settings modules import only stdlib, pydantic, herness.core.types and
+# herness.core.errors (connector settings modules may also import each other); the
+# third-party part is checked by tools.check_type_ownership (OWN050). Forbidden entries that
+# overlap a source are skipped for that source, so herness.model stops connectors settings
+# importing herness.model.settings and herness.connectors stops the reverse (R-69, D-16).
+source_modules = [
+    "herness.model.settings",
+    "herness.connectors.settings",
+    "herness.connectors.settings_base",
+    "herness.connectors.settings_entities",
+]
 forbidden_modules = [
     "herness.core.logging",
     "herness.core._log_pipeline",
@@ -278,26 +288,11 @@ forbidden_modules = [
     "herness.core.time",
     "herness.core.numbers",
     "herness.store",
+    "herness.model",
     "herness.model.errors",
+    "herness.connectors",
 ]
 # settings reach core.ids and core.time only through core.types (R-03 restricts direct imports)
-allow_indirect_imports = true
-
-[[tool.importlinter.contracts]]
-name = "model-settings-light"
-type = "forbidden"
-# impl 02 §2.2: herness.model.settings imports only stdlib, pydantic, herness.core.types and
-# herness.core.errors (R-03); the third-party part is checked by tools.check_type_ownership.
-source_modules = ["herness.model.settings"]
-forbidden_modules = [
-    "herness.core.logging",
-    "herness.core._log_pipeline",
-    "herness.core.ids",
-    "herness.core.time",
-    "herness.core.numbers",
-    "herness.store",
-    "herness.model.errors",
-]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]

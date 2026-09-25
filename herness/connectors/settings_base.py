@@ -146,6 +146,11 @@ class _ReadOnlyDict(dict[str, Any]):
     __setitem__ = __delitem__ = __ior__ = _refuse
     clear = pop = popitem = setdefault = update = _refuse
 
+    def __reduce__(self) -> tuple[type[Self], tuple[dict[str, Any]]]:
+        # Rebuild from a plain dict: the default protocol would call the refused __setitem__,
+        # breaking copy.deepcopy and model_copy(deep=True) of a non-empty mapping (N1).
+        return (type(self), (dict(self),))
+
 
 class AuthSettings(BaseModel):
     """Auth method and `secret:` reference for one source or adapter (U01-01)."""
