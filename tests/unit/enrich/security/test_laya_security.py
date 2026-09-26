@@ -43,6 +43,8 @@ def test_st03_07_flipped_byte_refused_on_load_and_accept(
     paths: EnrichPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ST03-07 flip one byte of model.safetensors: load and accept both refuse."""
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")  # recorded, so monkeypatch restores it
+    monkeypatch.delenv("HF_HUB_OFFLINE")
     agent = FakeLayaAgent()
     module = fake_laya_module(agent)
     monkeypatch.setitem(sys.modules, "laya", module)

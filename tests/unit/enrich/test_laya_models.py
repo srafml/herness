@@ -245,10 +245,16 @@ def _no_manifest(directory: Path) -> None:
 
 
 def _nested_link(directory: Path) -> None:
+    target = directory.parent / "outside"
+    target.mkdir()
     try:
-        (directory / "linked.json").symlink_to(directory / "tokenizer.json")
+        (directory / "linked").symlink_to(target, target_is_directory=True)
     except OSError:
-        pytest.skip("symlinks need developer mode on Windows")
+        if sys.platform != "win32":
+            raise
+        import _winapi  # noqa: PLC0415 - Windows only: junctions need no developer mode
+
+        _winapi.CreateJunction(str(target), str(directory / "linked"))
 
 
 @pytest.mark.parametrize(

@@ -96,8 +96,14 @@ def paths(tmp_path: Path) -> EnrichPaths:
 def agent(monkeypatch: pytest.MonkeyPatch) -> FakeLayaAgent:
     fake = FakeLayaAgent()
     monkeypatch.setitem(sys.modules, "laya", fake_laya_module(fake))
-    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
     return fake
+
+
+@pytest.fixture(autouse=True)
+def _restore_hf_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """load() sets HF_HUB_OFFLINE=1; setenv first so monkeypatch restores the original."""
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+    monkeypatch.delenv("HF_HUB_OFFLINE")
 
 
 @pytest.fixture

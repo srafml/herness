@@ -166,7 +166,6 @@ class LayaDecider:
             msg = "laya load"
             raise ModelUnavailable(msg) from exc
         self._laya, self._agent = laya, agent
-        _log.info("enrich.decider.laya_loaded", version=self.version, fast=self._settings.fast)
 
     def unload(self) -> None:
         """Drop the model and free CUDA memory (U03-57 invariant)."""
@@ -269,7 +268,9 @@ class LayaDecider:
         try:
             answers = _parse(parts, asked) if asked else {}
         except OutputValidationError as exc:
-            _log.warning("enrich.decider.invalid_output", decider=self.name, rule=exc.message)
+            _log.warning(
+                "enrich.decide.item_failed", decider=self.name, error_class=type(exc).__name__
+            )
             return self._make(item, {}, error=type(exc).__name__)
         return self._make(item, answers, error=None)
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -89,8 +90,8 @@ def read_current(paths: EnrichPaths) -> str:
         with paths.laya_current().open("rb") as handle:
             raw = handle.read(_MAX_CURRENT_BYTES + 1)
         version = raw.decode("ascii").strip()
-    except (OSError, UnicodeDecodeError) as exc:
-        raise ConfigError(_CURRENT_INVALID) from exc
+    except (OSError, UnicodeDecodeError):
+        raise ConfigError(_CURRENT_INVALID) from None  # never keep content fragments
     if len(raw) > _MAX_CURRENT_BYTES or _VERSION_RE.fullmatch(version) is None:
         raise ConfigError(_CURRENT_INVALID)
     return version
@@ -173,10 +174,9 @@ def _read_manifest(directory: Path, version: str) -> LayaManifest:
         _fail(version, "manifest unreadable")
     if len(raw) > _MAX_MANIFEST_BYTES:
         _fail(version, "manifest too large")
-    try:
+    with contextlib.suppress(ValidationError):  # raised below without __context__ (no input)
         return LayaManifest.model_validate_json(raw)
-    except ValidationError:
-        _fail(version, "manifest invalid")
+    _fail(version, "manifest invalid")
 
 
 def _hash_file(path: Path) -> str:
