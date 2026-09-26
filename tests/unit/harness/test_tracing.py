@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from herness.core import redact as r
+from herness.core import secrets
 from herness.core.errors import ConfigError
 from herness.core.redact_directory import NameDirectory
 from herness.core.settings import RedactionConfig
@@ -31,6 +32,7 @@ from herness.core.types import (
     TraceEmitter,
     Usage,
 )
+from herness.harness import _trace_clean as tc
 from herness.harness import tracing as t
 from herness.harness.llm.settings import TraceSettings
 
@@ -189,11 +191,11 @@ def test_ut05_43_fields_are_json_safe(tmp_path: Path) -> None:
     tracer.close()
     (line,) = _lines(tmp_path)
     assert line["used"] == {"cost_usd": "1.50", "tags": ["a", "b"], "ids": [3]}
-    assert line["at"] == "2026-09-26T01:02:03Z"
-    assert line["naive"] == "2026-01-01T00:00:00"
+    assert line["at"] == "2026-09-26T01:02:03.000000Z"
+    assert line["naive"] == "2026-01-01T00:00:00.000000Z"
     assert line["day"] == "2026-01-02"
     assert line["usage"]["input_tokens"] == 1
-    assert line["nan"] == "NaN"
+    assert line["nan"] == "nan"
     assert line["path"] == "a"
     assert line["n"] == 3
     assert line["ok"] is True
@@ -336,22 +338,25 @@ def test_ut05_45_payload_redacted_opaque_removed_and_cut(
 
 
 def test_ut05_45_redaction_failure_fails_closed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """UT05-45 redact_text None -> string omitted; redactor raising -> payload dropped."""
+    """UT05-45 redact_text None -> string (and its key) omitted; raising -> payload dropped."""
     tracer = _tracer(tmp_path)
-    monkeypatch.setattr(t, "redact_text", lambda _text: None)
+    monkeypatch.setattr(tc, "redact_text", lambda _text: None)
     tracer.emit("llm_call", payload={"m": "secret text"})
 
     def boom(_text: str | None) -> str | None:
         msg = "secret not found: redact.hmac_key"
         raise ConfigError(msg)
 
-    monkeypatch.setattr(t, "redact_text", boom)
+    monkeypatch.setattr(tc, "redact_text", boom)
     tracer.emit("llm_call", payload={"m": "secret text"})
+    tracer.emit("llm_call", payload=["secret text"])
     tracer.close()
-    none_line, failed_line = _lines(tmp_path)
-    assert none_line["payload"] == {"m": None}
+    none_line, failed_line, list_line = _lines(tmp_path)
+    assert none_line["payload"] == {}
+    assert list_line["payload_dropped"] is True
+    assert f"run_id={RUN_ID}" in "".join(capsys.readouterr())  # M-6
     assert "payload" not in failed_line
     assert failed_line["payload_dropped"] is True
 
@@ -535,3 +540,159 @@ def test_ut05_130_tracer_properties_root_and_bound(tmp_path: Path) -> None:
     assert (tracer.run_id, tracer.task_id) == (RUN_ID, None)
     assert (view.run_id, view.task_id) == (RUN_ID, "task_9")
     tracer.close()
+
+
+# --- Fix round 1 regressions (review I-1..I-3, M-1..M-4) ------------------------------------
+
+PLANTED = "Zq" + "9xT4" + "mW2pLk" + "Planted" + "ABCDEFGH"  # built at runtime (detect-secrets)
+
+
+def test_ut05_45_payload_keys_are_redacted_and_scrubbed(
+    tmp_path: Path, test_redactor: r.Redactor
+) -> None:
+    """UT05-45 dict keys in the payload pass redaction and the secret scrub at every depth."""
+    secrets._remember(PLANTED)
+    tracer = _tracer(tmp_path)
+    tracer.emit("retry", payload={SENTINEL_EMAIL: 1, "x": {SENTINEL_EMAIL: "v", PLANTED: 2}})
+    tracer.close()
+    text = (tmp_path / "traces" / f"{RUN_ID}.jsonl").read_text(encoding="utf-8")
+    assert SENTINEL_EMAIL not in text
+    assert PLANTED not in text
+    (line,) = _lines(tmp_path)
+    email_token = next(key for key in line["payload"] if key != "x")
+    assert email_token.startswith("[EMAIL_")
+    assert line["payload"]["x"] == {email_token: "v", "***": 2}
+
+
+@pytest.mark.parametrize("max_chars", [20_000, 200_000])
+def test_ut05_45_secret_straddling_the_cut_leaves_no_prefix(
+    tmp_path: Path, test_redactor: r.Redactor, max_chars: int
+) -> None:
+    """UT05-45 a known secret across the per-message cut (or the 64 KiB scrub limit) is
+    scrubbed on the whole string before the cut: no prefix of it is written."""
+    secrets._remember(PLANTED)
+    settings = TraceSettings(payload_sample_rate=ALL_ONE, max_payload_chars=max_chars)
+    tracer = t.Tracer(
+        RUN_ID, build_id=None, run_kind="eval", traces_dir=tmp_path / "traces", settings=settings
+    )
+    boundary = min(max_chars, 64 * 1024)
+    tracer.emit("retry", payload=["a" * (boundary - 10) + PLANTED + "b" * 100])
+    tracer.close()
+    (line,) = _lines(tmp_path)
+    (written,) = line["payload"]
+    assert PLANTED[:6] not in written
+    assert set(written) <= {"a", "b", "*"}
+    assert len(written) <= max_chars
+
+
+def test_ut05_45_opaque_and_deep_secrets_absent_from_fields(tmp_path: Path) -> None:
+    """UT05-45 `opaque` is removed from fields at every depth (plain key, pydantic model,
+    nested list) and field strings get the deep secret scrub (below the writer's depth 6)."""
+    secrets._remember(PLANTED)
+    tracer = _tracer(tmp_path)
+    part = ReasoningPart(text="t", provider="anthropic", opaque={"sig": "OPAQUESIG2"})
+    tracer.emit(
+        "retry",
+        opaque={"sig": "OPAQUESIG1"},
+        part=part,
+        parts=[{"opaque": "OPAQUESIG3", "keep": 1}],
+        deep=[[[[[[[[PLANTED]]]]]]]],
+    )
+    tracer.close()
+    text = (tmp_path / "traces" / f"{RUN_ID}.jsonl").read_text(encoding="utf-8")
+    assert "OPAQUESIG" not in text
+    assert '"opaque"' not in text
+    assert PLANTED not in text
+    (line,) = _lines(tmp_path)
+    assert line["part"] == {"type": "reasoning", "text": "t", "provider": "anthropic"}
+    assert line["parts"] == [{"keep": 1}]
+    assert line["deep"] == [[[[[[[["***"]]]]]]]]
+
+
+def test_ut05_43_datetime_fields_are_utc_iso_z(tmp_path: Path) -> None:
+    """UT05-43 aware datetimes convert to UTC, naive ones are taken as UTC; fixed-width Z."""
+    tracer = _tracer(tmp_path)
+    plus5 = datetime.timezone(datetime.timedelta(hours=5))
+    tracer.emit(
+        "retry",
+        offset=datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=plus5),
+        naive=datetime.datetime(2026, 1, 2, 3, 4, 5),  # noqa: DTZ001 - exercising naive input
+    )
+    tracer.close()
+    (line,) = _lines(tmp_path)
+    assert line["offset"] == "2026-01-01T22:04:05.000000Z"
+    assert line["naive"] == "2026-01-02T03:04:05.000000Z"
+
+
+class _BadStr:
+    def __str__(self) -> str:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+
+def test_ut05_43_unserializable_fields_are_config_error(tmp_path: Path) -> None:
+    """UT05-43 a circular or unprintable field raises ConfigError; the same payload is dropped."""
+    circular: list[object] = []
+    circular.append(circular)
+    tracer = _tracer(tmp_path)
+    for bad in (circular, _BadStr()):
+        with pytest.raises(ConfigError, match=r"^trace fields cannot be serialized$"):
+            tracer.emit("retry", x=bad)
+        tracer.emit("retry", payload=bad)
+    tracer.close()
+    lines = _lines(tmp_path)
+    assert [line["payload_dropped"] for line in lines] == [True, True]
+
+
+def test_ut05_46_torn_write_does_not_corrupt_the_next_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT05-46 a partial write followed by an error: the next event starts on a fresh line."""
+    original = Path.open
+
+    class _Torn:
+        def __init__(self, fh: Any) -> None:
+            self.fh, self.torn = fh, False
+
+        def write(self, data: bytes) -> int:
+            if not self.torn:
+                self.torn = True
+                self.fh.write(data[:10])
+                msg = "disk full"
+                raise OSError(msg)
+            return int(self.fh.write(data))
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.fh, name)
+
+    def opener(self: Path, *args: Any, **kwargs: Any) -> Any:
+        fh = original(self, *args, **kwargs)
+        return _Torn(fh) if args[:1] == ("ab",) else fh
+
+    monkeypatch.setattr(Path, "open", opener)
+    tracer = _tracer(tmp_path)
+    tracer.emit("retry", attempt=1)
+    tracer.emit("retry", attempt=2)
+    tracer.close()
+    raw = (tmp_path / "traces" / f"{RUN_ID}.jsonl").read_text(encoding="utf-8").splitlines()
+    fragment, *rest = raw
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(fragment)
+    events = [json.loads(line) for line in rest]
+    assert events[0]["message"] == "dropped 1 trace events"
+    assert events[-1]["attempt"] == 2
+
+
+def test_ut05_45_scrub_failure_in_cleaning_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, test_redactor: r.Redactor
+) -> None:
+    """UT05-45 a failed per-string scrub drops that string (None) and its key; enums -> value."""
+    monkeypatch.setattr(tc, "scrub_secrets", lambda *_a: {"event": "log.scrub.failed"})
+    tracer = _tracer(tmp_path)
+    tracer.emit("retry", payload=["text"], kind=t.TraceType.budget, n=1)
+    tracer.close()
+    (line,) = _lines(tmp_path)
+    assert line["payload"] == [None]
+    assert "kind" not in line  # field keys that cannot be scrubbed are dropped
+    assert "n" not in line
+    assert tc._leaf(t.TraceType.budget, str) == "budget"

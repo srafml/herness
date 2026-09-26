@@ -2,8 +2,8 @@
 
 ``emit`` never blocks: at 80 % of the queue the payload is dropped first, when full the event is
 dropped and counted, and the writer thread reports the count in a ``dropped_events`` budget event.
-Payloads of sampled tasks are redacted, scrubbed and cut per string, never with an ``opaque`` key;
-the writer scrubs every event again before it appends the line (TH05-14, TH05-19).
+Fields and sampled payloads are cleaned by ``_trace_clean`` (secret scrub, payload redaction and
+cut, no ``opaque`` key); the writer scrubs every event again before it appends the line.
 """
 
 from __future__ import annotations
@@ -18,16 +18,16 @@ from pathlib import Path
 from typing import IO, Final, Literal
 
 from pydantic import BaseModel
-from pydantic_core import to_json, to_jsonable_python
+from pydantic_core import to_json
 
 from herness.core import time as clock
 from herness.core.config import get_config
 from herness.core.errors import ConfigError
 from herness.core.ids import new_ulid
 from herness.core.logging import get_logger
-from herness.core.redact import redact_text
 from herness.core.secrets import scrub_secrets
 from herness.core.types import LLMRequest, LLMResponse, LoopState, ToolCall, ToolResult
+from herness.harness._trace_clean import clean_fields, clean_payload
 from herness.harness.llm.settings import TraceSettings
 
 __all__ = ["TraceType", "Tracer", "llm_call_fields", "tool_call_fields"]
@@ -53,26 +53,6 @@ _LLM_RESP_ATTRS: Final = ("stop_reason", "refusal_category", "latency_ms", "requ
 _TOOL_RESULT_ATTRS: Final = ("row_count", "truncated", "duration_ms")
 
 
-def _clean_text(text: str, max_chars: int) -> str | None:
-    """Redact, cut, then scrub one payload string; ``None`` when either step fails closed."""
-    redacted = redact_text(text)
-    if redacted is None:
-        return None
-    scrubbed = scrub_secrets(None, "trace", {"t": redacted[:max_chars]}).get("t")
-    return scrubbed if isinstance(scrubbed, str) else None
-
-
-def _clean_payload(value: object, max_chars: int) -> object:
-    """JSON-safe payload with every string cleaned and every ``opaque`` key removed."""
-    if isinstance(value, str):
-        return _clean_text(value, max_chars)
-    if isinstance(value, dict):
-        return {k: _clean_payload(v, max_chars) for k, v in value.items() if k != "opaque"}
-    if isinstance(value, list):
-        return [_clean_payload(v, max_chars) for v in value]
-    return value
-
-
 class _Core:
     """State shared by a root ``Tracer`` and its views: queue, drop counter, writer and file."""
 
@@ -85,7 +65,7 @@ class _Core:
         self.dropped, self.closed = 0, False
         self.last_drop: float | None = None
         self.fh: IO[bytes] | None = None
-        self.failing = self.dirty = False
+        self.failing = self.dirty = self.torn = False
         self.last_flush = clock.monotonic()
         self.thread: threading.Thread | None = None
 
@@ -111,16 +91,19 @@ class _Core:
         if "type" not in scrubbed:  # the scrubber failed closed
             self._failed("ScrubFailed")
             return
-        line = to_json(scrubbed, inf_nan_mode="strings", fallback=str) + b"\n"
+        # after a failed (possibly partial) write the next line starts on a fresh line (FT05-01)
+        head = b"\n" if self.torn else b""
+        line = head + to_json(scrubbed, inf_nan_mode="strings", fallback=str) + b"\n"
         try:
             if self.fh is None:
                 assert self.path is not None  # noqa: S101 - only a root with a file writes
                 self.fh = self.path.open("ab")
             self.fh.write(line)
         except (OSError, ValueError) as exc:
+            self.torn = self.torn or self.fh is not None
             self._failed(type(exc).__name__)
             return
-        self.dirty, self.failing = True, False
+        self.dirty, self.failing, self.torn = True, False, False
 
     def _failed(self, error_type: str) -> None:
         self.drop()
@@ -269,7 +252,7 @@ class Tracer:
         task = self._task_id if task_id is None else task_id
         event = core.event(str(type), task, self._role if role is None else role, step)
         event["parent_span_id"] = parent_span_id
-        event.update(to_jsonable_python(fields, fallback=str))
+        event.update(clean_fields(fields))
         span_id = str(event["span_id"])
         if core.closed:
             core.drop()
@@ -288,11 +271,11 @@ class Tracer:
             event["payload_dropped"] = True
             return
         try:
-            event["payload"] = _clean_payload(
-                to_jsonable_python(payload, fallback=str), core.max_chars
-            )
+            event["payload"] = clean_payload(payload, core.max_chars)
         except Exception as exc:  # noqa: BLE001 - redaction must fail closed, never raise
-            _log.warning("harness.trace.payload_failed", error_type=type(exc).__name__)
+            _log.warning(
+                "harness.trace.payload_failed", run_id=core.run_id, error_type=type(exc).__name__
+            )
             event["payload_dropped"] = True
 
     def is_sampled(self, task_id: str | None) -> bool:
