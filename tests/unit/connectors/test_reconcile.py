@@ -79,6 +79,14 @@ def _scratch(root: Path) -> Path:
     return root / "tmp" / "reconcile"
 
 
+@pytest.fixture(autouse=True)
+def _scratch_left_empty(ops_store: OpsStoreHandle) -> Iterator[None]:
+    """Every test must leave the reconcile scratch folder empty (T01-08 acceptance)."""
+    yield
+    scratch = _scratch(ops_store.data_root)
+    assert not scratch.exists() or list(scratch.iterdir()) == []
+
+
 def _runner(conn: object, root: Path, lake: FakeLake, **cfg: object) -> SyncRunner:
     return make_runner(conn, servicenow_cfg(**cfg), lake, root)
 
@@ -146,6 +154,7 @@ def test_ut01_40_find_missing_keys_latest_row_rule(ops_store: OpsStoreHandle) ->
         root, "part-2.parquet", batch(_SRC, _ENT, ["b"], later, deleted=True), day="2026-03-01"
     )
     _write_lake(root, ".part-3.parquet.tmp-x", batch(_SRC, _ENT, ["z"], later))
+    _write_lake(root, ".part-4.parquet", batch(_SRC, _ENT, ["y"], later))  # [!.] exclusion
     scratch = _scratch(root)
     scratch.mkdir(parents=True)
     keys_file = scratch / "keys.parquet"

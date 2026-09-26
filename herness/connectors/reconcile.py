@@ -228,5 +228,14 @@ def reconcile_entity(
     )
     wm = get_watermark(source, entity)
     text = None if wm is None else clock.format_utc(wm.value)
-    skipped, files = tombstones.skipped, tombstones.files
-    return SyncResult(source, entity, "reconcile", n, n, skipped, files, text, text)
+    return SyncResult(
+        source=source,
+        entity=entity,
+        mode="reconcile",
+        rows=n,
+        tombstones=n,
+        skipped_deleted=tombstones.skipped,
+        files=tombstones.files,
+        watermark_before=text,
+        watermark_after=text,
+    )
