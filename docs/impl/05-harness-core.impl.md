@@ -85,6 +85,7 @@ Line budgets are hard limits enforced by the CI module-length check (ENG §2.4).
 | `herness/harness/llm/tokens.py` | Token counting; the only token estimator (R-17) | `count_tokens`, `estimate_tokens` | L4 | `httpx` (exception types only; clients come from `herness.core.egress`, R-06), `anthropic` | 150 |
 | `herness/harness/llm/openai_compat.py` | OpenAI-compatible adapter | `OpenAICompatClient` | L4 | `openai` | 380 |
 | `herness/harness/llm/anthropic_client.py` | Anthropic adapter | `AnthropicClient` | L4 | `anthropic` | 400 |
+| `herness/harness/llm/_anthropic_batch.py` | Anthropic batch helpers (private, U05-29) | `check_batch_supported`, `build_batch_requests`, `validate_batch_id`, `validate_poll_interval`, `prepare_submit`, `validate_collect`, `poll_until_ended`, `collect_results`, `BATCH_MAX_WAIT_S` | L4 | `anthropic` | 200 |
 | `herness/harness/llm/registry.py` | Client registry and routing | `LLMRegistry`, `client_for` | L4 | none | 200 |
 | `herness/harness/tracing.py` | JSONL trace writer (R-02) | `Tracer`, `TraceType`, `llm_call_fields`, `tool_call_fields` | L4 | none | 360 |
 | `herness/harness/warehouse.py` | Read-only DuckDB handles per build | `DuckWarehouse`, `WarehousePool`, `open_warehouse`, `BUILD_ID_RE` | L4 | `duckdb` | 220 |
