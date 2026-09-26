@@ -15,8 +15,6 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Final, Literal
 
-import httpx
-
 from herness.core import time as clock
 from herness.core.config import get_config
 from herness.core.errors import (
@@ -32,6 +30,7 @@ from herness.core.errors import (
 )
 from herness.core.logging import get_logger
 from herness.core.redact import redact_text
+from herness.core.resilience._classify_httpx import HTTP_STATUS_ERRORS, HTTP_UNAVAILABLE_ERRORS
 
 type ErrorFamily = Literal["source", "model", "decider", "store"]
 
@@ -47,8 +46,6 @@ _UNAVAILABLE: Final[Mapping[str, type[HernessError]]] = types.MappingProxyType(
     }
 )
 _UNAVAILABLE_STATUS: Final = frozenset({500, 502, 503, 504, 529})
-# Rule 3: httpx.TimeoutException is exactly Connect/Read/Write/PoolTimeout.
-_HTTPX_UNAVAILABLE: Final = (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError)
 _DELAY_SECONDS: Final = re.compile(r"[0-9]{1,10}")
 _RESET_VALUE: Final = re.compile(r"[0-9]{1,16}(\.[0-9]+)?")
 _EPOCH_MS: Final = 10**12
@@ -159,9 +156,9 @@ def classify(exc: BaseException, *, family: ErrorFamily) -> HernessError:
     """Map a foreign exception to the taxonomy; the first matching rule of U08-16 wins."""
     if isinstance(exc, HernessError):
         return exc
-    if isinstance(exc, httpx.HTTPStatusError):
+    if isinstance(exc, HTTP_STATUS_ERRORS):  # httpx and httpx2 twins (_classify_httpx)
         return _from_status(exc, family, exc.response.status_code, exc.response)
-    if isinstance(exc, _HTTPX_UNAVAILABLE):
+    if isinstance(exc, HTTP_UNAVAILABLE_ERRORS):
         return _UNAVAILABLE[family](_msg(family, exc))
     mapped = _from_sdk(exc, family) or _from_store(exc, family)
     if mapped is not None:
@@ -172,7 +169,7 @@ def classify(exc: BaseException, *, family: ErrorFamily) -> HernessError:
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:
-    """Case-insensitive header lookup that works for plain dicts and `httpx.Headers`."""
+    """Case-insensitive header lookup: plain dicts, `httpx.Headers` and `httpx2.Headers`."""
     for key, value in headers.items():
         if str(key).lower() == name:
             return str(value).strip()

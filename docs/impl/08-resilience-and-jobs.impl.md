@@ -73,7 +73,8 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/resilience/ports.py` | Protocols the resilience code depends on | `ResilienceBackend`, `HealthRow`, `EventRow`, `ChainRegistry`, `ClientInfo`, `GpuStateReader`, `AsyncCompleter`, `DeciderLike`, `TracerLike` | L0 | none | 190 |
 | `herness/core/resilience/_state.py` | The single process-state holder | `ProcessState`, `process_state`, `reset_process_state`, `bind_ops_backend`, `bind_chain_registry` | L0 | none | 140 |
 | `herness/core/resilience/policies.py` | Policies and backoff math | `RetryPolicy`, `POLICY_FAMILY`, `GPU_HEALTH_POLICY`, `policy`, `policy_for_client`, `full_jitter_delay`, `FullJitterRetryAfter`, `job_backoff_delay` | L0 | `tenacity` | 220 |
-| `herness/core/resilience/classify.py` | Foreign exception → taxonomy | `classify`, `parse_retry_after` | L0 | `httpx` | 230 |
+| `herness/core/resilience/classify.py` | Foreign exception → taxonomy | `classify`, `parse_retry_after` | L0 | none (`httpx` classes via `_classify_httpx`) | 230 |
+| `herness/core/resilience/_classify_httpx.py` | The `httpx` and `httpx2` exception classes of U08-16 rules 2 and 3 (T08-04b) | none (private: `HTTP_STATUS_ERRORS`, `HTTP_UNAVAILABLE_ERRORS`) | L0 | `httpx`, `httpx2` (exception classes only) | 120 |
 | `herness/core/resilience/events.py` | `resilience_event` rows, logs, trace fan-out | `record_event`, `EVENT_KINDS` | L0 | `structlog` | 200 |
 | `herness/core/resilience/metrics.py` | Component metric recording | `record_counter`, `record_histogram`, `record_gauge`, `timed`, `flush_metrics` | L0 | none | 260 |
 | `herness/core/resilience/breaker.py` | Breaker state machine, registry, probes | `breaker_transition`, `probe_due`, `CircuitBreaker`, `breaker`, `guard`, `register_probe`, `run_due_probes` | L0 | none | 380 |
@@ -591,6 +592,8 @@ Algorithm (first matching rule wins; "unavailable" means `SourceUnavailable` for
 6. If `duckdb` is in `sys.modules`: `duckdb.InterruptException` → `QueryError("query interrupted after timeout", timeout=True)`; `duckdb.IOException` whose lower-cased text contains `"lock"` → `StoreBusy`.
 7. `TimeoutError` or `concurrent.futures.TimeoutError` → unavailable.
 8. Anything else → `FatalError("unclassified <ExceptionType>")`.
+
+httpx2 twins (T08-04b): egress clients use `httpx2` (T10-17), whose exceptions are not subclasses of the `httpx` ones. Rules 2 and 3 also match `httpx2.HTTPStatusError` and `httpx2.ConnectError`, `httpx2.ConnectTimeout`, `httpx2.ReadTimeout`, `httpx2.WriteTimeout`, `httpx2.PoolTimeout`, `httpx2.RemoteProtocolError`, with the same outcome, message, Retry-After parsing, redact-before-cut body detail and 2 KB cap as their `httpx` twins. The class tuples live in the private `herness/core/resilience/_classify_httpx.py`.
 
 #### U08-17 `herness.core.resilience.classify.parse_retry_after`
 
