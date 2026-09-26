@@ -20,6 +20,22 @@ from .core import (
     run_write,
 )
 
+# 01 ingest
+from .ingest import (
+    FileIngestRow,
+    SliceRow,
+    Watermark,
+    ensure_slices,
+    get_file_ingest,
+    get_watermark,
+    list_watermarks,
+    mark_slice_done,
+    mark_slice_failed,
+    mark_slice_running,
+    record_file_ingest,
+    set_watermark,
+)
+
 # 02 migrate
 from .migrate import (
     MIGRATION_RANGES,
@@ -47,4 +63,17 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "schema_version",
     "ops_health",
     "MigrationReport",
+    # 01 ingest
+    "Watermark",
+    "SliceRow",
+    "FileIngestRow",
+    "get_watermark",
+    "set_watermark",
+    "list_watermarks",
+    "ensure_slices",
+    "mark_slice_running",
+    "mark_slice_done",
+    "mark_slice_failed",
+    "get_file_ingest",
+    "record_file_ingest",
 ]
