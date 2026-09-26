@@ -431,3 +431,22 @@ forbidden_modules = [
     "herness.model",
 ]
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "store-rw-restricted"
+type = "forbidden"
+# impl 02 §2.2, TH02-05 (ST02-05): herness.store._warehouse_rw may be imported only by
+# herness.model.build (T02-18) and herness.model.promote (a later card); neither module
+# exists yet on this tree, so the ignore_imports lines below match nothing for now.
+source_modules = ["herness"]
+forbidden_modules = ["herness.store._warehouse_rw"]
+ignore_imports = [
+    "herness.model.build -> herness.store._warehouse_rw",
+    "herness.model.promote -> herness.store._warehouse_rw",
+]
+unmatched_ignore_imports_alerting = "none"
+
+# ops-areas-acyclic (impl 02 §2.2, §2.3 rule 5) is deferred: herness.store.ops and its area
+# modules (T02-04..T02-07) have not landed on this branch, so the contract cannot name any
+# concrete module without inventing a file that does not exist. Add it as a real contract
+# in the card that creates herness/store/ops/__init__.py and its first area module.
