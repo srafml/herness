@@ -1,0 +1,24 @@
+{% extends "base.html.j2" %}
+{#- Org review outline, slots 2–9 of design §5.2 (impl 09 U09-28). -#}
+{% block content %}
+{% import "partials/components.html.j2" as c %}
+{{ c.section(r, "executive_summary", "Executive summary") }}
+{% call c.section(r, "recommendations", "Org: top teams to improve") %}
+{% for card in r.cards %}
+{{ c.card(card) }}
+{% else %}
+{{ c.empty("No org recommendations in this run.") }}
+{% endfor %}
+{% if r.org_table %}
+<h3>Composite ranking</h3>
+{{ c.chart(r.charts["org_z"]) }}
+{{ c.table(r.org_table.columns, r.org_table.rows, r.org_table.marked) }}
+{% endif %}
+{% endcall %}
+{{ c.portfolio(r) }}
+{{ c.scorecards(r) }}
+{{ c.actions(r) }}
+{{ c.retrospective(r) }}
+{{ c.caveats(r) }}
+{{ c.method(r) }}
+{% endblock %}

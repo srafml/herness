@@ -1,0 +1,27 @@
+{% extends "base.html.j2" %}
+{#- Funding review outline, slots 2–9 of design §5.2 (impl 09 U09-28). -#}
+{% block content %}
+{% import "partials/components.html.j2" as c %}
+{{ c.section(r, "executive_summary", "Executive summary") }}
+{% call c.section(r, "recommendations", "Funding: top recommendations") %}
+{% for card in r.cards %}
+{{ c.card(card) }}
+{% else %}
+{{ c.empty("No funding recommendations in this run.") }}
+{% endfor %}
+{% if r.funding_table %}
+<h3>Funding ranking</h3>
+{{ c.chart(r.charts["funding_priority"]) }}
+{{ c.table(r.funding_table.columns, r.funding_table.rows, r.funding_table.marked) }}
+{% if true in r.funding_table.marked %}
+<p class="empty">* weights not yet confirmed for this row.</p>
+{% endif %}
+{% endif %}
+{% endcall %}
+{{ c.portfolio(r) }}
+{{ c.scorecards(r) }}
+{{ c.actions(r) }}
+{{ c.retrospective(r) }}
+{{ c.caveats(r) }}
+{{ c.method(r) }}
+{% endblock %}
