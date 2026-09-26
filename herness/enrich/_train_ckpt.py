@@ -1,7 +1,8 @@
 """Training checkpoints for `laya_trainer` (private helper of U03-131 ... U03-133).
 
 A checkpoint is a directory `checkpoints/<name>/` holding `model.safetensors`,
-`optimizer.safetensors` (every optimizer state tensor, keyed `<param index>.<name>`) and
+`optimizer.safetensors` (every optimizer state tensor, keyed `<param index>.<name>`, plus
+the torch CPU RNG state as a uint8 tensor under `rng.cpu`) and
 `state.json` (progress plus the optimizer's JSON-safe `param_groups`). It is written to a
 `.tmp-<name>` directory and renamed into place, so every directory without a leading `.`
 is complete. Safetensors only, never pickle (TH03-16).
@@ -27,6 +28,7 @@ MODEL_FILE: Final = "model.safetensors"
 _OPTIMIZER_FILE: Final = "optimizer.safetensors"
 _STATE_FILE: Final = "state.json"
 _GROUPS_KEY: Final = "optimizer_groups"
+_RNG_KEY: Final = "rng.cpu"
 
 
 def _order(state: Mapping[str, Any]) -> tuple[int, int]:
@@ -88,6 +90,7 @@ def _optimizer_parts(optimizer: torch.optim.Optimizer) -> tuple[dict[str, torch.
         for key, value in values.items():
             tensor = value if isinstance(value, torch.Tensor) else torch.tensor(value)
             tensors[f"{index}.{key}"] = tensor.detach().cpu().contiguous()
+    tensors[_RNG_KEY] = torch.get_rng_state()  # torch CPU RNG (dropout) for identical resume
     return tensors, state_dict["param_groups"]
 
 
@@ -101,14 +104,17 @@ def load_weights(path: Path, module: torch.nn.Module, device: str) -> None:
 def load_checkpoint(
     path: Path, parts: tuple[torch.nn.Module, torch.optim.Optimizer], device: str
 ) -> dict[str, Any]:
-    """Restore weights and optimizer state from `path`; returns its progress state."""
+    """Restore weights, optimizer state and the torch CPU RNG from `path`; returns progress."""
+    import torch  # noqa: PLC0415 - lazy import
     from safetensors.torch import load_file  # noqa: PLC0415 - lazy import
 
     module, optimizer = parts
     state = read_state(path)
     load_weights(path, module, device)
+    tensors = load_file(str(path / _OPTIMIZER_FILE))
+    torch.set_rng_state(tensors.pop(_RNG_KEY))
     per_param: dict[int, dict[str, Any]] = {}
-    for key, tensor in load_file(str(path / _OPTIMIZER_FILE)).items():
+    for key, tensor in tensors.items():
         index, _, name = key.partition(".")
         per_param.setdefault(int(index), {})[name] = tensor
     groups = state.pop(_GROUPS_KEY)

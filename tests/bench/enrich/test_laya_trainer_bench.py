@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
+from structlog.testing import capture_logs
 
 from herness.core.jobs import JobContext
 from herness.core.types import Question, QuestionSet
@@ -72,9 +73,11 @@ def test_bt03_12_laya_fine_tune_30k_records_within_6h(tmp_path: Path) -> None:
         texts=texts, questions=qs, gold=set(),
     )  # fmt: skip
     started = time.monotonic()
-    result = SoftLabelSftTrainer().train(
-        data, init_dir=Path(base), out_dir=tmp_path, hyper=TrainHyper(seed=7),
-        ctx=cast(JobContext, _Ctx()),
-    )  # fmt: skip
+    with capture_logs() as logs:
+        result = SoftLabelSftTrainer().train(
+            data, init_dir=Path(base), out_dir=tmp_path, hyper=TrainHyper(seed=7),
+            ctx=cast(JobContext, _Ctx()),
+        )  # fmt: skip
     assert result.epochs_run >= 1
     assert time.monotonic() - started <= _BUDGET_S
+    assert not [e for e in logs if e["event"] == "enrich.distill.wall_clock_cap"]  # not capped

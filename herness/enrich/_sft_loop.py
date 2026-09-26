@@ -58,6 +58,9 @@ def label_order(question: Question) -> tuple[str, ...]:
 def _target_vector(question: Question, target: Mapping[str, float]) -> tuple[float, ...]:
     """`target` as a distribution over `label_order`; bool targets are two-way."""
     if question.type == "bool":
+        if not {"true", "false"} & target.keys():
+            msg = f"{question.id}: bool training target has neither true nor false"
+            raise ConfigError(msg)
         p_true = float(target.get("true", 1.0 - target.get("false", 0.0)))
         return p_true, 1.0 - p_true
     values = [float(target.get(label, 0.0)) for label in label_order(question)]
@@ -167,7 +170,7 @@ class SftLoop:
         self.state: dict[str, Any] = {
             "epochs_done": 0, "step": 0, "global_step": 0, "best_val_nll": None,
             "best_epoch": 0, "bad_epochs": 0, "finished": False, "elapsed_s": 0.0,
-            "seed": hyper.seed,
+            "seed": hyper.seed, "data_sha256": data.sha256,
         }  # fmt: skip
         self.started = clock.monotonic()
 
@@ -185,6 +188,9 @@ class SftLoop:
         self.root = out_dir / "checkpoints"
         latest = ckpt.latest_checkpoint(self.root)
         if latest is not None:
+            if ckpt.read_state(latest).get("data_sha256") != self.state["data_sha256"]:
+                msg = f"checkpoint {latest.name} was trained on other data; use a new out_dir"
+                raise ConfigError(msg)
             self.state.update(ckpt.load_checkpoint(latest, (self.module, self.optimizer), device))
         self.started = clock.monotonic()
         while not self.state["finished"]:
@@ -203,13 +209,17 @@ class SftLoop:
     def _train_epoch(self, epoch: int) -> None:
         self.module.train()
         batches = _micro_batches(len(self.train_rows), self.hyper, epoch)
+        accumulation = self.hyper.accumulation
         for index in range(self.state["step"], len(batches)):
-            self._micro_step([self.train_rows[i] for i in batches[index]])
-            if (index + 1) % self.hyper.accumulation == 0 or index + 1 == len(batches):
+            start = index - index % accumulation  # the accumulation group of this micro batch
+            group = batches[start : start + accumulation]
+            group_weight = sum(self.train_rows[i].weight for batch in group for i in batch)
+            self._micro_step([self.train_rows[i] for i in batches[index]], 1.0 / group_weight)
+            if (index + 1) % accumulation == 0 or index + 1 == len(batches):
                 self._optimizer_step(epoch, index + 1)
 
-    def _micro_step(self, rows: list[_Row]) -> None:
-        scale = 1.0 / (sum(row.weight for row in rows) * self.hyper.accumulation)
+    def _micro_step(self, rows: list[_Row], scale: float) -> None:
+        """Backward of this micro batch's weighted KL sum over its group's total weight."""
 
         def forward_backward(chunk: Sequence[_Row]) -> list[float]:
             loss = self._divergence(chunk, nll=False) * scale

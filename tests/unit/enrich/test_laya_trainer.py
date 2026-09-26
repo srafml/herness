@@ -379,6 +379,9 @@ def test_ut03_127_targets_and_schedule() -> None:
     score = Question(id="sev", type="score", instructions="How severe was it?", threshold=0.7,
                      levels=("none", "low", "high", "critical"))  # fmt: skip
     assert _sft_loop.label_order(score) == ("0", "1", "2", "3")
+    assert _sft_loop.label_order(outage) == ("true", "false")
+    with pytest.raises(ConfigError, match="neither true nor false"):
+        _sft_loop._target_vector(outage, {"yes": 1.0})
     dynamic = Question(id="team", type="choice", instructions="Which team owns it?",
                        options_source="core.team", threshold=0.7)  # fmt: skip
     with pytest.raises(ConfigError, match="not resolved"):
@@ -457,4 +460,50 @@ def test_ut03_127_checkpoint_lookup_and_unreadable_state(tmp_path: Path) -> None
     (root / "epoch-9" / "state.json").unlink()
     with pytest.raises(ConfigError, match="unreadable"):
         _train_ckpt.read_state(root / "epoch-9")
-    assert _sft_loop.label_order(_QS.questions[0]) == ("true", "false")
+
+
+def test_ut03_127_train_hyper_defaults_are_design_values() -> None:
+    """UT03-127 TrainHyper defaults pin the U03-131 (design 03 §5.8) values."""
+    hyper = TrainHyper()
+    assert (hyper.epochs, hyper.lr_encoder, hyper.lr_head) == (4, 2e-5, 1e-4)
+    assert (hyper.weight_decay, hyper.warmup) == (0.01, 0.06)
+    assert (hyper.micro_batch, hyper.accumulation, hyper.bf16) == (8, 4, True)
+    assert (hyper.gradient_checkpointing, hyper.head_checkpointing) == (True, True)
+    assert (hyper.max_len, hyper.patience, hyper.wall_clock_cap_s) == (512, 1, 6 * 3600.0)
+
+
+def test_ut03_127_accumulation_is_a_weighted_mean_over_the_group(
+    laya: types.ModuleType, init_dir: Path, tmp_path: Path
+) -> None:
+    """UT03-127 one step over many micro batches (short last group) == one full-batch step."""
+    data = _data()
+    rows = data.train.num_rows
+    assert rows % 5  # the last micro batch is short
+    accumulated = replace(_HYPER, epochs=1, micro_batch=5, accumulation=rows)
+    full = replace(_HYPER, epochs=1, micro_batch=rows, accumulation=1)
+    _train(tmp_path / "acc", init_dir, _ctx(), accumulated)
+    _train(tmp_path / "full", init_dir, _ctx(), full)
+    for key, value in _weights(tmp_path / "full").items():
+        assert torch.allclose(value, _weights(tmp_path / "acc")[key], atol=1e-6)
+
+
+def test_ut03_127_checkpoint_restores_rng_and_rejects_other_data(
+    laya: types.ModuleType, init_dir: Path, tmp_path: Path
+) -> None:
+    """UT03-127 the torch CPU RNG resumes identically; a checkpoint of other data -> ConfigError."""
+    module = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW(module.parameters())
+    path = _train_ckpt.save_checkpoint(tmp_path / "ck", "epoch-1", (module, optimizer),
+                                       {"epochs_done": 1, "step": 0})  # fmt: skip
+    expected = torch.rand(4)
+    torch.rand(10)
+    _train_ckpt.load_checkpoint(path, (module, optimizer), "cpu")
+    assert torch.equal(torch.rand(4), expected)
+
+    out = tmp_path / "v1"
+    _train(out, init_dir, _ctx(), replace(_HYPER, epochs=1))
+    assert _train_ckpt.read_state(out / "checkpoints" / "epoch-1")["data_sha256"] == _data().sha256
+    other = replace(_data(), sha256="0" * 64)
+    trainer = SoftLabelSftTrainer(device="cpu")
+    with pytest.raises(ConfigError, match="other data"):
+        trainer.train(other, init_dir=init_dir, out_dir=out, hyper=_HYPER, ctx=_ctx())

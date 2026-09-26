@@ -3423,6 +3423,7 @@ All events carry `component="enrich"` and, when known, `job_id` and `build_id`.
 | `enrich.suggest.emitted` | INFO | `subjects`, `created`, `suppressed` | U03-114 |
 | `enrich.distill.teacher_selected` | INFO | `teacher`, `teacher_version`, `reason` | U03-136 |
 | `enrich.distill.trainer_selected` | INFO | `trainer` | U03-134 |
+| `enrich.distill.wall_clock_cap` | WARNING | `epochs_run`, `best_epoch` | U03-131 |
 | `enrich.distill.question_blocked` | WARNING | `question`, `disagreement`, `reviews` | U03-136 |
 | `enrich.distill.step_completed` | INFO | `version`, `step`, `duration_s` | U03-136 |
 | `enrich.distill.candidate_evaluated` | INFO | `version`, `accepted_proposed`, `macro_metric` | U03-129 |
