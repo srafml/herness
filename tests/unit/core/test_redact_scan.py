@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from herness.core import redact_scan as rs
+from herness.core.redact import MAX_TEXT_CHARS
 
 pytestmark = pytest.mark.unit
 
@@ -221,3 +222,87 @@ def test_ut10_47_module_entry_point_exit_code_is_the_scan_result(tmp_path: Path)
         check=False,
     )
     assert (done.returncode, done.stdout) == (1, "a.txt:1:6 EMAIL\n")
+
+
+# --- UT10-47 narrowed allow rules (T10-11 accepted deviation) -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "value", ["0.333333333", "1.10000002", "00.123456789", "59.999999-05", "12.1234567"]
+)
+def test_ut10_47_whole_decimal_phone_match_is_allowed(value: str) -> None:
+    """UT10-47 a PHONE match that is wholly a decimal or fractional seconds is not PII."""
+    assert rs._allowed("PHONE", value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "30.123456 7890",
+        "12.345678-9012",
+        "41.555012 34",
+        "01.234567 89",
+        "415.555.0142",
+        "+44 20 7946 0958",
+        "(415) 555-0142",
+        "12.345678+9012",
+    ],
+)
+def test_ut10_47_phone_with_decimal_prefix_or_real_format_is_not_allowed(value: str) -> None:
+    """UT10-47 the decimal rule is anchored at both ends: real phone formats stay findings."""
+    assert not rs._allowed("PHONE", value)
+
+
+@pytest.mark.parametrize(
+    "value", ["00000000-0000-0000", "0000 0000 0012 3456", "4111 1111 1111 1111"]
+)
+def test_ut10_47_short_or_reserved_card_is_allowed(value: str) -> None:
+    """UT10-47 CARD: 4111 test numbers and fewer than 12 digits after leading zeros."""
+    assert rs._allowed("CARD", value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "04532015112830366",
+        "0 4532 0151 1283 0366",
+        "0-4532-0151-1283-0366",
+        "0378282246310005",
+        "0004532015112830366",
+        "5500 0000 0000 0004",
+    ],
+)
+def test_ut10_47_zero_padded_real_card_is_not_allowed(value: str) -> None:
+    """UT10-47 leading zeros and separators do not hide a real-length card number."""
+    assert not rs._allowed("CARD", value)
+
+
+def _too_long(self: object, text: str, **kwargs: object) -> list[object]:
+    if REAL_EMAIL in text:
+        msg = "text too long"
+        raise rs.RedactionFailed(msg)
+    return []
+
+
+def test_ut10_47_line_too_long_to_scan_is_a_finding(
+    workdir: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-47 a line or Parquet cell over the redactor limit is a finding, never a traceback."""
+    monkeypatch.setattr(rs.Redactor, "scan", _too_long)
+    fx = workdir / "fx"
+    (fx / "a.txt").write_text(f"ok\nmail {REAL_EMAIL}\n", "utf-8")
+    pq.write_table(pa.table({"n": [1], "t": [f"to {REAL_EMAIL}"]}), fx / "b.parquet")
+    code, out = _scan(capsys, fx)
+    assert code == 1
+    assert out == [
+        "fx/a.txt:2:1 text too long to scan",
+        "fx/b.parquet:1:2 text too long to scan",
+    ]
+
+
+def test_ut10_47_real_over_limit_line_is_a_finding(
+    workdir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """UT10-47 a real line longer than MAX_TEXT_CHARS gives `text too long to scan`, exit 1."""
+    (workdir / "fx" / "big.txt").write_text("a" * (MAX_TEXT_CHARS + 1) + "\n", "utf-8")
+    assert _scan(capsys, workdir / "fx") == (1, ["fx/big.txt:1:1 text too long to scan"])

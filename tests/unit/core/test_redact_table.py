@@ -177,7 +177,7 @@ def test_ut10_43_spawn_args_name_the_cached_profile_and_config_dir(
 ) -> None:
     """UT10-43 the worker initializer gets the parent's profile and config dir, no overrides."""
     _keyring_config(tmp_path, fake_keyring)
-    assert pool.spawn_args() == ("local", (), tmp_path.resolve() / "config")
+    assert pool.spawn_args() == ("local", (), str(tmp_path.resolve() / "config"))
 
 
 def test_ut10_43_init_worker_loads_config_and_builds_the_redactor(
@@ -186,17 +186,23 @@ def test_ut10_43_init_worker_loads_config_and_builds_the_redactor(
     """UT10-43 _init_worker calls init_config with the spawn args and caches a redactor."""
     fake_keyring.store[("herness", "redact.hmac_key")] = KEY.hex()
     cfg_dir = write_full_config(tmp_path)
-    pool._init_worker("local", (), cfg_dir)
+    pool._init_worker("local", (), str(cfg_dir))
     assert c._Cache.config is not None
     assert r._State.redactor is not None
     assert pool._redact_chunk((["1"], [["mail ann@corp.test"]]))[1] == []
 
 
 def test_ut10_43_redact_chunks_in_process_for_one_chunk(
-    tmp_path: Path, fake_keyring: MemoryKeyring
+    tmp_path: Path, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT10-43 one chunk with several workers runs in-process (no pool is started)."""
     _keyring_config(tmp_path, fake_keyring)
+
+    def no_pool(*args: object, **kwargs: object) -> None:
+        msg = "a process pool was started"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(pool, "ProcessPoolExecutor", no_pool)
     tbl = pa.table({"record_id": ["1", "2"], "t": ["a", POISON]})
     out = r.redact_table(tbl, ["t"], workers=8)
     assert out.column("text").to_pylist() == ["a", None]
@@ -229,3 +235,34 @@ def test_ut10_44_workers_1_and_4_give_identical_output(
     assert single.num_rows == 50_000
     assert single.column("text")[50_000 - 3].as_py() is None
     assert single.column("text").null_count == 1
+
+
+class _RaisingRedactor:
+    """Stand-in redactor whose ``redact`` raises an unexpected (non-RedactionFailed) error."""
+
+    def redact(self, text: str | None) -> Any:
+        if text == "boom":
+            msg = "unexpected"
+            raise ValueError(msg)
+        return None if text is None else r.RedactionResult(text, {})
+
+
+def test_ut10_43_any_exception_in_a_row_fails_that_row_closed() -> None:
+    """UT10-43 a row whose redaction raises any exception is NULL and counted as failed."""
+    chunk: pool.Chunk = (["1", "2", "3"], [["ok", "boom", None]])
+    out, failed = pool.redact_rows(_RaisingRedactor(), chunk)  # type: ignore[arg-type]
+    assert out == ["ok", None, None]
+    assert failed == ["2"]
+
+
+def test_ut10_43_pool_keeps_at_most_two_chunks_per_worker_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-43 more chunks than 2 x workers: the pool drains in order, same output as 1 worker."""
+    dotenv_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(pool, "CHUNK_ROWS", 2)
+    tbl = _rows(11)  # 6 chunks, workers=2 -> at most 4 in flight
+    single = r.redact_table(tbl, ["short", "body"], workers=1)
+    multi = r.redact_table(tbl, ["short", "body"], workers=2)
+    assert multi.equals(single)
+    assert multi.column("text").null_count == 1

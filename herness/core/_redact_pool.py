@@ -42,7 +42,7 @@ def redact_rows(redactor: _redact.Redactor, chunk: Chunk) -> RowsOut:
         try:
             cells = (redactor.redact(column[row]) for column in columns)
             parts = [result.text for result in cells if result is not None]
-        except _redact.RedactionFailed:
+        except Exception:  # noqa: BLE001 - any row that raises fails closed (U10-47 step 4)
             failed.append(record_id)
             out.append(None)  # fail closed: raw text is never substituted
             continue
@@ -50,7 +50,7 @@ def redact_rows(redactor: _redact.Redactor, chunk: Chunk) -> RowsOut:
     return out, failed
 
 
-def spawn_args() -> tuple[ProfileName, tuple[str, ...], Path]:
+def spawn_args() -> tuple[ProfileName, tuple[str, ...], str]:
     """``(profile, overrides, config_dir)`` of the parent's cached config for ``init_config``.
 
     ``herness.core.config`` keeps neither the ``--set`` overrides nor the config dir: the dir
@@ -59,7 +59,7 @@ def spawn_args() -> tuple[ProfileName, tuple[str, ...], Path]:
     """
     cfg = _config.get_config()
     root = _config._Cache.root or Path.cwd()
-    return cfg.profile, (), root / "config"
+    return cfg.profile, (), str(root / "config")  # built-in types only (ENG X-2)
 
 
 def string_column(tbl: pa.Table, name: str) -> Any:  # noqa: ANN401 - pyarrow is untyped
@@ -80,9 +80,9 @@ def worker_count(workers: int | None) -> int:
     return max(1, workers)
 
 
-def _init_worker(profile: ProfileName, overrides: Sequence[str], config_dir: Path) -> None:
+def _init_worker(profile: ProfileName, overrides: Sequence[str], config_dir: str) -> None:
     """Worker initializer: load the parent's config, then build this process's redactor."""
-    _config.init_config(profile, overrides, config_dir)
+    _config.init_config(profile, overrides, Path(config_dir))
     _redact.get_redactor()
 
 

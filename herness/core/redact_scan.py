@@ -20,7 +20,7 @@ from typing import Final
 
 from herness.core.config_sources import deep_merge, load_yaml_file
 from herness.core.errors import ConfigError
-from herness.core.redact import Redactor
+from herness.core.redact import RedactionFailed, Redactor
 from herness.core.redact_patterns import EntityType, normalize_value
 from herness.core.settings import RedactionConfig
 
@@ -36,9 +36,12 @@ _RESERVED_NETS: Final = tuple(
     ipaddress.ip_network(net) for net in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")
 )
 _HOST: Final = "[A-Za-z0-9-]"
-# Not PII although a detector matches (T10-11 deviation, pending ruling): a decimal fraction
-# read as PHONE (``0.333333333``) and a CARD with leading 0 (no PAN starts with MII 0).
-_DECIMAL: Final = re.compile(r"\d{1,2}\.\d{6}")
+# Not PII although a detector matches (T10-11 accepted deviation, narrowed form): a whole
+# PHONE match that is a plain decimal (``0.333333333``) or fractional seconds with a UTC
+# offset (``59.999999-05``); a CARD with fewer than 12 digits once leading zeros are gone.
+_DECIMAL: Final = re.compile(r"[0-9]{1,2}\.[0-9]{6,}|[0-9]{2}\.[0-9]{6,9}[+-][0-9]{2}")
+_NON_DIGIT: Final = re.compile(r"[^0-9]")
+_MIN_CARD_DIGITS: Final = 12
 
 _Finding = tuple[int, int, str]  # line, column (both 1-based), type or reason
 
@@ -58,14 +61,20 @@ def _allowed(kind: EntityType, value: str) -> bool:
         return lowered.endswith(("@example.com", "@example.org"))
     if kind == "PHONE":
         fictional = _FICTIONAL_PHONE.fullmatch(normalize_value("PHONE", value)) is not None
-        return fictional or _DECIMAL.match(value) is not None
+        return fictional or _DECIMAL.fullmatch(value) is not None
     if kind == "IP":
         return _reserved_ip(value)
     if kind in {"CREDENTIAL", "URL_TOKEN"}:
         return lowered.startswith("synthetic")
     if kind == "NATIONAL_ID":
         return value.startswith(("9", "000"))
-    return kind == "EMPLOYEE_ID" or (kind == "CARD" and value.startswith(("4111", "0")))
+    return kind == "EMPLOYEE_ID" or (kind == "CARD" and _card_allowed(value))
+
+
+def _card_allowed(value: str) -> bool:
+    """A ``4111`` test card, or fewer than 12 digits once separators and leading 0s go."""
+    digits = _NON_DIGIT.sub("", value)
+    return digits.startswith("4111") or len(digits.lstrip("0")) < _MIN_CARD_DIGITS
 
 
 def _denylist_pattern(domains: Sequence[str]) -> re.Pattern[str] | None:
@@ -102,7 +111,12 @@ class _Scanner:
 
     def text(self, text: str, line: int, col: int = 0) -> Iterator[_Finding]:
         """Findings of one line; a Parquet cell passes its column index as ``col``."""
-        for span in self._redactor.scan(text):
+        try:
+            spans = self._redactor.scan(text)
+        except RedactionFailed:  # longer than MAX_TEXT_CHARS: unscanned text is a finding
+            yield line, col or 1, "text too long to scan"
+            return
+        for span in spans:
             if not _allowed(span.type, text[span.start : span.end]):
                 yield line, col or span.start + 1, span.type
         for match in self._deny.finditer(text) if self._deny is not None else ():
