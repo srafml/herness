@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Final, Self
@@ -21,7 +21,13 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 from herness.core import time as clock
-from herness.core.errors import ConfigError, FatalError, SchemaViolation, StoreBusy
+from herness.core.errors import (
+    ConfigError,
+    FatalError,
+    HernessError,
+    SchemaViolation,
+    StoreBusy,
+)
 from herness.core.ids import new_ulid
 from herness.core.logging import get_logger
 from herness.core.types import DecisionOutput, Question, QuestionSet
@@ -61,6 +67,47 @@ def _fault_point(name: str) -> None:
 
 def _fingerprint(q: Question) -> str:
     return q.fingerprint or question_fingerprint(q)
+
+
+def io_error(exc: OSError, msg: str, *, decider: str | None = None) -> HernessError:
+    """Map an OS error: ``StoreBusy`` for ``EACCES``/``EBUSY`` (Windows lock), else FatalError."""
+    error_class = StoreBusy if exc.errno in _BUSY_ERRNOS else FatalError
+    return error_class(msg, decider=decider)
+
+
+def replace_atomic(
+    target: Path, write: Callable[[Path], object], *, decider: str | None = None
+) -> None:
+    """Write ``target`` via ``write(tmp)`` on ``.<name>.tmp``, fsync, then ``os.replace``.
+
+    Raises StoreBusy or FatalError (``io_error``) on an OS error, after removing the tmp file.
+    """
+    tmp = target.with_name(f".{target.name}.tmp")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write(tmp)
+        with tmp.open("rb+") as handle:
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
+    except OSError as exc:
+        with contextlib.suppress(OSError):  # a Windows lock usually blocks the unlink too
+            tmp.unlink(missing_ok=True)
+        raise io_error(exc, f"cannot write cache part: {target.name}", decider=decider) from exc
+
+
+def write_part(
+    partition: Path, table: pa.Table, *, name: str | None = None, decider: str | None = None
+) -> Path:
+    """Write ``table`` (cast to ``CACHE_SCHEMA``) atomically as ``partition/name``.
+
+    ``name`` defaults to a new ``part-<ulid>.parquet``; an existing file of that name is replaced.
+    """
+    target = partition / (name or f"part-{new_ulid()}.parquet")
+    data = table.select(CACHE_SCHEMA.names).cast(CACHE_SCHEMA)
+    replace_atomic(
+        target, lambda tmp: pq.write_table(data, tmp, compression="zstd"), decider=decider
+    )
+    return target
 
 
 class DecisionCache:
@@ -210,21 +257,7 @@ class CacheWriter:
         if not self._buffer:
             return None
         table = pa.Table.from_pylist(self._buffer, schema=CACHE_SCHEMA)
-        ulid = new_ulid()
-        tmp = self._partition / f".part-{ulid}.parquet.tmp"
-        target = self._partition / f"part-{ulid}.parquet"
-        try:
-            self._partition.mkdir(parents=True, exist_ok=True)
-            pq.write_table(table, tmp, compression="zstd")
-            with tmp.open("rb+") as handle:
-                os.fsync(handle.fileno())
-            os.replace(tmp, target)
-        except OSError as exc:
-            with contextlib.suppress(OSError):  # a Windows lock usually blocks the unlink too
-                tmp.unlink(missing_ok=True)
-            msg = f"cannot write cache part: {target.name}"
-            error_class = StoreBusy if exc.errno in _BUSY_ERRNOS else FatalError
-            raise error_class(msg, decider=self._decider) from exc
+        target = write_part(self._partition, table, decider=self._decider)
         _fault_point("enrich.after_batch_write")
         _log.debug("enrich.cache.flushed", decider=self._decider, rows=table.num_rows)
         self._buffer.clear()
