@@ -79,7 +79,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (spec 00
 | `herness/harness/gates.py` | Per-client call gates and task slots | `CallGate`, `build_gates`, `TaskSlots` | L4 | none | 170 |
 | `herness/store/ops/runs.py` | Ops area `runs` (owner 06, R-08): `run` rows and `task` inserts and reads | U06-32–U06-40 symbols | L1 | none | 380 |
 | `herness/store/ops/findings.py` | Ops area `findings` (owner 06, R-08): `finding` rows, including the privacy scrub (R-77). Evidence reads belong to area `evidence` (05) and chat rows to area `chat` (09) (R-09) | U06-41–U06-44, U06-144 symbols | L1 | none | 300 |
-| `herness/store/ops/__init__.py` (06 block) | Re-export block for the two areas above (impl 02 owns the file) | U06-32–U06-44, U06-144 symbols | L1 | none | 20 (06 block) |
+| `herness/store/ops/__init__.py` (06 block) | Re-export block for the two areas above (impl 02 owns the file) | U06-32–U06-44, U06-144 symbols | L1 | none | 50 (06 block) |
 | `herness/harness/findings.py` | Pure finding rules and entity lookups | `extract_markers`, `validate_markers`, `impact_usd`, `normalize_objective`, `compute_dedup_key`, `EntityCatalog` | L4 | none | 260 |
 | `herness/harness/blackboard.py` | Blackboard API, single writer thread | `FindingFilter`, `Blackboard` | L4 | `herness.core.redact`, `herness.core.resilience` (fault point), `herness.core.jobs` (task helpers) | 380 |
 | `herness/harness/swarm/__init__.py` | Re-exports | `Swarm`, `RunRequest`, `RunResult`, `review_job_handler` | L4 | none | 20 |
