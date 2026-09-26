@@ -1,0 +1,18 @@
+# Synth profile overlay (design 10 §4.3, design 11 §5.1.2, U10-94): synthetic-data testing and
+# development. Never enables egress (U10-17 enforces this at load time) and never sets
+# security.data_policy (TH10-03). Role -> model, deciders and pipelines swarm caps stay as
+# `local` (no overrides here).
+version: 1
+security:
+  secrets:
+    backend: dotenv         # allowed only in dev/synth (C12); Phase 1 uses a fixed test HMAC key
+  redaction:
+    denylist_domains: []    # O-8 open: corporate domains supplied at Phase 1; empty until then
+
+# Carry-over to T11-16 (this card's forward dependency): design 11 §5.1.2 also has this file
+# hold the `mappings.*` custom-field IDs and enum maps that match the synthetic generator, the
+# `sources.sources.files` entry for the `service_costs` inbox CSV, and the
+# `sources.sources.servicenow` field rename `acknowledged_at <- u_acknowledged_at` (spec 01 Q8).
+# `config/sources.yaml` (impl 01/02) and `synth_mappings.yaml` (impl 11) have not shipped yet,
+# so that content would have to be invented rather than read from an owner file or spec table;
+# T11-16 adds it here once both exist. Reported in the T10-13 report.

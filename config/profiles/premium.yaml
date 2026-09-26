@@ -1,0 +1,40 @@
+# Premium profile overlay (design 10 §4.3, design 05 §7, U10-94). Routes the reasoning-heavy
+# roles to Claude clients, chains ending in local-30b; requires
+# security.data_policy.premium_approved (+ approved_by, approved_on) recorded in herness.yaml;
+# never set security.data_policy here (TH10-03, U10-17).
+#
+# Design 10 §4.3 also assigns premium a 50-200 parallel swarm cap (impl 06 `pipelines.yaml`).
+# T06-03 (herness.core.pipelines.settings.PipelinesConfig) has not merged yet, so
+# HernessConfig.pipelines is still the closed no-field stand-in (herness.core.config._PipelinesStub)
+# and cannot accept a swarm-cap override; that overlay is a carry-over to T06-03 (Ruling R4,
+# T10-13 report).
+version: 1
+models:
+  models:
+    roles:
+      planner: claude-opus
+      judge: claude-sonnet
+      analyst: claude-sonnet
+      skeptic: claude-opus
+      skeptic_final: claude-opus
+      writer: claude-opus
+      chat: claude-sonnet
+      triage: claude-haiku
+      enrich_decider: claude-haiku
+      cluster_namer: claude-haiku
+    fallback:                              # first entry must equal roles.<role> (C01)
+      planner: [claude-opus, local-30b]
+      judge: [claude-sonnet, local-30b]
+      analyst: [claude-sonnet, local-30b]
+      skeptic: [claude-opus, local-30b]
+      skeptic_final: [claude-opus, local-30b]
+      writer: [claude-opus, local-30b]
+      chat: [claude-sonnet, local-30b]
+      triage: [claude-haiku, local-30b]
+      enrich_decider: [claude-haiku, local-30b]
+      cluster_namer: [claude-haiku, local-30b]
+security:
+  egress:
+    enabled: true
+    destinations: [api.anthropic.com, api.typesafe.ai]
+    purposes: [reasoning, reasoning_final, bulk_classification]

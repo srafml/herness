@@ -1,0 +1,9 @@
+# Streamlit hardening (design 10 §9.2, U10-95). LAN access only through the reverse proxy;
+# this file binds the dashboard to loopback and turns off the vendor telemetry ping.
+[server]
+address = "127.0.0.1"
+headless = true
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
