@@ -231,6 +231,7 @@ def load_config(
 
 class _Cache:
     config: HernessConfig | None = None
+    root: Path | None = None  # parent of the config dir of ``config`` (the ``.env`` folder)
 
 
 _CACHE_LOCK: Final = threading.Lock()
@@ -248,7 +249,7 @@ def init_config(
         cfg = load_config(profile, overrides, config_dir, env)
         if _Cache.config is not None:
             _log.warning("config.cache.replaced", profile=cfg.profile)
-        _Cache.config = cfg
+        _Cache.config, _Cache.root = cfg, config_dir.resolve().parent
         return cfg
 
 
@@ -256,14 +257,14 @@ def get_config() -> HernessConfig:
     """The cached config; loads it with the defaults on first use (U10-10)."""
     with _CACHE_LOCK:
         if _Cache.config is None:
-            _Cache.config = load_config()
+            _Cache.config, _Cache.root = load_config(), Path("config").resolve().parent
         return _Cache.config
 
 
 def reset_config() -> None:
     """Clear the cache and call every reset hook (U10-10)."""
     with _CACHE_LOCK:
-        _Cache.config = None
+        _Cache.config = _Cache.root = None
     for hook in _RESET_HOOKS:
         hook()
 

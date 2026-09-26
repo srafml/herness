@@ -16,10 +16,9 @@ from keyring.errors import PasswordDeleteError
 class MemoryKeyring(KeyringBackend):
     """Dict-backed keyring; set ``error`` to make every call raise it (fault tests)."""
 
-    priority = 1  # type: ignore[assignment]  # plain value instead of the classproperty
+    priority = 1  # plain value instead of the classproperty
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self) -> None:  # no super().__init__(): it only reads KEYRING_PROPERTY_* env
         self.store: dict[tuple[str, str], str] = {}
         self.error: Exception | None = None
 

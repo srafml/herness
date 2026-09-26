@@ -16,13 +16,18 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Protocol
 
 import keyring
-from keyring.errors import KeyringError, PasswordDeleteError
+from keyring.errors import PasswordDeleteError
 from pydantic import AfterValidator, SecretStr
 
 from herness.core import config as _config
 from herness.core.audit import audit
 from herness.core.config import HernessConfig, effective_dict
-from herness.core.config_sources import _DOTENV_LINE, _MAX_DOTENV_BYTES, _read_text
+from herness.core.config_sources import (
+    _DOTENV_LINE,
+    _MAX_DOTENV_BYTES,
+    _read_text,
+    current_load_context,
+)
 from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
 
@@ -55,9 +60,7 @@ class SecretRef(str):
     @classmethod
     def parse(cls, value: str) -> SecretRef:
         """Accept ``secret:<name>`` or a bare name; ``ConfigError`` without echoing the value."""
-        if isinstance(value, SecretRef):
-            return value
-        bare = value.removeprefix(_PREFIX)
+        bare = str(value).removeprefix(_PREFIX)  # a SecretRef is re-checked too (lower-case)
         if SECRET_NAME.fullmatch(bare) is None:
             msg = "invalid secret name"
             raise ConfigError(msg)
@@ -108,7 +111,7 @@ def _keyring_call(fn: Callable[..., Any], *args: str) -> Any:  # noqa: ANN401 - 
         return fn(_SERVICE, *args)
     except PasswordDeleteError:
         return None  # the entry is already gone: deleting a missing name is a no-op
-    except (KeyringError, RuntimeError) as exc:
+    except Exception as exc:  # noqa: BLE001 - any backend failure (e.g. pywintypes.error) maps here
         _log.error("secrets.backend.unavailable", backend="keyring", error_type=type(exc).__name__)
         msg = "secret backend unavailable: keyring"
         raise ConfigError(msg, hint=_HINT) from None
@@ -171,6 +174,14 @@ def _dotenv_values(path: Path) -> Mapping[str, str]:
     return out
 
 
+def _dotenv_root() -> Path:
+    """Where ``FilteredDotEnvSource`` reads ``.env``: the config dir's parent (cached config,
+    else the active load context); the working directory only when neither exists."""
+    ctx = current_load_context()
+    root = _config._Cache.root or (ctx.config_dir.resolve().parent if ctx else None)
+    return root or Path.cwd()
+
+
 class _DotenvBackend:
     """Read-only ``HERNESS_SECRET__*`` variables of ``<repo root>/.env``, dev and synth only."""
 
@@ -181,7 +192,7 @@ class _DotenvBackend:
         if env.get("HERNESS_ENV") != "dev" and profile != "synth":
             msg = "dotenv secrets backend is refused outside dev and synth"
             raise ConfigError(msg)
-        self._values = _dotenv_values(((root or Path.cwd()) / ".env").resolve())
+        self._values = _dotenv_values(((root or _dotenv_root()) / ".env").resolve())
 
     def get(self, name: str) -> str | None:
         key = "HERNESS_SECRET__" + name.replace(".", "_").replace("-", "_").upper()

@@ -77,7 +77,7 @@ def test_ft10_01_lock_held_elsewhere_blocks_the_audited_action(
 def test_ft10_05_keyring_failure_is_config_error_with_hint(
     fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """FT10-05 keyring raises KeyringError: ConfigError with hint; secrets.backend.unavailable."""
+    """FT10-05 keyring raises (KeyringError or any error): ConfigError, hint, log event."""
     events: list[tuple[str, dict[str, object]]] = []
 
     class _Log:
@@ -86,7 +86,16 @@ def test_ft10_05_keyring_failure_is_config_error_with_hint(
 
     monkeypatch.setattr(secrets, "_log", _Log())
     fake_keyring.store[("herness", "vllm.api_key")] = "Fault-Sentinel-Value-1"
-    for error in (KeyringError("locked vault Fault-Sentinel-Value-1"), RuntimeError("no backend")):
+
+    class _WinError(Exception):  # stands in for a raw pywintypes.error from WinVaultKeyring
+        pass
+
+    errors = (
+        KeyringError("locked vault Fault-Sentinel-Value-1"),
+        RuntimeError("no backend"),
+        _WinError(5, "Access is denied", "Fault-Sentinel-Value-1"),
+    )
+    for error in errors:
         fake_keyring.error = error
         for call in (
             lambda: secrets.resolve("secret:vllm.api_key"),
@@ -97,7 +106,7 @@ def test_ft10_05_keyring_failure_is_config_error_with_hint(
             assert exc.value.hint == "run as the account that owns the credential"
             assert exc.value.__cause__ is None
             assert "Fault-Sentinel" not in str(exc.value)
-    assert len(events) == 4
+    assert len(events) == 6
     assert {e[0] for e in events} == {"secrets.backend.unavailable"}
     assert all(e[1]["backend"] == "keyring" for e in events)
     assert all("Fault-Sentinel" not in str(e[1]) for e in events)

@@ -14,6 +14,7 @@ from tests.support.fake_keyring import MemoryKeyring
 
 from herness.core import audit as a
 from herness.core import config as c
+from herness.core import config_sources as cs
 from herness.core import secrets as s
 from herness.core.errors import ConfigError, FatalError
 
@@ -85,10 +86,12 @@ def test_ut10_28_known_values_cleared_by_reset(fake_keyring: MemoryKeyring) -> N
 
 
 def test_ut10_28_referenced_names_from_config(tmp_path: Path) -> None:
-    """UT10-28 referenced_secret_names: fixed keys always present, sorted and lower-cased."""
+    """UT10-28 referenced_secret_names on a real config: refs collected, disabled skipped."""
     cfg = c.init_config(config_dir=write_full_config(tmp_path), env={})
     names = s.referenced_secret_names(cfg)
     assert {"redact.hmac_key", "ui_user_ref_key"} <= set(names)
+    assert {"vllm.api_key", "anthropic.api_key"} <= set(names)  # models.yaml client references
+    assert "typesafe_api_key" not in names  # the disabled ``jev`` decider's reference
     assert names == sorted(set(names))
     assert all(n == n.lower() for n in names)
 
@@ -146,7 +149,10 @@ def test_ut10_30_parse_forms() -> None:
     ref = s.SecretRef.parse("secret:Foo.Bar")
     assert ref.name == "foo.bar"
     assert ref == "foo.bar"
-    assert s.SecretRef.parse(ref) is ref
+    assert s.SecretRef.parse(ref) == ref
+    assert s.SecretRef.parse(s.SecretRef("Mixed.Case")).name == "mixed.case"
+    with pytest.raises(ConfigError, match=r"^invalid secret name$"):
+        s.SecretRef.parse(s.SecretRef("Bad Name"))
     assert s.SecretRef.parse("OPENJEV_API_KEY").name == "openjev_api_key"
     for bad in ("x", "secret:bad name", "secret:", "-lead", "a" * 65, "ok\n"):
         with pytest.raises(ConfigError, match=r"^invalid secret name$") as exc:
@@ -331,3 +337,38 @@ def test_ut10_33_delete_secret(tmp_path: Path, fake_keyring: MemoryKeyring) -> N
     ]
     times = a.last_secret_set_times(Path(cfg.paths.logs), ["big.key"])
     assert times["big.key"] is not None
+
+
+def test_ut10_30_unvalidated_ref_is_rechecked(fake_keyring: MemoryKeyring) -> None:
+    """UT10-30 a directly built SecretRef is re-validated and lower-cased before any backend use."""
+    fake_keyring.store[(SVC, "mixed.key")] = VALUE
+    assert s.resolve(s.SecretRef("MIXED.Key")).get_secret_value() == VALUE
+    assert s.exists(s.SecretRef("Mixed.KEY")) is True
+    with pytest.raises(ConfigError, match=r"^invalid secret name$"):
+        s.resolve(s.SecretRef("bad name"))
+
+
+def test_ut10_31_dotenv_root_follows_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-31 synth on a temp config tree reads <config dir parent>/.env, never the cwd's .env."""
+    tree, cwd = tmp_path / "tree", tmp_path / "dev"
+    cwd.mkdir()
+    (cwd / ".env").write_text("HERNESS_SECRET__VLLM_API_KEY=Developer-Real-Value\n", "utf-8")
+    monkeypatch.chdir(cwd)
+    monkeypatch.delenv("HERNESS_ENV", raising=False)
+    _dotenv_config(tree, "synth")
+    assert s._dotenv_root() == tree.resolve()
+    assert not s.exists("vllm.api_key")  # tree has no .env: the developer's file is not read
+    _write_env(tree)
+    c.reset_config()  # also drops the cached (empty) .env read
+    c.init_config("synth", config_dir=tree / "config", env={})
+    assert s.resolve("vllm.api_key").get_secret_value() == VALUE
+
+
+def test_ut10_31_dotenv_root_fallbacks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT10-31 no cached config: the load context's config dir parent, else the working dir."""
+    monkeypatch.chdir(tmp_path)
+    assert s._dotenv_root() == Path.cwd()
+    with cs.load_context("synth", tmp_path / "other" / "config", {}):
+        assert s._dotenv_root() == (tmp_path / "other").resolve()
