@@ -19,13 +19,13 @@ _Thinking = Literal["on", "off"]
 
 # R-38: the ``chat`` role (and every role not listed) gets purpose ``reasoning``; whether
 # ``hybrid`` may carry it is decided by the egress guard from ``security.data_policy`` (impl 10).
-EGRESS_PURPOSE_BY_MODEL_ROLE: Mapping[str, Literal["reasoning", "reasoning_final"]] = {
+EGRESS_PURPOSE_BY_MODEL_ROLE: Final[Mapping[str, Literal["reasoning", "reasoning_final"]]] = {
     "writer": "reasoning_final",
     "skeptic_final": "reasoning_final",
 }
 
 # Roles that borrow another role's ``RoleParams`` and thinking-under-``auto`` bucket.
-BASE_ROLE: Mapping[str, str] = {
+BASE_ROLE: Final[Mapping[str, str]] = {
     "skeptic_final": "skeptic",
     "chat_off_hours": "chat",
     "judge": "planner",

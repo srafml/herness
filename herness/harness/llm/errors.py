@@ -89,7 +89,9 @@ def translate_openai_error(exc: openai.OpenAIError) -> HernessError:
         "openai",
         exc,
         rate_limit=openai.RateLimitError,
-        unavailable=(openai.APIConnectionError, openai.APITimeoutError, openai.InternalServerError),
+        # APITimeoutError subclasses APIConnectionError in this SDK, so isinstance already
+        # matches it; listed once here (not twice) since the two are behaviourally identical.
+        unavailable=(openai.APIConnectionError, openai.InternalServerError),
         config_error=(
             openai.BadRequestError,
             openai.NotFoundError,
@@ -105,9 +107,10 @@ def translate_anthropic_error(exc: anthropic.AnthropicError) -> HernessError:
         "anthropic",
         exc,
         rate_limit=anthropic.RateLimitError,
+        # APITimeoutError subclasses APIConnectionError in this SDK too; see the openai
+        # translator above for why it is not listed twice.
         unavailable=(
             anthropic.APIConnectionError,
-            anthropic.APITimeoutError,
             anthropic.InternalServerError,
         ),
         config_error=(

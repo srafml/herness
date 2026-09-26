@@ -199,8 +199,8 @@ def test_ut05_35_egress_block_cause_returned_as_is() -> None:
 # --- find_egress_block (acceptance check) ----------------------------------------------
 
 
-def test_ut05_30_find_egress_block_finds_a_nested_cause_at_depth_10() -> None:
-    """UT05-30 acceptance: find_egress_block finds an EgressBlocked nested exactly 10 deep."""
+def test_ut05_35_find_egress_block_finds_a_nested_cause_at_depth_10() -> None:
+    """UT05-35 acceptance: find_egress_block finds an EgressBlocked nested exactly 10 deep."""
     blocked = EgressBlocked("refused", egress_id="egr_3", reason="off_network")
     current: BaseException = blocked
     for i in range(10):
@@ -210,8 +210,8 @@ def test_ut05_30_find_egress_block_finds_a_nested_cause_at_depth_10() -> None:
     assert find_egress_block(current) is blocked
 
 
-def test_ut05_30_find_egress_block_none_when_absent() -> None:
-    """UT05-30 a chain with no EgressBlocked anywhere returns None."""
+def test_ut05_35_find_egress_block_none_when_absent() -> None:
+    """UT05-35 a chain with no EgressBlocked anywhere returns None."""
     current: BaseException = RuntimeError("root")
     for i in range(5):
         wrapper = RuntimeError(f"wrap {i}")
@@ -220,8 +220,8 @@ def test_ut05_30_find_egress_block_none_when_absent() -> None:
     assert find_egress_block(current) is None
 
 
-def test_ut05_30_find_egress_block_beyond_depth_is_not_found() -> None:
-    """UT05-30 an EgressBlocked past depth 10 is not found (bounded walk)."""
+def test_ut05_35_find_egress_block_beyond_depth_is_not_found() -> None:
+    """UT05-35 an EgressBlocked past depth 10 is not found (bounded walk)."""
     blocked = EgressBlocked("refused", egress_id="egr_4", reason="off_network")
     current: BaseException = blocked
     for i in range(12):
@@ -243,14 +243,14 @@ def _wrap_via_context(blocked: EgressBlocked) -> RuntimeError:
             return wrapper
 
 
-def test_ut05_30_find_egress_block_uses_context_when_no_cause() -> None:
-    """UT05-30 implicit chaining (``__context__``) is walked when ``__cause__`` is unset."""
+def test_ut05_35_find_egress_block_uses_context_when_no_cause() -> None:
+    """UT05-35 implicit chaining (``__context__``) is walked when ``__cause__`` is unset."""
     blocked = EgressBlocked("refused", egress_id="egr_5", reason="off_network")
     wrapper = _wrap_via_context(blocked)
     assert find_egress_block(wrapper) is blocked
 
 
-def test_ut05_30_find_egress_block_root_is_itself() -> None:
-    """UT05-30 the exception itself, with no chain, is found at depth 0."""
+def test_ut05_35_find_egress_block_root_is_itself() -> None:
+    """UT05-35 the exception itself, with no chain, is found at depth 0."""
     blocked = EgressBlocked("refused", egress_id="egr_6", reason="off_network")
     assert find_egress_block(blocked) is blocked
