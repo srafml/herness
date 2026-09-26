@@ -17,7 +17,12 @@ CI = WORKFLOWS / "ci.yml"
 WORKFLOW_NAMES = ("ci.yml", "release.yml")
 PINNED = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}$")
 PINNED_LINE = re.compile(r"uses:\s*[^\s#]+@[0-9a-f]{40}\s+#\s*v\d+(\.\d+)*\b")
-FORBIDDEN_IN_RUN = ("${{ github.event.", "${{ github.head_ref", "${{ inputs.")
+# Any expression (whitespace-tolerant) that reads event data, head_ref or inputs.
+FORBIDDEN_IN_RUN = re.compile(
+    r"\$\{\{(?:(?!\}\}).)*?\b(github\s*\.\s*(event\s*[.\[]|head_ref)|inputs\s*[.\[])"
+)
+HOSTED_RUNNERS = frozenset({"ubuntu-latest", "windows-latest"})
+MATRIX_REF = re.compile(r"^\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}$")
 
 
 def _load(path: Path) -> dict[Any, Any]:
@@ -76,14 +81,33 @@ def _check_untrusted_input(path: Path, doc: dict[Any, Any]) -> None:
     assert "pull_request_target" not in names, path.name
     for step in _steps(doc):
         script = step.get("run", "")
-        for bad in FORBIDDEN_IN_RUN:
-            assert bad not in script, f"{path.name}: {step.get('name', script[:40])}"
+        assert not FORBIDDEN_IN_RUN.search(script), f"{path.name}: {step.get('name', script[:40])}"
+
+
+def _runners(job: dict[str, Any]) -> list[str]:
+    """Runner labels of a job, with a ``${{ matrix.<key> }}`` runs-on expanded."""
+    runs_on = job["runs-on"]
+    labels = runs_on if isinstance(runs_on, list) else [runs_on]
+    resolved: list[str] = []
+    for label in labels:
+        ref = MATRIX_REF.match(str(label))
+        if ref is None:
+            resolved.append(str(label))
+            continue
+        matrix = job.get("strategy", {}).get("matrix", {})
+        values = list(matrix.get(ref.group(1), []))
+        values += [e[ref.group(1)] for e in matrix.get("include", []) if ref.group(1) in e]
+        assert values, f"matrix.{ref.group(1)} has no values"
+        resolved.extend(str(value) for value in values)
+    return resolved
 
 
 def _check_runners_and_checkout(path: Path, doc: dict[Any, Any]) -> None:
+    assert not any("self-hosted" in s for s in _strings(doc["jobs"])), path.name
     for name, job in doc["jobs"].items():
-        runner_values = [job.get("runs-on", ""), job.get("strategy", {})]
-        assert not any("self-hosted" in s for s in _strings(runner_values)), f"{path.name}:{name}"
+        if "uses" in job:  # a reusable-workflow call has no runner of its own
+            continue
+        assert set(_runners(job)) <= HOSTED_RUNNERS, f"{path.name}:{name}"
     for step in _steps(doc):
         if step.get("uses", "").startswith("actions/checkout@"):
             assert step.get("with", {}).get("persist-credentials") is False, path.name
