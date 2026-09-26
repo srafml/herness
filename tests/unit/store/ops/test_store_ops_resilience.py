@@ -149,6 +149,19 @@ def test_ut08_19_claim_probe_due_and_stale(backend: SqliteResilienceBackend) -> 
     assert not backend.health_claim_probe("absent", stale, due, stale)
 
 
+def test_st08_05_claim_with_a_due_from_a_stale_row_loses(
+    backend: SqliteResilienceBackend,
+) -> None:
+    """ST08-05 store part (T08-07): a row re-opened at or after the caller's probe due (the
+    probe ran and failed meanwhile) is not claimed again with that stale due."""
+    due = T0 + timedelta(seconds=60)
+    reopened = _row(opened_at=due, updated_at=due)
+    backend.health_apply("jira", lambda _: reopened, due)
+    assert not backend.health_claim_probe("jira", due, due, due - timedelta(seconds=600))
+    later = due + timedelta(seconds=120)
+    assert backend.health_claim_probe("jira", later, later, later - timedelta(seconds=600))
+
+
 def test_ut08_29_insert_and_read_events(backend: SqliteResilienceBackend) -> None:
     """UT08-29 insert_event writes a §4.1.4 row; counts and latest read it back."""
     backend.insert_event(_event(target="t" * 300))
