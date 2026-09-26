@@ -12,16 +12,18 @@ import hashlib
 import hmac
 import importlib
 import re
+import sys
 import threading
 from bisect import bisect_right
 from collections.abc import Iterable, Sequence
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from herness.core import config as _config
 from herness.core import time as clock
 from herness.core.config import HernessConfig
-from herness.core.errors import ConfigError, FatalError
+from herness.core.errors import ConfigError, FatalError, StoreBusy
 from herness.core.logging import get_logger
 from herness.core.redact_directory import NameDirectory
 from herness.core.redact_patterns import (
@@ -35,8 +37,11 @@ from herness.core.redact_patterns import (
 from herness.core.secrets import resolve
 from herness.core.settings import RedactionConfig
 
+if TYPE_CHECKING:
+    import pyarrow as pa
+
 __all__ = ["DETECTION_ORDER", "EntityType", "RedactionFailed", "RedactionResult", "Redactor"]
-__all__ += ["Span", "get_redactor", "redact_text", "reset_redactor"]
+__all__ += ["Span", "get_redactor", "redact_table", "redact_text", "reset_redactor"]
 
 MAX_TEXT_CHARS: Final = 4_000_000
 _KEY_BYTES: Final = 32
@@ -311,3 +316,55 @@ def redact_text(text: str | None) -> str | None:
 
 _config._RESET_HOOKS.append(reset_redactor)
 _config._KEY_ID_PROVIDER = _config_key_id
+
+
+# --- U10-47 redact_table ---------------------------------------------------------------------
+
+
+def redact_table(
+    tbl: pa.Table, text_cols: Sequence[str], id_col: str = "record_id", workers: int | None = None
+) -> pa.Table:
+    """``(<id_col>, text)``: text columns redacted and joined per row, fail closed (U10-47)."""
+    import pyarrow as pa  # noqa: PLC0415 - pyarrow loads only for table redaction
+
+    from herness.core import _redact_pool as pool  # noqa: PLC0415 - cycle: it imports redact
+
+    started = clock.monotonic()
+    ids = pool.string_column(tbl, id_col)
+    columns = [pool.string_column(tbl, name) for name in text_cols]
+    count = pool.worker_count(workers)
+    get_redactor()  # a missing key is a ConfigError here, never a crashed worker
+    size = pool.CHUNK_ROWS
+
+    def load(i: int) -> tuple[list[str | None], list[list[str | None]]]:
+        return ids.slice(i * size, size).to_pylist(), [
+            col.slice(i * size, size).to_pylist() for col in columns
+        ]
+
+    try:
+        results = pool.redact_chunks(load, -(-tbl.num_rows // size), count)
+    except BrokenProcessPool as exc:
+        _log.error("redact.table.failed", error_type=type(exc).__name__)
+        msg = "redaction worker crashed"
+        raise StoreBusy(msg) from exc
+    texts = [text for out, _ in results for text in out]
+    failed_ids = [record_id for _, failed in results for record_id in failed]
+    for record_id in failed_ids:
+        _log.warning("redact.record.failed", record_id=record_id, error_type="RedactionFailed")
+    failed_rows = len(failed_ids)
+    # T08-05: herness_redact_records_total{result="ok"|"failed"} += rows - failed, failed_rows
+    _log.info(
+        "redact.table.completed",
+        rows=tbl.num_rows,
+        failed_rows=failed_rows,
+        workers=count,
+        duration_ms=round((clock.monotonic() - started) * 1000),
+    )
+    text_array = pa.array(texts, type=pa.string())
+    return pa.Table.from_arrays([ids.cast(pa.string()), text_array], names=[id_col, "text"])
+
+
+if __name__ == "__main__":
+    from herness.core import redact_scan
+
+    sys.exit(redact_scan.main())
