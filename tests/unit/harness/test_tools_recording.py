@@ -1,6 +1,6 @@
 """Tests for herness.harness.tools.execute_recorded and RecordedResult (U05-35).
 
-UT05-61-UT05-64 and UT05-124 on the test-local stand-in build of `_tools_standin` (spec 11
+UT05-61-UT05-64 and UT05-124 on the stand-in build of `tests.support.tools_standin` (spec 11
 `tiny_build` does not exist yet).
 """
 
@@ -15,9 +15,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import duckdb
+import pyarrow as pa
 import pytest
+from tests.support import tools_standin as sd
 from tests.support.harness_fakes import FakeOps
-from tests.unit.harness import _tools_standin as sd
+from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.errors import ConfigError, QueryError, SchemaViolation, ToolInputError
 from herness.core.resilience import ProcessState
@@ -27,6 +29,7 @@ from herness.harness import tools
 from herness.harness.llm.settings import SqlSettings
 from herness.harness.warehouse import DuckWarehouse
 from herness.metrics import evidence as metrics_evidence
+from herness.store.ops.evidence import get_evidence
 
 pytestmark = pytest.mark.unit
 
@@ -203,6 +206,45 @@ def test_ut05_63_timeout(wh: DuckWarehouse) -> None:
     assert info.value.hint == "filter by period or use get_metric"
 
 
+def test_ut05_63_timeout_while_streaming(wh: DuckWarehouse) -> None:
+    """UT05-63 the timer firing while rows stream (pyarrow OSError) is the same timeout."""
+    limits = SqlLimits(timeout_s=0.2, scan_rows=10_000_000)
+    ctx = sd.make_ctx(wh, FakeOps(), limits=limits)
+    sql = "SELECT i, md5(CAST(i AS VARCHAR)) AS h FROM range(5000000) AS t(i)"
+    with pytest.raises(QueryError, match=r"^timeout after 0\.2s$") as info:
+        tools.execute_recorded(ctx, sql, {})
+    assert info.value.hint == "filter by period or use get_metric"
+
+
+@pytest.mark.parametrize(
+    ("error", "message", "hint"),
+    [
+        (OSError("INTERRUPT Error: Interrupted!"), "timeout after 30.0s", "get_metric"),
+        (OSError("IO Error: disk 'x' full"), "IO Error: disk '<value>' full", "describe_table"),
+        (pa.ArrowInvalid("bad batch"), "bad batch", "describe_table"),
+    ],
+    ids=["interrupt", "other_os_error", "arrow_error"],
+)
+def test_ut05_63_reader_errors_mapped(
+    wh: DuckWarehouse,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    message: str,
+    hint: str,
+) -> None:
+    """UT05-63 errors raised by the Arrow reader: interrupt -> timeout, others -> DuckDB hint."""
+
+    def failing(batches: object) -> Iterator[tuple[object, ...]]:
+        del batches
+        raise error
+
+    monkeypatch.setattr(rec, "iter_batch_rows", failing)
+    with pytest.raises(QueryError) as info:
+        tools.execute_recorded(sd.make_ctx(wh, FakeOps()), "SELECT n FROM core.big", {})
+    assert info.value.message == message
+    assert hint in (info.value.hint or "")
+
+
 # --- UT05-64 ---------------------------------------------------------------------------------
 
 
@@ -224,11 +266,17 @@ def test_ut05_64_cache_hit_skips_duckdb_and_records_use(
     assert len(cursors) == 1
     second = tools.execute_recorded(sd.make_ctx(wh, ops, task_id="task_2"), sql, {})
     assert len(cursors) == 1
-    assert second is first
+    assert second == first
+    assert second is not first
+    second.rows.clear()  # a caller mutating its copy never reaches the cache
+    third = tools.execute_recorded(sd.make_ctx(wh, ops, task_id="task_3"), sql, {})
+    assert third.rows == first.rows
+    assert len(cursors) == 1
     assert list(ops.evidence) == [first.query_id]
     assert [use[:3] for use in ops.uses] == [
         (first.query_id, "run_1", "task_1"),
         (first.query_id, "run_1", "task_2"),
+        (first.query_id, "run_1", "task_3"),
     ]
 
 
@@ -284,18 +332,47 @@ def test_ut05_61_sample_redacts_non_text_cells(redacted: list[str]) -> None:
 # --- UT05-124 --------------------------------------------------------------------------------
 
 
-def test_ut05_124_no_second_result_hash() -> None:
-    """UT05-124 no SHA-256 row hashing in herness/harness; result_hash imported from spec 04."""
-    root = Path(tools.__file__).parent
+# Hash call sites in herness/harness that do not hash result rows (reviewed allow-list).
+_NON_ROW_HASHES = {
+    ("sql_guard.py", "_query_hash"),  # 16 hex of the SQL text for the rejection log
+    ("tracing.py", "is_sampled"),  # per-task payload sampling key
+    ("findings.py", "compute_dedup_key"),  # finding dedup key (SHA-1)
+    ("memory/policy.py", "content_hash"),  # memory content (R-14)
+    ("memory/policy.py", "keyed_hash"),  # memory key
+}
+_HASH_CALLS = frozenset({"sha1", "sha224", "sha256", "sha384", "sha512", "blake2b", "blake2s"})
+_HASH_CALLS |= {"md5", "sha3_256", "sha256_hex", "new"}
+
+
+def _hash_call_sites(root: Path) -> set[tuple[str, str]]:
+    sites: set[tuple[str, str]] = set()
     for path in root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        defs = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for node in ast.walk(fn):
+                func = node.func if isinstance(node, ast.Call) else None
+                name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+                owner = getattr(getattr(func, "value", None), "id", "")
+                if name in _HASH_CALLS and (name != "new" or owner == "hashlib"):
+                    sites.add((path.relative_to(root).as_posix(), fn.name))
+    return sites
+
+
+def test_ut05_124_no_second_result_hash() -> None:
+    """UT05-124 no SHA-256 row hashing in herness/harness; result_hash imported from spec 04.
+
+    Every hash call site in herness/harness/**/*.py must be on the reviewed non-row list.
+    """
+    root = Path(tools.__file__).parent
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        defs = {n.name for n in ast.walk(ast.parse(text)) if isinstance(n, ast.FunctionDef)}
         assert "result_hash" not in defs, path
-        assert "HashAccumulator" not in path.read_text(encoding="utf-8"), path
-    for module in (tools, rec):
-        text = Path(module.__file__ or "").read_text(encoding="utf-8")
-        assert "hashlib" not in text
-        assert "sha256" not in text.lower()
+        assert "HashAccumulator" not in text, path
+        assert "hash_arrow_batch" not in text, path
+    assert _hash_call_sites(root) <= _NON_ROW_HASHES
     assert vars(rec)["result_hash"] is metrics_evidence.result_hash
     assert vars(rec)["iter_batch_rows"] is metrics_evidence.iter_batch_rows
 
@@ -321,3 +398,44 @@ def test_ut05_61_blocked_columns_from_config(monkeypatch: pytest.MonkeyPatch) ->
     cfg = SimpleNamespace(models=SimpleNamespace(harness=SimpleNamespace(sql=sql)))
     monkeypatch.setattr(rec, "get_config", lambda: cfg)
     assert list(rec._blocked_columns()) == ["core.work_item.summary"]
+
+
+def test_ut05_61_duckdb_error_never_echoes_cell_values(
+    wh: DuckWarehouse, redacted: list[str]
+) -> None:
+    """UT05-61 ruling: quoted values in DuckDB errors are replaced, then the text is redacted."""
+    ops = FakeOps()
+    with pytest.raises(QueryError) as info:
+        tools.execute_recorded(
+            sd.make_ctx(wh, ops), "SELECT CAST(summary AS INTEGER) AS x FROM core.work_item", {}
+        )
+    message = info.value.message
+    assert "Conversion Error" in message
+    assert "'<value>'" in message
+    for summary in sd.SUMMARIES:
+        assert summary not in message
+        assert all(summary not in text for text in redacted)
+    assert redacted[-1] == message  # the sanitized text went through redact_text
+    assert ops.evidence == {}
+
+
+def test_ut05_61_safe_error_text_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-61 doubled quotes stay inside one literal; a failed redaction withholds the text."""
+    monkeypatch.setattr(rec, "redact_text", lambda text: text)
+    assert rec.safe_error_text("x 'it''s' y 'b'") == "x '<value>' y '<value>'"
+    assert len(rec.safe_error_text("e" * 900)) == 500
+    monkeypatch.setattr(rec, "redact_text", lambda text: None)
+    assert rec.safe_error_text("boom 'v'") == "query failed"
+
+
+def test_ut05_61_non_finite_floats_recorded(wh: DuckWarehouse, ops_store: OpsStoreHandle) -> None:
+    """UT05-61 NaN and +/-Infinity cells: the evidence sample is JSON-safe and the ops row lands."""
+    del ops_store
+    sql = (
+        "SELECT CAST('nan' AS DOUBLE) AS a, CAST('inf' AS DOUBLE) AS b, CAST('-inf' AS DOUBLE) AS c"
+    )
+    result = tools.execute_recorded(sd.make_ctx(wh, sd.StoreOps()), sql, {})
+    stored = get_evidence(result.query_id)
+    assert stored is not None
+    assert stored.result_sample == [{"a": "NaN", "b": "Infinity", "c": "-Infinity"}]
+    assert tools.json_safe([float("inf"), 1.5]) == ["Infinity", 1.5]

@@ -13,10 +13,10 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from tests.support import tools_standin as sd
 from tests.support.fault_env import FaultEnv
 from tests.support.harness_fakes import FakeOps
 from tests.support.ops_store import OpsStoreHandle
-from tests.unit.harness import _tools_standin as sd
 
 from herness.core.errors import QueryError, StoreBusy
 from herness.core.resilience import ProcessState
@@ -67,18 +67,6 @@ def test_ft05_02_other_injected_query_error_passes(wh: DuckWarehouse, fault_env:
         tools.execute_recorded(sd.make_ctx(wh, FakeOps()), SQL, {})
 
 
-class _StoreOps(FakeOps):
-    """`OpsHandle` over the real ops store `evidence` area (R-13)."""
-
-    def record_evidence(self, ev: Evidence) -> bool:
-        return ops_evidence.record_evidence(ev)
-
-    def record_evidence_use(
-        self, query_id: str, run_id: str, task_id: str | None, used_at: datetime
-    ) -> bool:
-        return ops_evidence.record_evidence_use(query_id, run_id, task_id, used_at)
-
-
 def _counting(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     calls: list[str] = []
     real: Callable[..., object] = vars(tools)["retry_call"]
@@ -110,7 +98,7 @@ def test_ft05_04_locked_ops_store_retried_then_error(
     blocker.execute("BEGIN EXCLUSIVE")
     try:
         with pytest.raises(StoreBusy) as info:
-            tools.execute_recorded(sd.make_ctx(wh, _StoreOps()), SQL, {})
+            tools.execute_recorded(sd.make_ctx(wh, sd.StoreOps()), SQL, {})
     finally:
         blocker.execute("ROLLBACK")
         blocker.close()
@@ -120,7 +108,7 @@ def test_ft05_04_locked_ops_store_retried_then_error(
     assert error.ok is False
     assert error.error is not None
     assert error.error.type == "StoreBusy"
-    result = tools.execute_recorded(sd.make_ctx(wh, _StoreOps()), SQL, {})  # lock released
+    result = tools.execute_recorded(sd.make_ctx(wh, sd.StoreOps()), SQL, {})  # lock released
     assert ops_evidence.get_evidence(result.query_id) is not None
     assert policies == ["sqlite_write", "sqlite_write", "sqlite_write"]
 

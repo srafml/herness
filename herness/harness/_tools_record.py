@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import re
 import threading
 import unicodedata
@@ -20,6 +21,7 @@ from datetime import UTC, date, datetime, time
 from typing import Final, cast
 
 import duckdb
+import pyarrow as pa
 from pydantic import JsonValue
 
 from herness.core import time as clock
@@ -36,6 +38,7 @@ BATCH_ROWS: Final = 10_000
 SAMPLE_ROWS: Final = 50
 ERROR_CHARS: Final = 500
 _PARAM_KEY_RE: Final = re.compile(r"[a-z][a-z0-9_]{0,31}")
+_QUOTED_RE: Final = re.compile(r"'(?:[^']|'')*'")
 _TIMEOUT_HINT: Final = "filter by period or use get_metric"
 _DUCKDB_HINT: Final = "check table and column names with describe_table"
 _SIZE_HINT: Final = "aggregate first or add filters"
@@ -158,7 +161,16 @@ def run_query(ctx: ToolContext, sql: str, params: Mapping[str, JsonValue]) -> Ex
             raise timeout_error(limits.timeout_s) from exc
         raise
     cur = cast("duckdb.DuckDBPyConnection", ctx.warehouse.cursor())
-    timer = threading.Timer(limits.timeout_s, cur.interrupt)
+    fired = threading.Event()
+
+    def interrupt() -> None:
+        fired.set()
+        cur.interrupt()
+
+    # `cancel()` cannot stop a callback that already started, so a late `interrupt()` may hit
+    # this thread's cached cursor after the query ended; DuckDB clears the interrupt flag when
+    # the next query starts, so the window is harmless (review M2).
+    timer = threading.Timer(limits.timeout_s, interrupt)
     timer.daemon = True
     timer.start()
     started = clock.monotonic()
@@ -169,10 +181,8 @@ def run_query(ctx: ToolContext, sql: str, params: Mapping[str, JsonValue]) -> Ex
         types = [str(d[1]) for d in cur.description or ()]
         rows = scan.feed(iter_batch_rows(cur.to_arrow_reader(BATCH_ROWS)))
         digest = result_hash(list(zip(columns, types, strict=True)), rows)
-    except duckdb.InterruptException as exc:
-        raise timeout_error(limits.timeout_s) from exc
-    except duckdb.Error as exc:
-        raise QueryError(str(exc)[:ERROR_CHARS], hint=_DUCKDB_HINT) from exc
+    except (duckdb.Error, OSError, pa.ArrowException) as exc:
+        raise _engine_error(exc, fired=fired.is_set(), timeout_s=limits.timeout_s) from exc
     except SchemaViolation as exc:  # a cell `result_hash` cannot encode
         msg = "result has a value that cannot be recorded"
         raise QueryError(msg, hint="cast the column to text or a number") from exc
@@ -182,14 +192,34 @@ def run_query(ctx: ToolContext, sql: str, params: Mapping[str, JsonValue]) -> Ex
     return Executed(columns, types, scan.rows, scan.count, digest, duration_ms)
 
 
+def _engine_error(exc: Exception, *, fired: bool, timeout_s: float) -> QueryError:
+    """Step 5 mapping; an interrupt may surface from DuckDB or, mid-stream, from pyarrow."""
+    text = str(exc)
+    if fired or isinstance(exc, duckdb.InterruptException) or "INTERRUPT" in text:
+        return timeout_error(timeout_s)
+    return QueryError(safe_error_text(text), hint=_DUCKDB_HINT)
+
+
+def safe_error_text(text: str) -> str:
+    """DuckDB error text without quoted values, redacted, first 500 chars (ENG §3.4 ruling).
+
+    Conversion errors quote the offending cell, which may be redact-on-read ticket text.
+    """
+    redacted = redact_text(_QUOTED_RE.sub("'<value>'", text))
+    return (redacted if redacted is not None else "query failed")[:ERROR_CHARS]
+
+
 def json_safe(value: object) -> JsonValue:
     """U05-35 step 6 JSON-safe cell: Decimal -> str, date -> ISO, datetime -> ISO UTC with Z.
 
+    Non-finite floats become "NaN", "Infinity", "-Infinity" (ops JSON rejects them).
     Naive datetimes (DuckDB `TIMESTAMP`) are read as UTC. Bytes become `None` inside lists
     and dicts; `sample_rows` omits top-level bytes cells.
     """
-    if value is None or isinstance(value, bool | int | float | str):
-        safe: JsonValue = value
+    if isinstance(value, float) and not math.isfinite(value):
+        safe: JsonValue = str(value).replace("inf", "Infinity").replace("nan", "NaN")
+    elif value is None or isinstance(value, bool | int | float | str):
+        safe = value
     elif isinstance(value, datetime):
         safe = clock.format_utc(value if value.tzinfo is not None else value.replace(tzinfo=UTC))
     elif isinstance(value, date | time):

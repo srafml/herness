@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Final, Protocol, runtime_checkable
@@ -76,6 +76,13 @@ class _ResultCache(Protocol):
     def cache_put(self, query_id: str, value: tuple[RecordedResult, Evidence]) -> None: ...
 
 
+def _copy(result: RecordedResult) -> RecordedResult:
+    """A copy with fresh lists, so no caller can mutate a cached result (rows are tuples)."""
+    return replace(
+        result, columns=list(result.columns), types=list(result.types), rows=list(result.rows)
+    )
+
+
 def execute_recorded(
     ctx: ToolContext, sql: str, params: dict[str, JsonValue], *, guard: bool = True
 ) -> RecordedResult:
@@ -91,7 +98,7 @@ def execute_recorded(
     cache = ctx.warehouse if isinstance(ctx.warehouse, _ResultCache) else None
     hit = cache.cache_get(qid) if cache is not None else None
     if hit is not None:
-        result, ev = hit
+        result, ev = _copy(hit[0]), hit[1]
     else:
         run = rec.run_query(ctx, sql, params)
         redact = rec.output_names(run.columns, guarded.redact_output_columns)
@@ -123,7 +130,7 @@ def execute_recorded(
         "sqlite_write", ctx.ops.record_evidence_use, qid, ctx.run_id, ctx.task_id, clock.now()
     )
     if hit is None and cache is not None and result.row_count <= ctx.sql_limits.return_rows:
-        cache.cache_put(qid, (result, ev))
+        cache.cache_put(qid, (_copy(result), ev))
     tool = "run_sql" if guard else "internal"
     elapsed = clock.monotonic() - started
     record_histogram(_QUERY_SECONDS, elapsed, component="harness", labels={"tool": tool})
@@ -171,7 +178,8 @@ def _cell_text(value: object) -> str:  # noqa: PLR0911 - one return per cell rul
 def _cell(value: object, *, untrusted: bool) -> str:
     text = _cell_text(value)
     if len(text) > CELL_MAX_CHARS:
-        text = text[: CELL_MAX_CHARS - 1] + "…"
+        # no dangling backslash of a half-cut `\n` / `\|` escape before the ellipsis
+        text = text[: CELL_MAX_CHARS - 1].rstrip("\\") + "…"
     return wrap_untrusted(text, source="warehouse") if untrusted else text
 
 
@@ -185,7 +193,8 @@ def _header(result: RecordedResult, shown: int) -> str:
 
 
 def _assemble(result: RecordedResult, lines: Sequence[str], shown: int) -> str:
-    parts = [_header(result, shown), " | ".join(result.columns), " | ".join(result.types)]
+    names = " | ".join(_escape(name) for name in result.columns)
+    parts = [_header(result, shown), names, " | ".join(_escape(t) for t in result.types)]
     parts.extend(lines[:shown])
     if shown < result.row_count and not result.ordered:
         parts.append(ARBITRARY_ROWS_LINE)

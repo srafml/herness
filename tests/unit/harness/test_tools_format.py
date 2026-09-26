@@ -184,3 +184,28 @@ def test_ut05_65_datetime_utc_input() -> None:
     """UT05-65 an aware UTC datetime renders with seconds precision and Z."""
     content, _ = format_result(_result(["t"], [(datetime(2026, 1, 2, 3, 4, 5, 6, tzinfo=UTC),)]))
     assert content.split("\n")[3] == "2026-01-02T03:04:05Z"
+
+
+def test_ut05_65_cut_never_splits_an_escape() -> None:
+    """UT05-65 a cut inside an escaped `|` or newline drops the dangling backslash."""
+    for text in ("a" * 78 + "|zz", "a" * 78 + "\nzz"):
+        content, _ = format_result(_result(["s"], [(text,)]))
+        cell = content.split("\n")[3]
+        assert cell == "a" * 78 + "…"
+
+
+def test_ut05_65_column_names_and_types_escaped() -> None:
+    """UT05-65 model-authored aliases with `|` or newlines cannot break the table lines."""
+    result = RecordedResult(
+        query_id=QID,
+        columns=["a|b", "c\nd"],
+        types=["VARCHAR", "STRUCT(x|y)"],
+        rows=[("1", "2")],
+        row_count=1,
+        truncated=False,
+        ordered=True,
+    )
+    lines = format_result(result)[0].split("\n")
+    assert lines[1] == "a\\|b | c\\nd"
+    assert lines[2] == "VARCHAR | STRUCT(x\\|y)"
+    assert len(lines) == 4
