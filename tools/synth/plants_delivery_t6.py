@@ -5,13 +5,22 @@ Split out of `tools.synth.plants_delivery` (which re-exports `plant_t6` and
 E6p and E6u.
 
 Thinning and the plan: `planned_counts_t6` books a negative count in each month after
-`effective_at + 14 days` (0.4 x S6p's expected incidents there), so the month's
-background shrinks and `seq_start` stays gap-free. `plant_t6` then drops each S6p
-incident of that window with probability 0.4 (in record order) and puts in its place,
-with the same number and open time, a background-like incident of a service outside the
-plants. The record count therefore stays the planned count, S6p loses 40 % of its
-post-effect volume, and the planned shrink offsets the replacements, so other services
-keep their volume in expectation. The kept S6p incidents resolve after 0.8 x their MTTR.
+`effective_at + 14 days`, so the month's background shrinks and `seq_start` stays
+gap-free. `plant_t6` then drops each S6p incident of that window with probability 0.4 (in
+record order) and puts in its place, with the same number and open time, a background-like
+incident of any service except S6p, drawn by the background incident weights renormalised
+without S6p (`refill_pool`). The record count therefore stays the planned count and S6p
+loses 40 % of its post-effect volume. The planned shrink equals the expected refills
+(`t6_drop`), so every other service, S6u and the other plant services included, keeps its
+background volume in expectation. The shrink is spread over the whole boundary month while
+refills land on post-effect days only, so S6p's post/pre ratio there is about
+0.6 x (1 - drop / month count), within the UT11-18 tolerance. The kept S6p incidents
+resolve after 0.8 x their MTTR.
+
+Plant order: on an incident shard, U11-19 applies T6 to the background records first,
+then T1, T3 and T5, so a refill is a background record for them (a refill on a T1
+service, on S5 or on C3 gets the same treatment as any background incident). A replaced
+record's id is listed in `PlantOutput.replaced`; U11-19 drops its label and PII rows.
 """
 
 import dataclasses
@@ -20,6 +29,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final
 
 import numpy as np
+import numpy.typing as npt
 
 from tools.synth import jira_changelog as lifecycle
 from tools.synth.catalog_plan import plant_range, span_months
@@ -114,11 +124,19 @@ def e6_created(cat: Catalog, params: SynthParams) -> datetime:
     return max(cat.plants.effective_at - E6_LEAD, span_start(params))
 
 
+def t6_drop(share: float, count: float, post: float) -> float:
+    """Expected shrink D of a month with `count` stub records, S6p incident-weight share
+    `share` and post-effect day-weight fraction `post`: D x (1 - share) =
+    0.4 x share x post x (count - D), i.e. the shrink equals the expected refills that
+    land on services other than S6p, so each of them keeps `share_s x count`."""
+    thinned = T6_DROP * share * post
+    return thinned * count / (1.0 - share + thinned)
+
+
 def planned_counts_t6(cat: Catalog, params: SynthParams) -> dict[MonthKey, int]:
-    """E6p and E6u in the Jira month of their creation; per incident month, minus
-    round(0.4 x S6p's expected incidents on days from `effective_at + 14 days`), where the
-    expectation is S6p's incident-weight share of the month's background, weighted by the
-    arrival model's day weights."""
+    """E6p and E6u in the Jira month of their creation; per incident month with days from
+    `effective_at + 14 days`, minus round(`t6_drop`) with S6p's incident-weight share and
+    the post-effect fraction of the arrival model's day weights."""
     counts: dict[MonthKey, int] = {
         ("jira", "issue", e6_created(cat, params).date().replace(day=1)): 2
     }
@@ -131,10 +149,20 @@ def planned_counts_t6(cat: Catalog, params: SynthParams) -> dict[MonthKey, int]:
         weights = {d: day_weight(params.arrival, d) for d in shard_days(params, month)}
         post = math.fsum(w for d, w in weights.items() if d >= since)
         if key in cat.month_counts and post:
-            expected = share * cat.month_counts[key] * post / math.fsum(weights.values())
-            if drop := round(T6_DROP * expected):
+            fraction = post / math.fsum(weights.values())
+            if drop := round(t6_drop(share, cat.month_counts[key], fraction)):
                 counts[key] = -drop
     return counts
+
+
+def refill_pool(cat: Catalog) -> tuple[list[ServiceRow], npt.NDArray[np.float64]]:
+    """Services a dropped S6p slot is refilled from (every service except S6p) and their
+    probabilities (the background incident weights renormalised without S6p)."""
+    index = service_index(cat)
+    keep = np.array([s.sys_id != cat.plants.s6p for s in index.services], dtype=bool)
+    services = [s for s, k in zip(index.services, keep, strict=True) if k]
+    p = np.asarray(index.p, dtype=np.float64)[keep]
+    return services, p / p.sum()
 
 
 def _thin(
@@ -144,10 +172,7 @@ def _thin(
     rng: np.random.Generator,
 ) -> PlantOutput:
     index, bank = service_index(cat), TemplateBank()
-    plants = set(cat.plants.services)
-    pool = [(s, float(p)) for s, p in zip(index.services, index.p, strict=True)]
-    others = [s for s, _ in pool if s.sys_id not in plants]
-    p = np.array([w for s, w in pool if s.sys_id not in plants])
+    services, p = refill_pool(cat)
     since = cat.plants.effective_at + T6_SETTLE
     out = PlantOutput()
     for k, record in enumerate(records):
@@ -159,8 +184,9 @@ def _thin(
         ):
             continue
         if rng.random() < T6_DROP:
-            service = others[int(rng.choice(len(others), p=p / p.sum()))]
+            service = services[int(rng.choice(len(services), p=p))]
             seq = int(record["number"]["value"][3:])
+            out.replaced.append(f"servicenow:incident:{record['sys_id']['value']}")
             spec = IncidentSpec(service, opened, seq)
             records[k], labels = make_incident(params, rng, bank, index, spec)
             out.labels.extend(labels)
@@ -206,10 +232,12 @@ def plant_t6(
 ) -> PlantOutput:
     """T6 for one shard (lake side). `servicenow/incident`: S6p incidents opened at or after
     `effective_at + 14 days` are dropped with probability 0.4 in record order (each
-    replaced in `records` by a non-plant incident with the same number and open time; its
-    labels are returned, and the dropped record's label and PII rows must be discarded);
-    the kept ones get MTTR x 0.8; S6u is unchanged. `jira/issue` of the creation month:
-    epics E6p and E6u, Done with `resolutiondate` = `effective_at`. Other shards: nothing."""
+    replaced in `records` by an incident of a `refill_pool` service with the same number
+    and open time; its labels are returned and the dropped record's id is listed in
+    `replaced`, whose label and PII rows U11-19 discards); the kept ones get MTTR x 0.8;
+    S6u is untouched. Runs on the background before T1, T3 and T5. `jira/issue` of the
+    creation month: epics E6p and E6u, Done with `resolutiondate` = `effective_at`. Other
+    shards: nothing."""
     if (shard.source, shard.entity) == ("servicenow", "incident"):
         return _thin(records, cat, params, rng)
     if (shard.source, shard.entity) == ("jira", "issue"):
@@ -230,4 +258,6 @@ __all__ = [
     "find_service",
     "planned_counts_t6",
     "plant_t6",
+    "refill_pool",
+    "t6_drop",
 ]

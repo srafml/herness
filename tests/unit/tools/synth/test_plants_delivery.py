@@ -26,9 +26,10 @@ from tools.synth.plants_delivery import (
     plant_t6,
     t2_times,
 )
-from tools.synth.plants_delivery_t6 import e6_created
+from tools.synth.plants_delivery_t6 import e6_created, refill_pool, t6_drop
+from tools.synth.plants_ops import plant_t1
 from tools.synth.servicenow import gen_incidents
-from tools.synth.servicenow_common import service_index, span_start
+from tools.synth.servicenow_common import day_weight, service_index, shard_days, span_start
 from tools.synth.servicenow_incidents import IncidentSpec, make_incident
 from tools.synth.shards import PlantOutput, Shard
 from tools.synth.text import TemplateBank
@@ -285,7 +286,9 @@ def test_ut11_18_planner_shrinks_s6p_post_effect_months(cat: Catalog, params: Sy
     services = {s.sys_id: s for s in cat.services}
     share = services[cat.plants.s6p].incident_weight / sum(s.incident_weight for s in cat.services)
     key = ("servicenow", "incident", date(2026, 8, 1))
-    expected = 0.4 * share * base.month_counts[key] * 29 / 31  # 08-03 .. 08-31
+    thinned = 0.4 * share * 29 / 31  # 08-03 .. 08-31
+    # shrink D = expected refills on non-S6p services: D (1 - share) = thinned (N - D)
+    expected = thinned * base.month_counts[key] / (1 - share + thinned)
     assert abs(-incident[key] - expected) <= 1.5  # day weights differ from 1 by a little
     assert background_count(cat, key) == base.month_counts[key] + incident[key]
 
@@ -311,8 +314,9 @@ def test_ut11_18_thinning_keeps_count_numbers_and_s6u(
     cat: Catalog, params: SynthParams, bank: TemplateBank
 ) -> None:
     """UT11-18 plant_t6 on background incidents: the count and gap-free numbers stay the
-    plan's; dropped S6p incidents are replaced in place by non-plant incidents with the
-    same number and open time; kept ones have MTTR x 0.8; S6u and earlier S6p unchanged."""
+    plan's; dropped S6p incidents are replaced in place by non-S6p incidents with the
+    same number and open time and their ids are listed in `replaced`; kept ones have
+    MTTR x 0.8; S6u and earlier S6p unchanged."""
     original = _records(cat, params, bank)
     records = copy.deepcopy(original)
     since = cat.plants.effective_at + timedelta(days=14)
@@ -325,10 +329,14 @@ def test_ut11_18_thinning_keeps_count_numbers_and_s6u(
         got = plant_t6(part, shard, cat, params, rng)
         records[lo : lo + shard.n_records] = part
         out.labels.extend(got.labels)
+        out.replaced.extend(got.replaced)
     assert len(records) == len(original)
     numbers = [int(_v(r, "number")[3:]) for r in records]
     assert numbers == [int(_v(r, "number")[3:]) for r in original]
-    plants = set(cat.plants.services)
+    ids = {f"servicenow:incident:{_v(r, 'sys_id')}" for r in records}
+    gone = [f"servicenow:incident:{_v(r, 'sys_id')}" for r in original]
+    assert out.replaced == [i for i in gone if i not in ids]
+    assert {row["record_id"] for row in out.labels}.isdisjoint(out.replaced)
     replaced = kept = 0
     for old, new in zip(original, records, strict=True):
         service = _v(old, "business_service")
@@ -337,7 +345,7 @@ def test_ut11_18_thinning_keeps_count_numbers_and_s6u(
             assert new == old
         elif _v(new, "sys_id") != _v(old, "sys_id"):
             replaced += 1
-            assert _v(new, "business_service") not in plants
+            assert _v(new, "business_service") != cat.plants.s6p
             assert _v(new, "opened_at") == _v(old, "opened_at")
         else:
             kept += 1
@@ -346,15 +354,12 @@ def test_ut11_18_thinning_keeps_count_numbers_and_s6u(
                 assert abs(after - round(before * 0.8)) <= 1
     assert replaced > 0
     assert kept > 0
-    assert len(out.labels) == 5 * replaced
+    assert len(out.labels) == 5 * replaced == 5 * len(out.replaced)
     assert any(_v(r, "business_service") == cat.plants.s6u for r in records)
 
 
-def test_ut11_18_s6p_post_effect_volume_is_sixty_percent(
-    cat: Catalog, params: SynthParams, bank: TemplateBank
-) -> None:
-    """UT11-18 S6p post-effect volume 0.60 +/- 0.05 of the pre-effect rate (one S6p
-    incident per 30 min over the span, so both rates are known exactly before thinning)."""
+def _s6p_stream(cat: Catalog, params: SynthParams, bank: TemplateBank) -> list[Rec]:
+    """One S6p incident per 30 min over the 90-day span (numbers 1..4320)."""
     services = {s.sys_id: s for s in cat.services}
     index, rng = service_index(cat), np.random.default_rng(8)
     start, step = span_start(params), timedelta(minutes=30)
@@ -362,6 +367,91 @@ def test_ut11_18_s6p_post_effect_volume_is_sixty_percent(
     for i in range(90 * 48):
         spec = IncidentSpec(services[cat.plants.s6p], start + i * step, 1 + i)
         records.append(make_incident(params, rng, bank, index, spec)[0])
+    return records
+
+
+def test_ut11_18_refill_pool_is_every_service_but_s6p(cat: Catalog) -> None:
+    """UT11-18 refills come from every service except S6p (S6u and the other plant
+    services included) with the background incident weights renormalised without S6p."""
+    services, p = refill_pool(cat)
+    others = [s for s in cat.services if s.sys_id != cat.plants.s6p]
+    assert [s.sys_id for s in services] == [s.sys_id for s in others]
+    assert set(cat.plants.services) - {cat.plants.s6p} <= {s.sys_id for s in services}
+    total = sum(s.incident_weight for s in others)
+    assert np.allclose(p, [s.incident_weight / total for s in others], rtol=1e-12, atol=0)
+    assert p.sum() == pytest.approx(1.0, abs=1e-12)
+
+
+@pytest.mark.parametrize("preset", ["tiny", "small", "full"])
+def test_ut11_18_other_services_keep_expected_volume(preset: str) -> None:
+    """UT11-18 per post-effect month the planned shrink matches the expected refills, so
+    every service but S6p (S6u, the control arm, in particular) keeps its expected
+    background count share x month count within 1 / month count (rounding of the plan)."""
+    params = load_params(
+        preset,
+        start=date(2026, 1, 1),
+        end=_END,
+        sources=("servicenow",),
+        dirty="none",
+        fetch_mode="initial",
+        params_file=None,
+    )
+    base = build_catalog(42, params, planners=())
+    weights = {s.sys_id: s.incident_weight for s in base.services}
+    share = weights[base.plants.s6p] / sum(weights.values())
+    since = (base.plants.effective_at + timedelta(days=14)).date()
+    services, p = refill_pool(base)
+    pool = {s.sys_id: float(q) for s, q in zip(services, p, strict=True)}
+    plan = planned_counts_t6(base, params)
+    months = [k for k in plan if k[:2] == ("servicenow", "incident")]
+    assert months
+    for key in months:
+        days = {d: day_weight(params.arrival, d) for d in shard_days(params, key[2])}
+        fraction = sum(w for d, w in days.items() if d >= since) / sum(days.values())
+        n, drop = base.month_counts[key], -plan[key]
+        assert drop == round(t6_drop(share, n, fraction))
+        refills = 0.4 * share * fraction * (n - drop)  # expected dropped S6p incidents
+        for sys_id in (base.plants.s6u, *base.plants.t1_services, base.plants.s5):
+            w = weights[sys_id] / sum(weights.values())
+            kept = w * (n - drop) + refills * pool[sys_id]
+            assert kept == pytest.approx(w * n, rel=1 / n)
+
+
+def test_ut11_18_refills_follow_the_pool_and_get_t1_treatment_after_t6(
+    cat: Catalog, params: SynthParams, bank: TemplateBank
+) -> None:
+    """UT11-18 refilled services follow `refill_pool` (S6u and plant services included);
+    T6 runs before T1, so a refill on a T1 service gets the T1 team like any background
+    incident."""
+    records = _s6p_stream(cat, params, bank)
+    shard = Shard("servicenow", "incident", date(2026, 8, 1), len(records), 1, 0)
+    out = plant_t6(records, shard, cat, params, np.random.default_rng(6))
+    refilled = Counter(
+        _v(r, "business_service") for r in records if _v(r, "business_service") != cat.plants.s6p
+    )
+    n = sum(refilled.values())
+    assert n == len(out.replaced) > 300
+    services, p = refill_pool(cat)
+    for service, prob in zip(services, p, strict=True):
+        sd = float(np.sqrt(n * prob * (1 - prob)))
+        assert abs(refilled[service.sys_id] - n * prob) <= 4 * sd + 1
+    t1 = set(cat.plants.t1_services)
+    assert refilled[cat.plants.s6u] > 0
+    assert sum(refilled[s] for s in t1) > 0
+    plant_t1(records, cat, params, np.random.default_rng(7))
+    team = next(t for t in cat.teams if t.sys_id == cat.plants.t1_team)
+    on_t1 = [r for r in records if _v(r, "business_service") in t1]
+    assert on_t1
+    assert all(_v(r, "assignment_group") == team.sys_id for r in on_t1)
+
+
+def test_ut11_18_s6p_post_effect_volume_is_sixty_percent(
+    cat: Catalog, params: SynthParams, bank: TemplateBank
+) -> None:
+    """UT11-18 S6p post-effect volume 0.60 +/- 0.05 of the pre-effect rate (one S6p
+    incident per 30 min over the span, so both rates are known exactly before thinning)."""
+    start = span_start(params)
+    records = _s6p_stream(cat, params, bank)
     shard = Shard("servicenow", "incident", date(2026, 8, 1), len(records), 1, 0)
     plant_t6(records, shard, cat, params, np.random.default_rng(5))
     since = cat.plants.effective_at + timedelta(days=14)

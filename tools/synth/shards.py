@@ -48,12 +48,15 @@ class IncidentTimeIndex:
 class PlantOutput:
     """What one plant adds to a shard (U11-11): source-shaped `records`, truth label rows
     `{record_id, question, answer}`, `members` (incident record ids of the plant) and
-    `links` (pair rows such as T3 `{incident_record_id, change_record_id}`). Data only."""
+    `links` (pair rows such as T3 `{incident_record_id, change_record_id}`); `replaced`
+    lists the ids of background records a plant replaced in place (T6), whose background
+    label and PII rows U11-19 drops. Data only."""
 
     records: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     labels: list[dict[str, str]] = dataclasses.field(default_factory=list)
     members: list[str] = dataclasses.field(default_factory=list)
     links: list[dict[str, str]] = dataclasses.field(default_factory=list)
+    replaced: list[str] = dataclasses.field(default_factory=list)
 
 
 __all__ = ["IncidentTimeIndex", "PlantOutput", "Shard"]
