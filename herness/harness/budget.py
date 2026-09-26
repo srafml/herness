@@ -22,6 +22,7 @@ __all__ = ["RunBudget", "new_phase_budgets"]
 PhaseName = Literal["analysis", "writer", "chat"]
 _CENT = Decimal("0.01")
 _INT_KEYS = ("tokens_in", "tokens_out", "calls")
+_EXTRA_KEYS = ("tokens_cap", "tokens_used", "tokens_remaining", "cost_cap", "cost_remaining")
 
 
 class RunBudget:
@@ -93,7 +94,7 @@ class RunBudget:
         """Serialize totals for `run.token_usage` (U06-27)."""
         with self._lock:
             used, cap = self.tokens_used, self.cost_cap
-            left = None if cap is None else str(max(Decimal(0), cap - self.cost_used))
+            left = None if cap is None else format(max(Decimal(0), cap - self.cost_used), "f")
             return {
                 "name": self.name,
                 "tokens_cap": self.tokens_cap,
@@ -101,8 +102,8 @@ class RunBudget:
                 "tokens_out": self.tokens_out,
                 "tokens_used": used,
                 "tokens_remaining": max(0, self.tokens_cap - used),
-                "cost_cap": None if cap is None else str(cap),
-                "cost_used": str(self.cost_used),
+                "cost_cap": None if cap is None else format(cap, "f"),
+                "cost_used": format(self.cost_used, "f"),
                 "cost_remaining": left,
                 "calls": self.calls,
                 "exhausted": self._exhausted,
@@ -115,18 +116,17 @@ class RunBudget:
         Both flags are recomputed against the current caps, so a resume with a raised cap
         continues and one with a lowered cap stops.
         """
-        bad = SchemaViolation(f"budget snapshot invalid: run_id={self.run_id}")
         counts: list[int] = []
         for key in _INT_KEYS:
             value = snap.get(key)
             if type(value) is int and value >= 0:
                 counts.append(value)
-        flags = (snap.get("exhausted"), snap.get("cost_cap_reached"))
         cost = _parse_cost(snap.get("cost_used"))
-        if snap.get("name") != self.name or len(counts) != len(_INT_KEYS) or cost is None:
-            raise bad
-        if any(type(f) is not bool for f in flags):
-            raise bad
+        absent = any(key not in snap for key in _EXTRA_KEYS)
+        if snap.get("name") != self.name or len(counts) != len(_INT_KEYS) or cost is None or absent:
+            raise SchemaViolation(f"budget snapshot invalid: run_id={self.run_id}")  # noqa: EM102
+        if any(type(f) is not bool for f in (snap.get("exhausted"), snap.get("cost_cap_reached"))):
+            raise SchemaViolation(f"budget snapshot invalid: run_id={self.run_id}")  # noqa: EM102
         with self._lock:
             self.tokens_in, self.tokens_out, self.calls = counts
             self.cost_used = cost

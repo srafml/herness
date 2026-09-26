@@ -119,6 +119,16 @@ def test_ut06_16_snapshot_restore_round_trip() -> None:
     assert b.cost_used == Decimal("2.00")
 
 
+def test_ut06_16_snapshot_decimal_strings_are_plain() -> None:
+    """UT06-16 snapshot decimal strings are plain, never exponent form like '1E-7' or '1E+1'."""
+    b = RunBudget("analysis", 100, Decimal("1E+1"), cost_cap_raises=False, run_id="r1")
+    b.charge(1, 1, Decimal("1E-7"))
+    snap = b.snapshot()
+    assert snap["cost_cap"] == "10"
+    assert snap["cost_used"] == "0.0000001"
+    assert snap["cost_remaining"] == "9.9999999"
+
+
 def test_ut06_16_restore_recomputes_exhausted_against_current_cap() -> None:
     """UT06-16 caps stay the current knobs; exhausted is recomputed against them."""
     a = _ledger(40)
@@ -154,9 +164,13 @@ def test_ut06_16_wrong_name_is_schema_violation() -> None:
         _ledger().restore(snap)
 
 
-@pytest.mark.parametrize("key", ["tokens_in", "tokens_out", "cost_used", "calls", "name"])
+@pytest.mark.parametrize(
+    "key",
+    ["tokens_in", "tokens_out", "cost_used", "calls", "name", "exhausted", "cost_cap_reached",
+     "tokens_cap", "tokens_used", "tokens_remaining", "cost_cap", "cost_remaining"],
+)  # fmt: skip
 def test_ut06_16_missing_key_is_schema_violation(key: str) -> None:
-    """UT06-16 a snapshot missing a key is a SchemaViolation."""
+    """UT06-16 a snapshot missing any of the 12 keys is a SchemaViolation."""
     snap = dict(_ledger().snapshot())
     del snap[key]
     with pytest.raises(SchemaViolation):

@@ -11,6 +11,7 @@ import asyncio
 import math
 import time
 from collections.abc import Callable, Mapping
+from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
 from herness.core.errors import ConfigError
@@ -120,7 +121,8 @@ class TaskSlots:
     @classmethod
     def for_run(cls, analyst_max_concurrency: int, oversubscribe: float) -> TaskSlots:
         """Slots for one run: `max(1, ceil(analyst_max_concurrency * oversubscribe))`."""
-        return cls(max(1, math.ceil(analyst_max_concurrency * oversubscribe)))
+        product = Decimal(analyst_max_concurrency) * Decimal(str(oversubscribe))
+        return cls(max(1, math.ceil(product)))
 
     async def acquire(self) -> None:
         """Wait for a free slot and hold it."""

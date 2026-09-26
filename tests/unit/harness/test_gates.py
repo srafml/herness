@@ -139,6 +139,11 @@ def test_ut06_20_for_run_size() -> None:
     assert TaskSlots.for_run(1, 0.1).free() == 1
 
 
+def test_ut06_20_for_run_exact_product_does_not_round_up() -> None:
+    """UT06-20 for_run(100, 1.1) is 110, not 111 from float `100 * 1.1` rounding up."""
+    assert TaskSlots.for_run(100, 1.1).free() == 110
+
+
 @pytest.mark.asyncio
 async def test_ut06_20_double_release_is_config_error() -> None:
     """UT06-20 release without a matching acquire raises ConfigError("slot released twice")."""
