@@ -9,8 +9,10 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx2
 import pytest
 import structlog
+import yaml
 from tests.support.config_tree import write_full_config
 from tests.support.fake_clock import FakeClock
 from tests.support.fake_gpu import FakeGpu, StubRequest, shipped_gpu_settings
@@ -23,7 +25,7 @@ from herness.core.errors import ConfigError, ModelUnavailable
 from herness.core.jobs import gpu_services as gs
 from herness.core.jobs.gpu_services import ComposeRunner, LoopbackHttp
 from herness.core.redact_directory import NameDirectory
-from herness.core.resilience.settings import HealthCheck, ServiceSettings
+from herness.core.resilience.settings import HealthCheck, ResilienceConfig, ServiceSettings
 from herness.core.settings import RedactionConfig
 
 pytestmark = pytest.mark.unit
@@ -32,9 +34,10 @@ PREFIX = [
     "wsl.exe", "-d", "herness", "--", "docker", "compose", "--env-file",
     "/opt/herness/docker.env", "-f", "/mnt/d/herness/docker/compose.yaml",
 ]  # fmt: skip
-# The shipped flow list splits "--format=csv,noheader,nounits" at its commas (a config
-# carry-over reported with T08-17): the runner must pass R.gpu.vram_check_cmd as loaded.
-VRAM_ARGV = list(shipped_gpu_settings().vram_check_cmd)
+# The design 08 §7 command; the shipped config quotes the last item so that YAML does not
+# split it at its commas (T08-17 fix round 1, C1).
+VRAM_ARGV = ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"]
+FIXTURE_RESILIENCE = Path(__file__).parents[1] / "fixtures" / "resilience.yaml"
 EMAIL = "ops.person@example.com"
 OPENJEV_KEY = "openjev-" + "stub-bearer-" + "value-1"  # built at runtime (detect-secrets)
 VLLM_KEY = "vllm-" + "stub-bearer-" + "value-2"
@@ -79,6 +82,7 @@ def spy(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
 
 def test_ut08_87_exact_argv_lists(fake_gpu: FakeGpu) -> None:
     """UT08-87 up/stop/kill/ps build the exact argv lists, shell=False, per-verb timeouts."""
+    fake_gpu.gpu = fake_gpu.gpu.model_copy(update={"stop_timeout_s": 90})  # not 120 (M1)
     runner = fake_gpu.runner()
     runner.up("reasoning", "vllm-reasoning")
     runner.stop("vllm-reasoning")
@@ -91,7 +95,7 @@ def test_ut08_87_exact_argv_lists(fake_gpu: FakeGpu) -> None:
         [*PREFIX, "ps", "--format", "json"],
     ]
     common = {"shell": False, "capture_output": True, "text": True, "check": False}
-    assert fake_gpu.kwargs == [{**common, "timeout": t} for t in (120, 120, 60, 30)]
+    assert fake_gpu.kwargs == [{**common, "timeout": t} for t in (120, 90, 60, 30)]
 
 
 def test_ut08_87_default_runner_reads_r_gpu(fake_gpu: FakeGpu) -> None:
@@ -112,6 +116,25 @@ def test_ut08_87_bad_service_name_config_error(fake_gpu: FakeGpu, service: Any) 
         lambda: runner.up("reasoning", service),
         lambda: runner.stop(service),
         lambda: runner.kill(service),
+    ):
+        with pytest.raises(ConfigError, match="not a configured service name"):
+            call()
+    assert fake_gpu.argv == []
+
+
+@pytest.mark.parametrize("service", ["bad;name", "Openjev", "-x", "a" * 65])
+def test_ut08_87_name_regex_decides(fake_gpu: FakeGpu, service: str) -> None:
+    """UT08-87 a configured key (allowlist bypassed) that fails the name regex → ConfigError."""
+    classes = dict(fake_gpu.gpu.classes)
+    decider = classes["decider"]
+    services = {**decider.services, service: decider.services["openjev"]}
+    classes["decider"] = decider.model_copy(update={"services": services})  # no validation
+    fake_gpu.gpu = fake_gpu.gpu.model_copy(update={"classes": classes})
+    runner = fake_gpu.runner()
+    for call in (
+        lambda: runner.up("decider", service),  # type: ignore[arg-type]
+        lambda: runner.stop(service),  # type: ignore[arg-type]
+        lambda: runner.kill(service),  # type: ignore[arg-type]
     ):
         with pytest.raises(ConfigError, match="not a configured service name"):
             call()
@@ -396,10 +419,33 @@ def test_ut08_89_reasoning_client_without_key(
     assert req.body["model"] == "local-lora-14b"
 
 
-def test_ut08_89_large_body_read_up_to_64_kb(fake_gpu: FakeGpu) -> None:
+def test_ut08_89_large_body_read_up_to_64_kb(
+    fake_gpu: FakeGpu, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """UT08-89 a large response body is read up to 64 KB and discarded; status still counts."""
-    fake_gpu.stubs["llamacpp-large"].payloads["/health"] = b"x" * 1_000_000
+    fake_gpu.stubs["llamacpp-large"].payloads["/health"] = b"x" * 4_000_000
+    consumed: list[int] = []
+    real_iter = httpx2.Response.iter_bytes
+
+    def counting(self: httpx2.Response, *args: Any, **kwargs: Any) -> Iterator[bytes]:
+        for chunk in real_iter(self, *args, **kwargs):
+            consumed.append(len(chunk))
+            yield chunk
+
+    monkeypatch.setattr(httpx2.Response, "iter_bytes", counting)
     assert fake_gpu.http.healthy(fake_gpu.service("llamacpp-large")) is True
+    total = sum(consumed)
+    assert gs.BODY_READ_MAX <= total < 1_000_000  # stopped near 64 KB, not at 4 MB
+    assert total - consumed[-1] < gs.BODY_READ_MAX  # the last chunk crossed the cap
+
+
+def test_ut08_90_vram_check_cmd_loads_unsplit() -> None:
+    """UT08-90 the shipped config and the test fixture load the exact nvidia-smi argv (C1)."""
+    assert list(shipped_gpu_settings().vram_check_cmd) == VRAM_ARGV
+    raw = yaml.safe_load(FIXTURE_RESILIENCE.read_text(encoding="utf-8"))
+    raw.pop("version", None)
+    fixture = ResilienceConfig.model_validate(raw).resilience.gpu
+    assert list(fixture.vram_check_cmd) == VRAM_ARGV
 
 
 # --- UT08-90 VRAM -----------------------------------------------------------------------------

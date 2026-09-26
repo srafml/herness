@@ -6,12 +6,13 @@ import multiprocessing
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import pytest
 from tests.support.gpu_lock_race import hold_lock
 
 from herness.core.errors import ConfigError
+from herness.core.jobs import gpu_lock
 from herness.core.jobs.gpu_lock import GpuLock
 
 pytestmark = pytest.mark.unit
@@ -76,3 +77,52 @@ def test_ut08_95_same_process_second_lock_refused(tmp_path: Path) -> None:
     with lock:
         pass
     lock.__exit__(None, None, None)  # a second exit is a no-op
+
+
+def test_ut08_95_file_closed_when_lock_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-95 a failed lock closes the file it opened before raising ConfigError."""
+    opened: list[IO[bytes]] = []
+
+    def refuse(fh: IO[bytes]) -> None:
+        opened.append(fh)
+        raise OSError(36, "locked")
+
+    monkeypatch.setattr(gpu_lock, "_lock", refuse)
+    with pytest.raises(ConfigError):
+        GpuLock(tmp_path / "gpu.lock").__enter__()
+    assert len(opened) == 1
+    assert opened[0].closed
+
+
+def test_ut08_95_exit_unlocks_before_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT08-95 __exit__ unlocks the locked handle while it is still open, then closes it."""
+    unlocked: list[tuple[IO[bytes], bool]] = []
+    real_unlock = gpu_lock._unlock
+
+    def spy(fh: IO[bytes]) -> None:
+        unlocked.append((fh, fh.closed))
+        real_unlock(fh)
+
+    monkeypatch.setattr(gpu_lock, "_unlock", spy)
+    lock = GpuLock(tmp_path / "gpu.lock")
+    with lock:
+        fh = lock._fh
+    assert fh is not None
+    assert unlocked == [(fh, False)]
+    assert fh.closed
+
+
+def test_ut08_95_unlock_releases_while_handle_open(tmp_path: Path) -> None:
+    """UT08-95 `_unlock` alone releases the byte lock: a new GpuLock succeeds while the first
+    handle stays open, so the release does not come from the close."""
+    path = tmp_path / "gpu.lock"
+    with path.open("a+b") as fh:
+        gpu_lock._lock(fh)
+        with pytest.raises(ConfigError):
+            GpuLock(path).__enter__()
+        gpu_lock._unlock(fh)
+        assert not fh.closed
+        with GpuLock(path):
+            pass
