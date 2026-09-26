@@ -147,7 +147,8 @@ class ClientConfig(_Section):
     chat_reserved_slots: int = Field(default=0, ge=0)
     reasoning_parser: str | None = None
     supports: ClientSupports = ClientSupports()
-    timeout_s: float = Field(default=300, gt=0, allow_inf_nan=False)
+    # le=3600 is egress MAX_TIMEOUT_S: a bad value fails at load, not at the first call (m1).
+    timeout_s: float = Field(default=300, gt=0, le=3600, allow_inf_nan=False)
     off_network: bool = False
     gpu_class: Literal["reasoning", "large", "decider"] | None = None
     price_per_mtok: PricePerMTok

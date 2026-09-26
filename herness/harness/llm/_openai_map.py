@@ -1,13 +1,13 @@
 """Wire mapping and response bounds of the OpenAI-compatible adapter (impl 05 U05-24).
 
-Private sibling of ``openai_compat`` (module-map spec note, T05-06 fix round 1): message
-mapping, response mapping with the adapter bounds (TH05-20) and the byte-capped HTTP client of
-on-network calls. Every bound is enforced before the data is decoded or kept.
+Private sibling of ``openai_compat`` (module-map row): request mapping (shared with ``tokens``)
+and response mapping with the adapter bounds (TH05-20), enforced before data is decoded or kept.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from pydantic import ValidationError
@@ -20,10 +20,12 @@ from herness.core.types import (
     LLMResponse,
     Message,
     ReasoningPart,
+    SystemBlock,
     TextPart,
     ToolCall,
     ToolCallPart,
     ToolResultPart,
+    ToolSpec,
     Usage,
 )
 from herness.harness.llm.base import MAX_RESPONSE_TEXT_CHARS, bound_response
@@ -55,11 +57,8 @@ def _joined_text(message: Message) -> list[str]:
 
 def _tool_call_dict(call: ToolCall) -> dict[str, object]:
     arguments = call.raw_arguments or canonical_json(call.arguments)
-    return {
-        "id": call.id,
-        "type": "function",
-        "function": {"name": call.name, "arguments": arguments},
-    }
+    function = {"name": call.name, "arguments": arguments}
+    return {"id": call.id, "type": "function", "function": function}
 
 
 def message_dicts(message: Message) -> list[dict[str, object]]:
@@ -81,6 +80,23 @@ def message_dicts(message: Message) -> list[dict[str, object]]:
     if calls:
         item["tool_calls"] = [_tool_call_dict(call) for call in calls]
     return [item]
+
+
+def chat_messages(
+    system: Sequence[SystemBlock], messages: Sequence[Message]
+) -> list[dict[str, Any]]:
+    """System blocks joined into one first message, then each message (U05-24; ``tokens``)."""
+    head = [{"role": "system", "content": "\n\n".join(b.text for b in system)}] if system else []
+    return head + [item for message in messages for item in message_dicts(message)]
+
+
+def tool_dicts(tools: Sequence[ToolSpec]) -> list[dict[str, object]]:
+    """Tool specs in the OpenAI ``function`` shape (U05-24; also the ``/tokenize`` tools)."""
+    return [{"type": "function", "function": _function(t)} for t in tools]
+
+
+def _function(t: ToolSpec) -> dict[str, object]:
+    return {"name": t.name, "description": t.description, "parameters": t.input_schema}
 
 
 def _json_object(text: str) -> dict[str, Any] | None:
@@ -122,11 +138,8 @@ def _reasoning(message: ChatCompletionMessage, client: str) -> list[ReasoningPar
     extra = message.model_extra or {}
     text = extra.get("reasoning") or extra.get("reasoning_content")
     if isinstance(text, str) and text:
-        return [
-            ReasoningPart(
-                provider="vllm", text=bound_response(text, 0, client=client, field="reasoning")
-            )
-        ]
+        bounded = bound_response(text, 0, client=client, field="reasoning")
+        return [ReasoningPart(provider="vllm", text=bounded)]
     return []
 
 

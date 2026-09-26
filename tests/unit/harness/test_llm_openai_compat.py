@@ -181,6 +181,7 @@ class _FakeServer:
         self.requests: list[httpx2.Request] = []
         self.bodies: list[dict[str, Any]] = []
         self.responses: list[tuple[int, dict[str, Any], dict[str, str]]] = []
+        self.streamed = False  # True: a real streamed body with no Content-Length (m2)
 
     def respond(self, status: int, body: dict[str, Any], **headers: str) -> None:
         self.responses.append((status, body, headers))
@@ -190,6 +191,10 @@ class _FakeServer:
         self.requests.append(request)
         self.bodies.append(json.loads(request.content))
         status, body, headers = self.responses.pop(0)
+        if self.streamed:
+            headers = {"content-type": "application/json", **headers}
+            stream = _Streamed(json.dumps(body).encode())
+            return httpx2.Response(status, headers=headers, stream=stream, request=request)
         return httpx2.Response(status, json=body, headers=headers, request=request)
 
 
@@ -799,10 +804,14 @@ def _spy_clients(
 def test_ut05_25_byte_cap_while_reading(
     server: _FakeServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT05-25 an on-network body of cap bytes maps; cap + 1 raises and the client is closed."""
+    """UT05-25 an on-network body of cap bytes maps; cap + 1 raises and the client is closed.
+
+    The body is streamed without Content-Length, so the loopback counter decides while reading.
+    """
     made = _spy_clients(monkeypatch)
+    server.streamed = True
     body = _completion(content="ok")
-    size = len(httpx2.Response(200, json=body).content)
+    size = len(json.dumps(body).encode())
     monkeypatch.setattr(openai_compat, "MAX_RESPONSE_BYTES", size)
     server.respond(200, body)
     assert asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request())).text == "ok"
@@ -909,10 +918,10 @@ def test_ut05_25_byte_cap_counts_streamed_chunks(monkeypatch: pytest.MonkeyPatch
     assert len(sent) == 3
 
 
-def test_ut05_35_on_network_uses_egress_loopback_client(
+def test_ut05_25_on_network_uses_egress_loopback_client(
     server: _FakeServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT05-35 on-network calls use egress.aloopback_http_client: base URL, deadline, no bearer.
+    """UT05-25 on-network calls use egress.aloopback_http_client: base URL, deadline, no bearer.
 
     The pool transport is built with retries=0, the SDK's Authorization header carries the key
     (TH05-15) and the client is closed after the call.
@@ -932,8 +941,8 @@ def test_ut05_35_on_network_uses_egress_loopback_client(
     assert made[0].is_closed
 
 
-def test_ut05_35_redirect_not_followed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT05-35 a redirect from the model server is not followed: one request, then an error."""
+def test_st05_20_redirect_not_followed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ST05-20 a redirect from the model server is not followed: one request, then an error."""
     seen: list[httpx2.Request] = []
 
     def handle(request: httpx2.Request) -> httpx2.Response:
@@ -957,8 +966,8 @@ class _Streamed(httpx2.AsyncByteStream):
         yield self._body
 
 
-def test_ut05_35_gzip_body_counted_after_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT05-35 a gzip body is decoded by the loopback client and its decoded bytes are capped."""
+def test_st05_20_gzip_body_counted_after_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ST05-20 a gzip body is decoded by the loopback client and its decoded bytes are capped."""
     raw = json.dumps(_completion(content="z" * 2_000)).encode()
     packed = gzip.compress(raw)
     assert len(packed) < 500 < len(raw)
@@ -975,10 +984,10 @@ def test_ut05_35_gzip_body_counted_after_decoding(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.parametrize("reason", ["response_too_large", "unsupported_encoding"])
-def test_ut05_35_wrapped_body_refusal_is_output_validation_error(
+def test_st05_20_wrapped_body_refusal_is_output_validation_error(
     monkeypatch: pytest.MonkeyPatch, reason: str
 ) -> None:
-    """UT05-35 a body refusal the SDK wraps (APIConnectionError cause) still maps the same."""
+    """ST05-20 a body refusal the SDK wraps (APIConnectionError cause) still maps the same."""
 
     def handle(request: httpx2.Request) -> httpx2.Response:
         msg = "wrapped"
@@ -991,10 +1000,10 @@ def test_ut05_35_wrapped_body_refusal_is_output_validation_error(
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
-def test_ut05_35_other_egress_block_propagates(
+def test_ut05_25_other_egress_block_propagates(
     monkeypatch: pytest.MonkeyPatch, *, wrapped: bool
 ) -> None:
-    """UT05-35 an EgressBlocked with another reason surfaces unchanged, direct or wrapped."""
+    """UT05-25 an EgressBlocked with another reason surfaces unchanged, direct or wrapped."""
     blocked = EgressBlocked("refused", reason="not_loopback")
 
     def handle(request: httpx2.Request) -> httpx2.Response:
@@ -1007,3 +1016,377 @@ def test_ut05_35_other_egress_block_propagates(
     with pytest.raises(EgressBlocked) as info:
         asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
     assert info.value is blocked
+
+
+# --- UT05-29: astream (U05-26) ------------------------------------------------------------------
+
+_USAGE = {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150}
+
+
+def _chunk(delta: dict[str, Any] | None = None, *, finish: str | None = None, **top: Any) -> Any:
+    body: dict[str, Any] = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "qwen3-30b",
+        "choices": [{"index": 0, "delta": delta or {}, "finish_reason": finish}],
+    }
+    body.update(top)
+    return body
+
+
+def _frag(index: Any, arguments: Any, call_id: str | None = None, name: str | None = None) -> Any:
+    frag: dict[str, Any] = {"index": index, "function": {"arguments": arguments}}
+    if call_id is not None:
+        frag["id"] = call_id
+        frag["type"] = "function"
+        frag["function"]["name"] = name
+    return frag
+
+
+def _sse(chunks: list[Any], *, done: bool = True) -> list[bytes]:
+    events = [f"data: {json.dumps(chunk)}\n\n".encode() for chunk in chunks]
+    return [*events, b"data: [DONE]\n\n"] if done else events
+
+
+class _SseBody(httpx2.AsyncByteStream):
+    """A real streamed SSE body, one event per read; records reads and closing."""
+
+    def __init__(self, events: list[bytes], delay_s: float = 0.0) -> None:
+        self.events = events
+        self.delay_s = delay_s
+        self.sent = 0
+        self.closed = False
+
+    async def __aiter__(self) -> Any:
+        for event in self.events:
+            if self.delay_s:
+                await asyncio.sleep(self.delay_s)
+            self.sent += 1
+            yield event
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _SseServer:
+    """Answers each request with the next queued SSE body or JSON completion."""
+
+    def __init__(self) -> None:
+        self.bodies: list[dict[str, Any]] = []
+        self.queue: list[_SseBody | tuple[int, dict[str, Any]]] = []
+        self.streams: list[_SseBody] = []
+
+    def stream(self, chunks: list[Any], *, done: bool = True, delay_s: float = 0.0) -> _SseBody:
+        body = _SseBody(_sse(chunks, done=done), delay_s)
+        self.queue.append(body)
+        return body
+
+    def respond(self, status: int, body: dict[str, Any]) -> None:
+        self.queue.append((status, body))
+
+    async def handle(self, request: httpx2.Request) -> httpx2.Response:
+        await request.aread()
+        self.bodies.append(json.loads(request.content))
+        item = self.queue.pop(0)
+        if isinstance(item, tuple):
+            return httpx2.Response(item[0], json=item[1], request=request)
+        self.streams.append(item)
+        headers = {"content-type": "text/event-stream"}
+        return httpx2.Response(200, headers=headers, stream=item, request=request)
+
+
+@pytest.fixture
+def sse(monkeypatch: pytest.MonkeyPatch) -> _SseServer:
+    fake = _SseServer()
+    _serve(monkeypatch, fake.handle)
+    return fake
+
+
+def _events(req: LLMRequest | None = None, cfg: ClientConfig | None = None) -> list[Any]:
+    client = OpenAICompatClient(cfg or _cfg())
+
+    async def collect() -> list[Any]:
+        return [event async for event in client.astream(req or _request())]
+
+    return asyncio.run(collect())
+
+
+def _events_until_error(req: LLMRequest | None = None) -> tuple[list[Any], Any]:
+    """The events a consumer saw before the stream raised, and the exception."""
+    got: list[Any] = []
+    client = OpenAICompatClient(_cfg())
+
+    async def collect() -> None:
+        async for event in client.astream(req or _request()):
+            got.append(event)  # noqa: PERF401 - keeps the events seen before the stream raises
+
+    with pytest.raises(Exception) as info:  # noqa: PT011 - each caller checks the type
+        asyncio.run(collect())
+    return got, info.value
+
+
+def _stream_chunks() -> list[Any]:
+    return [
+        _chunk({"role": "assistant", "content": ""}),
+        _chunk({"reasoning_content": "think "}),
+        _chunk({"reasoning_content": "more"}),
+        _chunk({"content": "Hel"}),
+        _chunk({"content": "lo"}),
+        _chunk({"tool_calls": [_frag(0, '{"sql": ', "call_a", "run_sql")]}),
+        _chunk({"tool_calls": [_frag(0, '"select 1"}')]}),
+        _chunk({"tool_calls": [_frag(1, "", "call_b", "list_tables")]}),
+        _chunk({}, finish="tool_calls"),
+        _chunk(choices=[], usage=_USAGE),
+    ]
+
+
+def _same_completion() -> dict[str, Any]:
+    return _completion(
+        content="Hello",
+        reasoning_content="think more",
+        finish_reason="tool_calls",
+        tool_calls=[
+            _tool_call("call_a", "run_sql", '{"sql": "select 1"}'),
+            _tool_call("call_b", "list_tables", ""),
+        ],
+    )
+
+
+def _no_latency(resp: Any) -> Any:
+    return resp.model_copy(update={"latency_ms": 0})
+
+
+def test_ut05_29_astream_deltas_in_order_and_done_equals_acomplete(sse: _SseServer) -> None:
+    """UT05-29 deltas in order; exactly one Done, last, equal to acomplete on the same payload."""
+    sse.stream(_stream_chunks())
+    sse.respond(200, _same_completion())
+    events = _events()
+    expected = asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+    assert events[:-1] == [
+        base.TextDelta("Hel"),
+        base.TextDelta("lo"),
+        base.ToolCallDelta("call_a", "run_sql", '{"sql": '),
+        base.ToolCallDelta("call_a", "run_sql", '"select 1"}'),
+        base.ToolCallDelta("call_b", "list_tables", ""),
+    ]
+    done = events[-1]
+    assert isinstance(done, base.Done)
+    assert sum(isinstance(event, base.Done) for event in events) == 1
+    assert _no_latency(done.response) == _no_latency(expected)
+    assert done.response.reasoning == [ReasoningPart(provider="vllm", text="think more")]
+    assert done.response.usage.input_tokens == 120
+    assert done.response.stop_reason == "tool_use"
+    stream_body, plain_body = sse.bodies
+    assert stream_body.pop("stream") is True
+    assert stream_body.pop("stream_options") == {"include_usage": True}
+    assert stream_body == plain_body
+    assert sse.streams[0].closed
+
+
+def test_ut05_29_astream_reasoning_key_and_stream_without_done_marker(sse: _SseServer) -> None:
+    """UT05-29 delta.reasoning is buffered (not yielded); a stream without [DONE] still ends."""
+    sse.stream([_chunk({"reasoning": "r"}), _chunk({"content": "x"}, finish="stop")], done=False)
+    events = _events()
+    assert events[0] == base.TextDelta("x")
+    resp = events[-1].response
+    assert (resp.text, resp.reasoning[0].text, resp.stop_reason) == ("x", "r", "end_turn")
+    assert resp.usage.input_tokens == 0
+
+
+def test_ut05_29_astream_truncates_at_done_only(sse: _SseServer) -> None:
+    """UT05-29 deltas stay raw; the Done text is cut to 200,000 with the marker and a WARNING."""
+    limit = base.MAX_RESPONSE_PART_CHARS
+    sse.stream([_chunk({"content": "a" * limit}), _chunk({"content": "b"}, finish="stop")])
+    with capture_logs() as logs:
+        events = _events()
+    assert [e.text for e in events[:-1]] == ["a" * limit, "b"]
+    text = events[-1].response.text
+    assert len(text) == limit
+    assert text.endswith(base.TRUNCATION_MARKER)
+    assert any(e["event"] == "harness.llm.response_truncated" for e in logs)
+
+
+@pytest.mark.parametrize("field", ["content", "reasoning_content"])
+def test_ut05_29_astream_text_cap_while_consuming(
+    sse: _SseServer, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    """UT05-29 a buffer passing 1,000,000 chars raises at once: no later delta, no Done."""
+    made = _spy_clients(monkeypatch)
+    limit = base.MAX_RESPONSE_TEXT_CHARS
+    sse.stream([_chunk({field: "a" * limit}), _chunk({field: "b"}), _chunk({"content": "late"})])
+    got, exc = _events_until_error()
+    assert isinstance(exc, OutputValidationError)
+    assert str(exc) == "response text exceeds limit"
+    assert exc.context["client"] == "local-30b"
+    assert got == ([base.TextDelta("a" * limit)] if field == "content" else [])
+    assert made[0].is_closed
+    assert sse.streams[0].closed
+
+
+def test_ut05_29_astream_tool_call_count_cap(sse: _SseServer) -> None:
+    """UT05-29 64 tool-call indices map; the 65th index raises as soon as it appears."""
+    calls = [_frag(i, "{}", f"call_{i}", "run_sql") for i in range(base.MAX_TOOL_CALLS)]
+    sse.stream([_chunk({"tool_calls": [call]}) for call in calls])
+    events = _events()
+    assert len(events[-1].response.tool_calls) == 64
+    extra = _frag(base.MAX_TOOL_CALLS, "{}", "call_x", "run_sql")
+    chunks = [_chunk({"tool_calls": [call]}) for call in [*calls, extra]]
+    sse.stream([*chunks, _chunk({"content": "late"})])
+    got, exc = _events_until_error()
+    assert isinstance(exc, OutputValidationError)
+    assert str(exc) == "response has more than 64 tool calls"
+    assert len(got) == 64
+
+
+def test_ut05_29_astream_tool_arguments_cap(sse: _SseServer) -> None:
+    """UT05-29 one call's arguments passing 1,000,000 chars raise while streaming."""
+    limit = base.MAX_RESPONSE_TEXT_CHARS
+    sse.stream(
+        [
+            _chunk({"tool_calls": [_frag(0, "x" * limit, "call_a", "run_sql")]}),
+            _chunk({"tool_calls": [_frag(0, "y")]}),
+        ]
+    )
+    got, exc = _events_until_error()
+    assert isinstance(exc, OutputValidationError)
+    assert str(exc) == "tool call call_a arguments exceed limit"
+    assert len(got) == 1
+
+
+_BAD_CHUNKS = {
+    "index_negative": _chunk({"tool_calls": [_frag(-1, "{}", "call_a", "run_sql")]}),
+    # The SDK coerces "0" and true to ints like any lax pydantic field; these it cannot coerce.
+    "index_null": _chunk({"tool_calls": [_frag(None, "{}", "call_a", "run_sql")]}),
+    "index_fraction": _chunk({"tool_calls": [_frag(0.5, "{}", "call_a", "run_sql")]}),
+    "index_word": _chunk({"tool_calls": [_frag("first", "{}", "call_a", "run_sql")]}),
+    "first_fragment_no_id": _chunk({"tool_calls": [_frag(0, "{}")]}),
+    "arguments_int": _chunk({"tool_calls": [_frag(0, 5, "call_a", "run_sql")]}),
+    "content_list": _chunk({"content": ["x"]}),
+    "delta_null": _chunk(choices=[{"index": 0, "delta": None, "finish_reason": None}]),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_BAD_CHUNKS))
+def test_ut05_29_astream_malformed_chunk(sse: _SseServer, name: str) -> None:
+    """UT05-29 a malformed chunk ends the stream with OutputValidationError("malformed ...")."""
+    sse.stream([_chunk({"content": "ok"}), _BAD_CHUNKS[name]])
+    got, exc = _events_until_error()
+    assert isinstance(exc, OutputValidationError)
+    assert str(exc) == "malformed response"
+    assert got == [base.TextDelta("ok")]
+
+
+def test_ut05_29_astream_empty_stream_is_malformed(sse: _SseServer) -> None:
+    """UT05-29 a stream with no chunk at all yields no Done: the mapping finds no model."""
+    sse.stream([])
+    got, exc = _events_until_error()
+    assert (got, str(exc)) == ([], "malformed response")
+
+
+def test_ut05_29_astream_error_event_mid_stream(sse: _SseServer) -> None:
+    """UT05-29 an error mid-stream propagates translated (U05-30); no Done is yielded."""
+    sse.stream([_chunk({"content": "part"}), {"error": {"message": "boom"}}])
+    got, exc = _events_until_error()
+    assert isinstance(exc, ModelUnavailable)
+    assert got == [base.TextDelta("part")]
+
+
+def test_ut05_29_astream_status_error_translated(sse: _SseServer) -> None:
+    """UT05-29 an HTTP error at create() is translated like acomplete; nothing is yielded."""
+    sse.respond(401, {"error": {"message": "no"}})
+    got, exc = _events_until_error()
+    assert isinstance(exc, AuthError)
+    assert got == []
+
+
+def test_ut05_29_astream_transport_error_mid_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-29 a transport failure while reading the stream is ModelUnavailable, no Done."""
+
+    class _Broken(httpx2.AsyncByteStream):
+        async def __aiter__(self) -> Any:
+            yield _sse([_chunk({"content": "part"})], done=False)[0]
+            msg = "reset"
+            raise httpx2.ReadError(msg)
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, stream=_Broken(), request=request)
+
+    _serve(monkeypatch, handle)
+    got, exc = _events_until_error()
+    assert isinstance(exc, ModelUnavailable)
+    assert got == [base.TextDelta("part")]
+
+
+def test_ut05_29_astream_wrong_client_raises() -> None:
+    """UT05-29 a request for another client raises ConfigError before any call."""
+    with pytest.raises(ConfigError, match="sent to client local-30b"):
+        _events(_request(client="other"))
+
+
+def test_ut05_29_astream_deadline_per_chunk(sse: _SseServer) -> None:
+    """UT05-29 a stream slower than timeout_s ends in ModelUnavailable like APITimeoutError."""
+    sse.stream([_chunk({"content": "a"}), _chunk({"content": "b"})], delay_s=0.2)
+    got, exc = _events_until_error(_request(timeout_s=0.3))
+    assert isinstance(exc, ModelUnavailable)
+    assert exc.message == "openai call failed: APITimeoutError"
+    assert exc.__cause__ is None
+    assert got == [base.TextDelta("a")]
+    assert sse.streams[0].closed
+
+
+def test_ut05_29_astream_deadline_counts_consumer_time_without_cancelling_it(
+    sse: _SseServer,
+) -> None:
+    """UT05-29 consumer time counts toward the deadline but the consumer is never cancelled."""
+    sse.stream([_chunk({"content": "a"}), _chunk({"content": "b"})])
+    client = OpenAICompatClient(_cfg())
+    slept: list[str] = []
+
+    async def consume() -> None:
+        async for _event in client.astream(_request(timeout_s=0.2)):
+            await asyncio.sleep(0.3)  # would be cancelled if a timeout spanned the yield
+            slept.append("done")
+
+    with pytest.raises(ModelUnavailable, match="APITimeoutError"):
+        asyncio.run(consume())
+    assert slept == ["done"]
+
+
+def test_ut05_29_astream_consumer_aclose_closes_everything(
+    sse: _SseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT05-29 a consumer that stops early (aclose) closes the SDK stream and the HTTP client."""
+    made = _spy_clients(monkeypatch)
+    sse.stream([_chunk({"content": "a"}), _chunk({"content": "b"})])
+    client = OpenAICompatClient(_cfg())
+
+    async def first() -> Any:
+        stream = client.astream(_request())
+        event = await anext(stream)
+        await stream.aclose()  # type: ignore[attr-defined]
+        return event
+
+    assert asyncio.run(first()) == base.TextDelta("a")
+    assert made[0].is_closed
+    assert sse.streams[0].closed
+
+
+def test_ut05_29_astream_byte_cap_while_streaming(
+    sse: _SseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT05-29 the loopback byte cap applies to the streamed body while it is read (m2)."""
+    made = _spy_clients(monkeypatch)
+    monkeypatch.setattr(openai_compat, "MAX_RESPONSE_BYTES", 400)
+    sse.stream([_chunk({"content": "x" * 100}) for _ in range(10)])
+    got, exc = _events_until_error()
+    assert isinstance(exc, OutputValidationError)
+    assert str(exc) == "response body exceeds limit"
+    assert 0 < len(got) < 10
+    assert sse.streams[0].sent < 10
+    assert made[0].is_closed
+
+
+def test_ut05_29_astream_is_stream_capable() -> None:
+    """UT05-29 the adapter satisfies the StreamCapable protocol."""
+    assert isinstance(OpenAICompatClient(_cfg()), base.StreamCapable)
