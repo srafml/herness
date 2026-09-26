@@ -109,6 +109,10 @@ def _errors_of(
         obj = _json_of(resp)
     except json.JSONDecodeError as exc:
         return [("/", f"invalid JSON: {exc.msg}")]  # `msg` holds no part of the document
+    except RecursionError:
+        return [("/", "invalid JSON: nesting too deep")]
+    except ValueError:  # e.g. an integer too long to convert; its text may quote the input
+        return [("/", "invalid JSON: invalid value")]
     return _validate(obj, req.response_schema, model)
 
 
@@ -338,7 +342,7 @@ class ModelChain:
             raise last
         for i, key in enumerate(cands):
             try:
-                return await self._attempt(key, req, schema, client_for, tracer)
+                return await self._attempt(key, i == 0, req, schema, client_for, tracer)
             except HernessError as err:
                 reason = _reason(err)
                 if reason is None:
@@ -356,6 +360,7 @@ class ModelChain:
     async def _attempt(
         self,
         key: str,
+        first: bool,
         req: LLMRequest,
         schema: type[BaseModel] | None,
         client_for: Callable[[str], AsyncCompleter],
@@ -363,7 +368,8 @@ class ModelChain:
     ) -> tuple[LLMResponse, BaseModel | None]:
         """U08-38 steps 2a-2d on one candidate, always starting from the original ``req``."""
         info = self._registry.config(key)
-        timeout = req.timeout_s if key == req.client else info.timeout_s
+        # only the first candidate keeps the caller's timeout, and only for its own client
+        timeout = req.timeout_s if first and key == req.client else info.timeout_s
         req_k = req.model_copy(update={"client": key, "timeout_s": timeout})
         wrapped = _RetryingCompleter(client_for(key), policy_for_client(info), key, tracer)
         if schema is None and req.response_schema is None:

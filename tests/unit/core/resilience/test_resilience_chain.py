@@ -317,6 +317,22 @@ def test_ut08_37_open_breaker_with_due_probe_stays(
     assert chain.candidates() == ["local-small-cpu"]
 
 
+def test_ut08_37_probe_due_boundary(
+    env: ProcessState, fake_chain_registry, fake_gpu_state, fake_clock
+) -> None:
+    """UT08-37 at exactly `now == retry_at` the probe is due: the key stays; 1 us before, not."""
+    chain = _chain(fake_chain_registry, fake_gpu_state, ["local-small-cpu"])
+    b = resilience.breaker("model:local-small-cpu")
+    b.force_open(ModelUnavailable("down"))
+    due = b.retry_at()
+    assert due is not None
+    fake_clock.advance((due - clock.now()).total_seconds() - 0.000001)
+    assert chain.candidates() == []
+    fake_clock.advance(0.000001)
+    assert clock.now() == due
+    assert chain.candidates() == ["local-small-cpu"]
+
+
 def test_ut08_37_egress_on_keeps_off_network(
     env: ProcessState, fake_chain_registry, fake_gpu_state, monkeypatch
 ) -> None:
@@ -544,3 +560,34 @@ def test_ut08_42_auth_drops_candidate_per_run(
         ("run_B", "local-small-cpu"),
     }
     assert chain.candidates() == ["local-small-cpu", "cpu-2"]  # no run filter when called directly
+
+
+def test_ut08_38_only_first_candidate_keeps_caller_timeout(
+    env: ProcessState, fake_chain_registry, fake_gpu_state
+) -> None:
+    """UT08-38 a later candidate equal to the caller's client gets its own timeout_s (2a)."""
+    fake_chain_registry.clients["local-30b-b"] = fake_chain_registry.clients["local-30b"]
+    chain = _chain(fake_chain_registry, fake_gpu_state, ["local-30b-b", "local-30b"])
+    first, second = Scripted("a", ModelRefused("no")), Scripted("b", VALID)
+    clients = _clients(**{"local-30b-b": first, "local-30b": second})
+    asyncio.run(chain.acomplete(_req(client="local-30b"), client_for=clients))
+    assert (first.calls[0].timeout_s, second.calls[0].timeout_s) == (90.0, 90.0)
+
+
+@pytest.mark.parametrize(
+    ("text", "line"),
+    [
+        ("[" * 100_000 + "]" * 100_000, "/: invalid JSON: nesting too deep"),
+        ("9" * 5000, "/: invalid JSON: invalid value"),
+    ],
+    ids=["deep_nesting", "long_integer"],
+)
+def test_ut08_36_undecodable_reply_is_repaired(env: ProcessState, text, line) -> None:
+    """UT08-36 a reply json.loads cannot decode (RecursionError, ValueError) is an invalid
+    reply with a fixed error line that quotes no part of the document."""
+    client = Scripted("c", text, VALID)
+    resp = asyncio.run(complete_validated(client, _req(schema=SCHEMA)))
+    assert resp.text == VALID
+    text = client.calls[1].messages[-1].parts[0].text
+    errors = text.split("Errors:\n")[1].split("\nReply")[0]
+    assert errors == line
