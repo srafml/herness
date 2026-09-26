@@ -1,4 +1,4 @@
-"""Ops store benchmarks (impl 02 BT02-06, BT02-07).
+"""Ops store benchmarks (impl 02 BT02-06, BT02-07; impl 05 BT05-08).
 
 Run: pytest -m "integration and slow" tests/bench.
 """
@@ -8,11 +8,15 @@ from __future__ import annotations
 import sqlite3
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from herness.core.ids import query_id as compute_query_id
+from herness.core.types.harness.evidence import Evidence
 from herness.store.ops import core, migrate
+from herness.store.ops.evidence import record_evidence, record_evidence_use
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -49,3 +53,33 @@ def test_bt02_07_fresh_migration_under_2_s(ops_store: Path) -> None:
     sys.stderr.write(f"BT02-07 fresh migrate={elapsed * 1000:.1f} ms ({len(report.applied)})\n")
     assert report.applied
     assert elapsed < 2.0
+
+
+def test_bt05_08_evidence_and_use_pair_write_p95(ops_store: Path) -> None:
+    """BT05-08 10,000 evidence + evidence_use insert pairs on a WAL ops store: p95 < 10 ms."""
+    migrate()
+    build_id = "20260101-000000-ABCDEF"
+    used_at = datetime(2026, 9, 26, 10, tzinfo=UTC)
+    durations: list[float] = []
+    for i in range(10_000):
+        sql = f"select {i} as n"
+        ev = Evidence(
+            query_id=compute_query_id(sql, {}, build_id),
+            run_id="run_1",
+            build_id=build_id,
+            sql=sql,
+            params={},
+            result_hash="a" * 64,
+            row_count=1,
+            result_sample=[{"n": i}],
+            executed_at=used_at,
+            duration_ms=1,
+        )
+        start = time.perf_counter()
+        record_evidence(ev)
+        record_evidence_use(ev.query_id, "run_1", "task_1", used_at)
+        durations.append(time.perf_counter() - start)
+    durations.sort()
+    p95 = durations[int(0.95 * (len(durations) - 1))]
+    sys.stderr.write(f"BT05-08 p95={p95 * 1000:.3f} ms\n")
+    assert p95 < 0.010

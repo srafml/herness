@@ -48,6 +48,16 @@ from .ingest import (
 )
 
 # isort: split
+# 05 evidence
+from .evidence import (
+    finding_statuses,
+    get_evidence,
+    record_evidence,
+    record_evidence_use,
+    scrub_record_from_evidence,
+)
+
+# isort: split
 # 10 privacy
 from .privacy import (
     DeletionRequest,
@@ -89,6 +99,12 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "mark_slice_failed",
     "get_file_ingest",
     "record_file_ingest",
+    # 05 evidence
+    "record_evidence",
+    "record_evidence_use",
+    "get_evidence",
+    "finding_statuses",
+    "scrub_record_from_evidence",
     # 10 privacy
     "DeletionRequest",
     "create_deletion_request",
