@@ -96,6 +96,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design spec's module t
 | `herness/enrich/labels.py` | Labels store and `label_check` sync | `LabelStore`, `sync_label_checks`, `gold_digest` | L3 | `pyarrow` | 380 |
 | `herness/enrich/review_items.py` | Enrichment helpers over impl 02's `review_item` functions (paging, idempotent creation, open counts) | `iter_review_items`, `create_if_absent`, `open_label_counts` | L3 | — | 160 |
 | `herness/enrich/resolve.py` | `resolve` stage, `decision_wide`, spot-checks, escalation queue query | `resolve_frame`, `escalation_queue`, `run_resolve`, `decision_wide_sql`, `select_spot_checks` | L3 | `duckdb` | 380 |
+| `herness/enrich/_spot_checks.py` | Private sibling of `resolve` (T03-20 spec note): the nightly spot-check selection of U03-81 (its SQL over `enrich_resolved`, per-question `n`, uniform/band/fill pick order and the `label_check` payloads), split off for the 380-line budget of `resolve.py`, which re-exports `select_spot_checks` as its public name | none (private; `select_spot_checks` re-exported by `resolve`) | L3 | `duckdb` | 150 |
 | `herness/enrich/sql/resolve_decisions.sql` | Set-based resolution over cache + labels | SQL file | — | — | 160 |
 | `herness/enrich/decide_stage.py` | `decide-primary`, `decide-escalate`, LLM escalation | `run_decide_primary`, `run_decide_escalate`, `run_llm_escalation`, `build_inputs` | L3 | `duckdb` | 390 |
 | `herness/enrich/ensemble_stage.py` | Deep-mode band selection and pooling | `ensemble_band`, `run_ensemble_pool` | L3 | `duckdb` | 260 |
