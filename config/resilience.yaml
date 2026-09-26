@@ -47,7 +47,7 @@ resilience:
   gpu:
     compose_cmd: [wsl.exe, -d, herness, --, docker, compose, --env-file, /opt/herness/docker.env]
     compose_file: /mnt/d/herness/docker/compose.yaml     # WSL path (spec 10 §5.6.4)
-    vram_check_cmd: [nvidia-smi, --query-gpu=memory.used, --format=csv,noheader,nounits]   # Windows nvidia-smi
+    vram_check_cmd: [nvidia-smi, --query-gpu=memory.used, "--format=csv,noheader,nounits"]   # Windows nvidia-smi
     vram_free_threshold_mb: 2000
     stop_timeout_s: 120
     warmup_timeout_s: 120

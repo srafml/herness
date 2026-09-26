@@ -19,13 +19,16 @@ _YAML_BLOCK = re.compile(r"## 7\. Configuration.*?```yaml\n(.*?)```", re.DOTALL)
 
 
 def _design_yaml() -> dict[str, Any]:
-    """The design 08 §7 YAML block with the R-43 and R-53 amendments applied."""
+    """The design 08 §7 YAML block with the R-43, R-53 and T08-17 C1 amendments applied."""
     match = _YAML_BLOCK.search(DESIGN.read_text(encoding="utf-8"))
     assert match is not None
     raw: dict[str, Any] = yaml.safe_load(match.group(1))
     services = raw["resilience"]["gpu"]["classes"]["decider"]["services"]
     services["openjev"]["health"]["bearer_secret"] = "secret:OPENJEV_API_KEY"  # noqa: S105 - reference (R-53)
     raw["schedule"]["jobs"][0]["job"]["gpu_class"] = "none"  # R-43
+    # T08-17 C1 (spec note on design 08 §7): the unquoted flow item splits at its commas.
+    vram = ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"]
+    raw["resilience"]["gpu"]["vram_check_cmd"] = vram
     return raw
 
 
