@@ -34,14 +34,17 @@ def _isolate(fake_keyring: MemoryKeyring) -> Iterator[None]:
     c.reset_config()
 
 
-def _dotenv_config(tmp_path: Path, profile: str = "local") -> c.HernessConfig:
+def _dotenv_config(
+    tmp_path: Path, profile: str = "local", env: dict[str, str] | None = None
+) -> c.HernessConfig:
     cfg_dir = write_full_config(tmp_path)
     herness = cfg_dir / "herness.yaml"
     text = herness.read_text("utf-8").replace(
         "security:\n", "security:\n  secrets: {backend: dotenv}\n"
     )
     herness.write_text(text, "utf-8")
-    return c.init_config(profile, config_dir=cfg_dir, env={})  # type: ignore[arg-type]
+    # C12 (T10-12) refuses dotenv at load unless the load env has HERNESS_ENV=dev or synth.
+    return c.init_config(profile, config_dir=cfg_dir, env=env or {})  # type: ignore[arg-type]
 
 
 # --- UT10-28 resolve, exists, referenced_secret_names --------------------------------------------
@@ -218,7 +221,7 @@ def test_ut10_31_resolve_through_dotenv_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT10-31 backend: dotenv in config with HERNESS_ENV=dev: resolve reads .env; set refused."""
-    _dotenv_config(tmp_path)
+    _dotenv_config(tmp_path, env={"HERNESS_ENV": "dev"})
     _write_env(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HERNESS_ENV", "dev")
