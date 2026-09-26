@@ -17,7 +17,7 @@
 - Python `>=3.12,<3.13`; `[tool.uv] required-version = "==0.11.8"` (the uv on this machine; O-07).
 - All installs from `uv.lock`: `uv sync --frozen`; editable install in development (R-58).
 - `mypy --strict` must report 0 errors on every commit; `ruff check` and `ruff format --check` must report 0 issues.
-- Line budgets (impl 00 §2): `errors.py` ≤ 340, `time.py` ≤ 200, `ids.py` ≤ 330, `numbers.py` ≤ 320, `logging.py` ≤ 260, `_log_pipeline.py` ≤ 360, `types/__init__.py` ≤ 150, `types/_ownership.py` ≤ 120, `tools/check_type_ownership.py` ≤ 390. Function complexity ≤ 10 (ruff `C901`), ≤ 6 arguments (`PLR0913`).
+- Line budgets (impl 00 §2): `errors.py` ≤ 380, `time.py` ≤ 200, `ids.py` ≤ 330, `numbers.py` ≤ 320, `logging.py` ≤ 260, `_log_pipeline.py` ≤ 360, `types/__init__.py` ≤ 150, `types/_ownership.py` ≤ 120, `tools/check_type_ownership.py` ≤ 390. Function complexity ≤ 10 (ruff `C901`), ≤ 6 arguments (`PLR0913`).
 - Coverage of each `herness/core` file ≥ 90 % line and ≥ 85 % branch.
 - Every test function name contains its ID with `_` (for example `test_ut00_55_...`) so `pytest -k UT00_55` selects it; the first line of its docstring starts with the ID (`"""UT00-55 ..."""`). Every test file sets module-level `pytestmark` (`pytest.mark.unit`, or `integration`, or `[integration, slow]` for benchmarks).
 - Ruff `EM101/EM102` is on: assign the message to `msg` before `raise`. Ruff `TRY003` is ignored globally.

@@ -57,7 +57,7 @@ This spec builds everything the design spec assigns to `herness/store/` and `her
 | Path | Purpose | Public symbols | Layer | Extra imports | Line budget |
 |------|---------|----------------|-------|---------------|-------------|
 | `herness/store/__init__.py` | Package marker | none | L1 | — | 5 |
-| `herness/store/errors.py` | Store error subclasses | `NotFoundError`, `ReviewItemConflict`, `LakeContractError`, `LakeStateError`, `MigrationError` | L1 | — | 60 |
+| `herness/store/errors.py` | Store error subclasses | `NotFoundError`, `ReviewItemConflict`, `LakeContractError`, `LakeStateError`, `MigrationError` | L1 | — | 70 |
 | `herness/store/layout.py` | Resolve data paths from config | `DataLayout`, `data_layout` | L1 | — | 70 |
 | `herness/store/lake.py` | Lake contract validation and `LakeWriter` | `META_COLUMNS`, `validate_name`, `partition_dir`, `lake_glob`, `LakeFileSet`, `LakeWriter` | L1 | `pyarrow`, `pyarrow.parquet`, `pyarrow.compute` | 380 |
 | `herness/store/lake_purge.py` | Record deletion rewrite and partition retention for the lake | `LakePurgeResult`, `purge_record_ids`, `LakeRetentionResult`, `purge_partitions_before` | L1 | `pyarrow` | 200 |
