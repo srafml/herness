@@ -37,10 +37,13 @@ from .shared import (
     ReviewKind,
     ReviewStatus,
     approved_mapping_suggestions,
+    count_review_items,
     create_review_item,
+    create_review_item_if_absent,
     decide_review_item,
     get_review_item,
     list_review_items,
+    update_review_payload,
 )
 
 # isort: split
@@ -145,9 +148,12 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "ReviewKind",
     "ReviewStatus",
     "create_review_item",
+    "create_review_item_if_absent",
     "get_review_item",
     "list_review_items",
+    "count_review_items",
     "decide_review_item",
+    "update_review_payload",
     "approved_mapping_suggestions",
     # 01 ingest
     "Watermark",

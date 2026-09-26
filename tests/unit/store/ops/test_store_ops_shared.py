@@ -1,5 +1,6 @@
-"""Unit tests for herness.store.ops.shared (impl 02 U02-55 … U02-60; UT02-43 … UT02-47,
-UT02-75, UT02-76, UT02-79). IT02-11 (service map over approved suggestions) is T02-15's.
+"""Unit tests for herness.store.ops.shared (impl 02 U02-55 … U02-60, U02-130 … U02-132;
+UT02-43 … UT02-47, UT02-72 … UT02-76, UT02-79). IT02-11 (service map over approved suggestions)
+is T02-15's.
 """
 
 from __future__ import annotations
@@ -8,6 +9,7 @@ import datetime
 import json
 import re
 import sqlite3
+import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import MappingProxyType
@@ -25,10 +27,13 @@ from herness.store.ops.migrate import migrate
 from herness.store.ops.shared import (
     ReviewItem,
     approved_mapping_suggestions,
+    count_review_items,
     create_review_item,
+    create_review_item_if_absent,
     decide_review_item,
     get_review_item,
     list_review_items,
+    update_review_payload,
 )
 
 pytestmark = pytest.mark.unit
@@ -509,3 +514,188 @@ def test_ut02_79_payload_match_with_decided_after(store: Path, audit_calls: Audi
         decide_review_item(item_id, "approved", decided_by=USER, now=_t(1))
     got = list_review_items(decided_after=T0, payload_match={"purpose": "gold"})
     assert [i.item_id for i in got] == [a]
+
+
+# --- UT02-72 ----------------------------------------------------------------------------------
+
+
+def test_ut02_72_create_if_absent_reuses_a_blocking_item(
+    store: Path, audit_calls: AuditCalls
+) -> None:
+    """UT02-72 create_if_absent reuses a blocking item; a new one appears once none block."""
+    payload = {"service": "payments", "target": "vendor_x"}
+    keys = ("service", "target")
+    first_id, created = create_review_item_if_absent(
+        "mapping_suggestion", payload, match_keys=keys, now=T0
+    )
+    assert created is True
+    again = create_review_item_if_absent("mapping_suggestion", payload, match_keys=keys, now=_t(1))
+    assert again == (first_id, False)
+
+    decide_review_item(first_id, "rejected", decided_by=USER, now=_t(2))
+    still_blocked = create_review_item_if_absent(
+        "mapping_suggestion",
+        payload,
+        match_keys=keys,
+        blocking_statuses=("pending", "rejected"),
+        now=_t(3),
+    )
+    assert still_blocked == (first_id, False)
+
+    fourth_id, created4 = create_review_item_if_absent(
+        "mapping_suggestion", payload, match_keys=keys, now=_t(4)
+    )
+    assert created4 is True
+    assert fourth_id != first_id
+    assert len(list_review_items(kind="mapping_suggestion")) == 2  # first (rejected) + fourth
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        (),
+        ("a.b",),
+        ("missing",),
+        ("service", "service"),
+        tuple(f"k{n}" for n in range(9)),
+    ],
+)
+def test_ut02_72_bad_match_keys_raise_config_error(store: Path, keys: tuple[str, ...]) -> None:
+    """UT02-72 an empty, malformed, missing, duplicate or over-long match_keys is a ConfigError."""
+    payload = {f"k{n}": "v" for n in range(9)} | {"service": "payments"}
+    with pytest.raises(ConfigError):
+        create_review_item_if_absent("label_check", payload, match_keys=keys, now=T0)
+    assert list_review_items() == []
+
+
+def test_ut02_72_concurrent_create_if_absent_makes_one_item(store: Path) -> None:
+    """UT02-72 two threads racing create_if_absent with equal match values create one item."""
+    payload = {"question": "q1", "purpose": "gold"}
+    keys = ("question", "purpose")
+    results: list[tuple[str, bool]] = []
+    barrier = threading.Barrier(2)
+
+    def worker() -> None:
+        barrier.wait(5)
+        results.append(
+            create_review_item_if_absent("label_check", payload, match_keys=keys, now=T0)
+        )
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert len(results) == 2
+    assert {item_id for item_id, _ in results} == {results[0][0]}
+    assert sorted(created for _, created in results) == [False, True]
+    assert len(list_review_items(kind="label_check")) == 1
+
+
+# --- UT02-73 ----------------------------------------------------------------------------------
+
+
+def test_ut02_73_counts_ungrouped_and_grouped_by_payload_key(
+    store: Path, audit_calls: AuditCalls
+) -> None:
+    """UT02-73 count pending label_check items ungrouped and grouped by `question`."""
+    for question in ("q1", "q1", "q1", "q2"):
+        create_review_item("label_check", {"question": question}, now=T0)
+    approved = create_review_item("label_check", {"question": "q1"}, now=_t(1))
+    decide_review_item(approved, "approved", decided_by=USER, now=_t(2))
+
+    assert count_review_items(kind="label_check", status="pending") == {"": 4}
+    grouped = count_review_items(kind="label_check", status="pending", group_by_payload="question")
+    assert grouped == {"q1": 3, "q2": 1}
+    assert count_review_items(kind="label_check", status="approved") == {"": 1}
+    assert count_review_items(kind="weight_change", status="pending") == {"": 0}
+    with pytest.raises(ConfigError):
+        count_review_items(kind="label_check", status="pending", group_by_payload="x'")
+
+
+def test_ut02_73_bad_kind_or_status_raise_config_error(store: Path) -> None:
+    """UT02-73 an unknown kind or status raises ConfigError before any query."""
+    with pytest.raises(ConfigError):
+        count_review_items(kind="bogus", status="pending")  # type: ignore[arg-type]
+    with pytest.raises(ConfigError):
+        count_review_items(kind="label_check", status="bogus")  # type: ignore[arg-type]
+
+
+def test_ut02_73_missing_row_falls_back_to_zero(
+    store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT02-73 an ungrouped count with no row from the store reports zero (defensive branch)."""
+    monkeypatch.setattr(shared, "read_one", lambda *a, **k: None)
+    assert count_review_items(kind="label_check", status="pending") == {"": 0}
+
+
+# --- UT02-74 ----------------------------------------------------------------------------------
+
+
+def test_ut02_74_replaces_payload_field_on_any_status(store: Path, audit_calls: AuditCalls) -> None:
+    """UT02-74 update_review_payload blanks a field on pending and decided items alike."""
+    pending_id = create_review_item(
+        "memory_write", {"memory_id": "mem_1", "content": "secret"}, now=T0
+    )
+    approved_id = create_review_item(
+        "memory_write", {"memory_id": "mem_2", "content": "secret"}, now=T0
+    )
+    decide_review_item(approved_id, "rejected", decided_by="system", now=_t(1))
+    before = get_review_item(approved_id)
+
+    update_review_payload(pending_id, {"content": ""})
+    update_review_payload(approved_id, {"content": ""})
+
+    pending_after = get_review_item(pending_id)
+    approved_after = get_review_item(approved_id)
+    assert dict(pending_after.payload) == {"memory_id": "mem_1", "content": ""}
+    assert dict(approved_after.payload) == {"memory_id": "mem_2", "content": ""}
+    assert (approved_after.status, approved_after.decided_by, approved_after.decided_at) == (
+        before.status,
+        before.decided_by,
+        before.decided_at,
+    )
+
+
+def test_ut02_74_unknown_id_and_bad_key(store: Path) -> None:
+    """UT02-74 an unknown ID raises NotFoundError; a bad or empty field mapping is ConfigError."""
+    item_id = create_review_item("memory_write", {"memory_id": "mem_3", "content": "x"}, now=T0)
+    unknown = "rev_" + "2" * 26
+    with pytest.raises(NotFoundError) as missing:
+        update_review_payload(unknown, {"content": ""})
+    assert missing.value.key == unknown
+    with pytest.raises(ConfigError):
+        update_review_payload(item_id, {"bad-key": ""})
+    with pytest.raises(ConfigError):
+        update_review_payload(item_id, {})
+    with pytest.raises(ConfigError):
+        update_review_payload(item_id, {f"k{n}": "v" for n in range(33)})
+    with pytest.raises(ConfigError):
+        update_review_payload("rev_<script>", {"content": ""})
+    assert dict(get_review_item(item_id).payload) == {"memory_id": "mem_3", "content": "x"}
+
+
+def test_ut02_74_log_has_key_names_only(store: Path) -> None:
+    """UT02-74 the update log line carries field key names, never values."""
+    item_id = create_review_item(
+        "memory_write", {"memory_id": "mem_4", "content": "secret"}, now=T0
+    )
+    with capture_logs() as logs:
+        update_review_payload(item_id, {"content": "top-secret-value"})
+    (line,) = [e for e in logs if e["event"] == "store.ops.review_payload_updated"]
+    assert line["keys"] == ["content"]
+    assert "top-secret-value" not in str(line)
+
+
+def test_ut02_74_with_conn_joins_the_callers_transaction(store: Path) -> None:
+    """UT02-74 `conn` runs the update inside the caller's own `run_write` transaction."""
+    item_id = create_review_item("memory_write", {"memory_id": "mem_5", "content": "x"}, now=T0)
+
+    def fn(conn: sqlite3.Connection) -> None:
+        update_review_payload(item_id, {"content": "y"}, conn=conn)
+        msg = "caller fails"
+        raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError):
+        core.run_write(fn, op="test_update_payload")
+    assert dict(get_review_item(item_id).payload) == {"memory_id": "mem_5", "content": "x"}

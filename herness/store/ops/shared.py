@@ -8,10 +8,9 @@ Messages, hints and log fields carry identifiers only, never payload or note tex
 
 from __future__ import annotations
 
-import json
 import re
 import sqlite3
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
@@ -24,20 +23,21 @@ from herness.core.ids import new_ulid
 from herness.core.logging import get_logger
 from herness.store.errors import NotFoundError, ReviewItemConflict
 
+from . import _review_common
 from .core import dump_json, load_json, read_all, read_one, run_write
+
+_is_count = _review_common.is_count  # pure validators live in _review_common (budget, T02-24)
+_is_json_object = _review_common.is_json_object
+_check_decision = _review_common.check_decision
 
 type ReviewKind = Literal["mapping_suggestion", "label_check", "memory_write", "weight_change"]
 type ReviewStatus = Literal["pending", "approved", "rejected"]
 
 _KINDS: Final[frozenset[str]] = frozenset(get_args(ReviewKind.__value__))
 _STATUS_ORDER: Final[tuple[str, ...]] = get_args(ReviewStatus.__value__)
-_DECISIONS: Final = frozenset({"approved", "rejected"})
 _ID_RE: Final = re.compile(r"rev_[0-9A-HJKMNP-TV-Z]{26}")
-_USER_REF_RE: Final = re.compile(r"[0-9a-f]{32}")
-_MATCH_KEY_RE: Final = re.compile(r"[a-z_][a-z0-9_]{0,63}")
 _MAX_ID: Final = "rev_" + "Z" * 26  # above every valid item_id: a plain datetime cursor
 _MAX_CURSOR_ID_CHARS: Final = 64
-_MAX_NOTE_CHARS: Final = 2000
 _MAX_MATCH_KEYS: Final = 8
 _MAX_MATCH_VALUE_CHARS: Final = 1024
 _MAX_LIMIT: Final = 5000
@@ -82,7 +82,6 @@ _APPROVED_SUGGESTIONS: Final = (
     " FROM review_item WHERE kind = 'mapping_suggestion' AND status = 'approved'"
     " ORDER BY decided_at, item_id"
 )
-
 _log = get_logger("store.ops")
 
 
@@ -221,7 +220,7 @@ def _match_json(payload_match: object) -> str | None:
         and 1 <= len(payload_match) <= _MAX_MATCH_KEYS
         and all(
             isinstance(k, str)
-            and _MATCH_KEY_RE.fullmatch(k)
+            and _review_common.MATCH_KEY_RE.fullmatch(k)
             and isinstance(v, str)
             and len(v) <= _MAX_MATCH_VALUE_CHARS
             for k, v in payload_match.items()
@@ -233,10 +232,6 @@ def _match_json(payload_match: object) -> str | None:
         )
         raise ConfigError(msg)
     return dump_json(dict(payload_match), field="payload_match")
-
-
-def _is_count(value: object, low: int, high: int) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
 
 
 def list_review_items(  # noqa: PLR0913 - keyword-only filters fixed by impl 02 U02-58
@@ -268,28 +263,6 @@ def list_review_items(  # noqa: PLR0913 - keyword-only filters fixed by impl 02 
         ts, after_id = _cursor(decided_after)
         rows = read_all(_LIST_DECIDED, (*filters, ts, ts, after_id, limit), max_rows=_MAX_LIMIT)
     return [ReviewItem.from_row(row) for row in rows]
-
-
-def _check_decision(item_id: object, status: object, decided_by: object, note: object) -> None:
-    if not isinstance(item_id, str) or status not in _DECISIONS:
-        msg = "item_id must be a string and status approved or rejected"
-        raise ConfigError(msg)
-    if not (
-        isinstance(decided_by, str)
-        and (decided_by == "system" or _USER_REF_RE.fullmatch(decided_by))
-    ):
-        msg = "decided_by must be a 32-hex user_ref or system"
-        raise ConfigError(msg)
-    if note is not None and not (isinstance(note, str) and len(note) <= _MAX_NOTE_CHARS):
-        msg = f"note must be a string of at most {_MAX_NOTE_CHARS} characters"
-        raise ConfigError(msg)
-
-
-def _is_json_object(text: str) -> bool:
-    try:
-        return isinstance(json.loads(text), dict)
-    except (ValueError, RecursionError):
-        return False
 
 
 def decide_review_item(
@@ -347,3 +320,71 @@ def approved_mapping_suggestions() -> list[ReviewItem]:
 
     Raises StoreBusy, or SchemaViolation beyond the 100,000-row ``read_all`` cap."""
     return [ReviewItem.from_row(row) for row in read_all(_APPROVED_SUGGESTIONS)]
+
+
+def create_review_item_if_absent(
+    kind: ReviewKind,
+    payload: Mapping[str, object],
+    *,
+    match_keys: Sequence[str],
+    blocking_statuses: Collection[ReviewStatus] = ("pending",),  # type: ignore[assignment]
+    now: datetime,
+) -> tuple[str, bool]:
+    """Insert unless a blocking item shares ``match_keys`` values (U02-130, TH02-07)."""
+    keys = list(match_keys)
+    if not _review_common.keys_ok(keys, _MAX_MATCH_KEYS, payload):
+        msg = "match_keys must be 1-8 distinct keys present in the payload"
+        raise ConfigError(msg)
+    match = dump_json({k: payload[k] for k in keys}, field="match_keys")
+    statuses = _statuses_json(None, blocking_statuses)
+
+    def fn(tx: sqlite3.Connection) -> tuple[str, bool]:
+        row = tx.execute(_review_common.MATCH_LOOKUP, (kind, statuses, match)).fetchone()
+        if row is None:
+            return create_review_item(kind, payload, now=now, conn=tx), True
+        item_id = str(row["item_id"])
+        _log.debug("store.ops.review_item_exists", item_id=item_id, kind=kind)
+        return item_id, False
+
+    return run_write(fn, op="review_item_create_if_absent")
+
+
+def count_review_items(
+    *, kind: ReviewKind, status: ReviewStatus, group_by_payload: str | None = None
+) -> dict[str, int]:
+    """Counts of ``kind``/``status`` items, grouped by a payload key if given (U02-131)."""
+    if kind not in _KINDS or status not in _STATUS_ORDER:
+        msg = "unknown review item kind or status"
+        raise ConfigError(msg)
+    if group_by_payload is None:
+        row = read_one(_review_common.COUNT, (kind, status))
+        return {"": int(row[0])} if row else {"": 0}
+    if not _review_common.MATCH_KEY_RE.fullmatch(group_by_payload):
+        msg = "group_by_payload must match ^[a-z_][a-z0-9_]{0,63}$"
+        raise ConfigError(msg)
+    rows = read_all(_review_common.COUNT_GROUPED, ("$." + group_by_payload, kind, status))
+    return {str(row["k"]): int(row[1]) for row in rows}
+
+
+def update_review_payload(
+    item_id: str, fields: Mapping[str, object], *, conn: sqlite3.Connection | None = None
+) -> None:
+    """Replace named top-level payload fields; other columns unchanged (U02-132, R-54)."""
+    keys = list(fields)
+    if not (_is_id(item_id) and _review_common.keys_ok(keys, _review_common.MAX_FIELDS)):
+        msg = "item_id or fields is invalid"
+        raise ConfigError(msg)
+
+    def fn(tx: sqlite3.Connection) -> None:
+        row = tx.execute(_review_common.PAYLOAD_ONLY, (item_id,)).fetchone()
+        if row is None:
+            raise _not_found(item_id)
+        payload = load_json(row["payload"], field="payload")
+        if not isinstance(payload, dict):
+            msg = "review_item row has an invalid payload"
+            raise SchemaViolation(msg)
+        payload |= dict(fields)
+        tx.execute(_review_common.UPDATE_PAYLOAD, (dump_json(payload, field="payload"), item_id))
+        _log.info("store.ops.review_payload_updated", item_id=item_id, keys=keys)
+
+    _write(conn, fn, op="review_item_payload")
