@@ -126,11 +126,10 @@ class SqliteJobsBackend(WorkerSqlMixin):
         }
 
         def insert(conn: sqlite3.Connection) -> tuple[str, bool]:
-            if sched_check is not None:
-                seen = conn.execute(
-                    sql.SCHED_SEEN,
-                    {"sched_key": job.idem_key, **sched_check._asdict()},
-                ).fetchone()
+            if sched_check is not None:  # the fire's own key, not the job's (sync:<source>)
+                key = f"sched:{sched_check.schedule}:{sched_check.fire_at}"
+                fire = {"sched_key": key, **sched_check._asdict()}
+                seen = conn.execute(sql.SCHED_SEEN, fire).fetchone()
                 if seen is not None:
                     return str(seen[0]), False
             row = conn.execute(sql.INSERT, params).fetchone()

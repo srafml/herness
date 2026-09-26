@@ -164,6 +164,35 @@ def test_ut08_53_sched_check_matches_the_payload_fire(backend: SqliteJobsBackend
     assert _count() == 2
 
 
+def test_ut08_53_sync_mode_schedule_fires_again(backend: SqliteJobsBackend) -> None:
+    """UT08-53 a sync-mode schedule (idem `sync:<source>`, U08-72): an earlier finished fire
+    does not block the next fire; the same fire again is deduped."""
+    f1, f2 = "2026-09-01T06:00:00.000000Z", "2026-09-01T07:00:00.000000Z"
+
+    def fire(job_id: str, at: str) -> tuple[str, bool]:
+        job = _new(job_id, idem="sync:jira", payload={"schedule": "sync.jira", "fire_at": at})
+        return backend.insert_job(job, sched_check=SchedCheck("sync.jira", at))
+
+    assert fire("job_1", f1) == ("job_1", True)
+    _set("job_1", status="done", finished_at=clock.format_utc(T0))
+    assert fire("job_2", f2) == ("job_2", True)
+    assert fire("job_3", f2) == ("job_2", False)
+    _set("job_2", status="done", finished_at=clock.format_utc(T0))
+    assert fire("job_4", f2) == ("job_2", False)
+    assert _count() == 2
+
+
+def test_ut08_53_sched_key_alone_blocks_the_fire(backend: SqliteJobsBackend) -> None:
+    """UT08-53 a finished job holding `sched:<name>:<fire_at>` blocks that fire even when its
+    payload carries no `schedule`."""
+    fire = "2026-09-01T02:00:00.000000Z"
+    _add(backend, _new("job_a", idem=f"sched:nightly:{fire}"))
+    _set("job_a", status="done")
+    again = _new("job_b", idem="other")
+    assert backend.insert_job(again, sched_check=SchedCheck("nightly", fire)) == ("job_a", False)
+    assert _count() == 1
+
+
 # --- claim_job / claimable_counts -------------------------------------------------------------
 
 
