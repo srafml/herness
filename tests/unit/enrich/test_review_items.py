@@ -17,7 +17,7 @@ from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.errors import ConfigError
 from herness.enrich import review_items
-from herness.store.ops import ReviewItem, create_review_item, decide_review_item
+from herness.store.ops import ReviewItem, create_review_item, decide_review_item, list_review_items
 from herness.store.ops import shared as ops_shared
 
 pytestmark = pytest.mark.unit
@@ -52,11 +52,10 @@ def test_ut03_136_iter_review_items_pages_and_orders(
         decide_review_item(item_id, "approved", decided_by=USER, now=_t(3_000 + i))
 
     calls: list[int] = []
-    real_list_review_items = review_items.list_review_items
 
     def spy(**kwargs: Any) -> list[ReviewItem]:
         calls.append(1)
-        return real_list_review_items(**kwargs)
+        return list_review_items(**kwargs)
 
     monkeypatch.setattr(review_items, "list_review_items", spy)
 
