@@ -92,6 +92,18 @@ from .runs import (
 )
 
 # isort: split
+# 06 findings
+from .findings import (
+    get_findings,
+    insert_finding,
+    list_task_findings,
+    query_findings,
+    query_verified_findings_recent,
+    scrub_record_from_findings,
+    transition_finding,
+)
+
+# isort: split
 # 09 chat
 from .chat import (
     ChatMessageRow,
@@ -185,6 +197,14 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "ready_tasks",
     "count_open",
     "count_tasks",
+    # 06 findings
+    "insert_finding",
+    "transition_finding",
+    "query_findings",
+    "get_findings",
+    "list_task_findings",
+    "query_verified_findings_recent",
+    "scrub_record_from_findings",
     # 09 chat
     "create_chat_session",
     "append_chat_message",
