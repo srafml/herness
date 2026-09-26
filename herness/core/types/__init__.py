@@ -79,6 +79,7 @@ from herness.core.types.memory import (
     SimilarOutcome,
     Status,
 )
+from herness.core.types.reports import ReportManifest
 from herness.core.types.swarm import (
     CHAT_EVENT_ADAPTER,
     SKEPTIC_CHECKS,
@@ -137,11 +138,11 @@ __all__: tuple[str, ...] = (  # noqa: RUF022 - code-point order, not isort order
     "OpsHandle", "Paragraph", "PlannedTask", "PolicyName", "PriorContext", "PriorRecommendation",
     "Provenance", "Question", "QuestionSet", "QuestionType", "RankedEntity", "ReasoningPart",
     "RecallHit", "RecommendationDraft", "RecommendationItem", "RejectReason", "ReportDraft",
-    "RequestMeta", "Role", "RunKind", "SKEPTIC_CHECKS", "ScopeEntityType", "Section", "SectionId",
-    "ServiceName", "SimilarOutcome", "SkepticCheck", "Specialty", "SqlLimits", "Status",
-    "SwarmTaskState", "SystemBlock", "TaskBudget", "TaskInputs", "TaskSpec", "TextPart",
-    "TokenEvent", "Tool", "ToolCall", "ToolCallPart", "ToolContext", "ToolErrorInfo", "ToolEvent",
-    "ToolResult", "ToolResultPart", "ToolSpec", "TraceEmitter", "UncitedSpan", "Usage",
+    "ReportManifest", "RequestMeta", "Role", "RunKind", "SKEPTIC_CHECKS", "ScopeEntityType",
+    "Section", "SectionId", "ServiceName", "SimilarOutcome", "SkepticCheck", "Specialty",
+    "SqlLimits", "Status", "SwarmTaskState", "SystemBlock", "TaskBudget", "TaskInputs", "TaskSpec",
+    "TextPart", "TokenEvent", "Tool", "ToolCall", "ToolCallPart", "ToolContext", "ToolErrorInfo",
+    "ToolEvent", "ToolResult", "ToolResultPart", "ToolSpec", "TraceEmitter", "UncitedSpan", "Usage",
     "VectorHandle", "VectorHit", "VerifiableItem", "VerificationEvent", "VerificationRecord",
     "VerificationResult", "WarehouseHandle",
 )

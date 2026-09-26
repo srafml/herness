@@ -1,0 +1,19 @@
+# Dashboard, chat, report and CLI defaults (design 09 §7; impl 09 U09-02). Sensitivity: internal.
+version: 1
+app:
+  cache_ttl_s: {warehouse: 3600, ops: 10}
+  current_recheck_s: 60
+  page_row_limit: 5000
+chat:
+  max_question_chars: 4000
+  poll_queued_s: 15
+reports:
+  formats: [html, md]            # pdf optional
+  top_n: 10
+  strict_numbers: true
+  evidence_sample_rows: 20
+  allowed_numeral_patterns: ['\b(19|20)\d{2}\b', '\d{4}-\d{2}-\d{2}', 'Q[1-4] \d{4}',
+                             '(INC|CHG|PRB)\d+', '[A-Z][A-Z0-9]+-\d+']   # shared with the Verifier (00 §12.1)
+  prior_outcomes_window_days: [60, 120]
+cli:
+  poll_interval_s: 2
