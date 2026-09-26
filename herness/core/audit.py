@@ -27,6 +27,7 @@ from herness.core.errors import ConfigError, FatalError, SchemaViolation, StoreB
 from herness.core.ids import canonical_json, is_valid_ulid, new_ulid, sha256_hex
 from herness.core.logging import get_logger
 from herness.core.redact_patterns import build_detectors
+from herness.core.resilience.metrics import record_counter
 from herness.core.settings import RedactionConfig
 
 __all__ = ["AuditEvent", "ChainReport", "append_jsonl_locked", "audit", "last_secret_set_times"]
@@ -247,7 +248,7 @@ def _audit_locked(
             record["ts"] = clock.format_utc(now)
             path = logs / f"audit-{clock.utc_day(now)}.jsonl"
             append_jsonl_locked(path, build, lock_path=lock, chain_glob=_CHAIN_GLOB, lock_held=True)
-    # T08-05: herness_audit_lines_total{event} += 1
+    record_counter("herness_audit_lines_total", component="audit", labels={"event": event})
 
 
 def audit(event: AuditEvent, actor: str, **fields: Any) -> None:  # noqa: ANN401 - spec signature

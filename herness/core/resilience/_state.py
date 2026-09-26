@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
+from herness.core.resilience._metric_buffer import MetricBuffer
 
 if TYPE_CHECKING:
     from herness.core.jobs.ports import JobContext, JobsBackend
@@ -54,8 +55,7 @@ class ProcessState:
     handlers: dict[JobKind, Callable[[JobContext], JobOutcome]] = field(default_factory=dict)
     fault_plan: FaultPlan | _NotLoaded | None = NOT_LOADED
     faults_enabled: bool = False
-    # Placeholder: T08-05 (U08-19) replaces this with its `MetricBuffer()`.
-    metric_buffer: object = field(default_factory=object)
+    metric_buffer: MetricBuffer = field(default_factory=MetricBuffer)
     auth_dropped: set[tuple[str, str]] = field(default_factory=set)
     rng: random.Random = field(default_factory=secrets.SystemRandom)
     sleep: Callable[[float], None] = time.sleep
@@ -92,7 +92,7 @@ def _flush_metrics_at_exit() -> None:
     """Flush buffered metrics once at interpreter exit (U08-22)."""
     try:
         metrics = importlib.import_module("herness.core.resilience.metrics")
-    except ModuleNotFoundError:  # the metrics module arrives with T08-05
+    except ModuleNotFoundError:  # defensive: exit must never fail on a partial install
         return
     metrics.flush_metrics()
 

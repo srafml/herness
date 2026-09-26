@@ -193,6 +193,14 @@ from .closed_loop import (
 )
 
 # isort: split
+# 08 resilience
+from .resilience import purge_events
+
+# isort: split
+# 08 metrics
+from .metrics import purge_metric_samples, record_metric_samples
+
+# isort: split
 # 09 ui_reads
 from .ui_reads import (
     UiDecisionRow,
@@ -278,6 +286,10 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "treated_targets", "recent_runs_with_recommendations", "accepted_since",
     "outcomes_for_similarity", "rec_memory_ids", "dead_task_count", "run_findings_for_promotion",
     "task_spec", "recent_done_runs",
+    # 08 resilience
+    "purge_events",
+    # 08 metrics
+    "record_metric_samples", "purge_metric_samples",
     # 09 ui_reads
     "UiRunRow", "UiTaskRow", "UiEvidenceRow", "UiRecommendationRow", "UiDecisionRow",
     "UiOutcomeRow", "UiFindingRow", "UiMemoryItemRow", "UiResilienceEventRow", "UiSourceHealthRow",
