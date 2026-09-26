@@ -327,6 +327,7 @@ source_modules = [
     "herness.connectors.settings_base",
     "herness.connectors.settings_entities",
     "herness.eval.settings",
+    "herness.harness.llm.settings",
 ]
 forbidden_modules = [
     "herness.core.logging",
@@ -367,7 +368,7 @@ name = "store-no-upward"
 type = "forbidden"
 # impl 02 §2.2: herness.store imports nothing from L2 and above; later cards append packages.
 source_modules = ["herness.store"]
-forbidden_modules = ["herness.model"]
+forbidden_modules = ["herness.model", "herness.harness"]
 
 [[tool.importlinter.contracts]]
 name = "herness.core must not import herness.store or herness.harness"

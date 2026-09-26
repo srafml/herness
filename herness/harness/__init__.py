@@ -1,1 +1,1 @@
-"""Agent harness (layer L4): loop, tools, memory and swarm (design 05-07)."""
+"""Agent harness (L4): LLM adapters, loop, tools, memory, swarm, verifier, tracing (05-07)."""

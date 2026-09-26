@@ -27,15 +27,15 @@ def test_st00_10_upward_import_rejected(tmp_path: Path) -> None:
         errors.read_text(encoding="utf-8") + "\nimport herness.harness\n", encoding="utf-8"
     )
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    config = tomllib.loads(text)["tool"]["importlinter"]
-    c1 = next(c for c in config["contracts"] if c["name"] == "herness layers")
-    # Put herness.harness on top of C1 and into C4 unless the repository already lists it.
-    if "herness.harness" not in c1["layers"]:
+    # Put herness.harness on top of C1 and into C4, whatever packages later cards added.
+    current = {c["name"]: c for c in tomllib.loads(text)["tool"]["importlinter"]["contracts"]}
+    if "herness.harness" not in current["herness layers"]["layers"]:
         text = text.replace(
             'name = "herness layers"\ntype = "layers"\nlayers = [\n',
             'name = "herness layers"\ntype = "layers"\nlayers = [\n    "herness.harness",\n',
             1,
         )
+    if "herness.harness" not in current.get("core base is closed", {}).get("forbidden_modules", []):
         text = re.sub(
             r'(name = "core base is closed"[^\[]*?\nsource_modules = \[[^\]]*\]\s*'
             r"forbidden_modules = \[)",
