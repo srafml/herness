@@ -118,7 +118,7 @@ def egress_purpose_for(model_role: str) -> Literal["reasoning", "reasoning_final
     return EGRESS_PURPOSE_BY_MODEL_ROLE.get(model_role, "reasoning")
 
 
-def bound_response(text: str, n_tool_calls: int, *, client: str) -> str:
+def bound_response(text: str, n_tool_calls: int, *, client: str, field: str = "text") -> str:
     """Apply the adapter response bounds; return ``text``, cut to the part cap when longer."""
     if len(text) > MAX_RESPONSE_TEXT_CHARS:
         msg = "response text exceeds limit"
@@ -128,7 +128,7 @@ def bound_response(text: str, n_tool_calls: int, *, client: str) -> str:
         raise OutputValidationError(msg, client=client)
     if len(text) <= MAX_RESPONSE_PART_CHARS:
         return text
-    _log.warning("harness.llm.response_truncated", client=client, length=len(text))
+    _log.warning("harness.llm.response_truncated", client=client, field=field, length=len(text))
     return text[: MAX_RESPONSE_PART_CHARS - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
 
 

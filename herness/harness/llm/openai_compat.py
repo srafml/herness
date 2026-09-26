@@ -4,66 +4,51 @@ Design 05 §5.1.1. The instance holds no SDK client: every call opens one inside
 so the adapter works across separate ``asyncio.run`` calls. The API key lives only on the
 instance as ``SecretStr`` and reaches the wire only in the SDK's ``Authorization`` header
 (TH05-15). Off-network clients send only through the egress guard's HTTP client; without it the
-call fails closed (TH05-13). Responses are bounded and checked before they reach the loop
-(TH05-20).
+call fails closed (TH05-13). On-network responses are byte-capped while read, every call has a
+whole-call deadline, and responses are bounded and checked before they reach the loop
+(TH05-20). Mapping helpers live in the private sibling ``_openai_map``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
+import contextlib
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
+import httpx2
 import openai
 from pydantic import SecretStr, ValidationError
 
 from herness.core import time as clock
 from herness.core.config import get_config
-from herness.core.egress import get_guard
-from herness.core.errors import ConfigError, OutputValidationError
-from herness.core.ids import canonical_json
-from herness.core.logging import get_logger
+from herness.core.egress import MAX_RESPONSE_BYTES, get_guard
+from herness.core.errors import ConfigError, ModelUnavailable, OutputValidationError
 from herness.core.registry import register
 from herness.core.secrets import resolve
-from herness.core.types import (
-    LLMRequest,
-    LLMResponse,
-    Message,
-    ReasoningPart,
-    TextPart,
-    ToolCall,
-    ToolCallPart,
-    ToolResultPart,
-    Usage,
-)
-from herness.harness.llm.base import bound_response, egress_purpose_for
+from herness.core.types import LLMRequest, LLMResponse
+from herness.harness.llm import _openai_map
+from herness.harness.llm.base import egress_purpose_for
 from herness.harness.llm.errors import translate_openai_error
-from herness.harness.llm.pricing import cost_usd
 
 if TYPE_CHECKING:
-    import httpx2
-    from openai.types.chat import ChatCompletion, ChatCompletionMessage
-    from openai.types.completion_usage import CompletionUsage
+    import httpx
+    from openai.types.chat import ChatCompletion
 
     from herness.harness.llm.settings import ClientConfig
 
 __all__ = ["OpenAICompatClient"]
 
 _Server = Literal["vllm", "ollama", "llamacpp", "openai"]
-_StopReason = Literal[
-    "end_turn", "tool_use", "max_tokens", "stop_sequence", "refusal", "content_filter", "other"
-]
-_STOP_REASONS: Final[dict[str, _StopReason]] = {
-    "stop": "end_turn",
-    "tool_calls": "tool_use",
-    "length": "max_tokens",
-    "content_filter": "content_filter",
-}
 _NO_KEY: Final = "EMPTY"
 _PAYLOAD_CLASS: Final = "aggregated_evidence"
-_MAX_ID_CHARS: Final = 128
+_IDENTITY: Final = "identity"
+# Same message translate_openai_error gives an openai.APITimeoutError (U05-30).
+_DEADLINE_MSG: Final = "openai call failed: APITimeoutError"
 
-_log = get_logger("harness.llm")
+
+# openai 3.x accepts a legacy httpx client too (T10-17 may return one); typing only.
+type _HttpClient = httpx.AsyncClient | httpx2.AsyncClient  # noqa: TID251 - type alias only
 
 
 class _GuardWithHttpClient(Protocol):
@@ -71,93 +56,61 @@ class _GuardWithHttpClient(Protocol):
 
     def async_http_client(
         self, purpose: str, payload_class: str, *, run_id: str, task_id: str | None
-    ) -> httpx2.AsyncClient: ...
+    ) -> _HttpClient: ...
 
 
-def _joined_text(message: Message) -> list[str]:
-    return [part.text for part in message.parts if isinstance(part, TextPart)]
+def _too_large() -> OutputValidationError:
+    return OutputValidationError("response body exceeds limit")
 
 
-def _tool_call_dict(call: ToolCall) -> dict[str, object]:
-    arguments = call.raw_arguments or canonical_json(call.arguments)
-    return {
-        "id": call.id,
-        "type": "function",
-        "function": {"name": call.name, "arguments": arguments},
-    }
+class _CappedStream(httpx2.AsyncByteStream):
+    """Counts body bytes while they are read; raises once they pass ``MAX_RESPONSE_BYTES``."""
+
+    def __init__(self, inner: httpx2.AsyncByteStream, headers: httpx2.Headers) -> None:
+        self._inner = inner
+        self._headers = headers
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        length = self._headers.get("content-length", "")
+        if length.isdigit() and int(length) > MAX_RESPONSE_BYTES:
+            raise _too_large()  # rejected before any byte is read
+        if self._headers.get("content-encoding", _IDENTITY).lower() != _IDENTITY:
+            raise _too_large()  # identity was requested: a compressed body cannot be bounded
+        total = 0
+        async for chunk in self._inner:
+            total += len(chunk)
+            if total > MAX_RESPONSE_BYTES:
+                raise _too_large()
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
 
-def _message_dicts(message: Message) -> list[dict[str, object]]:
-    """One ``Message`` as OpenAI chat messages; reasoning parts are never replayed."""
-    if message.role == "user":
-        return [{"role": "user", "content": "\n\n".join(_joined_text(message))}]
-    if message.role == "tool":
-        return [
-            {"role": "tool", "tool_call_id": part.tool_call_id, "content": part.content}
-            for part in message.parts
-            if isinstance(part, ToolResultPart)
-        ]
-    texts = _joined_text(message)
-    item: dict[str, object] = {
-        "role": "assistant",
-        "content": "\n\n".join(texts) if texts else None,
-    }
-    calls = [part.call for part in message.parts if isinstance(part, ToolCallPart)]
-    if calls:
-        item["tool_calls"] = [_tool_call_dict(call) for call in calls]
-    return [item]
+class _CappedTransport(httpx2.AsyncBaseTransport):
+    """Loopback transport whose responses are byte-capped (TH05-20)."""
+
+    def __init__(self) -> None:
+        self._inner = httpx2.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        response = await self._inner.handle_async_request(request)
+        stream = _CappedStream(cast("httpx2.AsyncByteStream", response.stream), response.headers)
+        return httpx2.Response(
+            response.status_code,
+            headers=response.headers,
+            stream=stream,
+            extensions=response.extensions,
+            request=request,
+        )
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
 
-def _json_object(text: str) -> dict[str, Any] | None:
-    """``text`` parsed as a JSON object, else ``None`` (bad JSON, too deep, or not an object)."""
-    try:
-        value = json.loads(text)
-    except (ValueError, RecursionError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def _tool_calls(message: ChatCompletionMessage) -> list[ToolCall]:
-    out: list[ToolCall] = []
-    for call in message.tool_calls or []:
-        function = getattr(call, "function", None)
-        if function is None:
-            msg = f"tool call {call.id[:_MAX_ID_CHARS]} is not a function call"
-            raise OutputValidationError(msg)
-        raw = function.arguments
-        arguments = {} if raw == "" else _json_object(raw)
-        if arguments is None:
-            msg = f"tool call {call.id[:_MAX_ID_CHARS]} arguments are not a JSON object"
-            raise OutputValidationError(msg)
-        try:
-            out.append(
-                ToolCall(id=call.id, name=function.name, arguments=arguments, raw_arguments=raw)
-            )
-        except ValidationError:
-            msg = f"tool call {call.id[:_MAX_ID_CHARS]} has an invalid id or name"
-            raise OutputValidationError(msg) from None
-    return out
-
-
-def _reasoning(message: ChatCompletionMessage) -> list[ReasoningPart]:
-    """``message.reasoning``, else ``message.reasoning_content`` (server extras), as one part."""
-    extra = message.model_extra or {}
-    text = extra.get("reasoning") or extra.get("reasoning_content")
-    if isinstance(text, str) and text:
-        return [ReasoningPart(provider="vllm", text=text)]
-    return []
-
-
-def _usage(raw: CompletionUsage | None) -> Usage:
-    if raw is None:
-        return Usage()
-    details = raw.completion_tokens_details
-    reasoning = details.reasoning_tokens if details is not None else None
-    return Usage(
-        input_tokens=raw.prompt_tokens,
-        output_tokens=raw.completion_tokens,
-        reasoning_tokens=reasoning or 0,
-    )
+def _capped_http_client() -> httpx2.AsyncClient:
+    """The HTTP client of on-network calls: uncompressed, byte-capped responses."""
+    return httpx2.AsyncClient(transport=_CappedTransport(), headers={"Accept-Encoding": _IDENTITY})
 
 
 @register("llm_client", "openai_compat")
@@ -191,7 +144,7 @@ class OpenAICompatClient:
         if req.system:
             out.append({"role": "system", "content": "\n\n".join(b.text for b in req.system)})
         for message in req.messages:
-            out.extend(_message_dicts(message))
+            out.extend(_openai_map.message_dicts(message))
         return out
 
     def _tool_params(self, req: LLMRequest) -> dict[str, object]:
@@ -254,44 +207,17 @@ class OpenAICompatClient:
         return params
 
     def _map_response(self, raw: ChatCompletion, req: LLMRequest, latency_ms: int) -> LLMResponse:
-        if not raw.choices:
-            msg = "response has no choices"
-            raise OutputValidationError(msg, client=self.name)
-        choice = raw.choices[0]
-        message = choice.message
-        text = bound_response(
-            message.content or "", len(message.tool_calls or []), client=self.name
-        )
-        tool_calls = _tool_calls(message)
-        if raw.model != self.cfg.model:
-            _log.warning(
-                "harness.llm.model_mismatch",
-                client=self.name,
-                expected=self.cfg.model,
-                actual=raw.model[:_MAX_ID_CHARS],
-            )
-        # Servers may send null although the SDK types it as a literal.
-        finish = cast("str | None", choice.finish_reason) or ""
-        usage = _usage(raw.usage)
-        return LLMResponse(
-            text=text,
-            tool_calls=tool_calls,
-            parsed=None if req.response_schema is None else _json_object(text),
-            reasoning=_reasoning(message),
-            stop_reason=_STOP_REASONS.get(finish, "other"),
-            raw_stop_reason=finish,
-            refusal_category=None,
-            usage=usage,
-            cost_usd=cost_usd(usage, self.cfg.price_per_mtok),
-            client=self.name,
-            model=raw.model,
-            provider="openai_compat",
-            latency_ms=latency_ms,
-            request_id=raw.id,
-        )
+        """Map one completion; a malformed shape is ``OutputValidationError`` without its data."""
+        try:
+            return _openai_map.map_response(raw, req, self.cfg, latency_ms)
+        except (TypeError, AttributeError, ValueError, ValidationError):
+            msg = "malformed response"
+            raise OutputValidationError(msg, client=self.name) from None
 
-    def _guarded_http_client(self, req: LLMRequest) -> httpx2.AsyncClient:
-        """The egress guard's HTTP client for an off-network call; fails closed without it."""
+    def _http_client(self, req: LLMRequest) -> _HttpClient:
+        """The guard's client off-network (fails closed without it); else a byte-capped one."""
+        if not self.cfg.off_network:
+            return _capped_http_client()
         guard = get_guard()
         if not hasattr(guard, "async_http_client"):
             msg = f"client {self.name} is off-network but the egress guard has no HTTP client"
@@ -304,27 +230,38 @@ class OpenAICompatClient:
             task_id=meta.task_id,
         )
 
+    async def _send(self, req: LLMRequest, params: dict[str, Any]) -> tuple[ChatCompletion, int]:
+        async with contextlib.AsyncExitStack() as stack:
+            http_client = self._http_client(req)
+            stack.push_async_callback(http_client.aclose)  # closed even if the SDK init fails
+            client = await stack.enter_async_context(
+                openai.AsyncOpenAI(
+                    base_url=self.cfg.base_url,
+                    api_key=self._api_key.get_secret_value(),
+                    timeout=req.timeout_s,
+                    max_retries=0,
+                    # openai 3.x accepts a legacy httpx client too; it is typed httpx2 only.
+                    http_client=cast("httpx2.AsyncClient", http_client),
+                )
+            )
+            t0 = clock.monotonic()
+            async with asyncio.timeout(req.timeout_s):  # whole-call deadline (per-phase above)
+                raw = await client.chat.completions.create(**params)
+            return cast("ChatCompletion", raw), int((clock.monotonic() - t0) * 1000)
+
     async def acomplete(self, req: LLMRequest) -> LLMResponse:
         """One non-streaming call; no retries (spec 08 retries)."""
         if req.client != self.name:
             msg = f"request for client {req.client[:64]} sent to client {self.name}"
             raise ConfigError(msg, client=self.name)
         params = cast("dict[str, Any]", self._build_params(req))
-        http_client = self._guarded_http_client(req) if self.cfg.off_network else None
         try:
-            async with openai.AsyncOpenAI(
-                base_url=self.cfg.base_url,
-                api_key=self._api_key.get_secret_value(),
-                timeout=req.timeout_s,
-                max_retries=0,
-                http_client=http_client,
-            ) as client:
-                t0 = clock.monotonic()
-                raw = await client.chat.completions.create(**params)
-                latency_ms = int((clock.monotonic() - t0) * 1000)
+            raw, latency_ms = await self._send(req, params)
+        except TimeoutError:
+            raise ModelUnavailable(_DEADLINE_MSG, client=self.name) from None
         except openai.OpenAIError as exc:
             raise translate_openai_error(exc) from exc
-        return self._map_response(cast("ChatCompletion", raw), req, latency_ms)
+        return self._map_response(raw, req, latency_ms)
 
     def complete(self, req: LLMRequest) -> LLMResponse:
         """Blocking ``acomplete``; refused inside a running event loop (design §3.2)."""

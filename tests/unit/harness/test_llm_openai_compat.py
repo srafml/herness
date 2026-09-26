@@ -432,6 +432,7 @@ def test_ut05_25_text_bounds_exact() -> None:
         "event": "harness.llm.response_truncated",
         "component": "harness.llm",
         "client": "local-30b",
+        "field": "text",
         "length": base.MAX_RESPONSE_PART_CHARS + 1,
         "log_level": "warning",
     }
@@ -671,3 +672,197 @@ def test_ut05_25_off_network_guard_without_client_fails_closed(
     with pytest.raises(ConfigError, match="egress guard has no HTTP client"):
         asyncio.run(OpenAICompatClient(_off_network_cfg()).acomplete(_request()))
     assert server.requests == []
+
+
+# --- Fix round 1: malformed shapes, byte cap, reasoning and argument bounds, deadline -------------
+
+_DELETE = object()
+
+
+def _set(path: tuple[Any, ...], value: Any) -> Any:
+    def mutate(body: dict[str, Any]) -> None:
+        node: Any = body
+        for key in path[:-1]:
+            node = node[key]
+        if value is _DELETE:
+            del node[path[-1]]
+        else:
+            node[path[-1]] = value
+
+    return mutate
+
+
+_ARGS = ("choices", 0, "message", "tool_calls", 0)
+_MALFORMED = {
+    "model_missing": _set(("model",), _DELETE),
+    "model_int": _set(("model",), 5),
+    "usage_no_prompt_tokens": _set(("usage",), {"completion_tokens": 1, "total_tokens": 1}),
+    "arguments_null": _set((*_ARGS, "function", "arguments"), None),
+    "tool_call_id_null": _set((*_ARGS, "id"), None),
+    "message_null": _set(("choices", 0, "message"), None),
+    "content_list": _set(("choices", 0, "message", "content"), [{"type": "text", "text": "x"}]),
+    "id_int": _set(("id",), 5),
+}
+
+
+def _malformed_body(name: str) -> dict[str, Any]:
+    body = _completion(content="x", tool_calls=[_tool_call("call_1", "run_sql", "{}")])
+    _MALFORMED[name](body)
+    return body
+
+
+@pytest.mark.parametrize("name", sorted(_MALFORMED))
+def test_ut05_26_malformed_response_is_output_validation_error(name: str) -> None:
+    """UT05-26 malformed shapes raise OutputValidationError("malformed response"), no data."""
+    with pytest.raises(OutputValidationError) as info:
+        _map(_malformed_body(name))
+    assert str(info.value) == "malformed response"
+    assert info.value.__suppress_context__
+
+
+@pytest.mark.parametrize("name", sorted(_MALFORMED))
+def test_ut05_26_malformed_response_via_acomplete(server: _FakeServer, name: str) -> None:
+    """UT05-26 the same shapes sent by a server surface from acomplete as malformed."""
+    server.respond(200, _malformed_body(name))
+    with pytest.raises(OutputValidationError, match=r"^malformed response$"):
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+
+
+def test_ut05_25_exactly_hard_limit_is_truncated_and_order() -> None:
+    """UT05-25 exactly 1,000,000 chars are truncated; 1,000,001 + 65 calls fail on the text."""
+    resp = _map(_completion(content="a" * base.MAX_RESPONSE_TEXT_CHARS))
+    assert len(resp.text) == base.MAX_RESPONSE_PART_CHARS
+    calls = [_tool_call(f"call_{i}", "run_sql", "{}") for i in range(base.MAX_TOOL_CALLS + 1)]
+    body = _completion(content="a" * (base.MAX_RESPONSE_TEXT_CHARS + 1), tool_calls=calls)
+    with pytest.raises(OutputValidationError, match=r"^response text exceeds limit$"):
+        _map(body)
+
+
+def test_ut05_25_reasoning_bounds() -> None:
+    """UT05-25 reasoning is bounded like text: 200,000 kept, 200,001 cut, > 1,000,000 raises."""
+    exact = "r" * base.MAX_RESPONSE_PART_CHARS
+    assert _map(_completion(content="x", reasoning=exact)).reasoning[0].text == exact
+    with capture_logs() as logs:
+        cut = _map(_completion(content="x", reasoning=exact + "s")).reasoning[0].text
+    assert len(cut) == base.MAX_RESPONSE_PART_CHARS
+    assert cut.endswith(base.TRUNCATION_MARKER)
+    event = next(e for e in logs if e["event"] == "harness.llm.response_truncated")
+    assert event["field"] == "reasoning"
+    too_long = "r" * (base.MAX_RESPONSE_TEXT_CHARS + 1)
+    with pytest.raises(OutputValidationError, match="response text exceeds limit"):
+        _map(_completion(content="x", reasoning_content=too_long))
+
+
+def test_ut05_26_tool_arguments_size_bound() -> None:
+    """UT05-26 arguments of exactly the cap decode; one more char raises before decoding."""
+    limit = base.MAX_RESPONSE_TEXT_CHARS
+    exact = '{"a":"' + "x" * (limit - 8) + '"}'
+    assert len(exact) == limit
+    resp = _map(_completion(tool_calls=[_tool_call("call_1", "run_sql", exact)]))
+    assert len(resp.tool_calls[0].arguments["a"]) == limit - 8
+    over = _completion(tool_calls=[_tool_call("call_1", "run_sql", exact + " ")])
+    with pytest.raises(OutputValidationError, match="tool call call_1 arguments exceed limit"):
+        _map(over)
+
+
+def _spy_clients(monkeypatch: pytest.MonkeyPatch) -> list[httpx2.AsyncClient]:
+    made: list[httpx2.AsyncClient] = []
+    real = openai_compat._capped_http_client
+
+    def spy() -> httpx2.AsyncClient:
+        made.append(real())
+        return made[-1]
+
+    monkeypatch.setattr(openai_compat, "_capped_http_client", spy)
+    return made
+
+
+def test_ut05_25_byte_cap_while_reading(
+    server: _FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT05-25 an on-network body of cap bytes maps; cap + 1 raises and the client is closed."""
+    made = _spy_clients(monkeypatch)
+    body = _completion(content="ok")
+    size = len(httpx2.Response(200, json=body).content)
+    monkeypatch.setattr(openai_compat, "MAX_RESPONSE_BYTES", size)
+    server.respond(200, body)
+    assert asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request())).text == "ok"
+    assert server.requests[0].headers["accept-encoding"] == "identity"
+    monkeypatch.setattr(openai_compat, "MAX_RESPONSE_BYTES", size - 1)
+    server.respond(200, body)
+    with pytest.raises(OutputValidationError, match=r"^response body exceeds limit$"):
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+    assert len(made) == 2
+    assert all(client.is_closed for client in made)
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"content-length": str(52_428_800 + 1)}, {"content-encoding": "gzip"}],
+)
+def test_ut05_25_byte_cap_rejects_headers_up_front(
+    monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]
+) -> None:
+    """UT05-25 an over-cap Content-Length or a compressed body is refused before reading."""
+    read: list[bytes] = []
+
+    class _Body(httpx2.AsyncByteStream):
+        async def __aiter__(self) -> Any:
+            read.append(b"chunk")
+            yield b"{}"
+
+    async def handle(_transport: object, request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, headers=headers, stream=_Body(), request=request)
+
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", handle)
+    assert openai_compat.MAX_RESPONSE_BYTES == 52_428_800
+    with pytest.raises(OutputValidationError, match=r"^response body exceeds limit$"):
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+    assert read == []
+
+
+def test_ut05_25_whole_call_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-25 a server slower than timeout_s ends in ModelUnavailable like APITimeoutError."""
+
+    async def slow(_transport: object, request: httpx2.Request) -> httpx2.Response:
+        await asyncio.sleep(5)
+        return httpx2.Response(200, json=_completion(content="late"), request=request)
+
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", slow)
+    with pytest.raises(ModelUnavailable) as info:
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request(timeout_s=0.05)))
+    assert info.value.message == "openai call failed: APITimeoutError"
+    assert info.value.__cause__ is None
+
+
+def test_ut05_25_http_client_closed_when_sdk_init_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-25 the HTTP client is closed even if AsyncOpenAI(...) raises."""
+    made = _spy_clients(monkeypatch)
+
+    def broken(**_kwargs: Any) -> None:
+        msg = "init failed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(openai_compat.openai, "AsyncOpenAI", broken)
+    with pytest.raises(RuntimeError, match="init failed"):
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+    assert len(made) == 1
+    assert made[0].is_closed
+
+
+def test_ut05_25_off_network_accepts_legacy_httpx_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-25 a guard returning a legacy httpx.AsyncClient still carries the call."""
+    import httpx  # noqa: PLC0415 - the legacy client type the guard may return
+
+    _stub_config(monkeypatch, enabled=True)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_completion(content="legacy"))
+
+    class _LegacyGuard:
+        def async_http_client(self, *_args: Any, **_kwargs: Any) -> Any:
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler))  # noqa: TID251
+
+    monkeypatch.setattr(openai_compat, "get_guard", _LegacyGuard)
+    resp = asyncio.run(OpenAICompatClient(_off_network_cfg()).acomplete(_request()))
+    assert resp.text == "legacy"
