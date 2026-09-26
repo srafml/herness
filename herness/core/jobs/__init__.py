@@ -11,6 +11,7 @@ import importlib
 from typing import TYPE_CHECKING, Final
 
 _EXPORTS: Final[dict[str, str]] = {
+    "CronExpr": "cron",
     "JobContext": "ports",
     "JobRow": "ports",
     "JobsBackend": "ports",
@@ -19,6 +20,9 @@ _EXPORTS: Final[dict[str, str]] = {
     "ServiceControl": "ports",
     "WorkerRow": "ports",
     "bind_jobs_backend": "ports",
+    "resolve_local": "cron",
+    "validate_resilience_config": "validate",
+    "validate_windows": "validate",
 }
 
 __all__: tuple[str, ...] = tuple(sorted(_EXPORTS))
@@ -26,6 +30,7 @@ __all__: tuple[str, ...] = tuple(sorted(_EXPORTS))
 # Explicit `X as X` re-exports, one statement per submodule.
 # isort: off
 if TYPE_CHECKING:
+    from herness.core.jobs.cron import CronExpr as CronExpr, resolve_local as resolve_local
     from herness.core.jobs.ports import (
         JobContext as JobContext,
         JobRow as JobRow,
@@ -35,6 +40,10 @@ if TYPE_CHECKING:
         ServiceControl as ServiceControl,
         WorkerRow as WorkerRow,
         bind_jobs_backend as bind_jobs_backend,
+    )
+    from herness.core.jobs.validate import (
+        validate_resilience_config as validate_resilience_config,
+        validate_windows as validate_windows,
     )
 # isort: on
 
