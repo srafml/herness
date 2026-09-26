@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from herness.core.errors import FatalError, SchemaViolation, StoreBusy
+from herness.core.errors import ConfigError, FatalError, SchemaViolation, StoreBusy
 from herness.core.types import Answer, DecisionOutput, Question, QuestionSet
 from herness.enrich import cache
 from herness.enrich.cache import CACHE_SCHEMA, CacheWriter, DecisionCache
@@ -231,7 +231,7 @@ def test_ut03_35_decider_mismatch_raises(paths: EnrichPaths) -> None:
     other = _output(HASH1, {"q_a": _answer()}, decider="openjev")
     with pytest.raises(SchemaViolation):
         writer.add([other], samples=None)
-    with pytest.raises(SchemaViolation, match="flush_rows"):
+    with pytest.raises(ConfigError, match="flush_rows"):
         DecisionCache(paths, QSV).writer("laya", LAYA_V, questions=QS, flush_rows=0)
 
 
@@ -283,3 +283,47 @@ def test_ut03_35_os_error_mapping(
     assert type(info.value) is expected
     assert list(paths.cache_partition(QSV, "laya", LAYA_V).iterdir()) == []
     assert fault_calls == []
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [(errno.EACCES, StoreBusy), (errno.EBUSY, StoreBusy), (errno.ENOSPC, FatalError)],
+)
+def test_ut03_35_os_error_mapping_when_unlink_fails_too(
+    paths: EnrichPaths,
+    fault_calls: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    code: int,
+    expected: type[Exception],
+) -> None:
+    """UT03-35 a locked tmp file that cannot be unlinked still maps to StoreBusy/FatalError."""
+    writer = DecisionCache(paths, QSV).writer("laya", LAYA_V, questions=QS, flush_rows=10)
+    writer.add([_output(HASH1, {"q_a": _answer()})], samples=None)
+
+    def _fail(*args: object, **kwargs: object) -> None:
+        raise OSError(code, os.strerror(code))
+
+    monkeypatch.setattr(cache.os, "replace", _fail)
+    monkeypatch.setattr(Path, "unlink", _fail)
+    with pytest.raises(expected) as info:
+        writer.flush()
+    assert type(info.value) is expected
+    assert fault_calls == []
+
+
+@pytest.mark.parametrize("samples", [0, -1, 2**15])
+def test_ut03_35_samples_out_of_int16_range_rejected(paths: EnrichPaths, samples: int) -> None:
+    """UT03-35 samples outside 1 ... 32767 is a ConfigError, never a raw Arrow error."""
+    writer = DecisionCache(paths, QSV).writer("laya", LAYA_V, questions=QS, flush_rows=10)
+    with pytest.raises(ConfigError, match="samples out of range"):
+        writer.add([_output(HASH1, {"q_a": _answer()})], samples=samples)
+    assert writer.flush() is None
+
+
+def test_ut03_35_samples_upper_bound_accepted(paths: EnrichPaths, fault_calls: list[str]) -> None:
+    """UT03-35 samples = 32767 fits the int16 column."""
+    writer = DecisionCache(paths, QSV).writer("laya", LAYA_V, questions=QS, flush_rows=10)
+    writer.add([_output(HASH1, {"q_a": _answer()})], samples=2**15 - 1)
+    part = writer.flush()
+    assert part is not None
+    assert pq.read_table(part).column("samples").to_pylist() == [2**15 - 1]

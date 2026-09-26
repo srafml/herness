@@ -7,6 +7,7 @@ and reject any part whose schema is not exactly ``CACHE_SCHEMA`` (TH03-18).
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import os
 from collections.abc import Sequence
@@ -20,7 +21,7 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 from herness.core import time as clock
-from herness.core.errors import FatalError, SchemaViolation, StoreBusy
+from herness.core.errors import ConfigError, FatalError, SchemaViolation, StoreBusy
 from herness.core.ids import new_ulid
 from herness.core.logging import get_logger
 from herness.core.types import DecisionOutput, Question, QuestionSet
@@ -44,6 +45,7 @@ _PARTITION_SCHEMA: Final = pa.schema([("decider", pa.string()), ("decider_versio
 _FULL_SCHEMA: Final = pa.schema([*CACHE_SCHEMA, *_PARTITION_SCHEMA])
 _PART_GLOB: Final = "decider=*/decider_version=*/part-*.parquet"
 _BUSY_ERRNOS: Final = frozenset({errno.EACCES, errno.EBUSY})
+_MAX_SAMPLES: Final = 2**15 - 1  # int16 column
 
 _log = get_logger("enrich.cache")
 
@@ -77,8 +79,9 @@ class DecisionCache:
     def dataset(self) -> ds.Dataset | None:
         """Dataset over every visible part, or None when there is none.
 
-        Only ``part-*.parquet`` files under the Hive partition directories are read, so
-        ``.tmp``, dot- or underscore-prefixed files and ``questions.json`` are never seen.
+        The explicit file list holds only ``part-*.parquet`` files under the Hive partition
+        directories (the glob in ``_part_files``), so ``.tmp``, dot- or underscore-prefixed
+        files and ``questions.json`` are never seen.
         Partition values are URL-decoded by pyarrow (``segment_encoding="uri"``).
         Raises SchemaViolation when any part's schema differs from ``CACHE_SCHEMA``.
         """
@@ -91,7 +94,6 @@ class DecisionCache:
             format="parquet",
             partitioning=partitioning,
             partition_base_dir=self._dir.as_posix(),
-            ignore_prefixes=[".", "_"],
             schema=_FULL_SCHEMA,
         )
         for fragment in dataset.get_fragments():
@@ -150,7 +152,7 @@ class CacheWriter:
     ) -> None:
         if flush_rows < 1:
             msg = "flush_rows must be at least 1"
-            raise SchemaViolation(msg, flush_rows=flush_rows)
+            raise ConfigError(msg, flush_rows=flush_rows)
         self._partition = partition
         self._decider = decider
         self._decider_version = decider_version
@@ -168,8 +170,12 @@ class CacheWriter:
         """Buffer the rows of ``outputs``; return the number of rows added.
 
         Error outputs, question ids outside the set and keys already written are skipped.
-        Flushes whenever the buffer reaches ``flush_rows``.
+        Flushes whenever the buffer reaches ``flush_rows``. ``samples`` must fit the int16
+        ``samples`` column (1 ... 32767) or be None.
         """
+        if samples is not None and not 1 <= samples <= _MAX_SAMPLES:
+            msg = "samples out of range for the cache samples column"
+            raise ConfigError(msg, samples=samples)
         added = 0
         for output in outputs:
             self._check_decider(output)
@@ -214,7 +220,8 @@ class CacheWriter:
                 os.fsync(handle.fileno())
             os.replace(tmp, target)
         except OSError as exc:
-            tmp.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):  # a Windows lock usually blocks the unlink too
+                tmp.unlink(missing_ok=True)
             msg = f"cannot write cache part: {target.name}"
             error_class = StoreBusy if exc.errno in _BUSY_ERRNOS else FatalError
             raise error_class(msg, decider=self._decider) from exc
