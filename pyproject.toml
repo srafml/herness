@@ -195,6 +195,11 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 module = ["app.*", "tools.*"]
 disallow_untyped_decorators = false
 
+[[tool.mypy.overrides]]
+# pyahocorasick ships a compiled extension with no type stubs (T10-09).
+module = ["ahocorasick"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true
@@ -284,6 +289,7 @@ forbidden_modules = [
     "herness.core.registry",
     "herness.core.redact",
     "herness.core.redact_patterns",
+    "herness.core.redact_directory",
     "herness.core.settings",
     "herness.store",
     "herness.model",
