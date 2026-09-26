@@ -64,7 +64,8 @@ This spec builds everything the design spec assigns to `herness/store/` and `her
 | `herness/store/warehouse.py` | Build IDs, `CURRENT` reading, read-only connections, build listing and file deletion | `BUILD_ID_RE`, `new_build_id`, `build_path`, `build_exists`, `read_current`, `CurrentPointer`, `open_readonly`, `BuildInfo`, `list_builds`, `delete_build_files`, `warehouse_health` | L1 | `duckdb` | 370 |
 | `herness/store/_warehouse_rw.py` | Writable build connection and `CURRENT` writer (import restricted to `herness.model`) | `open_for_build`, `write_current` | L1 | `duckdb` | 120 |
 | `herness/store/ops/__init__.py` | Public `herness.store.ops` namespace: re-exports of every area's public functions (§2.3, R-08) | re-exports only (§2.3) | L1 | — | 160 |
-| `herness/store/ops/core.py` | Per-thread SQLite connections, write transactions with retry, JSON helpers (core API names of R-10) | `OPS_JSON_MAX_BYTES`, `connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`, `reset_connections` | L1 | `sqlite3` | 260 |
+| `herness/store/ops/core.py` | Per-thread SQLite connections, write transactions with retry, JSON helpers (core API names of R-10) | `OPS_JSON_MAX_BYTES`, `connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`, `reset_connections` | L1 | `sqlite3` | 280 |
+| `herness/store/ops/_shims.py` | Interim stand-ins for `T08-07 (herness.core.resilience.retry_call)` (policy `sqlite_write` only) and `T08-08 (herness.core.resilience.fault_point)` (no-op), called by `core` through module attributes; not an area (§2.3). Deleted when T08-07 and T08-08 land | `retry_call`, `fault_point` (private module) | L1 | — | 80 |
 | `herness/store/ops/migrate.py` | Forward-only migration runner over all owner ranges (R-11) and ops health | `MIGRATION_RANGES`, `MigrationReport`, `migrate`, `pending_migrations`, `schema_version`, `ops_health` | L1 | `importlib.resources` | 260 |
 | `herness/store/ops/shared.py` | Ops functions owned by spec 02: every `review_item` function (R-08) | `ReviewItem`, `create_review_item`, `create_review_item_if_absent`, `get_review_item`, `list_review_items`, `count_review_items`, `decide_review_item`, `update_review_payload`, `approved_mapping_suggestions` | L1 | — | 390 |
 | `herness/store/migrations/001_ingestion_health.sql` | `watermark`, `sync_slice`, `file_ingest`, `source_health` | SQL | L1 | — | 90 |
@@ -3684,7 +3685,7 @@ Fixtures (spec 11 layout): `ops_store` (temp `ops.sqlite`, `reset_connections`),
 | ST02-15 | TH02-15 | edit an applied migration | startup refuses with `MigrationError` | unit |
 | ST02-16 | TH02-16 | deletion request `done` for a record with lake rows, enrich rows (from previous build) and a vector | next build | record absent from `stg`, `core`, `enrich` | integration |
 | ST02-17 | TH02-17 | build with a failing `duplicate_key` check; run `--from-stage promote` | DQ re-runs and blocks; `CURRENT` unchanged; empty `meta.dq_result` also blocks | integration |
-| ST02-18 | TH02-18 | a thread holds a read transaction for 5 s; another holds `BEGIN IMMEDIATE` for 12 s | writes during the read succeed (WAL); the writer blocked by the long writer gets `StoreBusy`, never hangs past policy 30 s | integration |
+| ST02-18 | TH02-18 | a thread holds a read transaction for 5 s; another holds `BEGIN IMMEDIATE` for 12 s | writes during the read succeed (WAL); the writer blocked by the long writer gets `StoreBusy`, never hangs past policy 30 s. Note (controller ruling, T02-04): the test asserts `StoreBusy` raised inside `run_write` on the first attempt and completion within the 30 s policy; a caller-visible `StoreBusy` is unreachable because the retry after `busy_timeout` 10 s outlasts the 12 s holder | integration |
 
 ### 11.6 Benchmarks
 
@@ -3743,7 +3744,7 @@ All cards are Phase 1.
 | Goal | Per-thread connections, `run_write` with retry and fault point, JSON helpers, package namespace. |
 | Depends on | T02-01, `T08-07 (herness.core.resilience.retry_call)`, `T08-08 (herness.core.resilience.fault_point)` |
 | Units | U02-36…U02-43, U02-62 (spec 02 blocks and the block layout of §2.3 rule 4) |
-| Files | `herness/store/ops/__init__.py`, `herness/store/ops/core.py` |
+| Files | `herness/store/ops/__init__.py`, `herness/store/ops/core.py`, `herness/store/ops/_shims.py` (interim) |
 | Tests | UT02-25…UT02-31, UT02-68, FT02-02, ST02-18, BT02-06 |
 | Threats | TH02-07, TH02-18 |
 | Acceptance checks | listed tests pass; `BT02-06` p95 < 10 ms on CI |

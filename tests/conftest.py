@@ -16,7 +16,13 @@ from hypothesis import settings
 from herness.core.resilience import ProcessState
 from herness.core.resilience import reset_process_state as _reset
 
-pytest_plugins = ["pytester", "tests.support.plugin", "tests.support.fake_clock"]
+# T02-04 added `tests.support.ops_core_store`; T11-40 replaces it with `tests.support.ops_store`.
+pytest_plugins = [
+    "pytester",
+    "tests.support.plugin",
+    "tests.support.fake_clock",
+    "tests.support.ops_core_store",
+]
 
 collect_ignore = ["support", "fixtures"]
 
