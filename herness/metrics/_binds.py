@@ -5,11 +5,14 @@ Private split of `herness.metrics.render` (module budget); `render` re-exports t
 
 import types
 from collections.abc import Mapping
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final
 
-from herness.metrics.settings import MetricDef, MetricsDefaults, ScoringConfig, WeightsConfig
+from herness.metrics.settings import WeightsConfig
 
-__all__ = ["BIND_TYPES", "CatalogView", "default_binds", "weight_binds"]
+if TYPE_CHECKING:  # catalog imports render, which imports this module
+    from herness.metrics.catalog import MetricCatalog
+
+__all__ = ["BIND_TYPES", "default_binds", "weight_binds"]
 
 # Names per DuckDB type, whitespace separated (U04-34 lists them by group).
 _TYPED: Final[Mapping[str, str]] = {
@@ -55,27 +58,13 @@ BIND_TYPES: Final[Mapping[str, str]] = types.MappingProxyType(
 )
 
 
-class CatalogView(Protocol):
-    """The read surface of `herness.metrics.catalog.MetricCatalog` (U04-23) used here."""
-
-    @property
-    def defaults(self) -> MetricsDefaults: ...
-
-    @property
-    def scoring(self) -> ScoringConfig: ...
-
-    def get(self, name: str, /) -> MetricDef: ...
-
-    def names(self, *, enabled_only: bool = True) -> list[str]: ...
-
-
 def _pairs[K: (int, str), V](mapping: Mapping[K, V]) -> tuple[list[K], list[V]]:
     """Keys sorted ascending and their values in the same order."""
     keys = sorted(mapping)
     return keys, [mapping[k] for k in keys]
 
 
-def default_binds(catalog: CatalogView, /) -> dict[str, object]:
+def default_binds(catalog: "MetricCatalog", /) -> dict[str, object]:
     """Candidate `d_*` and `s_*` bind values from the catalog config (U04-36)."""
     d = catalog.defaults
     s = catalog.scoring

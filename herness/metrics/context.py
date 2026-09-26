@@ -11,14 +11,15 @@ from typing import cast, get_args
 
 from pydantic import BaseModel, ConfigDict
 
-from herness.metrics._binds import CatalogView, default_binds, weight_binds
+from herness.metrics._binds import default_binds, weight_binds
+from herness.metrics.catalog import MetricCatalog
 from herness.metrics.settings import WEIGHT_USES, UsdModel, WeightsConfig, unconfirmed_blocks
 from herness.metrics.windows import default_window
 
 __all__ = ["ScoringReport", "StepContext", "StepResult"]
 
 
-def _step_binds(catalog: CatalogView, weights: WeightsConfig) -> dict[str, object]:
+def _step_binds(catalog: MetricCatalog, weights: WeightsConfig) -> dict[str, object]:
     """`s_count_metrics`, `s_unconfirmed_models` and `unconfirmed` (U04-34)."""
     count_metrics = sorted(
         n for n in catalog.names() if catalog.get(n).aggregation in ("count", "snapshot")
@@ -38,7 +39,7 @@ class StepContext:
     """Inputs shared by every scoring step (U04-54)."""
 
     build_id: str
-    catalog: CatalogView
+    catalog: MetricCatalog
     weights: WeightsConfig
     as_of: date
     tz: str
