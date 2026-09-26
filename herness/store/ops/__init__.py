@@ -31,6 +31,19 @@ from .migrate import (
 )
 
 # isort: split
+# 02 shared
+from .shared import (
+    ReviewItem,
+    ReviewKind,
+    ReviewStatus,
+    approved_mapping_suggestions,
+    create_review_item,
+    decide_review_item,
+    get_review_item,
+    list_review_items,
+)
+
+# isort: split
 # 01 ingest
 from .ingest import (
     FileIngestRow,
@@ -107,6 +120,15 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "schema_version",
     "ops_health",
     "MigrationReport",
+    # 02 shared
+    "ReviewItem",
+    "ReviewKind",
+    "ReviewStatus",
+    "create_review_item",
+    "get_review_item",
+    "list_review_items",
+    "decide_review_item",
+    "approved_mapping_suggestions",
     # 01 ingest
     "Watermark",
     "SliceRow",
