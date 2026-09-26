@@ -5,6 +5,7 @@ each with its own ops-store connection, claim and complete jobs from one migrate
 from __future__ import annotations
 
 import itertools
+import json
 import random
 import sqlite3
 import threading
@@ -17,7 +18,7 @@ from tests.support.ops_store import OpsStoreHandle
 from herness.core import time as clock
 from herness.core.types import GpuClass, JobKind
 from herness.store.ops import _job_sql
-from herness.store.ops.core import read_all, run_write
+from herness.store.ops.core import read_all, read_one, run_write
 from herness.store.ops.jobs import SqliteJobsBackend
 
 pytestmark = pytest.mark.integration
@@ -26,6 +27,7 @@ T0 = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 JOBS = 5_000
 THREADS = 8
 CLAIMS_PER_THREAD = 1_000
+EXCLUSIVE_CHECKS = 3
 EXCLUSIVE: tuple[JobKind, ...] = ("build_pipeline", "distill")
 KINDS: tuple[JobKind, ...] = ("sync", "review", "reconcile", "build_pipeline", "distill", "eval")
 CLASSES: tuple[GpuClass, ...] = ("none", "reasoning", "decider", "large")
@@ -61,32 +63,45 @@ def _seed(count: int) -> None:
     run_write(insert, op="test_seed")
 
 
-class _Exclusive:
-    """Counts exclusive jobs held between claim and completion (never more than one)."""
+_RUNNING_EXCLUSIVE = (
+    "SELECT COUNT(*) FROM job WHERE status = 'running' AND kind IN (SELECT value FROM json_each(?))"
+)
+
+
+class _Shared:
+    """What the threads report: exclusive-kind violations seen in the store, and errors."""
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
-        self.running = 0
-        self.violations = 0
+        self.violations: list[int] = []
         self.errors: list[BaseException] = []
 
-    def enter(self) -> None:
-        with self.lock:
-            if self.running:
-                self.violations += 1
-            self.running += 1
-
-    def leave(self) -> None:
-        with self.lock:
-            self.running -= 1
+    def check_exclusive(self) -> None:
+        """Called while this thread holds an exclusive job (claimed, not yet completed):
+        the committed store must show exactly one running exclusive-kind job."""
+        row = read_one(_RUNNING_EXCLUSIVE, (json.dumps(EXCLUSIVE),))
+        count = -1 if row is None else int(row[0])
+        if count != 1:
+            with self.lock:
+                self.violations.append(count)
 
 
 def _worker(
     index: int,
     backend: SqliteJobsBackend,
-    exclusive: _Exclusive,
+    shared: _Shared,
     out: list[_Claim],
     attempts: int = CLAIMS_PER_THREAD,
+) -> None:
+    try:
+        _claim_loop(index, backend, shared, out, attempts)
+    except BaseException as exc:  # noqa: BLE001 - reported to the test thread, never lost
+        with shared.lock:
+            shared.errors.append(exc)
+
+
+def _claim_loop(
+    index: int, backend: SqliteJobsBackend, shared: _Shared, out: list[_Claim], attempts: int
 ) -> None:
     owner = f"h:{index}:cli"
     for _ in range(attempts):
@@ -104,14 +119,13 @@ def _worker(
         )
         if row is None:
             continue
-        held = row.kind in EXCLUSIVE
-        if held:
-            exclusive.enter()
         out.append((row.job_id, row.kind, row.priority))
-        if held:
-            exclusive.leave()  # before the commit that lets another exclusive job start
+        if row.kind in EXCLUSIVE:
+            for _ in range(EXCLUSIVE_CHECKS):  # hold the job a little, checking each time
+                shared.check_exclusive()
         if not backend.finish_done(row.job_id, owner, {"n": 1}, T0):
-            exclusive.errors.append(AssertionError(row.job_id))
+            msg = f"lease lost for {row.job_id}"
+            raise AssertionError(msg)
 
 
 def _non_increasing(claims: Sequence[_Claim]) -> bool:
@@ -126,10 +140,10 @@ def test_it08_02_eight_threads_never_double_claim(ops_store: OpsStoreHandle) -> 
     del ops_store
     _seed(JOBS)
     backend = SqliteJobsBackend()
-    exclusive = _Exclusive()
+    shared = _Shared()
     claims: list[list[_Claim]] = [[] for _ in range(THREADS)]
     threads = [
-        threading.Thread(target=_worker, args=(i, backend, exclusive, claims[i]), daemon=True)
+        threading.Thread(target=_worker, args=(i, backend, shared, claims[i]), daemon=True)
         for i in range(THREADS)
     ]
     for thread in threads:
@@ -141,8 +155,8 @@ def test_it08_02_eight_threads_never_double_claim(ops_store: OpsStoreHandle) -> 
     assert len(claimed) == len(set(claimed))
     assert sum(1 for per_thread in claims if per_thread) >= 2  # threads really competed
     assert any(kind in EXCLUSIVE for per_thread in claims for _, kind, _ in per_thread)
-    assert exclusive.violations == 0
-    assert exclusive.errors == []
+    assert shared.violations == []
+    assert shared.errors == []
     assert all(_non_increasing(per_thread) for per_thread in claims)
     rows = read_all("SELECT status, attempts, COUNT(*) FROM job GROUP BY status, attempts")
     by_state = {(row[0], row[1]): row[2] for row in rows}
@@ -151,7 +165,8 @@ def test_it08_02_eight_threads_never_double_claim(ops_store: OpsStoreHandle) -> 
     assert set(by_state) <= {("done", 1), ("queued", 0)}
     # Exclusive jobs skipped while another one ran may remain; one more owner drains them.
     rest: list[_Claim] = []
-    _worker(THREADS, backend, exclusive, rest, attempts=JOBS - len(claimed) + 1)
+    _worker(THREADS, backend, shared, rest, attempts=JOBS - len(claimed) + 1)
+    assert shared.errors == []
     assert set(claimed).isdisjoint(job_id for job_id, _, _ in rest)
     assert len(claimed) + len(rest) == JOBS
     final = read_all("SELECT status, attempts, COUNT(*) FROM job GROUP BY status, attempts")
