@@ -1,8 +1,12 @@
 """Tests for herness.core.jobs.validate: window coverage and the `resilience` owner validator."""
 
-from datetime import date, datetime, timedelta
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
@@ -15,6 +19,7 @@ from herness.core import config as c
 from herness.core import config_validate as cv
 from herness.core import jobs
 from herness.core.config_view import ConfigIssue
+from herness.core.jobs import windows as jw
 from herness.core.jobs.validate import validate_resilience_config, validate_windows
 from herness.core.resilience.settings import ResilienceConfig, WindowSpec
 
@@ -264,3 +269,51 @@ def test_pt08_05_default_windows_every_minute(cfg_default: ResilienceConfig) -> 
     monday = datetime.combine(date(2026, 1, 5), datetime.min.time())
     windows = cfg_default.schedule.windows
     assert all(_count_at(windows, monday + timedelta(minutes=m)) == 1 for m in range(10080))
+
+
+# --- PT08-05 rerun against the real U08-66 `window_at` (T08-13 carry-over) -----------------
+
+LONDON = ZoneInfo("Europe/London")
+# A leap-free span with no DST change in Europe/London (2026-01-01 to 2026-03-28).
+UTC_MINUTES = st.integers(0, 60 * 24 * 86).map(
+    lambda m: datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=m)
+)
+
+
+@contextmanager
+def _real_windows(windows: Sequence[WindowSpec]) -> Iterator[None]:
+    """Point `windows.get_config` at the given windows in Europe/London."""
+    stub = SimpleNamespace(
+        resilience=SimpleNamespace(schedule=SimpleNamespace(windows=windows)),
+        weights=SimpleNamespace(business_timezone="Europe/London"),
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(jw, "get_config", lambda: stub)
+        yield
+
+
+def _local_names(windows: Sequence[WindowSpec], local: datetime) -> list[str]:
+    naive = local.replace(tzinfo=None)
+    return [w.name for w in windows if _count_at([w], naive) == 1]
+
+
+@given(windows=_daily_windows(), instants=st.lists(UTC_MINUTES, min_size=1, max_size=20))
+def test_pt08_05_window_at_one_window(windows: list[WindowSpec], instants: list[datetime]) -> None:
+    """PT08-05 for valid configs the real `window_at` returns the one window holding `now`."""
+    if validate_windows(windows) != []:
+        return
+    with _real_windows(windows):
+        for now in instants:
+            active = jw.window_at(now)
+            assert active.start_at <= now < active.end_at
+            assert [active.spec.name] == _local_names(windows, now.astimezone(LONDON))
+
+
+def test_pt08_05_window_at_default_week_every_minute(cfg_default: ResilienceConfig) -> None:
+    """PT08-05 the real `window_at` agrees with the local lookup at every minute of a week."""
+    windows = cfg_default.schedule.windows
+    monday = datetime(2026, 1, 5, tzinfo=LONDON)
+    with _real_windows(windows):
+        for minute in range(10080):
+            now = (monday + timedelta(minutes=minute)).astimezone(UTC)
+            assert [jw.window_at(now).spec.name] == _local_names(windows, now.astimezone(LONDON))
