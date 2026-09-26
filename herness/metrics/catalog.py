@@ -8,6 +8,7 @@ validator `metrics_owner_validator` runs it on impl 10's start-up validation hoo
 import dataclasses
 import datetime
 import json
+import re
 import types
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -17,6 +18,7 @@ import yaml
 from pydantic import ValidationError
 
 from herness.core.config import ConfigIssue, HernessConfig, config_hash, get_config
+from herness.core.config_validate import OwnerValidator
 from herness.core.errors import ConfigError, ToolInputError
 from herness.core.ids import canonical_json, sha256_hex
 from herness.core.logging import get_logger
@@ -117,6 +119,8 @@ _MAX_CATALOG_BYTES: Final = 1024 * 1024
 _MAX_MESSAGE: Final = 300
 _METRICS_FILE: Final = "metrics.yaml"
 _WEIGHTS_FILE: Final = "weights.yaml"
+_SNAPSHOT_HASH: Final = re.compile(r"cfg_[0-9a-f]{16}")
+_UNREADABLE: Final = "previous config snapshot unreadable; every confirmed block is checked as new"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -176,12 +180,11 @@ class MetricCatalog:
 def unit_for(column: str, metric: str | None, catalog: MetricCatalog) -> Unit:
     """Unit of a NumberRef-facing column; `metric` entries resolve to the metric's unit."""
     unit = SCORE_UNITS.get(column)
-    if unit is None or (unit == "metric" and metric is None):
+    if unit == "metric" and metric is not None:
+        return catalog.get(metric).unit
+    if unit is None or unit == "metric":
         msg = f"no unit for {column[:128]}"
         raise ToolInputError(msg)
-    if unit == "metric":
-        assert metric is not None  # noqa: S101 - checked above
-        return catalog.get(metric).unit
     return unit
 
 
@@ -315,8 +318,12 @@ def _previous_weights(cfg: HernessConfig) -> tuple[WeightsConfig | None, list[Co
     last = snaps / "LAST"
     if not last.is_file():
         return None, []
+    unreadable = [ConfigIssue("warn", "weights", _UNREADABLE, _WEIGHTS_FILE)]
     try:
-        snapshot = snaps / f"{last.read_text(encoding='utf-8').strip()}.yaml"
+        name = last.read_text(encoding="utf-8").strip()
+        if _SNAPSHOT_HASH.fullmatch(name) is None:  # LAST names a file: accept a hash only
+            return None, unreadable
+        snapshot = snaps / f"{name}.yaml"
         if not snapshot.is_file():
             return None, []
         data = yaml.safe_load(snapshot.read_text(encoding="utf-8"))
@@ -324,8 +331,7 @@ def _previous_weights(cfg: HernessConfig) -> tuple[WeightsConfig | None, list[Co
         # JSON mode: the snapshot's integer map keys come back as strings after a YAML dump.
         return WeightsConfig.model_validate_json(json.dumps(section)), []
     except (OSError, UnicodeDecodeError, yaml.YAMLError, KeyError, TypeError, ValidationError):
-        message = "previous config snapshot unreadable; every confirmed block is checked as new"
-        return None, [ConfigIssue("warn", "weights", message, _WEIGHTS_FILE)]
+        return None, unreadable
 
 
 def _approved_payloads() -> list[WeightChangePayload]:
@@ -338,7 +344,7 @@ def _approved_payloads() -> list[WeightChangePayload]:
     return approved
 
 
-def metrics_owner_validator(cfg: HernessConfig, /, *, offline: bool) -> list[ConfigIssue]:
+def metrics_owner_validator(cfg: HernessConfig, *, offline: bool) -> list[ConfigIssue]:
     """Impl 04 owner validator (U04-83, R-71): catalog cross-check and the weight gate."""
     del offline  # the checks do no network I/O
     issues = validate_catalog(cfg.metrics, weights=cfg.weights)
@@ -355,5 +361,7 @@ def metrics_owner_validator(cfg: HernessConfig, /, *, offline: bool) -> list[Con
     return issues
 
 
+# Static check that the validator satisfies the impl 10 hook protocol (U10-109).
+_OWNER_VALIDATOR: Final[OwnerValidator] = metrics_owner_validator
 # T09-20: the composition roots register this as
 # register_owner_validator("metrics", metrics_owner_validator) before init_config.

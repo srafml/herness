@@ -262,7 +262,8 @@ def test_ut04_16_macro_filter_table_matches_source_filters() -> None:
     """UT04-16 carry-over: the `_macros` FILTER table equals SOURCE_FILTERS (U04-28)."""
     ctx = {"entity_type": "service", "period": "week", "filters": {}, "rs": object()}
     module = make_environment().get_template("_macros.sql.j2").make_module(vars=ctx)
-    table = module.FILTER
+    table = getattr(module, "FILTER", None)
+    assert isinstance(table, dict)
     assert {src: frozenset(keys) for src, keys in table.items()} == dict(SOURCE_FILTERS)
 
 
@@ -509,13 +510,15 @@ def test_st04_04_text_column_through_alias_rejected(select: str) -> None:
 def test_st04_04_shipped_templates_select_no_text_column() -> None:
     """ST04-04 schema scan: no shipped metric, fact or score template names a text column."""
     templates = sorted(SQL_DIR.glob("*.sql.j2"))
+    # T04-05: adds herness/model/sql/400_facts.sql; the scan picks it up once it exists.
     facts = ROOT / "herness" / "model" / "sql" / "400_facts.sql"
-    templates += [facts] if facts.is_file() else []  # T04-05 adds the facts stage
+    templates += [facts] if facts.is_file() else []
     assert templates
     for path in templates:
-        assert checks.raw_sql_problems(path.read_text(encoding="utf-8").replace(";", "")) == [], (
-            path
-        )
+        # Only the text-column rule applies here: macros, checks and the facts stage carry
+        # `;`, `--` or `/*` legitimately (they are not catalog templates).
+        problems = checks.raw_sql_problems(path.read_text(encoding="utf-8"))
+        assert [p for p in problems if p.startswith("sql uses text column")] == [], path
 
 
 # --- UT04-117 SCORE_UNITS ---------------------------------------------------------------------
@@ -635,6 +638,20 @@ def test_ut04_120_missing_last_is_first_load(
     _snapshot(owner_cfg, None)
     issues = metrics_owner_validator(owner_cfg, offline=True)
     assert [(i.severity, i.path) for i in issues[1:]] == expected
+
+
+@pytest.mark.parametrize("last", ["../../secrets", "cfg_ABC", "cfg_0000000000000000.yaml", ""])
+def test_ut04_120_last_must_name_a_snapshot_hash(
+    owner_cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch, last: str
+) -> None:
+    """UT04-120 a `LAST` that is not a `cfg_<16 hex>` hash is an unreadable snapshot (warn)."""
+    _fake_store(monkeypatch, [])
+    _snapshot(owner_cfg, _previous_all_unconfirmed(owner_cfg), last=last)
+    issues = metrics_owner_validator(owner_cfg, offline=True)
+    assert [(i.severity, i.path) for i in issues[1:]] == [
+        ("error", "weights.cost_per_engineer_hour.unconfirmed"),
+        ("warn", "weights"),
+    ]
 
 
 @pytest.mark.parametrize("text", ["weights: [1, 2]", "- a\n- b\n", "a: [unclosed", "other: 1"])
