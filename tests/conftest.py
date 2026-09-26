@@ -27,6 +27,7 @@ pytest_plugins = [
     "tests.support.ops_store",
     "tests.support.fake_keyring",
     "tests.support.fault_env",
+    "tests.support.fake_gpu",
     "tests.support.build_harness",
 ]
 
