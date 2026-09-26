@@ -20,7 +20,7 @@ from herness.core.errors import SchemaViolation
 from herness.core.resilience.ports import EventRow, HealthRow, JsonScalar
 from herness.core.types import BreakerState, MetricSample
 
-from .core import dump_json, load_json, read_all, read_one, run_write
+from .core import connection, dump_json, load_json, read_all, read_one, run_write
 from .metrics import purge_metric_samples, record_metric_samples
 
 LAST_ERROR_MAX_CHARS: Final = 500  # §4.1.3: redacted, at most 500 chars
@@ -227,3 +227,8 @@ class SqliteResilienceBackend:
     def purge_metric_samples(self, before: datetime) -> int:
         """Port form of `herness.store.ops.metrics.purge_metric_samples`."""
         return purge_metric_samples(before)
+
+    def write_open(self) -> bool:
+        """True while this thread's ops connection has an open transaction, i.e. inside a
+        `run_write` callback, where a metric flush would hit the nested-write guard (T08-11)."""
+        return connection().in_transaction

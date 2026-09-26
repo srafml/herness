@@ -107,9 +107,10 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/store/ops/resilience.py` | SQL for `source_health`, `resilience_event`; backend binding (R-08) | `SqliteResilienceBackend`, `purge_events`, `bind_core_backends` | L1 | none | 320 |
 | `herness/store/ops/metrics.py` | The single `metric_sample` writer and its purge (R-12) | `record_metric_samples`, `purge_metric_samples` | L1 | none | 120 |
 | `herness/store/ops/jobs.py` | SQL for `job` (R-08) | `SqliteJobsBackend` (job methods) | L1 | none | 400 |
+| `herness/store/ops/_job_sql.py` | Private sibling of area `jobs` (T08-11 spec note): the constant SQL of U08-95, split off for the 400-line budget of `jobs.py`; imported only by `jobs` (`ops-areas-acyclic` ignore entry) | none (private) | L1 | none | 200 |
 | `herness/store/ops/worker.py` | SQL for `worker`, `run` reads (R-08) | `WorkerSqlMixin` | L1 | none | 200 |
 | `herness/store/ops/tasks.py` | SQL for task mechanics (R-08) | `TaskSqlMixin` | L1 | none | 300 |
-| `herness/store/ops/__init__.py` (08 block) | Re-export of the 08 module-level functions (ENG §2.1) | `record_metric_samples`, `purge_metric_samples`, `purge_events`, `bind_core_backends` | L1 | none | +8 |
+| `herness/store/ops/__init__.py` (08 block) | Re-export of the 08 module-level functions (ENG §2.1) | `record_metric_samples`, `purge_metric_samples`, `purge_events`, `bind_core_backends`, `SqliteJobsBackend` (block "08 jobs", T08-11) | L1 | none | +8 |
 
 Approved suppressions (ENG §2.4, §3.4). Each carries a `# noqa` with the reason text given here.
 
@@ -357,7 +358,7 @@ Algorithm:
 | `HealthRow` | frozen dataclass | `source: str`, `state: BreakerState`, `failures: int`, `trips: int`, `opened_at: datetime \| None`, `last_error: str \| None`, `updated_at: datetime` |
 | `EventRow` | frozen dataclass | `event_id`, `ts`, `kind`, `component`, `target: str \| None`, `run_id`, `job_id`, `task_id: str \| None`, `detail: dict[str, JsonScalar \| list[JsonScalar]]` |
 | `TracerLike` | protocol | read-only `run_id: str \| None`, `task_id: str \| None` (R-66); `emit(type: str, **fields: object) -> None`. Impl 05 `herness.harness.tracing.Tracer` satisfies it structurally; L0 code never imports it (ENG §2.1) |
-| `ResilienceBackend` | protocol | `health_get(key) -> HealthRow \| None`; `health_list(states: Sequence[BreakerState]) -> list[HealthRow]`; `health_apply(key, fn: Callable[[HealthRow \| None], HealthRow \| None], now) -> tuple[HealthRow \| None, HealthRow \| None]` (read-modify-write in one `BEGIN IMMEDIATE`; returns (before, after); `fn` returning `None` means no write); `health_claim_probe(key, now, probe_due, stale_before) -> bool`; `health_reset(keys: Sequence[str], now) -> list[str]`; `insert_event(row: EventRow) -> None`; `count_events(kind, *, target=None, since) -> int`; `event_counts(since, kinds) -> dict[str, int]`; `latest_event(kind) -> EventRow \| None`; `insert_metric_samples(rows: Sequence[MetricSample]) -> int` (implemented by U08-100); `purge_events(before) -> int`; `purge_metric_samples(before) -> int` |
+| `ResilienceBackend` | protocol | `health_get(key) -> HealthRow \| None`; `health_list(states: Sequence[BreakerState]) -> list[HealthRow]`; `health_apply(key, fn: Callable[[HealthRow \| None], HealthRow \| None], now) -> tuple[HealthRow \| None, HealthRow \| None]` (read-modify-write in one `BEGIN IMMEDIATE`; returns (before, after); `fn` returning `None` means no write); `health_claim_probe(key, now, probe_due, stale_before) -> bool`; `health_reset(keys: Sequence[str], now) -> list[str]`; `insert_event(row: EventRow) -> None`; `count_events(kind, *, target=None, since) -> int`; `event_counts(since, kinds) -> dict[str, int]`; `latest_event(kind) -> EventRow \| None`; `insert_metric_samples(rows: Sequence[MetricSample]) -> int` (implemented by U08-100); `purge_events(before) -> int`; `purge_metric_samples(before) -> int`; `write_open() -> bool` (T08-11 spec note: true while this thread's ops connection has an open transaction, i.e. inside a `run_write` callback; the metric auto-flush of U08-19–U08-21 and U08-103 then defers and keeps the buffer instead of failing on the nested-write guard) |
 | `ClientInfo` | protocol | attributes `off_network: bool`, `gpu_class: str \| None`, `timeout_s: float`, `model: str`, `base_url: str \| None`, `api_key: str \| None` |
 | `ChainRegistry` | protocol | `chain_for(model_role: str, depth: str) -> list[str]`; `config(name: str) -> ClientInfo` (spec 05 `LLMRegistry` satisfies it structurally) |
 | `GpuStateReader` | protocol | `loaded_class() -> GpuClass \| Literal["swapping"]`; `service_healthy(name: ServiceName) -> bool` (design 08 §3.5) |
@@ -422,8 +423,8 @@ Returns `None`.
 | Method | Signature | Meaning (SQL in U08-95–U08-97) |
 |--------|-----------|--------------------------------|
 | `insert_job` | `(job: NewJob, *, sched_check: SchedCheck \| None) -> tuple[str, bool]` | enqueue transaction of design 08 §5.7 |
-| `claim_job` | `(*, owner, now, lease_until, allowed_classes, exclusive_kinds, job_id, min_priority, priority_exempt_kinds) -> JobRow \| None` | atomic claim |
-| `claimable_counts` | `(*, now, classes, exclusive_kinds, min_priority, priority_exempt_kinds) -> dict[GpuClass, int]` | for the arbiter |
+| `claim_job` | `(*, owner, now, lease_until, allowed_classes, exclusive_kinds, job_id, min_priority, priority_exempt_kinds, slot: Literal["gpu","cpu","cli"], gpu_slot_kinds: Sequence[JobKind]) -> JobRow \| None` | atomic claim; `slot` and `gpu_slot_kinds` (`GPU_SLOT_KINDS`) carry the U08-95 slot rule, required keywords (T08-11 spec note) |
+| `claimable_counts` | `(*, now, classes, exclusive_kinds, min_priority, priority_exempt_kinds, gpu_slot_kinds: Sequence[JobKind]) -> dict[GpuClass, int]` | for the arbiter; slot `gpu`; every class of `classes` is a key (0 when none) |
 | `heartbeat_job` | `(job_id, owner, lease_until) -> bool` | lease extension |
 | `finish_done` / `finish_yield` / `finish_requeue` / `finish_failed` / `finalize_canceled` | owner-guarded completion statements | §4.1.1 |
 | `save_job_state` / `load_job_state` | `(job_id, owner, state_json) -> bool` / `(job_id) -> dict` | `job.result = {"state": ...}` |
@@ -437,7 +438,7 @@ Returns `None`.
 | `sched_fired` | `(schedule, fire_at_ts) -> bool` | any job, any status, with `payload.schedule`/`payload.fire_at` |
 | `recent_scheduled` | `(since) -> list[JobRow]` | done or failed jobs with `payload.schedule`, finished since |
 | `rekey_on` | `(start, end) -> JobRow \| None` | `maintenance` job with `payload.action = 'rekey'`, status queued, running or done, `scheduled_for` in `[start, end)` |
-| `queue_stats` | `(now, since) -> QueueStats` | counts for status |
+| `queue_stats` | `(now, since) -> QueueStats` | counts for status; `QueueStats` (T08-11 spec note) = frozen `NamedTuple` `(queued: int, next_job: NextJob \| None, failed_24h: int, dead_letters: int)` with `NextJob = (job_id, kind, priority, scheduled_for)` (the highest-priority due queued job by priority DESC, scheduled_for, created_at, else the earliest not yet due; class, slot and exclusive-kind eligibility are not applied); `failed_24h` counts `failed` jobs with `finished_at >= since`, `dead_letters` every `failed` job (U08-91 `queue`, `failed_24h`, `dead_letters`) |
 | `upsert_worker` / `update_worker` / `list_workers` | worker row writes and reads | U08-96 |
 | `run_row` | `(run_id) -> tuple[str, str] \| None` | `(kind, status)` of `run` |
 | task methods | see U08-97 | |
@@ -2730,7 +2731,7 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Goal | All `job` and `worker` SQL of U08-95 and U08-96. |
 | Depends on | T08-03, T08-07, T02-05 (herness/store/migrations/002_jobs.sql) (tables `job`, `worker`), T02-06 (herness/store/migrations/003_runs_evidence.sql) (table `run`) |
 | Units | U08-95, U08-96 |
-| Files | `herness/store/ops/jobs.py`, `herness/store/ops/worker.py` |
+| Files | `herness/store/ops/jobs.py`, `herness/store/ops/worker.py`, `herness/store/ops/_job_sql.py` (private SQL sibling, spec note) |
 | Tests | UT08-53, UT08-62, UT08-65, IT08-02, ST08-08 |
 | Threats | TH08-08 |
 | Acceptance checks | IT08-02 (8 × 1 000 claims) has no double claim; `EXPLAIN QUERY PLAN` of the claim uses the `job(status, gpu_class, scheduled_for, priority)` index |

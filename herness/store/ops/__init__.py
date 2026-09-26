@@ -201,6 +201,10 @@ from .resilience import purge_events
 from .metrics import purge_metric_samples, record_metric_samples
 
 # isort: split
+# 08 jobs
+from .jobs import SqliteJobsBackend
+
+# isort: split
 # 09 ui_reads
 from .ui_reads import (
     UiDecisionRow,
@@ -290,6 +294,8 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "purge_events",
     # 08 metrics
     "record_metric_samples", "purge_metric_samples",
+    # 08 jobs
+    "SqliteJobsBackend",
     # 09 ui_reads
     "UiRunRow", "UiTaskRow", "UiEvidenceRow", "UiRecommendationRow", "UiDecisionRow",
     "UiOutcomeRow", "UiFindingRow", "UiMemoryItemRow", "UiResilienceEventRow", "UiSourceHealthRow",
