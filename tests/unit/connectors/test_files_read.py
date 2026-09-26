@@ -214,18 +214,51 @@ def test_ut01_50_corrupt_parquet_and_bad_suffix(tmp_path: Path) -> None:
         list(conn.read_file("sites", odd))
 
 
+@pytest.mark.skipif(not _EXCEL, reason=d.EXCEL_SKIP)
 def test_st01_09_xlsx_zip_bomb_fails_as_schema_violation(tmp_path: Path) -> None:
-    """ST01-09 a small XLSX that inflates past the memory cap fails as SchemaViolation."""
+    """ST01-09 a small XLSX that inflates past the 1 GB memory cap fails as SchemaViolation."""
     (tmp_path / "sheets").mkdir()
-    # With the extension the cell inflates to 1.2 GiB (> the 1 GB DuckDB cap); without it
-    # the read fails at LOAD excel, so a small bomb keeps the test fast.
-    size = int(1.2 * 1024**3) if _EXCEL else 8 * 1_048_576
-    path = d.write_xlsx_bomb(tmp_path / "sheets" / "bomb.xlsx", size)
+    path = d.write_xlsx_bomb(tmp_path / "sheets" / "bomb.xlsx", int(1.2 * 1024**3))
     assert path.stat().st_size < 4 * 1_048_576
     os.utime(path, ns=(d.mtime_ns(3600), d.mtime_ns(3600)))
     entities = {"sheets": {"pattern": "*.xlsx", "key_field": ["id"], "sheet": "Teams"}}
     with pytest.raises(SchemaViolation, match="unreadable inbox file"):
         _read(d.connector(tmp_path, entities), "sheets")
+
+
+def test_ut01_50_missing_excel_extension_is_schema_violation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-50 a missing excel extension (LOAD excel fails) raises SchemaViolation."""
+    real = duckdb.connect
+
+    def no_excel(database: str, *, config: dict[str, Any]) -> _NoExcel:
+        return _NoExcel(real(database, config=config))
+
+    monkeypatch.setattr(files.duckdb, "connect", no_excel)
+    (tmp_path / "sheets").mkdir()
+    path = d.write_xlsx(tmp_path / "sheets" / "t.xlsx", {"Teams": [["id"], ["1"]]})
+    os.utime(path, ns=(d.mtime_ns(3600), d.mtime_ns(3600)))
+    entities = {"sheets": {"pattern": "*.xlsx", "key_field": ["id"], "sheet": "Teams"}}
+    with pytest.raises(SchemaViolation, match=r"unreadable inbox file sheets/t\.xlsx") as info:
+        _read(d.connector(tmp_path, entities), "sheets")
+    assert isinstance(info.value.__cause__, duckdb.Error)
+
+
+class _NoExcel:
+    """Connection proxy whose ``LOAD excel`` fails as on a host without the extension."""
+
+    def __init__(self, con: duckdb.DuckDBPyConnection) -> None:
+        self._con = con
+
+    def execute(self, sql: str, *args: object) -> object:
+        if sql == "LOAD excel":
+            msg = 'Extension "excel" not found'
+            raise duckdb.IOException(msg)
+        return self._con.execute(sql, *args)
+
+    def close(self) -> None:
+        self._con.close()
 
 
 def test_ut01_49_file_changed_during_read(tmp_path: Path) -> None:

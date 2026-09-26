@@ -179,7 +179,7 @@ class FilesConnector:
         settings: FilesSettings,
         *,
         inbox_root: Path,
-        clock: Callable[[], datetime.datetime] = clock.now,
+        clock: Callable[[], datetime.datetime] = clock.now,  # default: module; body: parameter
     ) -> None:
         self._settings = settings
         self._root = inbox_root
@@ -210,34 +210,34 @@ class FilesConnector:
     def _reject(self, entity: str, rel_path: str, reason: str) -> None:
         _log.warning("connectors.files.rejected", entity=entity, file=rel_path, reason=reason)
 
-    def _reason(self, p: Path, root: Path) -> tuple[str | None, os.stat_result | None]:
-        """Why ``p`` is skipped (``None`` when eligible) and its ``lstat``."""
+    def _reason(self, p: Path, root: Path, rel_path: str) -> tuple[str | None, InboxFile | None]:
+        """Why ``p`` is skipped, or ``(None, file)`` when it is eligible."""
         if _is_link(p):
             return "symlink", None
         st = p.lstat()
         if not stat.S_ISREG(st.st_mode):
-            return "not_regular", st
-        if not p.resolve(strict=True).is_relative_to(root):
-            return "outside_root", st
-        if self._clock() - _mtime(st.st_mtime_ns) < self._settle:
-            return "settling", st
+            return "not_regular", None
+        resolved = p.resolve(strict=True)
+        if not resolved.is_relative_to(root):
+            return "outside_root", None
+        mtime = _mtime(st.st_mtime_ns)
+        if self._clock() - mtime < self._settle:
+            return "settling", None
         if st.st_size > MAX_INBOX_FILE_BYTES:
-            return "too_large", st
-        return None, st
+            return "too_large", None
+        return None, InboxFile(resolved, rel_path, st.st_size, mtime, st.st_mtime_ns)
 
     def _eligible(self, entity: str, p: Path, root: Path) -> InboxFile | None:
         rel_path = p.relative_to(self._root).as_posix()
         try:
-            reason, st = self._reason(p, root)
+            reason, found = self._reason(p, root, rel_path)
         except OSError:
-            reason, st = "unreadable", None
+            reason, found = "unreadable", None
         if reason == "settling":
             _log.debug("connectors.files.rejected", entity=entity, file=rel_path, reason=reason)
-            return None
-        if reason is not None or st is None:
-            self._reject(entity, rel_path, reason or "unreadable")
-            return None
-        return InboxFile(p.resolve(), rel_path, st.st_size, _mtime(st.st_mtime_ns), st.st_mtime_ns)
+        elif reason is not None:
+            self._reject(entity, rel_path, reason)
+        return found
 
     def candidates(self, entity: str) -> list[InboxFile]:
         """Eligible files of the entity folder sorted by ``(mtime, name)`` (U01-47).
