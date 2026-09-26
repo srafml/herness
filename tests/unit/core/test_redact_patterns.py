@@ -9,6 +9,7 @@ re-pointed at ``Redactor.scan`` when U10-41 lands.
 from __future__ import annotations
 
 import dataclasses
+import re
 import time
 from typing import get_args
 
@@ -289,6 +290,43 @@ def test_ut10_36_pem_multiple_blocks_and_unterminated() -> None:
     assert pem == [one, two]
 
 
+_JWT_SPEC = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}")
+
+
+def _jwt_spans(text: str) -> list[tuple[int, int]]:
+    return [(s, e) for s, e, _ in redact_patterns._find_jwts(text)]
+
+
+def test_ut10_36_jwt_long_segment() -> None:
+    """UT10-36 a JWT with a > 4 KB segment (Entra ID tokens) is matched without a cap."""
+    token = "eyJ" + "a" * 5000 + "." + "b" * 50 + "." + "c" * 50
+    assert ("CREDENTIAL", token) in _detect(f"jwt {token} end")
+    assert _jwt_spans(token) == [(0, 5105)]
+
+
+@settings(max_examples=600)
+@given(st.text(alphabet="eyJa1_-. x\u00e9", max_size=40))
+def test_ut10_36_jwt_matches_spec_regex(text: str) -> None:
+    """UT10-36 the linear JWT scan yields exactly the spec regex spans."""
+    assert _jwt_spans(text) == [m.span() for m in _JWT_SPEC.finditer(text)]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "eyJabcde.fghij.klmno",
+        "xeyJabcde.fghij.klmno eyJabcde.fghij.klmno",
+        "-eyJabcde.fghij.klmn eyJeyJabcde.fghij.klmno.pqrst",
+        "eyJabcd.fghij.klmno eyJabcde..klmno eyJabcde.fghij",
+        "eyJabcde.fghij.klmnoeyJabcde.fghij.klmno",
+        "\u00e9eyJabcde.fghij.klmno .eyJabcde.fghij.klmno",
+    ],
+)
+def test_ut10_36_jwt_matches_spec_regex_examples(text: str) -> None:
+    """UT10-36 the linear JWT scan equals the spec regex on hand-picked edge cases."""
+    assert _jwt_spans(text) == [m.span() for m in _JWT_SPEC.finditer(text)]
+
+
 _ADVERSARIAL = {
     "pem_begin_no_end": "-----BEGIN PRIVATE KEY-----\n" * 20_000,
     "jwt_runs": "eyJ-" * 100_000,
@@ -301,14 +339,17 @@ _ADVERSARIAL = {
 
 @pytest.mark.parametrize("name", sorted(_ADVERSARIAL))
 def test_ut10_36_detectors_linear_on_adversarial_input(name: str) -> None:
-    """UT10-36 every detector finishes adversarial 400-540 KB inputs well under a second."""
+    """UT10-36 every detector finishes adversarial 400-540 KB inputs in linear time.
+
+    The bound is generous for loaded CI; the former quadratic patterns took 6-46 s here.
+    """
     text = _ADVERSARIAL[name]
     started = time.perf_counter()
     for det in _DETECTORS:
         if det.prefilter(text):
             for _ in det.find(text):
                 pass
-    assert time.perf_counter() - started < 1.0
+    assert time.perf_counter() - started < 5.0
 
 
 def test_ut10_36_pem_block_wins_over_inner_credentials() -> None:

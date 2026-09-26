@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from bisect import bisect_right
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal
@@ -74,8 +75,8 @@ _NANP_DIGITS: Final = 10
 # quadratic on repeated BEGINs without an END; _find_pem gives the same spans in linear time.
 _PEM_BEGIN: Final = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", _I)
 _PEM_END: Final = re.compile(r"-----END [A-Z ]*PRIVATE KEY-----", _I)
-# CREDENTIAL (b)-(f), in spec order; the int is the span group (0 = whole match). JWT
-# segments are bounded to 4096 and the URL scheme to 32 characters so each is linear.
+# CREDENTIAL (b)-(d) before the JWT and (e)-(f) after it, in spec order; the int is the span
+# group (0 = whole match). The URL scheme is bounded to 32 characters so (f) is linear.
 _CREDENTIAL: Final[tuple[tuple[re.Pattern[str], int], ...]] = (
     (re.compile(r"\bauthorization\s*:\s*(?:bearer|basic)\s+([A-Za-z0-9._~+/=-]+)", _I), 1),
     (
@@ -87,13 +88,18 @@ _CREDENTIAL: Final[tuple[tuple[re.Pattern[str], int], ...]] = (
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), 0),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,255}\b"), 0),
     (re.compile(r"\bxox[abpors]-[A-Za-z0-9-]{10,200}\b"), 0),
-    (
-        re.compile(r"\beyJ[A-Za-z0-9_-]{5,4096}+\.[A-Za-z0-9_-]{5,4096}+\.[A-Za-z0-9_-]{5,4096}+"),
-        0,
-    ),
+)
+_CREDENTIAL_AFTER_JWT: Final[tuple[tuple[re.Pattern[str], int], ...]] = (
     (re.compile(r"AccountKey=([A-Za-z0-9+/=]{20,})", _I), 1),
     (re.compile(r"\b[a-z][a-z0-9+.-]{0,31}://([^\s/:@]+:[^\s/@]+)@", _I), 1),
 )
+# CREDENTIAL (d) JWT, spec `\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}`:
+# quadratic as a regex on `eyJ-` repeats, so _find_jwts yields the same spans from
+# precomputed maximal runs of the segment class, in linear time and without a length cap.
+_JWT_START: Final = re.compile(r"\beyJ")
+_JWT_RUN: Final = re.compile(r"[A-Za-z0-9_-]+")
+_JWT_MIN_SEGMENT: Final = 5
+_JWT_SEGMENTS: Final = 3
 _CREDENTIAL_HINTS: Final = ("=", ":", "-----", "AKIA", "gh", "xox", "eyJ", "AccountKey")
 
 _URL: Final = re.compile(r"\bhttps?://[^\s<>\"']+", _I)
@@ -163,9 +169,48 @@ def _find_pem(text: str) -> Found:
         pos = end.end()
 
 
+def _jwt_end(text: str, pos: int, run_end: Callable[[int], int]) -> int | None:
+    """End of the JWT whose first segment starts at ``pos`` (after ``eyJ``), else None."""
+    for segment in range(_JWT_SEGMENTS):
+        end = run_end(pos)
+        if end - pos < _JWT_MIN_SEGMENT:
+            return None
+        if segment == _JWT_SEGMENTS - 1:
+            return end
+        if text[end : end + 1] != ".":
+            return None
+        pos = end + 1
+    return None  # pragma: no cover - the last segment always returns
+
+
+def _find_jwts(text: str) -> Found:
+    starts = [match.start() for match in _JWT_START.finditer(text)]
+    if not starts:
+        return
+    runs = [match.span() for match in _JWT_RUN.finditer(text)]
+    run_starts = [begin for begin, _ in runs]
+
+    def run_end(pos: int) -> int:
+        # Greedy segment end: the end of the maximal run holding pos (pos if none does).
+        index = bisect_right(run_starts, pos) - 1
+        return runs[index][1] if index >= 0 and runs[index][1] > pos else pos
+
+    after = 0
+    for start in starts:
+        if start < after:
+            continue
+        end = _jwt_end(text, start + 3, run_end)
+        if end is not None:
+            yield start, end, text[start:end]
+            after = end
+
+
 def _find_credentials(text: str) -> Found:
     yield from _find_pem(text)
     for pattern, group in _CREDENTIAL:
+        yield from _spans(pattern, text, group)
+    yield from _find_jwts(text)
+    for pattern, group in _CREDENTIAL_AFTER_JWT:
         yield from _spans(pattern, text, group)
 
 
