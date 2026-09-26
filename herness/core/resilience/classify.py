@@ -1,9 +1,7 @@
 """Foreign exception → spec 00 §7 taxonomy (U08-16) and the single Retry-After parser (U08-17).
 
-Never imports `openai`, `anthropic` or `duckdb`: their classes are looked up only when the
-caller has already imported them (`sys.modules`). Messages never carry exception text; an
-HTTP body is redacted and cut before it enters a message (TH08-02).
-"""
+SDK classes (`openai`, `anthropic`, `duckdb`) are only looked up in `sys.modules`, never
+imported. Messages never carry exception text; HTTP bodies are redacted first (TH08-02)."""
 
 from __future__ import annotations
 
@@ -32,6 +30,7 @@ from herness.core.errors import (
     SourceUnavailable,
     StoreBusy,
 )
+from herness.core.logging import get_logger
 from herness.core.redact import redact_text
 
 type ErrorFamily = Literal["source", "model", "decider", "store"]
@@ -48,18 +47,14 @@ _UNAVAILABLE: Final[Mapping[str, type[HernessError]]] = types.MappingProxyType(
     }
 )
 _UNAVAILABLE_STATUS: Final = frozenset({500, 502, 503, 504, 529})
-_HTTPX_UNAVAILABLE: Final = (
-    httpx.ConnectError,
-    httpx.ConnectTimeout,
-    httpx.ReadTimeout,
-    httpx.WriteTimeout,
-    httpx.PoolTimeout,
-    httpx.RemoteProtocolError,
-)
+# Rule 3: httpx.TimeoutException is exactly Connect/Read/Write/PoolTimeout.
+_HTTPX_UNAVAILABLE: Final = (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError)
 _DELAY_SECONDS: Final = re.compile(r"[0-9]{1,10}")
 _RESET_VALUE: Final = re.compile(r"[0-9]{1,16}(\.[0-9]+)?")
 _EPOCH_MS: Final = 10**12
 _EPOCH_S: Final = 10**9
+_DEFAULT_MAX_S: Final = 86400.0  # R.retry.retry_after_max_s default (design 08 §7)
+_log = get_logger("resilience")
 
 
 def _classes(module: str, *names: str) -> tuple[type[BaseException], ...]:
@@ -79,18 +74,19 @@ def _body(response: object) -> str:
 
 
 def _redacted(body: str) -> str:
-    """Redact, then cut to 500 chars.
-
-    Deviation (controller ruling on U08-16, which says "cut then redact"): redacting first
-    means a cut at char 500 cannot split an e-mail or key into a fragment redaction misses.
-    `redact_text` returns None when it fails closed; that (or any redactor error) gives "".
-    """
+    """Redact, then cut to 500 chars (controller ruling; U08-16 says cut then redact): a cut
+    cannot split a value into a fragment redaction misses. A body longer than the window
+    drops the last 500 redacted chars, where a value split at the window edge sits.
+    `redact_text` returning None, or raising, gives no detail."""
     if not body:
         return ""
     try:
         clean = redact_text(body[:_REDACT_WINDOW])
-    except Exception:  # noqa: BLE001 - fail closed: classify must return, never raise
+    except Exception as exc:  # noqa: BLE001 - fail closed: classify must return, never raise
+        _log.warning("resilience.classify.redact_failed", error_type=type(exc).__name__)
         return ""
+    if clean is not None and len(body) > _REDACT_WINDOW:
+        clean = clean[: max(len(clean) - DETAIL_CHARS, 0)]
     return "" if clean is None else clean[:DETAIL_CHARS]
 
 
@@ -104,6 +100,14 @@ def _msg(
     return msg.encode("utf-8")[:MESSAGE_BYTES].decode("utf-8", "ignore")
 
 
+def _max_s() -> float:
+    """`R.retry.retry_after_max_s`, or its 86 400 s default when no config can be read."""
+    try:
+        return get_config().resilience.resilience.retry.retry_after_max_s
+    except Exception:  # noqa: BLE001 - classify must return, never raise
+        return _DEFAULT_MAX_S
+
+
 def _from_status(
     exc: BaseException, family: ErrorFamily, status: int, response: object
 ) -> HernessError:
@@ -111,9 +115,9 @@ def _from_status(
     msg = _msg(family, exc, status, _redacted(_body(response)))
     if status == 429:  # noqa: PLR2004 - HTTP status
         headers = getattr(response, "headers", None)
-        now = clock.now()
-        wait = parse_retry_after(headers, now) if isinstance(headers, Mapping) else None
-        return RateLimited(msg, retry_after=wait)
+        if not isinstance(headers, Mapping):
+            return RateLimited(msg)
+        return RateLimited(msg, retry_after=parse_retry_after(headers, clock.now(), max_s=_max_s()))
     if status in {401, 403}:
         return AuthError(msg)
     if status in _UNAVAILABLE_STATUS:
@@ -157,10 +161,12 @@ def classify(exc: BaseException, *, family: ErrorFamily) -> HernessError:
         return exc
     if isinstance(exc, httpx.HTTPStatusError):
         return _from_status(exc, family, exc.response.status_code, exc.response)
+    if isinstance(exc, _HTTPX_UNAVAILABLE):
+        return _UNAVAILABLE[family](_msg(family, exc))
     mapped = _from_sdk(exc, family) or _from_store(exc, family)
     if mapped is not None:
         return mapped
-    if isinstance(exc, (*_HTTPX_UNAVAILABLE, TimeoutError, concurrent.futures.TimeoutError)):
+    if isinstance(exc, TimeoutError | concurrent.futures.TimeoutError):
         return _UNAVAILABLE[family](_msg(family, exc))
     return FatalError(_msg(family, exc, detail=f"unclassified {type(exc).__name__}"))
 
@@ -214,9 +220,7 @@ def parse_retry_after(
 
 
 class _CallableModule(types.ModuleType):
-    """This module and U08-16's function share the name `herness.core.resilience.classify`;
-    a callable module keeps `resilience.classify(exc, family=...)` working whichever one the
-    package attribute holds (the import system sets it to the module)."""
+    """The package attribute `classify` is this module (U08-16's function shares the name)."""
 
     def __call__(self, exc: BaseException, *, family: ErrorFamily) -> HernessError:
         return classify(exc, family=family)

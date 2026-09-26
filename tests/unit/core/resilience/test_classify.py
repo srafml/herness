@@ -14,6 +14,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import structlog
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -228,19 +229,36 @@ def test_ut08_10_classify_imports_no_sdk() -> None:
     assert out.stdout.strip() == ""
 
 
-def test_rf_package_classify_is_callable_in_either_import_order() -> None:
-    """RF resilience.classify stays callable although a submodule shares its name."""
+_CHECK_MODULE = (
+    "import herness.core.resilience.classify as m\n"
+    "print(m.parse_retry_after({'Retry-After': '5'}, __import__('datetime').datetime.now("
+    "__import__('datetime').UTC), max_s=9))\n"
+)
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        "import herness.core.resilience.classify\nfrom herness.core import resilience\n",
+        "from herness.core.resilience import classify\nfrom herness.core import resilience\n",
+        "from herness.core import resilience\nresilience.classify\n",
+    ],
+    ids=["submodule-first", "package-name-first", "attribute-first"],
+)
+def test_rf_package_classify_is_callable_in_either_import_order(first: str) -> None:
+    """RF resilience.classify is callable and its module attributes work in any import order."""
     code = (
-        "import herness.core.resilience.classify\n"
-        "from herness.core import resilience\n"
-        "print(type(resilience.classify(TimeoutError(), family='model')).__name__)\n"
-        "from herness.core.resilience import classify\n"
-        "print(type(classify(TimeoutError(), family='source')).__name__)\n"
+        first
+        + "print(type(resilience.classify(TimeoutError(), family='model')).__name__)\n"
+        + "from herness.core.resilience import classify\n"
+        + "print(type(classify(TimeoutError(), family='source')).__name__)\n"
+        + _CHECK_MODULE
+        + "print(classify.parse_retry_after({}, None, max_s=1))\n"
     )
     out = subprocess.run(  # noqa: S603 - fixed argv, this interpreter
         [sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=True
     )
-    assert out.stdout.split() == ["ModelUnavailable", "SourceUnavailable"]
+    assert out.stdout.split() == ["ModelUnavailable", "SourceUnavailable", "5.0", "None"]
     err = resilience.classify(TimeoutError(), family="model")
     assert type(err) is ModelUnavailable
 
@@ -292,8 +310,70 @@ def test_ut08_11_redaction_raising_omits_detail(monkeypatch: pytest.MonkeyPatch)
         raise ConfigError(msg)
 
     monkeypatch.setattr(cm, "redact_text", boom)
-    err = _classify(_status_error(500, "body"), "decider")
+    with structlog.testing.capture_logs() as logs:
+        err = _classify(_status_error(500, "body"), "decider")
     assert err.message == "decider call failed: HTTPStatusError HTTP 500"
+    assert logs == [
+        {
+            "component": "resilience",
+            "event": "resilience.classify.redact_failed",
+            "error_type": "ConfigError",
+            "log_level": "warning",
+        }
+    ]
+
+
+def _long_email(i: int, length: int) -> str:
+    """A valid e-mail of exactly `length` chars (long domain labels) for heavy shrinkage."""
+    local = f"u{i:02d}" + "x" * 40 + "@"
+    tld = ".com"
+    labels, left = [], length - len(local) - len(tld)
+    while left > 0:
+        size = min(60, left)  # label + its "." separator
+        labels.append("d" * (size - 1 if left > size else size))
+        left -= size
+    return local + ".".join(labels) + tld
+
+
+@pytest.mark.usefixtures("test_redactor")
+@pytest.mark.parametrize(
+    ("value", "split_after"),
+    [
+        ("jane.victim@examplecorp.org", "jane.victim@examp"),
+        (KEY_TEXT, "api_key=synth"),
+    ],
+    ids=["email", "api_key"],
+)
+def test_ut08_11_value_straddling_redaction_window_leaves_no_fragment(
+    value: str, split_after: str
+) -> None:
+    """UT08-11 a value split at the 4 000-char window edge after heavy shrinkage never leaks."""
+    prefix = " ".join(_long_email(i, 266) for i in range(14)) + " "
+    last = 4000 - len(prefix) - len(split_after) - 1
+    prefix += _long_email(99, last) + " "
+    body = prefix + value + " more text " + "z" * 300
+    assert body[: cm._REDACT_WINDOW].endswith(split_after)
+    assert len(cm.redact_text(body[: cm._REDACT_WINDOW]) or "") < 1000  # heavy shrinkage
+    err = _classify(_status_error(503, body), "model")
+    assert type(err) is ModelUnavailable
+    assert split_after not in err.message
+    assert "jane" not in err.message
+    assert "synth" not in err.message
+
+
+def test_ut08_11_429_without_loadable_config_uses_default_max(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT08-11 classify never raises: a 429 with no readable config clamps to 86 400 s."""
+
+    def no_config() -> object:
+        msg = "config not loadable"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(cm, "get_config", no_config)
+    err = _classify(_status_error(429, **{"Retry-After": "9999999"}), "source")
+    assert isinstance(err, RateLimited)
+    assert err.retry_after == 86400.0
 
 
 def test_ut08_11_multibyte_message_within_2kb(monkeypatch: pytest.MonkeyPatch) -> None:
