@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.errors import StoreBusy
 from herness.store.ops import _shims, core
@@ -35,7 +36,7 @@ def _hold(path: Path, begin: str, seconds: float, ready: threading.Event) -> Non
 
 
 def test_st02_18_long_holders_never_hang_writers(
-    ops_store: Path, monkeypatch: pytest.MonkeyPatch
+    ops_store: OpsStoreHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ST02-18 a 5 s reader does not block writes (WAL); a 12 s BEGIN IMMEDIATE holder makes
     the writer's first attempt raise StoreBusy, and run_write completes within the 30 s policy.
@@ -47,7 +48,7 @@ def test_st02_18_long_holders_never_hang_writers(
 
     # Phase 1: a read transaction held for 5 s; writes during it succeed at once (WAL).
     ready = threading.Event()
-    reader = threading.Thread(target=_hold, args=(ops_store, "BEGIN", 5.0, ready))
+    reader = threading.Thread(target=_hold, args=(ops_store.db_path, "BEGIN", 5.0, ready))
     reader.start()
     assert ready.wait(5)
     for i in range(3):
@@ -75,7 +76,9 @@ def test_st02_18_long_holders_never_hang_writers(
 
     monkeypatch.setattr(_shims, "retry_call", watching_retry)
     ready = threading.Event()
-    writer = threading.Thread(target=_hold, args=(ops_store, "BEGIN IMMEDIATE", 12.0, ready))
+    writer = threading.Thread(
+        target=_hold, args=(ops_store.db_path, "BEGIN IMMEDIATE", 12.0, ready)
+    )
     writer.start()
     assert ready.wait(5)
     start = time.monotonic()

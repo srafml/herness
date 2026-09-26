@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib
 import itertools
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from importlib import resources
 from pathlib import Path
 from types import ModuleType
@@ -30,6 +30,17 @@ from herness.store.ops.migrate import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def ops_store(tmp_path: Path) -> Iterator[Path]:
+    """Local override: every test here drives `migrate()` itself, so it needs an empty,
+    un-migrated store, not the plugin `ops_store` (which is pre-migrated, T11-40)."""
+    db_path = tmp_path / "ops.sqlite"
+    core.reset_connections(path=db_path)
+    yield db_path
+    core.reset_connections()
+
 
 # The package attribute `herness.store.ops.migrate` is the function (U02-62), so reach the
 # module through importlib for monkeypatching.
