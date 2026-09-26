@@ -1,25 +1,31 @@
-"""Fault tests for impl 10 security paths (FT10-01 T10-05, FT10-05 T10-06, FT10-07 T10-11)."""
+"""Fault tests for impl 10 security paths (FT10-01 T10-05, FT10-05 T10-06, FT10-07 T10-11,
+FT10-08 T10-16)."""
 
 from __future__ import annotations
 
+import errno
 import json
 import os
+import socket
 import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pyarrow as pa
 import pytest
 from keyring.errors import KeyringError
 from tests.support.config_tree import write_full_config
+from tests.support.egress_harness import API, audit_fields, make_guard
+from tests.support.egress_harness import load as load_egress
 from tests.support.fake_keyring import MemoryKeyring
 
 from herness.core import _redact_pool as redact_pool
 from herness.core import audit as a
 from herness.core import config as c
 from herness.core import redact, secrets
-from herness.core.errors import ConfigError, FatalError, RetryableError, StoreBusy
+from herness.core.errors import ConfigError, EgressBlocked, FatalError, RetryableError, StoreBusy
 from herness.core.logging import configure_logging, reset_logging
 
 pytestmark = pytest.mark.fault
@@ -155,3 +161,29 @@ def test_ft10_07_killed_redaction_worker_raises_store_busy_and_no_table(
     assert events["redact.table.failed"]["error_type"] == "BrokenProcessPool"
     assert "redact.table.completed" not in events
     assert all("a@b.test" not in json.dumps(line) for line in lines)
+
+
+@pytest.mark.parametrize("body", [b'{"metric": "mttr_hours"}', b"mail john@corp.com"])
+def test_ft10_08_egress_log_disk_full_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_keyring: MemoryKeyring, body: bytes
+) -> None:
+    """FT10-08 OSError (disk full) writing the egress log: egress_log_failed; no socket opened."""
+    cfg = load_egress(tmp_path, "hybrid")
+    real_open = Path.open
+
+    def full_disk(self: Path, mode: str = "r", *args: Any, **kw: Any) -> Any:
+        if self.name.startswith("egress-") and "a" in mode:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real_open(self, mode, *args, **kw)
+
+    connects: list[object] = []
+    monkeypatch.setattr(Path, "open", full_disk)
+    monkeypatch.setattr(socket.socket, "connect", lambda _self, addr: connects.append(addr))
+    with pytest.raises(EgressBlocked) as caught:
+        make_guard(cfg).check(API, body, "reasoning_final", "aggregated_evidence")
+    assert caught.value.reason == "egress_log_failed"
+    assert connects == []
+    assert not list(cfg.paths.logs.glob("egress-*.jsonl"))
+    assert audit_fields(cfg.paths.logs) == [
+        {"egress_id": caught.value.egress_id, "reason": "egress_log_failed"}
+    ]
