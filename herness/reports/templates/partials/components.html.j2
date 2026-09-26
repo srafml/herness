@@ -1,0 +1,214 @@
+{#- HTML report macros (impl 09 U09-28; design §5.2). Autoescaped: data values are escaped,
+    model text arrives as segments_to_html Markup and charts as Markup (U09-24); no safe filter. -#}
+{% macro text(block) %}
+<p class="text">{{ block.segments }}</p>
+{% endmacro %}
+{% macro blocks(items) %}
+{% for block in items %}
+{{ text(block) }}
+{% endfor %}
+{% endmacro %}
+{% macro num(cell) -%}
+{% if cell.query_id is none %}{{ cell.text }}{% else %}<a class="num" href="#ev-{{ cell.query_id }}" title="{{ cell.title }}">{{ cell.text }}</a>{% endif %}
+{%- endmacro %}
+{% macro empty(text) %}
+<p class="empty">{{ text }}</p>
+{% endmacro %}
+{% macro table(columns, rows, marked=()) %}
+{% if rows %}
+<table>
+<thead><tr>{% for col in columns %}<th scope="col">{{ col|replace("_", " ") }}</th>{% endfor %}</tr></thead>
+<tbody>
+{% for row in rows %}
+<tr{% if marked and marked[loop.index0] %} class="marked" title="unconfirmed"{% endif %}>{% for cell in row %}<td>{{ num(cell) }}</td>{% endfor %}</tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+{{ empty("No rows.") }}
+{% endif %}
+{% endmacro %}
+{% macro chart(svg) %}
+<figure class="chart">{{ svg }}</figure>
+{% endmacro %}
+{% macro card(card) %}
+<article class="card" id="rec-{{ card.rank }}">
+<h3><span class="rank">#{{ card.rank }}</span> {{ card.headline }}</h3>
+<p class="target">{{ card.kind|replace("_", " ") }} · {{ card.target_type }} <code>{{ card.target_id }}</code></p>
+<p>{{ card.summary }}</p>
+{% if card.extras %}
+<dl class="extras">
+{% for name, cell in card.extras %}
+<div><dt>{{ name|replace("_", " ") }}</dt><dd>{{ num(cell) }}</dd></div>
+{% endfor %}
+</dl>
+{% endif %}
+{% if card.finding_ids %}
+<p class="findings">Findings: {% for fid in card.finding_ids %}<code>{{ fid }}</code>{{ ", " if not loop.last }}{% endfor %}</p>
+{% endif %}
+</article>
+{% endmacro %}
+{% macro banner(b) %}
+<div class="banner banner-{{ b.code }}" role="note">
+<p>{{ b.text|replace("`", "") }}</p>
+{% if b.details %}
+<ul>{% for item in b.details %}<li><code>{{ item }}</code></li>{% endfor %}</ul>
+{% endif %}
+</div>
+{% endmacro %}
+{% macro used_by(place) -%}
+{% if place.startswith("rec-") and place[4:].isdigit() %}<a href="#{{ place }}">{{ place }}</a>{% else %}{{ place }}{% endif %}
+{%- endmacro %}
+{% macro evidence_entry(e) %}
+<article class="evidence-entry">
+<a id="ev-{{ e.query_id }}"></a>
+<h3><code>{{ e.query_id }}</code></h3>
+{% if e.found %}
+<pre><code>{{ e.sql }}</code></pre>
+{% if e.params %}
+<table class="params">
+<thead><tr><th scope="col">param</th><th scope="col">value</th></tr></thead>
+<tbody>{% for key, value in e.params|dictsort %}<tr><td><code>{{ key }}</code></td><td>{{ value }}</td></tr>{% endfor %}</tbody>
+</table>
+{% endif %}
+<dl class="facts">
+<div><dt>build</dt><dd><code>{{ e.build_id }}</code></dd></div>
+<div><dt>rows</dt><dd>{{ "—" if e.row_count is none else e.row_count }}</dd></div>
+<div><dt>executed</dt><dd>{{ e.executed_at or "—" }}</dd></div>
+</dl>
+{% if e.result_sample is none %}
+{{ empty("Sample not stored for this build") }}
+{% elif e.result_sample %}
+<details open><summary>Sample ({{ e.result_sample|length }} rows)</summary>
+<div class="details-body"><table class="sample">
+<thead><tr>{% for col in e.sample_columns %}<th scope="col">{{ col }}</th>{% endfor %}</tr></thead>
+<tbody>
+{% for row in e.result_sample %}
+<tr>{% for col in e.sample_columns %}<td>{{ row.get(col, "") }}</td>{% endfor %}</tr>
+{% endfor %}
+</tbody>
+</table></div>
+</details>
+{% else %}
+{{ empty("The query returned no rows.") }}
+{% endif %}
+{% else %}
+{{ empty("Evidence not found for this query in the ops store or the build.") }}
+{% endif %}
+<p class="used-by">Used by: {% for place in e.used_by %}{{ used_by(place) }}{{ ", " if not loop.last }}{% endfor %}</p>
+</article>
+{% endmacro %}
+{% macro section(r, sid, heading) %}
+<section id="{{ sid }}">
+<h2>{{ r.section_titles.get(sid, heading) }}</h2>
+{{ blocks(r.sections[sid]) }}
+{{ caller() if caller is defined else "" }}
+</section>
+{% endmacro %}
+{#- Slots 4–9, shared by both review kinds. -#}
+{% macro portfolio(r) %}
+{% call section(r, "portfolio", "Portfolio under budget scenarios") %}
+{% for p in r.portfolio_blocks %}
+<article class="scenario">
+<h3>Scenario {{ p.scenario }}{% if p.custom %} <span class="tag">custom</span>{% endif %}</h3>
+<p>Budget {{ num(p.budget) }} · solver status <code>{{ p.solver_status }}</code></p>
+{{ chart(r.charts[p.chart_key]) }}
+{{ table(p.table.columns, p.table.rows, p.table.marked) }}
+</article>
+{% else %}
+{{ empty("No portfolio scenarios for this build.") }}
+{% endfor %}
+{% endcall %}
+{% endmacro %}
+{% macro scorecards(r) %}
+{% call section(r, "org_scorecards", "Org scorecards") %}
+{% for s in r.scorecards %}
+<article class="scorecard">
+<h3>{{ s.entity_type }} <code>{{ s.entity_id }}</code></h3>
+<table>
+<thead><tr>{% for col in s.table.columns[:5] %}<th scope="col">{{ col|replace("_", " ") }}</th>{% endfor %}<th scope="col">trend</th>{% for col in s.table.columns[5:] %}<th scope="col">{{ col|replace("_", " ") }}</th>{% endfor %}</tr></thead>
+<tbody>
+{% for row in s.table.rows %}
+<tr>{% for cell in row[:5] %}<td>{{ num(cell) }}</td>{% endfor %}<td class="spark">{{ r.charts[s.spark_keys[loop.index0]] }}</td>{% for cell in row[5:] %}<td>{{ num(cell) }}</td>{% endfor %}</tr>
+{% endfor %}
+</tbody>
+</table>
+</article>
+{% else %}
+{{ empty("No scorecards for this run.") }}
+{% endfor %}
+{% endcall %}
+{% endmacro %}
+{% macro actions(r) %}
+{% call section(r, "actions", "Recommended actions") %}
+{% if r.levers %}
+<table>
+<thead><tr><th scope="col">entity</th><th scope="col">metric</th><th scope="col">target</th><th scope="col">delta usd</th><th scope="col">rationale</th><th scope="col">cards</th></tr></thead>
+<tbody>
+{% for lever in r.levers %}
+<tr{% if lever.unconfirmed %} class="marked" title="unconfirmed"{% endif %}><td>{{ lever.entity_type }} <code>{{ lever.entity_id }}</code></td><td>{{ lever.metric }}</td><td>{{ lever.target_kind }}</td><td>{{ num(lever.delta_usd) }}</td><td>{{ lever.rationale }}</td><td>{% for a in lever.card_anchors %}<a href="#{{ a }}">{{ a }}</a>{{ ", " if not loop.last }}{% endfor %}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+{{ empty("No action levers for this build.") }}
+{% endif %}
+{% endcall %}
+{% endmacro %}
+{% macro retrospective(r) %}
+<section id="retrospective">
+<h2>{{ r.section_titles.get("retrospective", "Did last quarter's recommendations work?") }}</h2>
+{{ blocks(r.retro.blocks) }}
+{% if r.retro.verdict_counts %}
+<p class="verdicts">{% for verdict, count in r.retro.verdict_counts.items() %}{{ verdict }}: {{ count }}{{ " · " if not loop.last }}{% endfor %}</p>
+{% endif %}
+{% for item in r.retro.items %}
+<article class="retro-item">
+<h3><code>{{ item.rec_id }}</code> · <code>{{ item.target_id }}</code></h3>
+<p>{{ item.summary }}</p>
+<p>Decision: {{ item.decision or "none recorded" }}</p>
+{{ table(item.outcomes.columns, item.outcomes.rows) }}
+</article>
+{% endfor %}
+{% if r.retro.empty_text %}
+{{ empty(r.retro.empty_text) }}
+{% endif %}
+</section>
+{% endmacro %}
+{% macro caveats(r) %}
+{% set cv = r.caveats %}
+{% call section(r, "risks_and_caveats", "Data quality and caveats") %}
+{{ blocks(cv.blocks) }}
+<h3>Failed data quality checks</h3>
+{% if cv.dq_failed.rows %}{{ table(cv.dq_failed.columns, cv.dq_failed.rows) }}{% else %}{{ empty("All data quality checks passed.") }}{% endif %}
+<dl class="facts">
+<div><dt>unmapped incident share</dt><dd>{{ cv.unmapped_share or "—" }}</dd></div>
+<div><dt>unconfirmed weights</dt><dd>{% for key in cv.unconfirmed_keys %}<code>{{ key }}</code>{{ ", " if not loop.last }}{% else %}none{% endfor %}</dd></div>
+<div><dt>contested findings</dt><dd>{% for fid in cv.contested %}<code>{{ fid }}</code>{{ ", " if not loop.last }}{% else %}none{% endfor %}</dd></div>
+</dl>
+{% if cv.dead_tasks %}
+<h3>Tasks that did not finish</h3>
+<table><thead><tr><th scope="col">role</th><th scope="col">objective</th><th scope="col">last error</th></tr></thead>
+<tbody>{% for role, objective, error in cv.dead_tasks %}<tr><td>{{ role }}</td><td>{{ objective }}</td><td>{{ error }}</td></tr>{% endfor %}</tbody></table>
+{% endif %}
+{% if cv.removed %}
+<h3>Removed from the draft</h3>
+<ul>{% for where, reason in cv.removed %}<li><code>{{ where }}</code>: {{ reason }}</li>{% endfor %}</ul>
+{% endif %}
+{% if cv.flags %}
+<h3>Flags</h3>
+<ul>{% for flag, items in cv.flags|dictsort %}<li><code>{{ flag }}</code>: {{ items|join(", ") }}</li>{% endfor %}</ul>
+{% endif %}
+{% endcall %}
+{% endmacro %}
+{% macro method(r) %}
+{% set m = r.method %}
+{% call section(r, "method", "Method") %}
+<dl class="facts">
+<div><dt>depth</dt><dd>{{ m.depth }}</dd></div>
+<div><dt>profile</dt><dd><code>{{ m.profile }}</code></dd></div>
+<div><dt>verification</dt><dd>gate 2 {{ "passed" if m.gate2_passed else "failed" }}: {{ m.gate2_numbers }} numbers checked, {{ m.gate2_failed }} failed</dd></div>
+<div><dt>model calls by role</dt><dd>{% for role, calls in m.role_calls.items() %}{{ role }} {{ calls }}{{ ", " if not loop.last }}{% else %}none{% endfor %}</dd></div>
+</dl>
+{% endcall %}
+{% endmacro %}

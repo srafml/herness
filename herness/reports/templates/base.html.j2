@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+{# Report skeleton (impl 09 U09-28; design §5.2 slots 0, 1, 10, 11). Offline by design
+   (TH09-03): no script, link, img or url(); the CSP meta is the first element of head. #}
+{% import "partials/components.html.j2" as c %}
+{% set h = r.header %}
+<html lang="en">
+<head>
+<meta http-equiv="Content-Security-Policy" content="{{ REPORT_CSP }}">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ h.title|striptags }}</title>
+<style>
+:root {
+  --c-bg: #ffffff;
+  --c-fg: #1f2328;
+  --c-muted: #6e7781;
+  --c-accent: #0b5cad;
+  --c-axis: #8c959f;
+  --c-bar: #3a7bd5;
+  --c-border: #d0d7de;
+  --c-panel: #f6f8fa;
+  --c-banner: #fff8c5;
+  --c-mark: #fbe3e4;
+  --c-warn: #9a3412;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-bg: #0d1117;
+    --c-fg: #e6edf3;
+    --c-muted: #8b949e;
+    --c-accent: #58a6ff;
+    --c-axis: #6e7681;
+    --c-bar: #4c8ee8;
+    --c-border: #30363d;
+    --c-panel: #161b22;
+    --c-banner: #3b2e05;
+    --c-mark: #4a1d21;
+    --c-warn: #fdba74;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto; max-width: 72rem; padding: 1.5rem 1rem 4rem;
+  background: var(--c-bg); color: var(--c-fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+h1 { font-size: 1.7rem; margin: 0.2rem 0 0.8rem; }
+h2 { font-size: 1.3rem; margin-top: 2.2rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--c-border); }
+h3 { font-size: 1.05rem; margin: 1.2rem 0 0.4rem; }
+code, pre { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.9em; }
+pre { background: var(--c-panel); border: 1px solid var(--c-border); padding: 0.6rem; overflow-x: auto; white-space: pre-wrap; }
+a { color: var(--c-accent); }
+a.num { text-decoration: none; border-bottom: 1px dotted var(--c-accent); }
+.num-na { color: var(--c-muted); }
+mark.uncited { background: var(--c-mark); color: inherit; }
+table { border-collapse: collapse; margin: 0.5rem 0 1rem; font-size: 0.92em; }
+th, td { border: 1px solid var(--c-border); padding: 0.25rem 0.5rem; text-align: left; vertical-align: top; }
+th { background: var(--c-panel); }
+tr.marked td:first-child::before { content: "* "; color: var(--c-warn); }
+.kind, .empty, .used-by, .target, .findings { color: var(--c-muted); }
+.meta, .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.2rem 1rem; margin: 0.5rem 0; }
+.meta dt, .facts dt, .extras dt { font-size: 0.8em; color: var(--c-muted); }
+.meta dd, .facts dd, .extras dd { margin: 0; }
+.extras { display: flex; flex-wrap: wrap; gap: 0.2rem 1.5rem; margin: 0.4rem 0; }
+.banner { background: var(--c-banner); border-left: 4px solid var(--c-warn); padding: 0.4rem 0.8rem; margin: 0.5rem 0; }
+.banner p { margin: 0.2rem 0; }
+.card, .scenario, .scorecard, .retro-item, .evidence-entry { border: 1px solid var(--c-border); border-radius: 6px; padding: 0.4rem 1rem; margin: 0.8rem 0; }
+.rank { color: var(--c-accent); }
+.tag { font-size: 0.75em; border: 1px solid var(--c-border); border-radius: 3px; padding: 0 0.3rem; }
+figure.chart { margin: 0.5rem 0; max-width: 40rem; }
+figure.chart svg, td.spark svg { width: 100%; height: auto; }
+td.spark { min-width: 6rem; }
+svg text { fill: var(--c-fg); font-size: 11px; }
+.watermark {
+  position: fixed; top: 0.5rem; right: 0.5rem; z-index: 10; padding: 0.3rem 0.8rem;
+  border: 2px solid var(--c-warn); color: var(--c-warn); background: var(--c-bg);
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+}
+body.not-for-decision h1::after { content: " (draft)"; color: var(--c-warn); font-weight: 400; }
+footer { margin-top: 3rem; color: var(--c-muted); font-size: 0.85em; }
+@media print {
+  body { max-width: none; padding: 0; font-size: 11pt; }
+  details > summary { list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::marker { content: ""; }
+  details::details-content { content-visibility: visible; display: contents; }
+  details > .details-body { display: block !important; }
+  .card, .scenario, .scorecard, .retro-item, .evidence-entry, table, figure { break-inside: avoid; }
+  a { color: inherit; text-decoration: none; }
+}
+</style>
+</head>
+<body class="report report-{{ h.kind }}{% if not r.publishable %} not-for-decision{% endif %}">
+{% if not r.publishable %}
+<div class="watermark" role="note">Not for decision</div>
+{% endif %}
+{% block header %}
+<header>
+<p class="kind">{{ h.kind|replace("_", " ")|capitalize }}</p>
+<h1>{{ h.title }}</h1>
+<dl class="meta">
+<div><dt>run</dt><dd><code>{{ h.run_id }}</code></dd></div>
+<div><dt>build</dt><dd><code>{{ h.build_id }}</code></dd></div>
+<div><dt>data as of</dt><dd>{{ h.data_as_of.strftime("%Y-%m-%d %H:%M %Z") if h.data_as_of else "unknown" }}</dd></div>
+<div><dt>rendered</dt><dd>{{ h.rendered_at.strftime("%Y-%m-%d %H:%M %Z") }}</dd></div>
+<div><dt>depth · profile</dt><dd>{{ h.depth }} · <code>{{ h.profile }}</code></dd></div>
+<div><dt>tasks</dt><dd>{{ h.coverage.done_tasks }} of {{ h.coverage.planned_tasks }} done, {{ h.coverage.dead_tasks }} dead</dd></div>
+<div><dt>must-cover</dt><dd>{{ h.coverage.must_cover_done }} of {{ h.coverage.must_cover_total }}</dd></div>
+<div><dt>findings</dt><dd>{{ h.coverage.verified_findings }} verified, {{ h.coverage.rejected_findings }} rejected</dd></div>
+<div><dt>gate 2</dt><dd>{{ "passed" if h.gate2_passed else "failed" }}: {{ h.gate2_numbers }} numbers, {{ h.gate2_failed }} failed</dd></div>
+<div><dt>numbers linked</dt><dd>{{ r.numbers_linked }} of {{ r.numbers_total }}</dd></div>
+</dl>
+</header>
+{% endblock %}
+{% block banners %}
+{% if r.banners %}
+<div class="banners">
+{% for b in r.banners %}
+{{ c.banner(b) }}
+{% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+<main>
+{% block content %}{% endblock %}
+</main>
+{% block evidence_appendix %}
+<section id="evidence">
+<h2>Evidence appendix</h2>
+{% for e in r.evidence %}
+{{ c.evidence_entry(e) }}
+{% else %}
+{{ c.empty("No evidence was cited.") }}
+{% endfor %}
+</section>
+{% endblock %}
+{% block run_appendix %}
+{% set a = r.run_appendix %}
+<section id="run">
+<h2>Run appendix</h2>
+<h3>Ranked entities</h3>
+{% if a.ranked_entities %}
+<table><thead><tr><th scope="col">rank</th><th scope="col">entity type</th><th scope="col">entity id</th></tr></thead>
+<tbody>{% for rank, etype, eid in a.ranked_entities %}<tr><td>{{ rank }}</td><td>{{ etype }}</td><td><code>{{ eid }}</code></td></tr>{% endfor %}</tbody></table>
+{% else %}
+{{ c.empty("No ranked entities.") }}
+{% endif %}
+<h3>Tasks by role and status</h3>
+{% if a.task_counts %}
+<table><thead><tr><th scope="col">role</th><th scope="col">status</th><th scope="col">tasks</th></tr></thead>
+<tbody>{% for role, status, count in a.task_counts %}<tr><td>{{ role }}</td><td>{{ status }}</td><td>{{ count }}</td></tr>{% endfor %}</tbody></table>
+{% else %}
+{{ c.empty("No tasks recorded.") }}
+{% endif %}
+<dl class="facts">
+<div><dt>tokens in · out</dt><dd>{{ a.tokens_input }} · {{ a.tokens_output }}</dd></div>
+<div><dt>cost</dt><dd>{{ a.cost_usd }}</dd></div>
+<div><dt>config hash</dt><dd><code>{{ a.config_hash }}</code></dd></div>
+</dl>
+</section>
+{% endblock %}
+<footer>Template version {{ TEMPLATE_VERSION }} · rendered {{ h.rendered_at.strftime("%Y-%m-%d %H:%M %Z") }}</footer>
+</body>
+</html>
