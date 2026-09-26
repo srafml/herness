@@ -85,7 +85,8 @@ _QID_RE: Final = re.compile(r"[a-z][a-z0-9_]{1,40}")  # U03-02 pattern, re-check
 # deduplication, which impl 02 rejects, so the version is matched through `scope` only.
 _SPOT_KEYS: Final = ("purpose", "question", "content_hash")
 _INSERT_SQL: Final = """
-INSERT INTO enrich.decision
+INSERT INTO enrich.decision (record_id, question, answer, probability, agreement, decider,
+    decider_version, question_set_version, content_hash, decided_at, escalated, review_status)
 SELECT record_id, question, answer, probability, agreement, decider, decider_version, $qsv,
     content_hash, decided_at, escalated, review_status
 FROM enrich_resolved WHERE status = 'final'

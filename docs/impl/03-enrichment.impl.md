@@ -1749,6 +1749,8 @@ The `review_item` table and its functions belong to impl 02 (`herness.store.ops.
 | Security notes | Payload carries no text (TH03-03). |
 | Tests | UT03-77 |
 
+Spec note (T03-20): candidates are deduplicated per (`question`, `content_hash`), keeping the lowest `record_id` (then `entity`), because `label_check` items match on `content_hash`; `N_new` still counts rows. Implemented in the private sibling `herness/enrich/_spot_checks.py` (§2).
+
 #### U03-82 herness.enrich.resolve.decision_wide_sql
 
 | Field | Content |
@@ -1784,6 +1786,8 @@ The `review_item` table and its functions belong to impl 02 (`herness.store.ops.
 | Complexity and limits | — |
 | Security notes | TH03-03 (no text in payloads). |
 | Tests | IT03-04, IT03-06 |
+
+Spec note (T03-20): step 5 passes `match_keys=("purpose","question","content_hash")` with `scope={"question_set_version": qs.version}` instead of the literal four keys. `create_if_absent` (U03-148) appends the scope keys to `match_keys` without deduplication and impl 02 `create_review_item_if_absent` rejects duplicate keys, so the literal call raises `ConfigError`; the store still matches on all four keys and the scope check still applies. Restore the literal `match_keys` once U03-148 deduplicates. Spot-checks are selected with `since = run_started_at` (rows decided during this run are the newly decided rows). Step 3 names the target columns explicitly.
 
 ### 3.13 Decide stages (`herness/enrich/decide_stage.py`, `herness/enrich/ensemble_stage.py`)
 

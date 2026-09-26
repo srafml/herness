@@ -21,7 +21,7 @@ import pytest
 from structlog.testing import capture_logs
 from tests.support.ops_store import OpsStoreHandle
 
-from herness.core.errors import ConfigError
+from herness.core.errors import ConfigError, SchemaViolation
 from herness.core.types import Question, QuestionSet
 from herness.enrich import resolve
 from herness.enrich.cache import CACHE_SCHEMA, DecisionCache, write_part
@@ -260,4 +260,29 @@ def test_it03_06_bad_question_id_writes_nothing(run: Callable[..., _Report]) -> 
     with pytest.raises(ConfigError, match="decision_wide_sql"):
         run(wh, qs=bad)
     assert wh.execute("SELECT count(*) FROM enrich.decision").fetchone() == (0,)
+    assert _spot_items() == []
+
+
+def test_it03_06_warehouse_error_is_schema_violation(run: Callable[..., _Report]) -> None:
+    """IT03-06 a DuckDB error while writing ``enrich.decision`` is a SchemaViolation."""
+    wh = _warehouse()
+    wh.execute("DROP TABLE enrich.decision")
+    with pytest.raises(SchemaViolation, match=r"^run_resolve: "):
+        run(wh)
+    assert _spot_items() == []  # nothing is created after a failed write
+
+
+def test_it03_06_nothing_decided_sets_no_share_gauge(
+    run: Callable[..., _Report], gauges: list[tuple[str, float, dict[str, str]]]
+) -> None:
+    """IT03-06 no final pair: counters stay 0, coverage 0.0, no escalation-share gauge."""
+    wh = _warehouse()
+    wh.execute("DELETE FROM enrich.text_redacted WHERE record_id <> 'inc_3'")  # queued only
+    with capture_logs() as logs:
+        report = run(wh)
+    assert (report.decided, report.escalated) == (0, 0)
+    assert wh.execute("SELECT count(*) FROM enrich.decision").fetchone() == (0,)
+    assert gauges == [("herness_enrich_coverage_ratio", 0.0, {"entity": "incident"})]
+    done = next(e for e in logs if e["event"] == "enrich.resolve.completed")
+    assert (done["decided"], done["escalated"], done["coverage"]) == (0, 0, {"incident": 0.0})
     assert _spot_items() == []
