@@ -427,6 +427,22 @@ def test_ut02_70_out_of_range_file_stops_migrate(mig_dir: Path) -> None:
     assert not _names("table") & (_TABLES_001_002 | {"x"})
 
 
+@pytest.mark.parametrize(
+    "name", ["012_Add-Col.sql", "12_x.sql", "012_x.SQL", "\u0660\u0661\u0662_arabic.sql"]
+)
+def test_ut02_70_misnamed_migration_warns_and_is_not_applied(mig_dir: Path, name: str) -> None:
+    """UT02-70 a digit-leading file that is not `NNN_<slug>.sql` (incl. non-ASCII digits) is
+    skipped with a `store.ops.migration_name_ignored` warning; nothing from it is applied."""
+    (mig_dir / name).write_text("CREATE TABLE misnamed (id INTEGER) STRICT;\n", encoding="utf-8")
+    with capture_logs() as logs:
+        report = migrate()
+    ignored = [e for e in logs if e["event"] == "store.ops.migration_name_ignored"]
+    assert [(e["file"], e["log_level"]) for e in ignored] == [(name, "warning")]
+    assert len(report.applied) == 6
+    assert "misnamed" not in _names("table")
+    assert all(version <= 6 for version, _ in _recorded())
+
+
 def test_ut02_70_duplicate_version_stops_migrate(mig_dir: Path) -> None:
     """UT02-70 two files numbered 012 raise duplicate_version; nothing is applied."""
     (mig_dir / "012_a.sql").write_text("CREATE TABLE a (id INTEGER) STRICT;\n", encoding="utf-8")

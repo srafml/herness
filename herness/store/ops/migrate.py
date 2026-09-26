@@ -37,7 +37,7 @@ MIGRATION_RANGES: Final[tuple[tuple[int, int, str], ...]] = (
 )
 
 _PACKAGE: Final = "herness.store.migrations"
-_FILE_RE: Final = re.compile(r"(\d{3})_([a-z0-9_]+)\.sql")
+_FILE_RE: Final = re.compile(r"([0-9]{3})_([a-z0-9_]+)\.sql")
 _LEADING_COMMENTS: Final = re.compile(r"\A(?:\s+|--[^\n]*(?:\n|\Z)|/\*.*?\*/)*", re.DOTALL)
 # ENG §3.5: migration files never manage transactions, PRAGMAs or attachments themselves.
 _FORBIDDEN: Final = re.compile(
@@ -95,6 +95,8 @@ def _discover() -> list[_Migration]:
     for entry in sorted(_migrations_root().iterdir(), key=lambda e: e.name):
         match = _FILE_RE.fullmatch(entry.name)
         if match is None or not entry.is_file():
+            if entry.name[:1].isdigit() and match is None:  # likely a mis-named migration
+                _log.warning("store.ops.migration_name_ignored", file=entry.name)
             continue  # not a migration file (README, __init__.py, drafts starting with "_")
         version, slug = int(match[1]), match[2]
         if _owner_of(version) is None:
