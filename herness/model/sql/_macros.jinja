@@ -1,0 +1,71 @@
+{#
+  Shared SQL fragments of the build files (impl 02 U02-106); imported, never executed:
+  `import "_macros.jinja" as m`. Plain imports see only the globals `lake` and `raw`.
+  Values reach SQL only through `ident`, `sqlstr`, `num` and `raw` (U02-86, TH02-10);
+  `raw_expr`/`expr` arguments are repo-authored SQL expressions.
+#}
+
+{#- latest(source, entity, columns): the newest live version of every record of one lake
+    entity (design 02 §4.2: glob, dedupe, tombstones, deletion requests). `columns` is a
+    list of (raw_column, sqltype); a column missing from the lake reads as a typed NULL.
+    An absent entity gives a zero-row SELECT with the same column names and types. -#}
+{% macro latest(source, entity, columns) -%}
+{% set inv = lake.get(source, entity) %}
+{% if inv.present %}
+(
+    SELECT _record_id, _source_key, _source_updated_at
+{%- for column, sqltype in columns %}, {{ column | ident }}{% endfor %}
+
+    FROM (
+        SELECT _record_id, _source_key, _source_updated_at, _deleted
+{%- for column, sqltype in columns %},
+            {{ raw(source, entity, column, sqltype) }} AS {{ column | ident }}
+{%- endfor %}
+
+        FROM read_parquet({{ inv.glob | sqlstr }}, hive_partitioning = true, union_by_name = true, filename = true)
+        QUALIFY row_number() OVER (
+            PARTITION BY _record_id
+            ORDER BY _source_updated_at DESC, _fetched_at DESC, filename DESC
+        ) = 1
+    ) AS _latest
+    WHERE NOT _deleted AND _record_id NOT IN (SELECT record_id FROM stg.deleted_record)
+)
+{%- else %}
+(
+    SELECT CAST(NULL AS VARCHAR) AS _record_id, CAST(NULL AS VARCHAR) AS _source_key,
+        CAST(NULL AS TIMESTAMPTZ) AS _source_updated_at
+{%- for column, sqltype in columns %},
+        {{ raw(source, entity, column, sqltype) }} AS {{ column | ident }}
+{%- endfor %}
+
+    WHERE false
+)
+{%- endif %}
+{%- endmacro %}
+
+{#- typed(raw_expr, expr, alias): the typed column plus its non-null and cast-failure flags. -#}
+{% macro typed(raw_expr, expr, alias) -%}
+{{ expr }} AS {{ alias | ident }}, ({{ raw_expr }} IS NOT NULL) AS {{ ("_nn_" ~ alias) | ident }}, ({{ raw_expr }} IS NOT NULL AND {{ expr }} IS NULL) AS {{ ("_cf_" ~ alias) | ident }}
+{%- endmacro %}
+
+{#- cast_stats(table, aliases): one stg.cast_stats row per typed alias of stg.<table>. -#}
+{% macro cast_stats(table, aliases) -%}
+INSERT INTO stg.cast_stats
+{% for alias in aliases %}
+{% if not loop.first %}UNION ALL
+{% endif %}
+SELECT {{ ("stg." ~ table) | sqlstr }}, {{ alias | sqlstr }}, count_if({{ ("_nn_" ~ alias) | ident }}), count_if({{ ("_cf_" ~ alias) | ident }}) FROM stg.{{ table | ident }}
+{% else %}
+SELECT NULL, NULL, 0, 0 WHERE false
+{% endfor %}
+{%- endmacro %}
+
+{#- enum(alias, domain, raw_expr): exact match after lower-casing, no trimming. -#}
+{% macro enum(alias, domain, raw_expr) -%}
+LEFT JOIN stg.enum_map AS {{ alias | ident }} ON {{ alias | ident }}.domain = {{ domain | sqlstr }} AND {{ alias | ident }}.source_value_lc = lower({{ raw_expr }})
+{%- endmacro %}
+
+{#- rid(prefix, raw_expr): record ID `<prefix>:<trimmed key>`; blank keys are NULL. -#}
+{% macro rid(prefix, raw_expr) -%}
+CASE WHEN nullif(trim({{ raw_expr }}), '') IS NULL THEN NULL ELSE {{ prefix | sqlstr }} || ':' || trim({{ raw_expr }}) END
+{%- endmacro %}

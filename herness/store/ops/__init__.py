@@ -37,10 +37,13 @@ from .shared import (
     ReviewKind,
     ReviewStatus,
     approved_mapping_suggestions,
+    count_review_items,
     create_review_item,
+    create_review_item_if_absent,
     decide_review_item,
     get_review_item,
     list_review_items,
+    update_review_payload,
 )
 
 # isort: split
@@ -237,8 +240,9 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "MIGRATION_RANGES", "migrate", "pending_migrations", "schema_version", "ops_health",
     "MigrationReport",
     # 02 shared
-    "ReviewItem", "ReviewKind", "ReviewStatus", "create_review_item", "get_review_item",
-    "list_review_items", "decide_review_item", "approved_mapping_suggestions",
+    "ReviewItem", "ReviewKind", "ReviewStatus", "create_review_item",
+    "create_review_item_if_absent", "get_review_item", "list_review_items", "count_review_items",
+    "decide_review_item", "update_review_payload", "approved_mapping_suggestions",
     # 01 ingest
     "Watermark", "SliceRow", "FileIngestRow", "get_watermark", "set_watermark", "list_watermarks",
     "ensure_slices", "mark_slice_running", "mark_slice_done", "mark_slice_failed",
