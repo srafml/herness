@@ -444,6 +444,9 @@ as_packages = false
 ignore_imports = [
     "herness.store.ops.* -> herness.store.ops.core",
     "herness.store.ops.core -> herness.store.ops._shims",
+    # T07-03: private sibling of area `memory` (row types, SQL plumbing), kept apart for the
+    # impl 07 §2 line budget of memory.py; no other module imports it.
+    "herness.store.ops.memory -> herness.store.ops._memory_rows",
 ]
 # The area -> core ignore matches `migrate` (T02-05), `shared` (T02-07) and each area its card
 # adds later.

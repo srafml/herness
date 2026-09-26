@@ -124,6 +124,32 @@ from .privacy import (
 )
 
 # isort: split
+# 07 memory
+from .memory import (
+    UNCHANGED,
+    EvidenceRow,
+    FindingFact,
+    MemoryItemRow,
+    Unchanged,
+    count_proposals,
+    entity_candidates,
+    evidence_rows,
+    existing_query_ids,
+    find_memory_item,
+    finding_facts,
+    fts_candidates,
+    fts_check_and_rebuild,
+    get_memory_items,
+    get_task_scratchpad,
+    insert_memory_item,
+    maintenance_rows,
+    pending_embedding_count,
+    session_memory_ids,
+    touch_memory_items,
+    update_memory_item,
+)
+
+# isort: split
 # 09 ui_reads
 from .ui_reads import (
     UiDecisionRow,
@@ -248,6 +274,28 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "set_deletion_status",
     "record_deletion_step",
     "deleted_record_ids",
+    # 07 memory
+    "MemoryItemRow",
+    "FindingFact",
+    "EvidenceRow",
+    "Unchanged",
+    "UNCHANGED",
+    "insert_memory_item",
+    "get_memory_items",
+    "find_memory_item",
+    "update_memory_item",
+    "touch_memory_items",
+    "fts_candidates",
+    "entity_candidates",
+    "count_proposals",
+    "existing_query_ids",
+    "finding_facts",
+    "evidence_rows",
+    "get_task_scratchpad",
+    "maintenance_rows",
+    "fts_check_and_rebuild",
+    "pending_embedding_count",
+    "session_memory_ids",
     # 09 ui_reads
     "UiRunRow",
     "UiTaskRow",

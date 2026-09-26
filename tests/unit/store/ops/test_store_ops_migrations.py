@@ -80,8 +80,21 @@ _INDEXES = {
     "metric_sample_name_ts",
     "metric_sample_ts",
 }
-# Indexes of later owners' migrations (R-11): 090_chat (impl 09 U09-43).
-_LATER_INDEXES = {"chat_message_reply"}
+# Indexes of later owners' migrations (R-11): 070_memory_indexes (impl 07 U07-20), 090_chat
+# (impl 09 U09-43).
+_LATER_INDEXES = {
+    "chat_message_reply",
+    "ix_memory_expires",
+    "ix_memory_content_hash",
+    "ix_memory_task",
+    "ix_memory_fingerprint",
+    "ix_memory_rec",
+    "ix_memory_prov_run",
+    "ix_memory_prov_session",
+    "ix_memory_prov_author",
+    "ix_rec_target",
+    "ix_rec_metric",
+}
 _TRIGGERS = {"memory_item_ai", "memory_item_ad", "memory_item_au"}
 
 
