@@ -123,6 +123,14 @@ from .privacy import (
     set_deletion_status,
 )
 
+# isort: split
+# 08 resilience
+from .resilience import purge_events
+
+# isort: split
+# 08 metrics
+from .metrics import purge_metric_samples, record_metric_samples
+
 __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     # 02 core
     "connection",
@@ -209,4 +217,9 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "set_deletion_status",
     "record_deletion_step",
     "deleted_record_ids",
+    # 08 resilience
+    "purge_events",
+    # 08 metrics
+    "record_metric_samples",
+    "purge_metric_samples",
 ]

@@ -32,6 +32,7 @@ from herness.core.redact_patterns import (
     build_detectors,
     normalize_value,
 )
+from herness.core.resilience.metrics import record_counter
 from herness.core.secrets import resolve
 from herness.core.settings import RedactionConfig
 
@@ -102,7 +103,7 @@ class _Taken:
 
 
 _FAILED_LOCK: Final = threading.Lock()
-_failed = [0]  # herness_redact_records_total{result="failed"}; metric-sink wiring deferred
+_failed = [0]  # in-process count; also recorded as herness_redact_records_total{result="failed"}
 
 
 def _records_failed_total() -> int:
@@ -236,6 +237,8 @@ class Redactor:
             except RedactionFailed:
                 with _FAILED_LOCK:
                     _failed[0] += 1
+                labels = {"result": "failed"}
+                record_counter("herness_redact_records_total", component="redact", labels=labels)
                 result = None
             out.append(None if result is None else result.text)
         return out
