@@ -9,7 +9,7 @@ from copy import deepcopy
 from decimal import Decimal
 from typing import Annotated, Any, Final, Literal, Self, get_args
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, ValidationError
 from pydantic.functional_validators import field_validator, model_validator
 
 from herness.core.errors import ConfigError
@@ -97,11 +97,11 @@ class SwarmSettings(_Model):
 
 
 class BudgetSettings(_Model):
-    """Step, token and wall-clock limits of one task; `to_task_budget` adds `max_cost_usd = 0`."""
+    """Task step, token and wall-clock limits, within the `TaskBudget` bounds (U06-04)."""
 
-    max_steps: _Pos
-    max_tokens: _Pos
-    wall_clock_s: _Pos
+    max_steps: int = Field(ge=1, le=200)
+    max_tokens: int = Field(ge=1_000)
+    wall_clock_s: int = Field(ge=1, le=86_400)
 
     def to_task_budget(self) -> TaskBudget:
         """The shared `TaskBudget` with these limits and no cost cap (U06-24 step 1)."""
@@ -247,11 +247,18 @@ class PipelineSections(_Model):
     chat: ChatPipelineConfig = ChatPipelineConfig()
 
 
+def _usd(value: object) -> object:
+    if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
+        msg = "must be a number"
+        raise ValueError(msg)  # noqa: TRY004 - pydantic reports ValueError with the key path
+    return Decimal(str(value))
+
+
 class HybridConfig(_Model):
     """`hybrid`: evidence-pack and off-network cost caps (design 06 §5.12)."""
 
     max_input_tokens_per_call: int = Field(default=30_000, ge=10_000)
-    max_cost_usd_per_run: Decimal = Field(default=Decimal(15), ge=0, strict=False)
+    max_cost_usd_per_run: Annotated[Decimal, BeforeValidator(_usd)] = Field(Decimal(15), ge=0)
 
 
 def _budget(steps: int, tokens: int, wall: int) -> dict[str, int]:
@@ -304,7 +311,7 @@ def resolve_knobs(
     """Build the `DepthKnobs` of one review run (U06-24); pure.
 
     Raises `ConfigError` for an override outside the int-knob allowlist (TH06-15), a value that is
-    not a non-negative int, or an override that breaks a `DepthKnobs` bound.
+    not a non-negative int, or resolved knobs that break a `DepthKnobs` bound.
     """
     base = cfg.depth[depth]
     knobs: dict[str, object] = dict(base)
@@ -319,5 +326,5 @@ def resolve_knobs(
         return DepthKnobs.model_validate(knobs)
     except ValidationError as exc:
         fields = ", ".join(".".join(map(str, e["loc"])) for e in exc.errors())
-        msg = f"budget_override gives invalid knobs: {fields}"
+        msg = f"invalid {kind} {depth} knobs: {fields}"
         raise ConfigError(msg) from exc

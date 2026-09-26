@@ -100,6 +100,11 @@ def test_ut06_11_unknown_key_reports_path() -> None:
         (("pipelines", "chat", "escalation"), {"max_tasks_per_run": -1}),
         (("hybrid", "max_input_tokens_per_call"), 9_999),
         (("hybrid", "max_cost_usd_per_run"), -1),
+        (("hybrid", "max_cost_usd_per_run"), "15.123456"),
+        (("hybrid", "max_cost_usd_per_run"), True),
+        (("depth", "deep", "analyst_budget", "max_steps"), 201),
+        (("depth", "deep", "analyst_budget", "wall_clock_s"), 86_401),
+        (("pipelines", "chat", "budget", "max_tokens"), 500),
     ],
 )
 def test_ut06_11_bound_violations_rejected(path: tuple[str, ...], value: object) -> None:
@@ -111,6 +116,23 @@ def test_ut06_11_bound_violations_rejected(path: tuple[str, ...], value: object)
     node[path[-1]] = value
     with pytest.raises(ValidationError):
         PipelinesConfig.model_validate(raw)
+
+
+def test_ut06_11_budget_below_task_budget_bounds_rejected_at_load() -> None:
+    """UT06-11 a budget `TaskBudget` would reject fails at load with its key path."""
+    raw = _raw()
+    raw["depth"]["standard"]["analyst_budget"]["max_tokens"] = 500
+    with pytest.raises(ValidationError) as exc:
+        PipelinesConfig.model_validate(raw)
+    assert ("depth", "standard", "analyst_budget", "max_tokens") in _error_locs(exc)
+
+
+def test_ut06_11_cost_cap_accepts_numbers() -> None:
+    """UT06-11 `hybrid.max_cost_usd_per_run` accepts int, float and Decimal."""
+    for value, want in ((15, "15"), (2.5, "2.5"), (Decimal("7.25"), "7.25")):
+        raw = _raw()
+        raw["hybrid"]["max_cost_usd_per_run"] = value
+        assert PipelinesConfig.model_validate(raw).hybrid.max_cost_usd_per_run == Decimal(want)
 
 
 def test_ut06_11_depth_needs_all_three_keys() -> None:
