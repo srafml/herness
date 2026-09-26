@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import builtins
+import contextlib
 import io
 import json
 import os
 import signal
 import sys
 import types
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -34,19 +36,40 @@ def _rule(**fields: object) -> dict[str, object]:
     return {"point": "llm.call", "action": "error:StoreBusy", **fields}
 
 
-@pytest.fixture
-def open_spy(monkeypatch: pytest.MonkeyPatch) -> list[object]:
-    """Record every `open` (builtin, io, os, Path) instead of letting it touch a file."""
-    calls: list[object] = []
+_FS_ENTRY_POINTS: tuple[tuple[object, str], ...] = (
+    (builtins, "open"),
+    (io, "open"),
+    (os, "open"),
+    (os, "stat"),
+    (Path, "open"),
+    (Path, "stat"),
+    (Path, "is_symlink"),
+    (Path, "resolve"),
+    (Path, "exists"),
+)
 
-    def spy(*args: object, **_kwargs: object) -> None:
-        calls.append(args[0] if args else None)
-        msg = "file access in a test that forbids it"
-        raise AssertionError(msg)
 
-    for target, attr in ((builtins, "open"), (io, "open"), (os, "open"), (Path, "open")):
-        monkeypatch.setattr(target, attr, spy)
-    return calls
+@contextlib.contextmanager
+def _fs_spy() -> Iterator[list[tuple[str, object]]]:
+    """Record (and refuse) every open/stat/is_symlink/resolve/exists call inside the block.
+
+    Scoped to the calls under test (so pytest's own reporting is unaffected); a mutant that
+    swallows the AssertionError is still caught by the record.
+    """
+    calls: list[tuple[str, object]] = []
+
+    def make(attr: str) -> Callable[..., object]:
+        def spy(*args: object, **_kwargs: object) -> object:
+            calls.append((attr, args[0] if args else None))
+            msg = f"file access ({attr}) in a test that forbids it"
+            raise AssertionError(msg)
+
+        return spy
+
+    with pytest.MonkeyPatch.context() as patch:
+        for target, attr in _FS_ENTRY_POINTS:
+            patch.setattr(target, attr, make(attr))
+        yield calls
 
 
 def _fire_indices(calls: int, name: str = "llm.call", **labels: str) -> list[int]:
@@ -74,27 +97,39 @@ def test_ut08_46_package_reexports_fault_api() -> None:
 # --- UT08-46 inert without the variable ----------------------------------------------------
 
 
-def test_ut08_46_no_variable_no_file_access(
-    reset_process_state: ProcessState, open_spy: list[object]
-) -> None:
-    """UT08-46 without HERNESS_FAULTS 1 000 calls open no file and have no effect."""
-    with structlog.testing.capture_logs() as logs:
+def test_ut08_46_no_variable_no_file_access(reset_process_state: ProcessState) -> None:
+    """UT08-46 without HERNESS_FAULTS 1 000 calls touch no file and have no effect."""
+    with structlog.testing.capture_logs() as logs, _fs_spy() as touched:
         for _ in range(1000):
             assert faults.fault_point("llm.call", model="m") is None
-    assert open_spy == []
+    assert touched == []
     assert reset_process_state.fault_plan is None
     assert reset_process_state.faults_enabled is False
     assert logs == []
 
 
 def test_ut08_46_empty_variable_is_unset(
-    reset_process_state: ProcessState, monkeypatch: pytest.MonkeyPatch, open_spy: list[object]
+    reset_process_state: ProcessState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT08-46 an empty HERNESS_FAULTS counts as unset."""
     monkeypatch.setenv("HERNESS_FAULTS", "")
-    faults.fault_point("sqlite.write", kind="x")
-    assert open_spy == []
+    with _fs_spy() as touched:
+        faults.fault_point("sqlite.write", kind="x")
+    assert touched == []
     assert reset_process_state.fault_plan is None
+
+
+def test_ut08_46_spy_catches_stat_only_access(tmp_path: Path) -> None:
+    """UT08-46 the spy records every entry point (io.open, stat, is_symlink, ...), not only open."""
+    path = _write(tmp_path, [_rule()])
+    with _fs_spy() as touched:
+        for target, attr in _FS_ENTRY_POINTS:
+            with pytest.raises(AssertionError):
+                getattr(target, attr)(path)
+        with pytest.raises(AssertionError):
+            path.is_symlink()  # a bound Path method goes through the spy too
+    assert touched == [(attr, path) for _, attr in _FS_ENTRY_POINTS] + [("is_symlink", path)]
+    assert path.is_symlink() is False  # restored after the block
 
 
 # --- UT08-47 load_fault_plan ---------------------------------------------------------------
@@ -585,13 +620,11 @@ def test_ut08_105_plan_ignored_outside_test(
         monkeypatch.delenv("HERNESS_ENV")
     else:
         monkeypatch.setenv("HERNESS_ENV", env)
-    opened: list[object] = []
-    monkeypatch.setattr(Path, "open", lambda *a, **_k: opened.append(a))
-    monkeypatch.setattr(builtins, "open", lambda *a, **_k: opened.append(a))
-    with structlog.testing.capture_logs() as logs:
+    # The spy covers only the calls (the plan file is written before it), any path.
+    with structlog.testing.capture_logs() as logs, _fs_spy() as touched:
         for _ in range(10):
             faults.fault_point("llm.call")
-    assert opened == []
+    assert touched == []
     assert logs == [
         {
             "component": "resilience",

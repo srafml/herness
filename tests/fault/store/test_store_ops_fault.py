@@ -31,10 +31,20 @@ def test_ft02_02_store_busy_plan(
     """FT02-02 count=4: the write succeeds; count=7: StoreBusy after 6 attempts.
 
     Runs the real fault hook with the JSON plan rule
-    `{"point": "sqlite.write", "action": "error:StoreBusy", "count": n}` (HERNESS_FAULTS).
+    `{"point": "sqlite.write", "action": "error:StoreBusy", "kind": "insert_item", "count": n}`
+    (HERNESS_FAULTS); the `kind` filter proves run_write passes `kind=<op>`.
     """
     core.run_write(lambda c: c.execute("CREATE TABLE item (name TEXT)"), op="create_item")
-    fault_env([{"point": "sqlite.write", "action": "error:StoreBusy", "count": count}])
+    fault_env(
+        [
+            {
+                "point": "sqlite.write",
+                "action": "error:StoreBusy",
+                "kind": "insert_item",
+                "count": count,
+            }
+        ]
+    )
     if succeeds:
         core.run_write(_insert, op="insert_item")
     else:
