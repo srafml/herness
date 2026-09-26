@@ -390,6 +390,7 @@ forbidden_modules = [
     "herness.metrics._recorded",
     "herness.metrics.catalog",
     "herness.metrics.evidence",
+    "herness.metrics.facts",
     "herness.metrics.render",
     "herness.metrics.windows",
     "herness.connectors",
