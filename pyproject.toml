@@ -365,6 +365,7 @@ source_modules = [
     "herness.enrich.settings",
     "herness.reports.settings",
     "herness.harness.memory.settings",
+    "herness.harness.pipelines.settings",
 ]
 forbidden_modules = [
     "herness.core.logging",

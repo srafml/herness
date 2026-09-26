@@ -36,6 +36,7 @@ from herness.core.settings import (
 from herness.enrich.settings import DecidersSettings, DecisionsConfig
 from herness.eval.settings import EvalConfig
 from herness.harness.llm.settings import ModelsConfig
+from herness.harness.pipelines.settings import PipelinesConfig
 from herness.metrics.settings import MetricsCatalogConfig, WeightsConfig
 from herness.model.settings import BuildSettings, DqSettings, MappingsConfig
 
@@ -65,10 +66,6 @@ class _Stub(BaseModel):
     """Closed stand-in for an owner model not yet on the branch (Ruling R2)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class _PipelinesStub(_Stub):
-    """``pipelines.yaml`` until T06-03 lands ``PipelinesConfig``."""
 
 
 class _MemoryStub(_Stub):
@@ -119,7 +116,7 @@ class HernessConfig(BaseSettings):
     metrics: MetricsCatalogConfig
     weights: WeightsConfig
     models: ModelsFileConfig
-    pipelines: _PipelinesStub
+    pipelines: PipelinesConfig
     memory: _MemoryStub
     resilience: ResilienceConfig
     app: _AppStub

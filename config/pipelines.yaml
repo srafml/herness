@@ -1,0 +1,50 @@
+# Swarm and review/chat pipeline settings (owner: impl 06 §9; shipped values = design 06 §7).
+# Loaded and validated by spec 10 as `cfg.pipelines` (herness.harness.pipelines.settings.PipelinesConfig).
+# Every key needs a new run to take effect; a changed value changes config_hash. None is sensitive.
+version: 1
+swarm:
+  max_task_attempts: 3
+  oversubscribe: 1.5
+  admit_fraction: 0.25
+  aging_per_min: 0.01
+  max_inflight_children_per_parent: 2
+  max_inflight_per_entity: 2
+  max_children_per_task: 3
+  child_budget_factor: 0.5
+  writer_reserve: 0.15
+  verifier_batch: 20
+  dedup: {cosine: 0.85}
+  coverage: {min_done_fraction: 0.8}
+  skeptic: {min_sample: 30, single_record_share: 0.25, min_weeks_seasonality: 13}
+  crosscheck: {rel_tol: 0.005, abs_tol_count: 0.5, abs_tol_ratio: 0.001}
+depth:
+  fast:     {max_tasks_per_run: 40,  run_tokens: 1500000,  skeptic_top_n: 5,  skeptic_rounds: 1, k_samples: 1,
+             max_spawn_depth: 0, plans_best_of: 1, crosscheck_ways: 1, writer_fix_passes: 1, writer_max_findings: 25,
+             analyst_budget: {max_steps: 12, max_tokens: 40000, wall_clock_s: 300}}
+  standard: {max_tasks_per_run: 150, run_tokens: 6000000,  skeptic_top_n: 15, skeptic_rounds: 2, k_samples: {reject: 3},
+             max_spawn_depth: 1, plans_best_of: 1, crosscheck_ways: 2, writer_fix_passes: 2, writer_max_findings: 60,
+             analyst_budget: {max_steps: 20, max_tokens: 80000, wall_clock_s: 600}}
+  deep:     {max_tasks_per_run: 600, run_tokens: 30000000, skeptic_top_n: 40, skeptic_rounds: 3, k_samples: 5,
+             max_spawn_depth: 2, plans_best_of: 3, crosscheck_ways: 3, writer_fix_passes: 3, writer_max_findings: 120,
+             analyst_budget: {max_steps: 30, max_tokens: 150000, wall_clock_s: 1800},
+             large_stage: true}
+pipelines:
+  funding_review:
+    window_days: 365
+    portfolio_scenario: base
+    K_candidates: {fast: 10, standard: 25, deep: 60}
+    K_clusters:   {fast: 5,  standard: 10, deep: 25}
+    M_must:       {fast: 5,  standard: 10, deep: 20}
+    H_wildcards:  {fast: 0,  standard: 3,  deep: 8}
+  org_review:
+    window_days: 180
+    K_teams: {fast: 10, standard: 25, deep: 60}
+    org_specialties: {fast: [ops], standard: [ops, change], deep: [ops, change, delivery]}
+    M_must: {fast: 5, standard: 10, deep: 20}
+    H_wildcards: {fast: 0, standard: 3, deep: 8}
+  chat:
+    budget: {max_steps: 12, max_tokens: 40000, wall_clock_s: 120}
+    escalation: {max_tasks_per_run: 8, skeptic_rounds: 1, skeptic_top_n: 3, run_tokens: 400000}
+hybrid:
+  max_input_tokens_per_call: 30000
+  max_cost_usd_per_run: 15
