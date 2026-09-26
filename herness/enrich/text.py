@@ -108,6 +108,10 @@ def build_text_redacted(
 ) -> None:
     """Fill ``enrich.text_redacted``, copying unchanged rows from ``prev_warehouse`` (U03-28)."""
     started = clock.monotonic()
+    first, second = (wh.execute("SELECT txid_current()").fetchone() for _ in range(2))
+    if first == second:  # open transaction: the selection cursor could not see its inserts
+        msg = "text stage: connection must be in auto-commit mode"
+        raise SchemaViolation(msg)
     attached = prev_warehouse is not None and _attach_prev(wh, prev_warehouse)
     totals = _Counts()
     try:
@@ -169,11 +173,7 @@ def _run_entity(
 
 
 def _duck_reason(exc: duckdb.Error) -> str:
-    """The DuckDB message for catalog and binder errors (names only), else the error class.
-
-    Other DuckDB messages (conversion, constraint) can quote row values, which must never
-    reach an error message (ENG §3.4).
-    """
+    """Catalog/binder message (names only), else the class: others may quote row values."""
     if isinstance(exc, _SCHEMA_ERRORS):
         return str(exc).splitlines()[0] if str(exc) else type(exc).__name__
     return type(exc).__name__

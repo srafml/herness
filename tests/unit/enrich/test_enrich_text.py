@@ -308,9 +308,25 @@ def test_ut03_25_value_errors_never_quote_row_values(tmp_path: Path, stub: StubR
 
 def test_ut03_25_detach_failure_is_logged(logs: pytest.CaptureFixture[str]) -> None:
     """UT03-25 a failed DETACH is logged as a WARNING and never raised."""
-    tx._detach_prev(duckdb.connect())
+    con = duckdb.connect()
+    try:
+        tx._detach_prev(con)
+    finally:
+        con.close()
     _, events = _events(logs)
     assert [e["event"] for e in events] == ["enrich.text.detach_failed"]
+
+
+def test_ut03_25_open_transaction_is_refused(tmp_path: Path, stub: StubRedactor) -> None:
+    """UT03-25 a connection inside an explicit transaction is refused before any write."""
+    wh = create_warehouse(tmp_path / "w.duckdb", UNCHANGED)
+    wh.execute("BEGIN")
+    pattern = r"^text stage: connection must be in auto-commit mode$"
+    with pytest.raises(SchemaViolation, match=pattern):
+        tx.build_text_redacted(wh, prev_warehouse=None, report=Report())
+    wh.execute("ROLLBACK")
+    assert stub.seen == []
+    assert stored(wh) == {}
 
 
 def test_ut03_25_chunk_where_every_record_fails(tmp_path: Path, stub: StubRedactor) -> None:
