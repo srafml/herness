@@ -1,6 +1,7 @@
 # Model clients, routing and harness settings (impl 05 U05-72, design 05 §7).
 # Sections `models` and `harness` are validated by herness.harness.llm.settings.ModelsConfig.
-# The sibling top-level `deciders` section is owned by impl 03 (R-76).
+# The sibling top-level `deciders` section is owned by impl 03 (R-76); validated by
+# herness.enrich.settings.DecidersSettings (keys and defaults: docs/impl/03-enrichment.impl.md §9).
 # Credentials are `secret:` references only (TH05-15).
 models:
   clients:
@@ -123,3 +124,30 @@ harness:
   loop: {wrap_up_ratio: 0.9, no_progress_steps: 4, error_streak: 3}   # compaction thresholds: spec 07 memory.yaml (soft_ratio 0.70)
   verifier: {float_rel_tol: 0.005, rerun_timeout_s: 60}
   trace: {payload_sample_rate: {eval: 1.0, chat: 0.0, review: 0.1}, max_payload_chars: 20000}
+
+deciders:
+  laya:
+    current_file: data/models/laya/CURRENT
+    device: cuda
+    dtype: bf16
+    fast: false            # true only after the parity test IT03-16 passed
+    call_batch: 256
+    batch_size: 64
+  openjev:
+    enabled: true
+    base_url: "http://127.0.0.1:8100"   # host port (container port 8080, R-51); loopback only
+    model: openjev-latest
+    concurrency: 64
+    timeout_s: 30
+    samples: {fast: 1, standard: null, deep: 5}
+    api_key: "secret:OPENJEV_API_KEY"   # R-53
+  jev:
+    enabled: false         # hosted Jev; the profile must allow egress (spec 10)
+    base_url: "https://api.typesafe.ai"
+    model: jev-latest
+    concurrency: 16
+    api_key: "secret:TYPESAFE_API_KEY"
+  llm:
+    role: enrich_decider
+    votes: {fast: 1, standard: 3, deep: 5}
+    temperature: 0.7
