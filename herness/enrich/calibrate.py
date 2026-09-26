@@ -193,11 +193,13 @@ class CalibrationStore:
         memo = self._memo.get(path)
         if memo is not None and memo[0] == stat.st_mtime_ns:
             return memo[1]
-        if stat.st_size > _MAX_FILE_BYTES:
+        with path.open("rb") as handle:
+            raw = handle.read(_MAX_FILE_BYTES + 1)  # bounded read (1 MB cap)
+        if len(raw) > _MAX_FILE_BYTES:
             msg = f"calibration file {path.name} is larger than 1 MB"
             raise ConfigError(msg, path=str(path))
         try:
-            doc = _File.model_validate(json.loads(path.read_bytes()))
+            doc = _File.model_validate(json.loads(raw))
         except (ValueError, ValidationError) as exc:
             msg = f"calibration file {path.name} is malformed"
             raise ConfigError(msg, path=str(path)) from exc
@@ -252,6 +254,11 @@ class CalibrationStore:
             "fitted_at": clock.format_utc(clock.now()),
             "questions": {qid: dataclasses.asdict(r) for qid, r in sorted(merged.items())},
         }
+        try:  # the loader's bounds: never write a file that load would reject
+            _File.model_validate(doc)
+        except ValidationError as exc:
+            msg = f"calibration results for {path.name} are out of bounds"
+            raise ConfigError(msg, path=str(path)) from exc
         _write_atomic(path, canonical_json(doc) + "\n")
         self._memo.pop(path, None)
         return path

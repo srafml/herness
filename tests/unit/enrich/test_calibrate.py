@@ -145,7 +145,9 @@ def test_ut03_41_ece_hand_worked() -> None:
     order = np.random.default_rng(5).permutation(30)  # input order must not matter
     probs = np.array([[float(confs[i]), 1 - float(confs[i])] for i in order])
     labels = np.array([0 if correct[i] else 1 for i in order])
+    assert expected == Fraction(1693, 6000)  # the hand-worked value, pinned
     assert ece(probs, labels) == pytest.approx(float(expected), abs=1e-12)
+    assert ece(probs, labels) == pytest.approx(1693 / 6000, abs=1e-12)
 
 
 def test_ut03_41_ece_small_n_and_range() -> None:
@@ -240,12 +242,22 @@ def test_ut03_44_laya_file_other_qsv_is_missing(tmp_path: Path) -> None:
     assert replaced == path
 
 
-def test_ut03_44_store_memoizes_and_rereads(tmp_path: Path) -> None:
+def test_ut03_44_store_memoizes_and_rereads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """UT03-44 reads are memoized per path and mtime; an atomic replace is picked up."""
     paths = _paths(tmp_path)
     reader, writer = CalibrationStore(paths), CalibrationStore(paths)
     path = writer.save("llm", "m-1", QSV, {"q1": _result(1.5)})
     assert reader.load("llm", "m-1", QSV)["q1"].temperature == 1.5
+    with monkeypatch.context() as patched:  # unchanged mtime: no file read at all
+
+        def _no_read(*_a: object, **_k: object) -> None:
+            msg = "memoized load must not read the file"
+            raise AssertionError(msg)
+
+        patched.setattr(Path, "open", _no_read)
+        assert reader.load("llm", "m-1", QSV)["q1"].temperature == 1.5
     stat = path.stat()
     writer.save("llm", "m-1", QSV, {"q1": _result(2.0)})
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000))
@@ -282,6 +294,19 @@ def test_ut03_44_store_malformed_file(tmp_path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
     with pytest.raises(ConfigError, match=r"\.json"):
         CalibrationStore(paths).load("llm", "m-1", QSV)
+
+
+def test_ut03_44_store_save_rejects_out_of_bounds(tmp_path: Path) -> None:
+    """UT03-44 save validates entries with the loader's bounds and writes nothing on failure."""
+    paths = _paths(tmp_path)
+    store = CalibrationStore(paths)
+    with pytest.raises(ConfigError, match="out of bounds"):
+        store.save("llm", "m-1", QSV, {"q1": _result(0.01)})
+    assert not paths.calibration_file("llm", "m-1", QSV).exists()
+    store.save("llm", "m-1", QSV, {"q1": _result(1.5)})
+    with pytest.raises(ConfigError, match="out of bounds"):
+        store.save("llm", "m-1", QSV, {"q2": _result(20.0)})
+    assert store.load("llm", "m-1", QSV) == {"q1": _result(1.5)}
 
 
 def test_ut03_44_store_oversized_file(tmp_path: Path) -> None:
