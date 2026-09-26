@@ -1,12 +1,14 @@
 """Tests for herness.store.layout (U02-06, U02-07)."""
 
 import dataclasses
-import sys
 import types
 from pathlib import Path
 
 import pytest
+from tests.support.config_tree import write_full_config
 
+from herness.core.config import init_config, reset_config
+from herness.store import layout as layout_module
 from herness.store.layout import DataLayout, data_layout
 
 pytestmark = pytest.mark.unit
@@ -62,7 +64,16 @@ def test_ut02_66_layout_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     cfg = types.SimpleNamespace(paths=types.SimpleNamespace(data=tmp_path / "data"))
     assert data_layout(cfg=cfg).root == (tmp_path / "data").resolve()
     assert data_layout(cfg=cfg, root=tmp_path / "other").root == (tmp_path / "other").resolve()
-    fake = types.ModuleType("herness.core.config")
-    fake.get_config = lambda: cfg  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "herness.core.config", fake)
+    monkeypatch.setattr(layout_module, "get_config", lambda: cfg)
     assert data_layout().root == (tmp_path / "data").resolve()
+
+
+def test_ut02_66_layout_from_loaded_config(tmp_path: Path) -> None:
+    """UT02-66 without cfg or root, data_layout uses the cached HernessConfig's paths.data."""
+    cfg_dir = write_full_config(tmp_path)
+    try:
+        cfg = init_config(config_dir=cfg_dir, env={})
+        assert data_layout().root == cfg.paths.data == (tmp_path / "data").resolve()
+        assert data_layout(cfg=cfg).raw == (tmp_path / "data" / "raw").resolve()
+    finally:
+        reset_config()

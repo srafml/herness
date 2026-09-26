@@ -11,7 +11,7 @@ import datetime
 import math
 import re
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import ClassVar, Final, Literal
 
 MAX_MESSAGE_CHARS: Final = 1000
@@ -255,7 +255,22 @@ class NotFound(RecoverableError):
 
 
 class ConfigError(FatalError):
-    """Configuration is invalid or incomplete."""
+    """Configuration is invalid or incomplete; ``issues`` holds impl 10 ``ConfigIssue``s (R-19)."""
+
+    _extra_attrs: ClassVar[tuple[str, ...]] = ("issues",)
+
+    def __init__(
+        self,
+        message: str,
+        /,
+        *,
+        issues: Sequence[object] = (),
+        hint: str | None = None,
+        details: Mapping[str, str] | None = None,
+        **context: Scalar,
+    ) -> None:
+        super().__init__(message, hint=hint, details=details, **context)
+        self.issues: tuple[object, ...] = tuple(issues)[:1000]
 
 
 class AuthError(FatalError):
@@ -275,7 +290,18 @@ class PermissionDenied(FatalError):
 
 
 class EgressBlocked(FatalError):
-    """The egress guard refused an off-network call."""
+    """The egress guard refused an off-network call; ``egress_id``, ``reason`` keywords (R-19)."""
+
+    @property
+    def egress_id(self) -> str | None:  # egr_<ulid>; None for socket-guard and loopback refusals
+        return value if isinstance(value := self._context.get("egress_id"), str) else None
+
+    @property
+    def reason(self) -> str | None:
+        code = self._context.get("reason")  # U10-51/58/59 code; anything else reads as "invalid"
+        if isinstance(code, str) and re.fullmatch(r"[a-z_]{1,40}", code):
+            return code
+        return None if code is None else "invalid"
 
 
 # --- 08 (resilience and jobs) ---
