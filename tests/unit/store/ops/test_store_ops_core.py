@@ -364,6 +364,10 @@ def test_ut02_28_busy_while_opening_is_retried(
     assert _count() == 0
 
 
+def _insert_named(name: str) -> Callable[[sqlite3.Connection], object]:
+    return lambda conn: conn.execute("INSERT INTO item (name) VALUES (?)", (name,))
+
+
 class _RollbackFails:
     """Connection proxy whose ROLLBACK raises (the real connection stays usable)."""
 
@@ -384,9 +388,8 @@ class _RollbackFails:
 def test_ut02_27_failed_rollback_keeps_original_error(
     item_table: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT02-27 a failing ROLLBACK is logged; the original error is kept and mapped."""
-    real = core.connection()
-    monkeypatch.setattr(core, "connection", lambda: _RollbackFails(real))
+    """UT02-27 a failing ROLLBACK is logged; the original error is kept and mapped; the
+    thread's connection is closed and the next run_write succeeds on a fresh one."""
 
     def dup(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO item (name) VALUES ('x')")
@@ -396,13 +399,23 @@ def test_ut02_27_failed_rollback_keeps_original_error(
         msg = "boom"
         raise RuntimeError(msg)
 
+    cases: list[tuple[Callable[[sqlite3.Connection], None], type[Exception], str]] = [
+        (dup, SchemaViolation, "ops constraint failed in insert_item"),
+        (fail, RuntimeError, "boom"),
+    ]
     with capture_logs() as logs:
-        with pytest.raises(SchemaViolation, match="ops constraint failed in insert_item"):
-            core.run_write(dup, op="insert_item")
-        real.execute("ROLLBACK")
-        with pytest.raises(RuntimeError, match="boom"):
-            core.run_write(fail, op="insert_item")
-        real.execute("ROLLBACK")
+        for i, (fn, exc_type, pattern) in enumerate(cases):
+            real = core.connection()
+            with monkeypatch.context() as patch:
+                patch.setattr(core, "connection", lambda r=real: _RollbackFails(r))
+                with pytest.raises(exc_type, match=pattern):
+                    core.run_write(fn, op="insert_item")
+            with pytest.raises(sqlite3.ProgrammingError):
+                real.execute("SELECT 1")  # dropped and closed, not left in a transaction
+            assert real not in core._registry.connections
+            core.run_write(_insert_named(f"ok{i}"), op="insert_item")
+            assert core.connection() is not real
+    assert [r["name"] for r in core.read_all("SELECT name FROM item ORDER BY id")] == ["ok0", "ok1"]
     failed = [e for e in logs if e["event"] == "store.ops.rollback_failed"]
     assert [(e["op"], e["error"]) for e in failed] == [("insert_item", "OperationalError")] * 2
 

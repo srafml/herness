@@ -102,6 +102,18 @@ def _open(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _drop_cached(*, close: bool) -> None:
+    """Forget this thread's cached connection, unregister it and optionally close it."""
+    cached: _Entry | None = getattr(_local, "entry", None)
+    _local.entry = None
+    if cached is not None:
+        with _registry.lock, contextlib.suppress(ValueError):
+            _registry.connections.remove(cached[3])
+        if close:
+            with contextlib.suppress(sqlite3.Error):
+                cached[3].close()
+
+
 def connection() -> sqlite3.Connection:
     """This thread's ops connection (U02-37); ConfigError, StoreBusy or SchemaViolation."""
     path = _registry.path_override or data_layout().ops_db
@@ -110,11 +122,7 @@ def connection() -> sqlite3.Connection:
     if cached is not None:
         if cached[:3] == key:
             return cached[3]
-        _local.entry = None
-        with _registry.lock, contextlib.suppress(ValueError):
-            _registry.connections.remove(cached[3])
-        if cached[0] == key[0]:  # never close a handle inherited across fork
-            cached[3].close()
+        _drop_cached(close=cached[0] == key[0])  # never close a handle inherited across fork
     _check_sqlite()
     conn = _open(path)
     with _registry.lock:
@@ -125,12 +133,14 @@ def connection() -> sqlite3.Connection:
 
 
 def _rollback(conn: sqlite3.Connection, op: str) -> None:
-    """Roll back an open transaction; a failing ROLLBACK is logged, never raised over the cause."""
+    """Roll back an open transaction. A failing ROLLBACK is logged, never raised over the cause,
+    and the thread's connection is dropped and closed so the next call opens a clean one."""
     if conn.in_transaction:
         try:
             conn.execute("ROLLBACK")
         except sqlite3.Error as exc:
             _log.warning("store.ops.rollback_failed", op=op, error=type(exc).__name__)
+            _drop_cached(close=True)
 
 
 def run_write[T](fn: Callable[[sqlite3.Connection], T], *, op: str) -> T:
