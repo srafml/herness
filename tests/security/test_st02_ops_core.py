@@ -38,11 +38,10 @@ def test_st02_18_long_holders_never_hang_writers(
     ops_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ST02-18 a 5 s reader does not block writes (WAL); a 12 s BEGIN IMMEDIATE holder makes
-    the writer hit StoreBusy, and run_write returns or raises within the 30 s policy.
+    the writer's first attempt raise StoreBusy, and run_write completes within the 30 s policy.
 
-    With busy_timeout 10 s and the sqlite_write policy (6 attempts, 30 s) the retry after the
-    first StoreBusy outlasts the 12 s holder, so the write finally succeeds; the test asserts
-    that StoreBusy was raised inside run_write and that the call never ran past 30 s.
+    Controller ruling (spec note on ST02-18): with busy_timeout 10 s the retry after the first
+    StoreBusy outlasts the 12 s holder, so a caller-visible StoreBusy is unreachable here.
     """
     core.run_write(lambda c: c.execute("CREATE TABLE item (name TEXT)"), op="create_item")
 
@@ -59,15 +58,17 @@ def test_st02_18_long_holders_never_hang_writers(
     reader.join()
 
     # Phase 2: a writer holds BEGIN IMMEDIATE for 12 s.
-    busy: list[StoreBusy] = []
+    attempts: list[int] = []
+    busy: list[int] = []  # attempt numbers that raised StoreBusy
     real_retry = _shims.retry_call
 
     def watching_retry(name: str, fn: Callable[[], object]) -> object:
         def attempt() -> object:
+            attempts.append(len(attempts) + 1)
             try:
                 return fn()
-            except StoreBusy as exc:
-                busy.append(exc)
+            except StoreBusy:
+                busy.append(attempts[-1])
                 raise
 
         return real_retry(name, attempt)
@@ -86,8 +87,9 @@ def test_st02_18_long_holders_never_hang_writers(
         outcome = "written"
     elapsed = time.monotonic() - start
     writer.join()
-    assert busy, "the blocked writer never saw StoreBusy"
+    assert busy[:1] == [1], "the first attempt of the blocked writer did not raise StoreBusy"
     assert elapsed < _POLICY_MAX_ELAPSED_S
-    assert outcome in {"busy", "written"}
     names = {row["name"] for row in core.read_all("SELECT name FROM item")}
     assert {"during-read-0", "during-read-1", "during-read-2"} <= names
+    # The row exists exactly when run_write returned normally.
+    assert ("after-writer" in names) == (outcome == "written")

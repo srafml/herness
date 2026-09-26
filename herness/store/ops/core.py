@@ -61,7 +61,7 @@ _registry: Final = _Registry()
 _local: Final = threading.local()
 
 
-def _map_error(exc: sqlite3.Error, busy: str, other: str, op: str = "") -> HernessError:
+def _map_error(exc: Exception, busy: str, other: str, op: str = "") -> HernessError:
     text = str(exc).lower()
     if isinstance(exc, sqlite3.OperationalError) and ("locked" in text or "busy" in text):
         return StoreBusy(busy, op=op)
@@ -81,16 +81,16 @@ def _check_sqlite() -> None:
 
 
 def _open(path: Path) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
     conn: sqlite3.Connection | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(
             path, timeout=_BUSY_TIMEOUT_MS / 1000, isolation_level=None, check_same_thread=True
         )
         conn.execute(f"PRAGMA busy_timeout = {int(_BUSY_TIMEOUT_MS)}")
         mode = str(conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]).lower()
         conn.executescript(_PRAGMAS)
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, OSError) as exc:  # U02-37: any open failure is "cannot open"
         if conn is not None:
             conn.close()
         raise _map_error(exc, "ops store busy while opening", "cannot open ops store") from exc
@@ -124,6 +124,15 @@ def connection() -> sqlite3.Connection:
     return conn
 
 
+def _rollback(conn: sqlite3.Connection, op: str) -> None:
+    """Roll back an open transaction; a failing ROLLBACK is logged, never raised over the cause."""
+    if conn.in_transaction:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error as exc:
+            _log.warning("store.ops.rollback_failed", op=op, error=type(exc).__name__)
+
+
 def run_write[T](fn: Callable[[sqlite3.Connection], T], *, op: str) -> T:
     """Run SQL-only ``fn(conn)`` in one ``BEGIN IMMEDIATE`` transaction, retried (U02-38).
 
@@ -131,21 +140,20 @@ def run_write[T](fn: Callable[[sqlite3.Connection], T], *, op: str) -> T:
     if _OP_RE.fullmatch(op) is None:
         msg = "run_write op must match ^[a-z_]{1,64}$"
         raise ConfigError(msg)
-    if connection().in_transaction:
-        msg = f"nested run_write in {op}"
-        raise ConfigError(msg)
 
     def attempt() -> T:
         _shims.fault_point("sqlite.write", kind=op)
-        conn = connection()
+        conn = connection()  # inside the retry: StoreBusy while opening is retried too
+        if conn.in_transaction:  # ConfigError is not retryable
+            msg = f"nested run_write in {op}"
+            raise ConfigError(msg)
         started = clock.monotonic()
         try:
             conn.execute("BEGIN IMMEDIATE")
             result = fn(conn)
             conn.execute("COMMIT")
         except BaseException as exc:
-            if conn.in_transaction:
-                conn.execute("ROLLBACK")
+            _rollback(conn, op)
             if isinstance(exc, sqlite3.IntegrityError):  # names table and column, never values
                 msg = f"ops constraint failed in {op}: {exc}"
                 raise SchemaViolation(msg, op=op) from exc
@@ -227,6 +235,9 @@ def dump_json(value: object, *, field: str, max_bytes: int = OPS_JSON_MAX_BYTES)
     except TypeError as exc:
         msg = f"JSON for {field} not serialisable: {exc}"
         raise SchemaViolation(msg) from exc
+    except RecursionError as exc:
+        msg = f"JSON for {field} is nested too deeply"
+        raise SchemaViolation(msg) from exc
     except ValueError as exc:  # NaN/Infinity, or a circular reference
         nan = "Out of range float" in str(exc)
         msg = f"JSON for {field} " + ("contains NaN or Infinity" if nan else "is circular")
@@ -243,7 +254,7 @@ def load_json(text: str | None, *, field: str) -> object:
         return None
     try:
         return json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:  # RecursionError: nested too deeply
         msg = f"invalid JSON in {field}"
         raise SchemaViolation(msg) from exc
 

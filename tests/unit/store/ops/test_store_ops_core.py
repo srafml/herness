@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from structlog.testing import capture_logs
 
 from herness.core.errors import ConfigError, NotFound, SchemaViolation, StoreBusy
+from herness.core.resilience import ProcessState
 from herness.store.ops import _shims, core
 
 pytestmark = pytest.mark.unit
@@ -108,6 +109,18 @@ def test_ut02_25_locked_while_opening_is_store_busy(
     finally:
         holder.execute("ROLLBACK")
         holder.close()
+        core.reset_connections()
+
+
+def test_ut02_25_parent_not_creatable_is_schema_violation(tmp_path: Path) -> None:
+    """UT02-25 an OSError creating the parent directory is SchemaViolation("cannot open ...")."""
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    core.reset_connections(path=blocker / "sub" / "ops.sqlite")
+    try:
+        with pytest.raises(SchemaViolation, match="cannot open ops store"):
+            core.connection()
+    finally:
         core.reset_connections()
 
 
@@ -316,6 +329,84 @@ def test_ut02_28_nested_run_write_is_config_error(item_table: Path) -> None:
     assert _count() == 1
 
 
+def test_ut02_28_nested_run_write_not_retried(
+    item_table: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT02-28 the nested ConfigError is raised on the inner call's single attempt."""
+    calls: list[str] = []
+    monkeypatch.setattr(_shims, "fault_point", lambda _name, **labels: calls.append(labels["kind"]))
+
+    def outer(conn: sqlite3.Connection) -> None:
+        with pytest.raises(ConfigError, match="nested run_write in inner"):
+            core.run_write(_create_table, op="inner")
+
+    core.run_write(outer, op="outer")
+    assert calls == ["outer", "inner"]
+
+
+def test_ut02_28_busy_while_opening_is_retried(
+    ops_store: Path, reset_process_state: ProcessState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT02-28 StoreBusy while a thread first opens its connection is retried by run_write."""
+    real_open = core._open
+    opens: list[Path] = []
+
+    def busy_once(path: Path) -> sqlite3.Connection:
+        opens.append(path)
+        if len(opens) == 1:
+            msg = "ops store busy while opening"
+            raise StoreBusy(msg)
+        return real_open(path)
+
+    monkeypatch.setattr(core, "_open", busy_once)
+    core.run_write(_create_table, op="create_item")
+    assert len(opens) == 2
+    assert _count() == 0
+
+
+class _RollbackFails:
+    """Connection proxy whose ROLLBACK raises (the real connection stays usable)."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._conn.in_transaction
+
+    def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+        if sql == "ROLLBACK":
+            msg = "disk I/O error"
+            raise sqlite3.OperationalError(msg)
+        return self._conn.execute(sql, *args)
+
+
+def test_ut02_27_failed_rollback_keeps_original_error(
+    item_table: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT02-27 a failing ROLLBACK is logged; the original error is kept and mapped."""
+    real = core.connection()
+    monkeypatch.setattr(core, "connection", lambda: _RollbackFails(real))
+
+    def dup(conn: sqlite3.Connection) -> None:
+        conn.execute("INSERT INTO item (name) VALUES ('x')")
+        conn.execute("INSERT INTO item (name) VALUES ('x')")
+
+    def fail(conn: sqlite3.Connection) -> None:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    with capture_logs() as logs:
+        with pytest.raises(SchemaViolation, match="ops constraint failed in insert_item"):
+            core.run_write(dup, op="insert_item")
+        real.execute("ROLLBACK")
+        with pytest.raises(RuntimeError, match="boom"):
+            core.run_write(fail, op="insert_item")
+        real.execute("ROLLBACK")
+    failed = [e for e in logs if e["event"] == "store.ops.rollback_failed"]
+    assert [(e["op"], e["error"]) for e in failed] == [("insert_item", "OperationalError")] * 2
+
+
 # --- UT02-29 dump_json ----------------------------------------------------------------
 
 
@@ -396,6 +487,25 @@ def test_ut02_30_load_json_invalid_names_field() -> None:
     """UT02-30 `"{bad"` raises SchemaViolation naming the field."""
     with pytest.raises(SchemaViolation, match="invalid JSON in labels"):
         core.load_json("{bad", field="labels")
+
+
+def _deep_list(depth: int) -> list[object]:
+    value: list[object] = []
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def test_ut02_29_deep_nesting_rejected() -> None:
+    """UT02-29 JSON nested beyond the recursion limit is a SchemaViolation naming the field."""
+    with pytest.raises(SchemaViolation, match="JSON for payload is nested too deeply"):
+        core.dump_json(_deep_list(100_000), field="payload", max_bytes=16 * 1024 * 1024)
+
+
+def test_ut02_30_load_json_deep_nesting_rejected() -> None:
+    """UT02-30 deeply nested JSON text is a SchemaViolation naming the field."""
+    with pytest.raises(SchemaViolation, match="invalid JSON in labels"):
+        core.load_json("[" * 100_000 + "]" * 100_000, field="labels")
 
 
 def test_ut02_30_load_json_values() -> None:

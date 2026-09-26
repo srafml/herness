@@ -25,7 +25,8 @@ class _Policy:
     max_elapsed_s: float
 
 
-# Design 08 §5.2 / §7 defaults of `sqlite_write` (StoreBusy only).
+# Design 08 §5.2 / §7 defaults of `sqlite_write`. Design 08 lists it for StoreBusy; like U08-28,
+# the shim retries every RetryableError (run_write raises no other RetryableError).
 _POLICIES: Final[dict[str, _Policy]] = {
     "sqlite_write": _Policy(attempts=6, base_s=0.2, cap_s=5.0, max_elapsed_s=30.0),
 }

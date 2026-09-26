@@ -99,6 +99,8 @@ default = 400
 "herness/harness/loop.py" = { limit = 220, reason = "design 05 §5.2" }
 # Interim T08-07 / T08-08 stand-ins used by herness.store.ops.core (T02-04); deleted by T08-08.
 "herness/store/ops/_shims.py" = { limit = 80, reason = "interim resilience shims (T02-04)" }
+# Mirrors the impl 02 §2 row (raised from 260 in T02-04 fix round 1, controller ruling).
+"herness/store/ops/core.py" = { limit = 280, reason = "impl 02 §2 module map (T02-04 fix round 1)" }
 
 [tool.herness.licences]
 allowed = ["MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "PSF-2.0", "Python-2.0", "ISC", "MPL-2.0"]
