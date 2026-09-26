@@ -52,6 +52,7 @@ def _connect_config(sql: SqlSettings) -> dict[str, str | bool | int | float | li
     return {
         "autoinstall_known_extensions": False,
         "autoload_known_extensions": False,
+        "python_enable_replacements": False,
         "threads": sql.threads,
         "memory_limit": sql.memory_limit,
     }

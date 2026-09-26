@@ -74,6 +74,8 @@ def test_ut05_49_open_warehouse_locks_settings(tmp_path: Path) -> None:
         assert row == (False,)
         row = cur.execute("SELECT current_setting('lock_configuration')").fetchone()
         assert row == (True,)
+        row = cur.execute("SELECT current_setting('python_enable_replacements')").fetchone()
+        assert row == (False,)  # T05-14 carry-over: no Python-variable replacement scans
         with pytest.raises(duckdb.Error):
             cur.execute("CREATE TABLE core.x (a INT)")
     finally:
