@@ -150,6 +150,34 @@ from .memory import (
 )
 
 # isort: split
+# 07 closed_loop
+from .closed_loop import (
+    DecisionRow,
+    DueMeasurement,
+    OutcomeRow,
+    PromotionSource,
+    RecommendationRow,
+    SimilarityRow,
+    accepted_since,
+    dead_task_count,
+    due_measurements,
+    insert_decision,
+    insert_outcome,
+    insert_recommendations,
+    latest_decisions,
+    latest_outcomes,
+    outcome_exists,
+    outcomes_for_similarity,
+    rec_memory_ids,
+    recent_done_runs,
+    recent_runs_with_recommendations,
+    run_findings_for_promotion,
+    run_recommendations,
+    task_spec,
+    treated_targets,
+)
+
+# isort: split
 # 09 ui_reads
 from .ui_reads import (
     UiDecisionRow,
@@ -296,6 +324,30 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "fts_check_and_rebuild",
     "pending_embedding_count",
     "session_memory_ids",
+    # 07 closed_loop
+    "RecommendationRow",
+    "DecisionRow",
+    "OutcomeRow",
+    "DueMeasurement",
+    "SimilarityRow",
+    "PromotionSource",
+    "insert_recommendations",
+    "run_recommendations",
+    "insert_decision",
+    "latest_decisions",
+    "insert_outcome",
+    "outcome_exists",
+    "due_measurements",
+    "latest_outcomes",
+    "treated_targets",
+    "recent_runs_with_recommendations",
+    "accepted_since",
+    "outcomes_for_similarity",
+    "rec_memory_ids",
+    "dead_task_count",
+    "run_findings_for_promotion",
+    "task_spec",
+    "recent_done_runs",
     # 09 ui_reads
     "UiRunRow",
     "UiTaskRow",

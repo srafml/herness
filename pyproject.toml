@@ -447,6 +447,9 @@ ignore_imports = [
     # T07-03: private sibling of area `memory` (row types, SQL plumbing), kept apart for the
     # impl 07 §2 line budget of memory.py; no other module imports it.
     "herness.store.ops.memory -> herness.store.ops._memory_rows",
+    # T07-04: private sibling of area `closed_loop` (row types, constant SQL, plumbing), kept
+    # apart for the impl 07 §2 line budget of closed_loop.py; no other module imports it.
+    "herness.store.ops.closed_loop -> herness.store.ops._closed_loop_rows",
 ]
 # The area -> core ignore matches `migrate` (T02-05), `shared` (T02-07) and each area its card
 # adds later.
