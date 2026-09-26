@@ -305,6 +305,50 @@ def test_ut02_20_open_readonly_settings(layout: DataLayout) -> None:
         assert setting("threads") == 2
         assert setting("access_mode") == "read_only"
         assert con.execute("SELECT status FROM meta.build").fetchone() == ("promoted",)
+        cursor_tz = con.cursor().execute("SELECT current_setting('TimeZone')").fetchone()
+        assert cursor_tz == ("UTC",)
+
+
+def test_ut02_20_open_readonly_twice_in_one_process(layout: DataLayout) -> None:
+    """UT02-20 a second open of the same build shares the hardened instance."""
+    make_build(layout, ID_A)
+    set_current(layout, f"{ID_A}\n")
+    first = open_readonly(layout=layout)
+    try:
+        second = open_readonly(layout=layout)
+        try:
+            row = second.execute(
+                "SELECT current_setting('lock_configuration'),"
+                " current_setting('enable_external_access'), current_setting('TimeZone')"
+            ).fetchone()
+            assert row == (True, False, "UTC")
+            assert second.execute("SELECT status FROM meta.build").fetchone() == ("promoted",)
+        finally:
+            second.close()
+        assert first.execute("SELECT build_id FROM meta.build").fetchone() == (ID_A,)
+    finally:
+        first.close()
+
+
+def test_ut02_20_open_readonly_other_settings_in_one_process(layout: DataLayout) -> None:
+    """UT02-20 a second open with different threads -> ConfigError naming the conflict."""
+    make_build(layout, ID_A)
+    first = open_readonly(ID_A, layout=layout)
+    try:
+        with pytest.raises(ConfigError, match="already open in this process"):
+            open_readonly(ID_A, threads=3, layout=layout)
+    finally:
+        first.close()
+
+
+def test_ut02_20_open_readonly_hardening_fails(
+    layout: DataLayout, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT02-20 a failing hardening statement on an unhardened instance -> SchemaViolation."""
+    make_build(layout, ID_A)
+    monkeypatch.setattr(warehouse, "_HARDENING", "SET no_such_setting = 1")
+    with pytest.raises(SchemaViolation, match="cannot open warehouse"):
+        open_readonly(ID_A, layout=layout)
 
 
 def test_ut02_20_open_readonly_explicit_build(layout: DataLayout) -> None:
@@ -565,3 +609,41 @@ def test_ut02_24_health_bad_arguments(layout: DataLayout) -> None:
         warehouse_health(now=NOW, stale_after_h=0.0, layout=layout)
     with pytest.raises(ConfigError):
         warehouse_health(now=datetime.datetime(2026, 1, 1), layout=layout)  # noqa: DTZ001
+    plus_two = datetime.timezone(datetime.timedelta(hours=2))
+    with pytest.raises(ConfigError):
+        warehouse_health(now=NOW.astimezone(plus_two), layout=layout)
+
+
+def test_ut02_24_health_ok_while_reader_open(layout: DataLayout) -> None:
+    """UT02-24 health stays ok while a reader in this process holds the build open."""
+    make_build(layout, ID_A)
+    set_current(layout, f"{ID_A}\n")
+    reader = open_readonly(layout=layout)
+    try:
+        assert warehouse_health(now=NOW, layout=layout)[0] == "ok"
+        assert reader.execute("SELECT status FROM meta.build").fetchone() == ("promoted",)
+    finally:
+        reader.close()
+
+
+def test_ut02_24_health_unknown_status_not_echoed(layout: DataLayout) -> None:
+    """UT02-24 a status outside the known set is degraded and never echoed."""
+    make_build(layout, ID_A, status="<script>junk</script>")
+    set_current(layout, f"{ID_A}\n")
+    status, reason = warehouse_health(now=NOW, layout=layout)
+    assert status == "degraded"
+    assert "junk" not in reason
+    assert "unknown status" in reason
+
+
+def test_ut02_24_health_never_raises(layout: DataLayout, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT02-24 any runtime failure (e.g. a ValueError from the config loader) -> down."""
+
+    def broken(**_: Any) -> str:
+        msg = "bad config value"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(warehouse, "read_current", broken)
+    status, reason = warehouse_health(now=NOW, layout=layout)
+    assert status == "down"
+    assert "ValueError" in reason

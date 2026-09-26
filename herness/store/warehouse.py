@@ -1,8 +1,4 @@
-"""Warehouse read side (impl 02 U02-24 … U02-33, U02-133): build IDs, ``CURRENT``, readers.
-
-Every path comes from an ID that passed ``BUILD_ID_RE`` (TH02-03); every reader connection
-is read-only, external access off, configuration locked (TH02-04). Writes: ``_warehouse_rw``.
-"""
+"""Warehouse read side (impl 02 U02-24 … U02-33, U02-133): gated IDs, CURRENT, hardened readers."""
 
 from __future__ import annotations
 
@@ -28,9 +24,8 @@ type BuildStatus = Literal["building", "failed", "promoted", "retired", "unreada
 type HealthResult = tuple[Literal["ok", "degraded", "down"], str]
 type _Config = dict[str, str | bool | int | float | list[str]]
 
-# re.ASCII keeps non-ASCII digits out of \d, so only plain ASCII IDs ever reach a path.
+# ``YYYYMMDD-HHMMSS-<ulid6>``; re.ASCII keeps non-ASCII digits out of \d (TH02-03).
 BUILD_ID_RE: Final = re.compile(r"^\d{8}-\d{6}-[0-9A-HJKMNP-TV-Z]{6}$", re.ASCII)
-"""``YYYYMMDD-HHMMSS-<ulid6>`` (Crockford base32, upper case); gates every build path."""
 
 _MEMORY_LIMIT_RE: Final = re.compile(r"^([1-9][0-9]?%|100%|[0-9]+(\.[0-9]+)?\s?(GB|MB|GiB|MiB))$")
 _MAX_THREADS: Final = 256
@@ -38,22 +33,23 @@ _CURRENT: Final = "CURRENT"
 _CURRENT_MAX_BYTES: Final = 64
 # POSIX DuckDB names the file lock; on Windows the OS reports a sharing violation instead.
 _LOCK_RE: Final = re.compile(r"\block\b|being used by another process|already open", re.I)
-# Setting names verified on the pinned DuckDB by UT02-20 (open-questions (b) item 4).
+_EXT_OFF: Final[_Config] = {
+    "autoinstall_known_extensions": False,
+    "autoload_known_extensions": False,
+}
+# Setting names verified on the pinned DuckDB by UT02-20 (open-questions (b) item 4). GLOBAL
+# time zone: a session-level SET would not reach cursors or later connections to the instance.
 _HARDENING: Final = (
-    "SET TimeZone = 'UTC'",
-    "SET enable_external_access = false",
-    "SET lock_configuration = true",
+    "SET GLOBAL TimeZone = 'UTC'; SET enable_external_access = false; SET lock_configuration = true"
+)
+_HARDENED_SQL: Final = (
+    "SELECT current_setting('lock_configuration'), current_setting('enable_external_access'),"
+    " current_setting('TimeZone')"
 )
 _META_SQL: Final = "SELECT status, epoch_us(started_at), epoch_us(finished_at) FROM meta.build"
 _META_STATUSES: Final = frozenset({"building", "failed", "promoted", "retired"})
-_MONOTONIC: Final = clock.monotonic
 _EPOCH: Final = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
-
 _log = get_logger("store.warehouse")
-
-
-def _extensions_off() -> _Config:
-    return {"autoinstall_known_extensions": False, "autoload_known_extensions": False}
 
 
 def _resolve(layout: DataLayout | None) -> DataLayout:
@@ -64,9 +60,13 @@ def _valid_id(build_id: object) -> bool:
     return isinstance(build_id, str) and BUILD_ID_RE.fullmatch(build_id) is not None
 
 
+def _is_utc(now: datetime.datetime) -> bool:
+    return now.tzinfo is not None and now.utcoffset() == datetime.timedelta(0)
+
+
 def new_build_id(now: datetime.datetime) -> str:
     """Return a new build ID for the UTC time ``now``. Raises ConfigError for a non-UTC time."""
-    if now.tzinfo is None or now.utcoffset() != datetime.timedelta(0):
+    if not _is_utc(now):
         msg = "new_build_id needs a UTC time"
         raise ConfigError(msg)
     return ids.new_build_id(now)
@@ -90,11 +90,16 @@ def build_exists(build_id: str, *, layout: DataLayout | None = None) -> bool:
         return False
 
 
+def _existing_path(build_id: str, lay: DataLayout) -> Path:
+    path = build_path(build_id, layout=lay)
+    if not path.is_file():
+        msg = f"warehouse build {build_id} not found"
+        raise NotFoundError(msg, kind="build", key=build_id)
+    return path
+
+
 def _parse_current(raw: bytes) -> str:
-    try:
-        text = raw.decode("ascii").strip()
-    except UnicodeDecodeError:
-        text = ""
+    text = raw.decode("ascii", errors="replace").strip()  # U+FFFD never passes the gate
     if len(raw) > _CURRENT_MAX_BYTES or not _valid_id(text):
         msg = "CURRENT content invalid"
         raise SchemaViolation(msg)
@@ -102,10 +107,7 @@ def _parse_current(raw: bytes) -> str:
 
 
 def read_current(*, layout: DataLayout | None = None) -> str | None:
-    """Return the promoted build ID, or None when ``CURRENT`` does not exist.
-
-    Raises SchemaViolation (bad content), NotFoundError (build file missing), StoreBusy.
-    """
+    """Return the promoted build ID, None without ``CURRENT``; raises as U02-27."""
     lay = _resolve(layout)
     try:
         with (lay.warehouse / _CURRENT).open("rb") as fh:
@@ -119,9 +121,7 @@ def read_current(*, layout: DataLayout | None = None) -> str | None:
         msg = "cannot read CURRENT"
         raise SchemaViolation(msg, error_type=type(exc).__name__) from exc
     build_id = _parse_current(raw)
-    if not build_path(build_id, layout=lay).is_file():
-        msg = f"warehouse build {build_id} not found"
-        raise NotFoundError(msg, kind="build", key=build_id)
+    _existing_path(build_id, lay)
     return build_id
 
 
@@ -133,7 +133,7 @@ class CurrentPointer:
         *,
         layout: DataLayout | None = None,
         recheck_s: float = 60.0,
-        clock: Callable[[], float] = _MONOTONIC,
+        clock: Callable[[], float] = clock.monotonic,
     ) -> None:
         if not 1.0 <= recheck_s <= 3600.0:  # noqa: PLR2004 - range of U02-28
             msg = "recheck_s must be between 1 and 3600 seconds"
@@ -171,12 +171,15 @@ def _open_error(exc: duckdb.Error, build_id: str) -> HernessError:
     if _is_lock_error(exc):
         msg = f"warehouse {build_id} is locked"
         return StoreBusy(msg, build_id=build_id, error_type=error_type)
+    if isinstance(exc, duckdb.ConnectionException) and "different configuration" in str(exc):
+        msg = f"warehouse {build_id} is already open in this process with other settings"
+        return ConfigError(msg, build_id=build_id, error_type=error_type)
     msg = f"cannot open warehouse {build_id}"
     return SchemaViolation(msg, build_id=build_id, error_type=error_type)
 
 
 def _reader_config(threads: int | None, memory_limit: str | None) -> _Config:
-    config = _extensions_off()
+    config = dict(_EXT_OFF)
     if threads is not None:
         if not 1 <= threads <= _MAX_THREADS:
             msg = f"threads must be between 1 and {_MAX_THREADS}"
@@ -190,6 +193,14 @@ def _reader_config(threads: int | None, memory_limit: str | None) -> _Config:
     return config
 
 
+def _already_hardened(con: duckdb.DuckDBPyConnection) -> bool:
+    """True when the shared instance was hardened by an earlier ``open_readonly``."""
+    try:
+        return con.execute(_HARDENED_SQL).fetchone() == (True, False, "UTC")
+    except duckdb.Error:
+        return False
+
+
 def open_readonly(
     build_id: str | None = None,
     *,
@@ -197,9 +208,10 @@ def open_readonly(
     memory_limit: str | None = None,
     layout: DataLayout | None = None,
 ) -> duckdb.DuckDBPyConnection:
-    """Open the hardened read-only connection every reader uses (TH02-04).
+    """Open the hardened read-only reader (TH02-04); raises as U02-29.
 
-    Raises NotFoundError, ConfigError (limits), StoreBusy (lock) and SchemaViolation.
+    DuckDB shares one instance per file per process: a second open of the same build needs
+    the same ``threads``/``memory_limit`` (else ConfigError) and reuses its hardening.
     """
     config = _reader_config(threads, memory_limit)
     lay = _resolve(layout)
@@ -208,20 +220,17 @@ def open_readonly(
         if build_id is None:
             msg = "no promoted warehouse build"
             raise NotFoundError(msg, kind="current", key=_CURRENT)
-    path = build_path(build_id, layout=lay)
-    if not path.is_file():
-        msg = f"warehouse build {build_id} not found"
-        raise NotFoundError(msg, kind="build", key=build_id)
+    path = _existing_path(build_id, lay)
     try:
         con = duckdb.connect(str(path), read_only=True, config=config)
     except duckdb.Error as exc:
         raise _open_error(exc, build_id) from exc
     try:
-        for statement in _HARDENING:
-            con.execute(statement)
+        con.execute(_HARDENING)
     except duckdb.Error as exc:
-        con.close()
-        raise _open_error(exc, build_id) from exc
+        if not _already_hardened(con):
+            con.close()
+            raise _open_error(exc, build_id) from exc
     return con
 
 
@@ -243,12 +252,8 @@ def _from_epoch_us(value: object) -> datetime.datetime | None:
 
 
 def _meta_row(con: duckdb.DuckDBPyConnection) -> tuple[str, object, object] | None:
-    """The single ``meta.build`` row as (status, started_us, finished_us), else None."""
-    rows = con.execute(_META_SQL).fetchmany(2)
-    if len(rows) != 1:
-        return None
-    status, started, finished = rows[0]
-    return str(status), started, finished
+    rows = con.execute(_META_SQL).fetchmany(2)  # (status, started_us, finished_us)
+    return (str(rows[0][0]), rows[0][1], rows[0][2]) if len(rows) == 1 else None
 
 
 def _file_size(path: Path) -> int:
@@ -263,19 +268,14 @@ def _inspect(path: Path, build_id: str, *, is_current: bool) -> BuildInfo:
     status: BuildStatus = "unreadable"
     started = finished = None
     try:
-        con = duckdb.connect(str(path), read_only=True, config=_extensions_off())
-    except duckdb.Error as exc:
-        status = "locked" if _is_lock_error(exc) else "unreadable"
-    else:
-        try:
+        with duckdb.connect(str(path), read_only=True, config=dict(_EXT_OFF)) as con:
             row = _meta_row(con)
-        except duckdb.Error:
-            row = None
-        finally:
-            con.close()
-        if row is not None and row[0] in _META_STATUSES:
-            status = cast("BuildStatus", row[0])
-            started, finished = _from_epoch_us(row[1]), _from_epoch_us(row[2])
+    except duckdb.Error as exc:
+        row = None
+        status = "locked" if _is_lock_error(exc) else status
+    if row is not None and row[0] in _META_STATUSES:
+        status = cast("BuildStatus", row[0])
+        started, finished = _from_epoch_us(row[1]), _from_epoch_us(row[2])
     return BuildInfo(build_id, path, size, status, started, finished, is_current)
 
 
@@ -286,8 +286,6 @@ def list_builds(*, layout: DataLayout | None = None) -> list[BuildInfo]:
         current = read_current(layout=lay)
     except (SchemaViolation, NotFoundError):
         current = None
-    if not lay.warehouse.is_dir():
-        return []
     infos: list[BuildInfo] = []
     for path in lay.warehouse.glob("wh-*.duckdb"):
         build_id = path.name[len("wh-") : -len(".duckdb")]
@@ -325,11 +323,7 @@ def _remove(build_id: str, lay: DataLayout) -> tuple[bool, int]:
 def delete_build_files(
     build_id: str, *, layout: DataLayout | None = None
 ) -> Literal["deleted", "deferred", "absent"]:
-    """Delete a build's file, WAL and spill directory, tolerating Windows file locks.
-
-    Raises ConfigError for the current build; SchemaViolation for an invalid ID or an
-    OSError other than a sharing violation.
-    """
+    """Delete a build's file, WAL and spill directory, tolerating locks; raises as U02-32."""
     lay = _resolve(layout)
     build_path(build_id, layout=lay)  # validates the ID before anything else
     if _is_current(build_id, lay):
@@ -349,38 +343,25 @@ def delete_build_files(
     return "deleted"
 
 
-def _current_meta(layout: DataLayout | None) -> tuple[str | None, tuple[str, object] | None]:
-    """(current build ID, (status, finished_us) of its ``meta.build`` row or None)."""
-    build_id = read_current(layout=layout)
-    if build_id is None:
-        return None, None
-    con = open_readonly(build_id, layout=layout)
-    try:
-        row = _meta_row(con)
-    finally:
-        con.close()
-    return build_id, None if row is None else (row[0], row[2])
-
-
 def warehouse_health(
     *, now: datetime.datetime, stale_after_h: float = 48.0, layout: DataLayout | None = None
 ) -> HealthResult:
-    """Classify the current build as ok, degraded or down (ENG §4 health).
-
-    Raises ConfigError only for a caller bug (``stale_after_h`` <= 0 or a naive ``now``).
-    """
-    if not stale_after_h > 0 or now.tzinfo is None or now.utcoffset() is None:
-        msg = "warehouse_health needs stale_after_h > 0 and an aware UTC now"
+    """Classify the current build (ENG §4); ConfigError only for bad arguments."""
+    if not stale_after_h > 0 or not _is_utc(now):
+        msg = "warehouse_health needs stale_after_h > 0 and a UTC now"
         raise ConfigError(msg)
     try:
-        build_id, meta = _current_meta(layout)
-    except (HernessError, duckdb.Error, OSError, ImportError) as exc:
+        build_id = read_current(layout=layout)
+        if build_id is None:
+            return "down", "no CURRENT build pointer"
+        with open_readonly(build_id, layout=layout) as con:
+            row = _meta_row(con)
+    except Exception as exc:  # noqa: BLE001 - U02-33 raises nothing: every failure is "down"
         return "down", f"current build cannot be opened ({type(exc).__name__})"
-    if build_id is None:
-        return "down", "no CURRENT build pointer"
-    if meta is None:
+    if row is None:
         return "down", f"build {build_id} has no meta.build row"
-    status, finished = meta[0], _from_epoch_us(meta[1])
+    status = row[0] if row[0] in _META_STATUSES else "in an unknown status"
+    finished = _from_epoch_us(row[2])
     if finished is None:
         return "degraded", f"build {build_id} is {status} with no finished_at"
     age_h = (now - finished).total_seconds() / 3600
