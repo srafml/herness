@@ -58,8 +58,8 @@ CASES: list[tuple[GpuClass, str, dict[GpuClass, int], GpuClass | None, tuple[str
     ("decider", "chat", {"decider": 5}, None, ("swap", "reasoning", "preload")),
     # step 4: preload
     ("none", "morning_prep", {}, None, ("swap", "reasoning", "preload")),
-    ("reasoning", "chat", {"reasoning": 0}, None, ("idle", "reasoning", "no_work")),
     # step 5: idle on the loaded class
+    ("reasoning", "chat", {"reasoning": 0}, None, ("idle", "reasoning", "no_work")),
     ("decider", "reviews", {"none": 0}, None, ("idle", "decider", "no_work")),
     ("large", "deep", {}, None, ("idle", "large", "no_work")),
     ("none", "enrichment", {}, None, ("idle", "none", "no_work")),

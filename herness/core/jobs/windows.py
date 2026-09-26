@@ -38,7 +38,11 @@ _log = get_logger("jobs")
 
 @dataclass(frozen=True, slots=True)
 class ActiveWindow:
-    """One occurrence of a schedule window: `start_at <= t < end_at`, both aware UTC."""
+    """One occurrence of a schedule window from `start_at` to `end_at`, both aware UTC.
+
+    Usually `start_at <= now < end_at`; after the U08-66 +1 hour DST fallback the window
+    may start after the instant that was asked for.
+    """
 
     spec: WindowSpec
     start_at: dt.datetime
