@@ -6,12 +6,14 @@ runner takes. Every writer it builds appends to one shared ordered `events` list
 assert the exact order of writer calls against other recorded calls such as
 `set_watermark`. `commit()` returns a real `LakeFileSet` with one fake path per call under
 `root/<source>/<entity>/` (nothing is written to disk), the committed row count and the
-maximum `_source_updated_at` of the written batches, like the real writer.
+maximum `_source_updated_at` of the written batches, like the real writer. Building a
+writer is thread-safe, so backfill slice threads get distinct writer numbers (T01-07).
 """
 
 from __future__ import annotations
 
 import datetime
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,11 +80,13 @@ class FakeLake:
     writers: list[FakeLakeWriter] = field(default_factory=list)
     fail_on_commit: BaseException | None = None
     abort_error: BaseException | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def __call__(self, source: str, entity: str) -> FakeLakeWriter:
-        writer = FakeLakeWriter(self, len(self.writers), source, entity)
-        self.writers.append(writer)
-        self.events.append(("open", writer.number))
+        with self.lock:
+            writer = FakeLakeWriter(self, len(self.writers), source, entity)
+            self.writers.append(writer)
+            self.events.append(("open", writer.number))
         return writer
 
     def factory(self) -> Callable[[str, str], LakeWriter]:

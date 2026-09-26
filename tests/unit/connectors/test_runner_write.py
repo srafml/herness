@@ -23,7 +23,7 @@ from tests.unit.connectors._runner_data import (
 )
 
 import herness.connectors._write_loop as write_loop
-import herness.connectors.runner as runner_module
+import herness.connectors.backfill as backfill_module
 from herness.core.errors import SourceUnavailable
 from herness.store.ops import get_watermark, set_watermark
 from herness.store.ops.privacy import create_deletion_request, set_deletion_status
@@ -54,7 +54,7 @@ def _spy_watermarks(monkeypatch: pytest.MonkeyPatch, lake: FakeLake) -> None:
         return real(source, entity, field, value, now=now)
 
     monkeypatch.setattr(write_loop, "set_watermark", spy)
-    monkeypatch.setattr(runner_module, "set_watermark", spy)
+    monkeypatch.setattr(backfill_module, "set_watermark", spy)
 
 
 def _request_deletion(record_id: str) -> None:
