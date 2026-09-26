@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import structlog
 from tests.support.config_tree import write_full_config
 from tests.support.fake_clock import FakeClock
 from tests.support.fake_keyring import MemoryKeyring
@@ -50,6 +51,7 @@ pytestmark = pytest.mark.unit
 
 SETTINGS = BreakerSettings(failure_threshold=3, cooldown_s=60, cooldown_max_s=900)
 TRANSITIONS = "herness_resilience_breaker_transitions_total"
+EMAIL = "ops.person@example.com"
 
 
 @pytest.fixture
@@ -259,6 +261,20 @@ def test_ut08_15_failures_open_then_success_resets(
     assert _events("breaker_close") == []
 
 
+def test_ut08_15_last_error_redacted_before_cut(env: FakeClock) -> None:
+    """UT08-15 (review M-1) redaction runs on the whole text before the 500-char cut: a value
+    straddling char 500 is replaced, never left as a fragment."""
+    del env
+    text = "x" * 488 + EMAIL + " tail"
+    breaker("jira").record_failure(SourceUnavailable(text))
+    row = _read("jira")
+    assert row is not None
+    assert row.last_error is not None
+    assert len(row.last_error) <= 500
+    assert "ops.person" not in row.last_error
+    assert row.last_error.startswith("x" * 488)
+
+
 def test_ut08_15_error_text_redaction_fallbacks(
     env: FakeClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -411,6 +427,32 @@ def test_ut08_19_open_probe_claimed_once(
     assert len(_events("breaker_close")) == 1
     assert breaker("model:m").allow()
     assert transitions == [("model:m", "open"), ("model:m", "half_open"), ("model:m", "closed")]
+    (half_open,) = _events("breaker_half_open")
+    assert '"reason":"probe"' in half_open["detail"].replace(" ", "")
+
+
+def test_ut08_19_stale_cache_rechecks_probe_due(env: FakeClock) -> None:
+    """UT08-19 (review I-1) a row cached before the probe fell due is re-read: another process
+    probed, failed and re-opened it (trips 2, 120 s), so this process must not claim."""
+    key = "model:m"
+    a, b = CircuitBreaker(key), CircuitBreaker(key)  # two processes over one store
+    a.force_open(ModelUnavailable("down"))
+    env.advance(57)
+    assert b.state() == "open"  # B caches the trips-1 row 3 s before the probe is due
+    env.advance(3)
+    assert a.allow()
+    a.record_failure(ModelUnavailable("probe failed"))
+    env.advance(1)
+    assert b.allow() is False
+    row = _read(key)
+    assert row is not None
+    assert (row.state, row.trips) == ("open", 2)
+    assert b.retry_at() == row.opened_at + timedelta(seconds=120)  # type: ignore[operator]
+    assert len(_events("breaker_half_open")) == 1
+    env.advance(120)
+    assert b.allow()
+    detail = _events("breaker_half_open")[-1]["detail"].replace(" ", "")
+    assert '"trips":2' in detail
 
 
 def test_ut08_19_lost_claim_rereads_row(env: FakeClock, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -518,7 +560,10 @@ def test_ut08_104_model_probe_network_rules(
         _open(key, now - timedelta(seconds=61))
     assert run_due_probes(now) == 0  # no chain registry bound
     bind_chain_registry(_Chains({"claude-opus": True}))
-    assert run_due_probes(now) == 0  # off-network without egress; ghost unknown
+    with structlog.testing.capture_logs() as logs:
+        assert run_due_probes(now) == 0  # off-network without egress; ghost unknown
+    unknown = [e for e in logs if e["event"] == "resilience.probe.client_unknown"]
+    assert [(e["log_level"], e["error_type"]) for e in unknown] == [("debug", "KeyError")]
     real = c.get_config()
     egress_on = SimpleNamespace(
         resilience=real.resilience, security=SimpleNamespace(egress=SimpleNamespace(enabled=True))
@@ -526,6 +571,36 @@ def test_ut08_104_model_probe_network_rules(
     monkeypatch.setattr(bmod, "get_config", lambda: egress_on)
     assert run_due_probes(now) == 1
     assert calls == ["claude-opus"]
+
+
+def test_ut08_104_probe_due_boundary(env: FakeClock) -> None:
+    """UT08-104 (review M-2) a row opened exactly cooldown_s ago is due; 1 s less is not."""
+    now = env.now()
+    calls: list[str] = []
+    register_probe("source", calls.append)
+    _open("jira", now - timedelta(seconds=300))
+    _open("confluence", now - timedelta(seconds=299))
+    assert run_due_probes(now) == 1
+    assert calls == ["jira"]
+
+
+def test_ut08_104_invalid_stored_key_is_skipped(
+    env: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-104 (review M-3) a `source_health` key failing the key regex is skipped with a
+    DEBUG log; the other rows of the tick still run."""
+    now = env.now()
+    calls: list[str] = []
+    register_probe("source", calls.append)
+    _open("Bad Key", now - timedelta(hours=1))
+    _open("jira", now - timedelta(hours=1))
+    with structlog.testing.capture_logs() as logs:
+        assert run_due_probes(now) == 1
+    assert calls == ["jira"]
+    skipped = [e for e in logs if e["event"] == "resilience.probe.invalid_key"]
+    assert skipped
+    assert skipped[0]["log_level"] == "debug"
+    assert "Bad Key" not in str(skipped)
 
 
 def test_ut08_104_lost_claim_skips_probe(env: FakeClock, monkeypatch: pytest.MonkeyPatch) -> None:

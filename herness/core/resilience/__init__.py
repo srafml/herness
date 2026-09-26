@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Final
 
 _EXPORTS: Final[dict[str, str]] = {
     "AsyncCompleter": "ports",
-    "CircuitBreaker": "breaker",
     "ChainRegistry": "ports",
+    "CircuitBreaker": "breaker",
     "ClientInfo": "ports",
     "DeciderLike": "ports",
     "EventRow": "ports",
@@ -24,8 +24,8 @@ _EXPORTS: Final[dict[str, str]] = {
     "RetryPolicy": "policies",
     "TracerLike": "ports",
     "bind_chain_registry": "_state",
-    "breaker": "breaker",
     "bind_ops_backend": "_state",
+    "breaker": "breaker",
     "classify": "classify",
     "fault_point": "faults",
     "guard": "breaker",

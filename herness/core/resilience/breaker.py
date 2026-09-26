@@ -1,12 +1,9 @@
 """Circuit breakers and probes (U08-23..U08-27; design 08 §3.1, §5.3; TH08-05).
 
-State lives in `source_health` and is cached per process for `BREAKER_CACHE_S`; every
-transition is written through `health_apply` (`BEGIN IMMEDIATE`) and the half-open probe is
-claimed across processes by one conditional `UPDATE`. Events and metrics are recorded only
-after the write returns (they insert through `run_write` themselves).
-
-`breaker` (U08-25) shares this submodule's name: the module is made callable (the
-`classify` precedent), so `herness.core.resilience.breaker(key)` works either way.
+State lives in `source_health`, cached per process for `BREAKER_CACHE_S`; transitions are
+written through `health_apply`, the probe is claimed by one conditional `UPDATE`, and events
+and metrics are recorded after the write returns. The module is callable (`breaker(key)`,
+U08-25, shares its name; the `classify` precedent).
 """
 
 from __future__ import annotations
@@ -30,6 +27,7 @@ from herness.core.errors import (
     ModelUnavailable,
     SourceUnavailable,
 )
+from herness.core.logging import get_logger
 from herness.core.redact import redact_text
 from herness.core.resilience._state import process_state, require_ops_backend
 from herness.core.resilience.events import record_event
@@ -58,6 +56,7 @@ _TO_STATE: Final[dict[TransitionKind, BreakerState]] = {
 }
 _TRANSITIONS_METRIC: Final = "herness_resilience_breaker_transitions_total"
 _CACHE_TTL: Final = timedelta(seconds=BREAKER_CACHE_S)
+_log: Final = get_logger("resilience")
 _STALE: Final = timedelta(seconds=HALF_OPEN_STALE_S)
 
 type _Result = tuple[HealthRow, list[TransitionKind]]
@@ -103,11 +102,7 @@ def breaker_transition(
     key: str,
     error: str | None = None,
 ) -> _Result:
-    """Apply one event to a `source_health` row (design 08 §5.3 state table).
-
-    Returns the new row (``updated_at = now``; ``failure`` and ``force_open`` set
-    ``last_error = error``) and the transition event kinds to emit.
-    """
+    """Apply one event to a row (design 08 §5.3); returns the new row and the kinds to emit."""
     base = row if row is not None else _closed_row(key, now)
     last_error = error if event in {"failure", "force_open"} else base.last_error
     base = dataclasses.replace(base, source=key, last_error=last_error, updated_at=now)
@@ -160,43 +155,51 @@ class CircuitBreaker:
         with self._lock:
             self._cached = (row, now)
 
-    def _row(self, now: datetime) -> HealthRow:
-        """The cached row while younger than 5 s, else a fresh `health_get`."""
+    def _entry(self, now: datetime) -> tuple[HealthRow, datetime]:
+        """The cached (row, read time) while younger than 5 s, else a fresh `health_get`."""
         with self._lock:
             cached = self._cached
         if cached is not None and timedelta(0) <= now - cached[1] < _CACHE_TTL:
-            return cached[0]
+            return cached
+        return self._refresh(now), now
+
+    def _refresh(self, now: datetime) -> HealthRow:
         row = require_ops_backend().health_get(self.key) or _closed_row(self.key, now)
         self._cache(row, now)
         return row
 
     def state(self) -> BreakerState:
         """The (cached) breaker state."""
-        return self._row(clock.now()).state
+        return self._entry(clock.now())[0].state
 
     def retry_at(self) -> datetime | None:
         """The probe due time while open, else None."""
-        row = self._row(clock.now())
+        row = self._entry(clock.now())[0]
         return probe_due(row, _family(self.key)) if row.state == "open" else None
 
     def allow(self) -> bool:
         """True when a call may go ahead: closed, or this caller won the probe claim."""
         now = clock.now()
-        row = self._row(now)
+        row, read_at = self._entry(now)
+        due = self._claimable(row, now)
+        if due is not None and row.state == "open" and read_at < due:
+            row = self._refresh(now)  # read before the probe fell due: another process
+            due = self._claimable(row, now)  # may have probed and re-opened it since
         if row.state == "closed":
             return True
-        if row.state == "half_open" and row.updated_at >= now - _STALE:
-            return False  # another caller's probe is in flight
+        return due is not None and self._claim(row, now, due)
+
+    def _claimable(self, row: HealthRow, now: datetime) -> datetime | None:
+        """The probe due time when ``row`` lets a caller claim the probe at ``now``."""
+        if row.state == "closed" or (row.state == "half_open" and row.updated_at >= now - _STALE):
+            return None  # closed, or another caller's probe is in flight
         due = probe_due(row, _family(self.key))
-        if row.state == "open" and now < due:
-            return False
-        return self._claim(row, now, due)
+        return None if row.state == "open" and now < due else due
 
     def _claim(self, row: HealthRow, now: datetime, due: datetime) -> bool:
         """Claim the half-open probe across processes (U08-24 step 4)."""
-        ops = require_ops_backend()
-        if not ops.health_claim_probe(self.key, now, due, now - _STALE):
-            self._cache(ops.health_get(self.key) or _closed_row(self.key, now), now)
+        if not require_ops_backend().health_claim_probe(self.key, now, due, now - _STALE):
+            self._refresh(now)
             return False
         claimed = dataclasses.replace(row, state="half_open", updated_at=now)
         self._cache(claimed, now)
@@ -205,7 +208,7 @@ class CircuitBreaker:
 
     def record_success(self) -> None:
         """Record a successful call; no I/O while the cache is closed with no failures."""
-        row = self._row(clock.now())
+        row = self._entry(clock.now())[0]
         if row.state == "closed" and row.failures == 0:
             return
         self._apply("success", None, None)
@@ -295,8 +298,7 @@ def _split(key: str) -> tuple[ProbePrefix, str]:
 
 
 def _network_ok(prefix: ProbePrefix, name: str) -> bool:
-    """False for a `model:` key whose client is off-network while egress is disabled, or
-    whose client cannot be resolved (fail closed: no registry, unknown name)."""
+    """False for a `model:` key whose client is off-network without egress or unknown."""
     if prefix != "model":
         return True
     chains = process_state().chains
@@ -304,7 +306,8 @@ def _network_ok(prefix: ProbePrefix, name: str) -> bool:
         return False
     try:
         off_network = chains.config(name).off_network
-    except Exception:  # noqa: BLE001 - an unknown client is never probed
+    except Exception as exc:  # noqa: BLE001 - an unknown client is never probed
+        _log.debug("resilience.probe.client_unknown", error_type=type(exc).__name__)
         return False
     return not off_network or get_config().security.egress.enabled
 
@@ -349,6 +352,9 @@ def run_due_probes(now: datetime) -> int:
     state = process_state()
     count = 0
     for row in require_ops_backend().health_list(["open"]):
+        if _KEY_RE.fullmatch(row.source) is None:
+            _log.debug("resilience.probe.invalid_key")  # the key text stays out of the log
+            continue
         prefix, name = _split(row.source)
         with state.lock:
             fn = state.probes.get(prefix)
