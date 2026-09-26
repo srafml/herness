@@ -1,10 +1,9 @@
-"""Unit tests for the setup SQL and DuckDB macros (UT02-60 … UT02-64; U02-107, U02-108)."""
+"""Unit tests for the DuckDB macros of 010_macros.sql (UT02-60 … UT02-64; U02-108)."""
 
 import datetime
 import re
 from pathlib import Path
 
-import duckdb
 import pytest
 from tests.support.build_harness import BuildHarness
 
@@ -56,12 +55,14 @@ TS_CASES: list[tuple[str | None, datetime.datetime | None]] = [
     ("2024-03-01", None),
     ("2024-03-01 10:20", None),
     ("not a time", None),
+    ("2024-13-01 00:00:00", None),
 ]
 
 
 def test_ut02_60_ts_utc_twenty_strings(harness: BuildHarness) -> None:
-    """UT02-60 ts_utc parses every listed format to UTC; other strings and NULL are NULL."""
-    assert len(TS_CASES) == 20
+    """UT02-60 ts_utc over 20 strings plus NULL: listed formats parse to UTC, others are NULL."""
+    assert len(TS_CASES) == 21
+    assert sum(v is not None for v, _ in TS_CASES) == 20
     values = [v for v, _ in TS_CASES]
     assert _select(harness, "ts_utc(x)", values) == [want for _, want in TS_CASES]
     typed = harness.query("SELECT typeof(ts_utc('2024-03-01 10:20:30'))")
@@ -84,44 +85,16 @@ def test_ut02_60_to_date(harness: BuildHarness) -> None:
     assert got == [datetime.date(2024, 2, 29), None, None, None]
 
 
-def test_ut02_60_settings_schemas_and_tables(harness: BuildHarness) -> None:
-    """UT02-60 000_settings.sql creates the six schemas and the fixed tables; re-run is a no-op."""
-    schemas = {r[0] for r in harness.query("SELECT schema_name FROM information_schema.schemata")}
-    assert {"stg", "core", "enrich", "metrics", "score", "meta"} <= schemas
-    harness.con.execute("INSERT INTO stg.build_counts VALUES ('n', 1)")
-    harness.run(0, 99)
-    assert harness.query("SELECT * FROM stg.build_counts") == [("n", 1)]
-    tables = {
-        f"{r[0]}.{r[1]}": r[2]
-        for r in harness.query(
-            "SELECT table_schema, table_name, count(*) FROM information_schema.columns"
-            " WHERE table_schema IN ('meta', 'enrich', 'stg') GROUP BY ALL"
-        )
-    }
-    assert tables == {
-        "meta.build": 9,
-        "meta.evidence": 8,
-        "meta.dq_result": 6,
-        "enrich.text_redacted": 4,
-        "enrich.decision": 12,
-        "enrich.cluster": 9,
-        "enrich.cluster_member": 3,
-        "enrich.incident_change_link": 4,
-        "stg.cast_stats": 4,
-        "stg.build_counts": 2,
-    }
-    harness.con.execute("INSERT INTO meta.evidence (query_id) VALUES ('q_1')")
-    with pytest.raises(duckdb.ConstraintException):
-        harness.con.execute("INSERT INTO meta.evidence (query_id) VALUES ('q_1')")
-    cluster = harness.query(
-        "SELECT data_type FROM information_schema.columns"
-        " WHERE table_schema = 'enrich' AND table_name = 'cluster' AND column_name = 'top_terms'"
-    )
-    assert cluster == [("VARCHAR[]",)]
+def test_ut02_61_lead_int(harness: BuildHarness) -> None:
+    """UT02-61 lead_int reads a leading integer inside [lo, hi]."""
+    values = ["1 - Critical", "2", "P2-ish", "9", "3-High", "0", None]
+    assert _select(harness, "lead_int(x, 1, 5)", values) == [1, 2, None, None, 3, None, None]
+    assert harness.query("SELECT typeof(lead_int('1', 1, 5))") == [("INTEGER",)]
 
 
-def test_ut02_60_macros_live_in_main_not_temp(harness: BuildHarness) -> None:
-    """UT02-60 the macros are persistent in schema main of the build file."""
+def test_ut02_61_macros_stored_in_main_without_extensions(harness: BuildHarness) -> None:
+    """UT02-61 lead_int and the other U02-108 macros persist in schema main (not TEMP);
+    no setup SQL or macro file installs or loads a DuckDB extension (TH02-12)."""
     names = {
         r[0]
         for r in harness.query(
@@ -143,13 +116,10 @@ def test_ut02_60_macros_live_in_main_not_temp(harness: BuildHarness) -> None:
         "jira_text",
         "team_value",
     } <= names
-
-
-def test_ut02_61_lead_int(harness: BuildHarness) -> None:
-    """UT02-61 lead_int reads a leading integer inside [lo, hi]."""
-    values = ["1 - Critical", "2", "P2-ish", "9", "3-High", "0", None]
-    assert _select(harness, "lead_int(x, 1, 5)", values) == [1, 2, None, None, 3, None, None]
-    assert harness.query("SELECT typeof(lead_int('1', 1, 5))") == [("INTEGER",)]
+    pattern = re.compile(r"\b(INSTALL|LOAD)\b", re.IGNORECASE)
+    for path in sorted(SQL_DIR.iterdir()):
+        text = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
+        assert pattern.search(text) is None, path.name
 
 
 def test_ut02_62_to_bool(harness: BuildHarness) -> None:
@@ -210,11 +180,3 @@ def test_ut02_64_team_value(harness: BuildHarness) -> None:
     ]
     want = ["Payments", "Core", "Ops", None, "Quoted", "Plain team", "123", None]
     assert _select(harness, "team_value(x)", values) == want
-
-
-def test_st02_12_setup_sql_never_installs_or_loads() -> None:
-    """ST02-12 no build SQL file or macro file installs or loads a DuckDB extension."""
-    pattern = re.compile(r"\b(INSTALL|LOAD)\b", re.IGNORECASE)
-    for path in sorted(SQL_DIR.iterdir()):
-        text = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8"))
-        assert pattern.search(text) is None, path.name

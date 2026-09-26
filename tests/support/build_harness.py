@@ -130,8 +130,12 @@ class BuildHarness:
     ) -> list[str]:
         """Render and run files lo..hi in order; `refdata` is registered before file 100.
 
-        Returns the names of the files run (also appended to `executed`).
+        Returns the names of the files run (also appended to `executed`). Pass either
+        `context` or `inventory`, not both (ValueError).
         """
+        if context is not None and inventory is not None:
+            msg = "pass either context or inventory, not both"
+            raise ValueError(msg)
         ctx = context if context is not None else self.context(inventory)
         pending = refdata
         ran: list[str] = []

@@ -90,6 +90,7 @@ def _write_lake(raw: Path) -> None:
             _row("inc2", T1, T1, **old),
             _row("inc3", T1, T1, **old),
             _row("inc5", T2, T1, state="New"),
+            _row("inc6", T2, T2, state="New", group="g0"),
         ],
     )
     _lake_file(
@@ -99,6 +100,8 @@ def _write_lake(raw: Path) -> None:
             _row("inc2", T2, T2, deleted=True),
             _row("inc4", T1, T1, state="Resolved ", opened_at="garbage", group=""),
             _row("inc5", T2, T3, state="RESOLVED", opened_at="2024-01-02T00:00:00Z"),
+            # same _source_updated_at and _fetched_at as in a.parquet: filename DESC wins
+            _row("inc6", T2, T2, state="Resolved", group="g6"),
         ],
     )
 
@@ -106,7 +109,7 @@ def _write_lake(raw: Path) -> None:
 def test_ut02_60_jinja_macros_stage_a_lake_entity(
     build_harness: BuildHarness, sql_dir: Path
 ) -> None:
-    """UT02-60 latest/typed/enum/rid/cast_stats: dedupe, tombstones, deletions, flags."""
+    """UT02-60 latest/typed/enum/rid/cast_stats: dedupe incl. filename tiebreak, deletions."""
     build_harness.run(0, 99)
     _write_lake(build_harness.layout.raw)
     inventory = scan_lake(build_harness.layout)
@@ -141,6 +144,15 @@ def test_ut02_60_jinja_macros_stage_a_lake_entity(
             None,
             datetime.datetime(2024, 1, 2, tzinfo=UTC),
             True,
+            False,
+            "resolved",
+            None,
+        ),
+        (
+            "servicenow:incident:inc6",
+            "servicenow:sys_user_group:g6",
+            None,
+            False,
             False,
             "resolved",
             None,
