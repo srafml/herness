@@ -1,0 +1,57 @@
+# Memory configuration (design 07 §7; impl 07 §9, U07-18, U07-19). Sensitivity: internal.
+# Loaded once per process by spec 10; changes need a restart. outcome.window_weeks = 10 (R-34).
+compaction:
+  soft_ratio: 0.70
+  hard_ratio: 0.85
+  target_ratio: 0.45
+  keep_last_tool_groups: {local: 3, claude: 8}
+  summary_max_tokens: 800
+  ledger_sample_max_cells: 60
+recall:
+  weights: {sim: 0.55, kw: 0.25, ent: 0.20}
+  conf_floor: 0.6
+  rec_floor: 0.7
+  min_score: 0.30
+  candidates: {vector: 50, keyword: 50, entity: 50}
+  mmr_lambda: 0.8
+  half_life_days: {run_summary: 90, outcome_summary: 365, decision_note: 180, glossary: 3650,
+                   business_rule: 3650, mapping: 3650, insight: 120, user_correction: 180,
+                   sql_template: 365, qa_pair: 365, analysis_recipe: 365}
+write:
+  expiry_days: {run_summary: 400, outcome_summary: 730, decision_note: 730, insight: 180,
+                user_correction: 365, sql_template: 365, qa_pair: 365, analysis_recipe: 365}
+  max_content_chars: 2000
+  max_sql_chars: 8000
+  max_data_bytes: 16384
+  max_numbers: 20
+  rate_limits: {per_run: 50, per_chat_session: 10, corrections_per_user_day: 3}
+  dedupe: {merge_cosine: 0.92, conflict_cosine: 0.80}
+episodic:
+  prior_runs: 2
+  prior_accepted_lookback_days: 400
+outcome:
+  measure_after_weeks: 12
+  second_measure_weeks: 26
+  window_weeks: 10
+  settle_weeks: 2
+  min_peers: 3
+  min_weeks: 6
+  min_coverage: 0.8
+  t_crit: 2.0
+  min_rel: 0.05
+  per_metric: {change_failure_rate: {measure_after_weeks: 8}}
+feedback:
+  sim_threshold: 0.6
+  alpha: 0.5
+  k0: 1.0
+  delta_bounds: [-0.25, 0.15]
+  confidence_bounds: [0.05, 0.95]
+procedural:
+  promote: {min_passes: 3, min_runs: 2, min_pass_lb: 0.7}
+  demote_pass_lb: 0.5
+  lora: {min_pass_lb: 0.8, val_fraction: 0.1, golden_exclusion_cosine: 0.90}
+chat:
+  last_messages: 10
+  summary_every_turns: 6
+  summary_max_chars: 6000
+  correction_min_confidence: 0.7
