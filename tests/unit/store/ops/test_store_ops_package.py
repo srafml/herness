@@ -41,7 +41,9 @@ AREAS = (
     "privacy",
 )
 _HEADER = re.compile(r"^\s*#\s*(\d{2})\s+([a-z_]+)\s*$")
-_NAME = re.compile(r'^\s*"([A-Za-z_][A-Za-z0-9_]*)",?\s*$')
+# Compact layout (controller ruling): several comma-separated names per line in a block.
+_NAMES_LINE = re.compile(r'^\s*"[A-Za-z_][A-Za-z0-9_]*"(\s*,\s*"[A-Za-z_][A-Za-z0-9_]*")*,?\s*$')
+_NAME = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"')
 _CORE_BLOCK = (
     "connection",
     "run_write",
@@ -101,10 +103,9 @@ def _blocks() -> list[tuple[str, str, list[str]]]:
         if header is not None:
             blocks.append((header[1], header[2], []))
             continue
-        name = _NAME.match(line)
-        if name is not None:
+        if _NAMES_LINE.match(line) is not None:
             assert blocks, "a name precedes the first block header"
-            blocks[-1][2].append(name[1])
+            blocks[-1][2].extend(_NAME.findall(line))
     return blocks
 
 
