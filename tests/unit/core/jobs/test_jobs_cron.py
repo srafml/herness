@@ -46,6 +46,7 @@ def test_ut08_72_forms_and_names() -> None:
     assert (cron.days, cron.months, cron.weekdays) == ({1, 15}, {1, 7}, {0, 6})
     assert (cron.dom_star, cron.dow_star) == (False, False)
     assert CronExpr.parse("0 0 * * 7").weekdays == {0}
+    assert CronExpr.parse("*/99999 * * * *").minutes == {0}  # a step beyond the range
     assert jobs.CronExpr is CronExpr
     assert jobs.resolve_local is resolve_local
 
@@ -61,6 +62,8 @@ def test_ut08_72_forms_and_names() -> None:
         ("* * 0 * *", "day-of-month value out of range 1-31"),
         ("* * * 13 *", "month value out of range 1-12"),
         ("* * * * 8", "day-of-week value out of range 0-7"),
+        ("99999 * * * *", "minute value out of range 0-59"),
+        ("* * 1-" + "9" * 20 + " * *", "day-of-month value out of range 1-31"),
         ("* * * JAN *", "month has a non-numeric value 'JAN'"),
         ("5/2 * * * *", "minute step needs '*' or a range in '5/2'"),
         ("1,,2 * * * *", "minute has a malformed item ''"),

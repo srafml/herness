@@ -24,12 +24,15 @@ _CRON_FIELDS: Final = 5
 _NEXT_DAYS: Final = 1830
 _LATEST_DAYS: Final = 366
 _GAP_STEPS: Final = 180
-# Candidates this far from the start minute on the first date are still resolved and compared
-# as instants, so a fire inside a DST fold (fold=0 only) is never skipped by the naive walk.
+# `latest_at_or_before` still resolves first-date candidates up to this far after the start
+# minute: when `t` is in the second pass of a DST fold, a later wall time resolved with fold=0
+# can be an instant at or before `t`. (`next_after` needs no margin: an earlier wall time
+# always resolves at or before `t`.)
 _FOLD_MARGIN: Final = dt.timedelta(hours=3)
 _MINUTE: Final = dt.timedelta(minutes=1)
 _DAY: Final = dt.timedelta(days=1)
-_NUMBER: Final = re.compile(r"[0-9]{1,4}")
+_NUMBER: Final = re.compile(r"[0-9]+")
+_MAX_DIGITS: Final = 9
 _ITEM: Final = re.compile(r"(?P<base>\*|[^-/]+|[^-/]+-[^-/]+)(?:/(?P<step>[^/]*))?")
 _WEEKDAYS: Final = {"SUN": 0, "MON": 1, "TUE": 2, "WED": 3, "THU": 4, "FRI": 5, "SAT": 6}
 # (name, low, high) per field; day-of-week accepts 7 and maps it to 0 afterwards.
@@ -56,7 +59,8 @@ def _value(token: str, names: bool) -> int:
         return _WEEKDAYS[upper]
     if _NUMBER.fullmatch(token) is None:
         _fail(f"has a non-numeric value '{token}'")
-    return int(token)
+    # Clamp long digit strings (int() refuses > 4300 digits); the range check rejects them.
+    return int(token) if len(token) <= _MAX_DIGITS else 10**_MAX_DIGITS
 
 
 def _item(item: str, low: int, high: int, names: bool) -> range:
@@ -138,12 +142,11 @@ class CronExpr:
         """First fire strictly after `t` as an aware UTC instant (walks at most 1 830 days)."""
         t = clock.ensure_utc(t)
         start = t.astimezone(tz).replace(second=0, microsecond=0, tzinfo=None) + _MINUTE
-        floor = start - _FOLD_MARGIN
         day = start.date()
         for _ in range(_NEXT_DAYS):
             if self.matches_date(day):
                 for naive in self._times(day, reverse=False):
-                    if naive >= floor and (fire := resolve_local(naive, tz)) > t:
+                    if naive >= start and (fire := resolve_local(naive, tz)) > t:
                         return fire
             day += _DAY
         msg = f"cron never fires: {self.text}"
@@ -155,6 +158,7 @@ class CronExpr:
         start = t.astimezone(tz).replace(second=0, microsecond=0, tzinfo=None)
         ceiling = start + _FOLD_MARGIN
         day = start.date()
+        # 367 dates (today and 366 back): a yearly cron such as Feb 29 stays findable.
         for _ in range(_LATEST_DAYS + 1):
             if self.matches_date(day):
                 for naive in self._times(day, reverse=True):

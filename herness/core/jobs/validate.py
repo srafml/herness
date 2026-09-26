@@ -72,16 +72,18 @@ def validate_windows(windows: Sequence[WindowSpec]) -> list[str]:
     """Issues of the week coverage, names and `chat` count (U08-67); empty means valid.
 
     Minutes are wall-clock (Monday 00:00 = 0, DST ignored); runs of equal issues merge into
-    one `<DAY HH:MM>` en-dash `<DAY HH:MM>` message. At most 20 messages, coverage first.
+    one `<DAY HH:MM>` en-dash `<DAY HH:MM>` message. At most 20 messages: coverage in
+    minute order, then the name and `chat` issues, which always keep their room.
     """
-    issues = list(_coverage_issues(_cover(windows)))
     names = [window.name for window in windows]
     duplicates = sorted({n for n in names if names.count(n) > 1})
-    issues += [f"window name {name} is used more than once" for name in duplicates]
+    name_issues = [f"window name {name} is used more than once" for name in duplicates]
     chats = names.count("chat")
     if chats != 1:
-        issues.append(f"exactly one window must be named chat, found {chats}")
-    return issues[:_MAX_ISSUES]
+        name_issues.append(f"exactly one window must be named chat, found {chats}")
+    name_issues = name_issues[:_MAX_ISSUES]
+    coverage = list(_coverage_issues(_cover(windows)))  # room is kept for the name issues
+    return coverage[: _MAX_ISSUES - len(name_issues)] + name_issues
 
 
 def _crons(cfg: HernessConfig) -> Iterator[tuple[str, str, str]]:

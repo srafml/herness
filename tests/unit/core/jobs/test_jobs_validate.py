@@ -98,15 +98,33 @@ def test_ut08_04_ranges_merge_across_days_not_week(cfg_default: ResilienceConfig
     ]
 
 
+def _gap_messages(days: tuple[str, ...]) -> list[str]:
+    return [
+        message
+        for day in days
+        for message in (
+            f"minute {day} 00:01 not covered",
+            f"minute {day} 00:03 not covered",
+            f"minute {day} 00:05{DASH}{day} 23:59 not covered",
+        )
+    ]
+
+
 def test_ut08_04_at_most_twenty_messages(cfg_default: ResilienceConfig) -> None:
-    """UT08-04 at most 20 messages; no `chat` window is reported when there is room."""
+    """UT08-04 at most 20 messages: the first coverage issues, name issues always kept."""
     base = cfg_default.schedule.windows[1]
     windows = [
         _renamed(base, name="chat", start="00:00", end="00:01", days=None),
         _renamed(base, name="w1", start="00:02", end="00:03", days=None),
         _renamed(base, name="w2", start="00:04", end="00:05", days=None),
     ]
-    assert len(validate_windows(windows)) == 20
+    assert validate_windows(windows) == _gap_messages(DAYS)[:20]  # 21 found, the last dropped
+    windows[1] = _renamed(windows[1], name="chat")
+    assert validate_windows(windows) == [
+        *_gap_messages(DAYS[:6]),
+        "window name chat is used more than once",
+        "exactly one window must be named chat, found 2",
+    ]
     assert validate_windows([]) == [
         f"minute MON 00:00{DASH}SUN 23:59 not covered",
         "exactly one window must be named chat, found 0",
