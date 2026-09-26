@@ -1,8 +1,9 @@
 """Root conftest (U11-35): plugins, Hypothesis profiles, ignore list, state reset.
 
 `pytester` is loaded for the plugin's own tests (UT11-31..UT11-37). T08-03 registers the
-opt-in `reset_process_state` fixture (impl 08 §11); T11-40 registers `tests.support.ops_store`
-(U11-78) in place of the interim `tests.support.ops_core_store` (T02-04).
+opt-in `reset_process_state` fixture (impl 08 §11) and T08-08 the `tests.support.fault_env`
+plugin; T11-40 registers `tests.support.ops_store` (U11-78) in place of the interim
+`tests.support.ops_core_store` (T02-04).
 """
 
 import random
@@ -24,6 +25,7 @@ pytest_plugins = [
     "tests.support.fake_clock",
     "tests.support.ops_store",
     "tests.support.fake_keyring",
+    "tests.support.fault_env",
 ]
 
 collect_ignore = ["support", "fixtures"]

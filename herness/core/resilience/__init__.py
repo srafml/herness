@@ -14,8 +14,10 @@ _EXPORTS: Final[dict[str, str]] = {
     "ClientInfo": "ports",
     "DeciderLike": "ports",
     "EventRow": "ports",
+    "FaultRule": "faults",
     "GpuStateReader": "ports",
     "HealthRow": "ports",
+    "NAMED_POINTS": "faults",
     "ProcessState": "_state",
     "ResilienceBackend": "ports",
     "RetryPolicy": "policies",
@@ -23,6 +25,8 @@ _EXPORTS: Final[dict[str, str]] = {
     "bind_chain_registry": "_state",
     "bind_ops_backend": "_state",
     "classify": "classify",
+    "fault_point": "faults",
+    "load_fault_plan": "faults",
     "policy": "policies",
     "process_state": "_state",
     "reset_process_state": "_state",
@@ -41,6 +45,12 @@ if TYPE_CHECKING:
         reset_process_state as reset_process_state,
     )
     from herness.core.resilience.classify import classify as classify
+    from herness.core.resilience.faults import (
+        NAMED_POINTS as NAMED_POINTS,
+        FaultRule as FaultRule,
+        fault_point as fault_point,
+        load_fault_plan as load_fault_plan,
+    )
     from herness.core.resilience.policies import RetryPolicy as RetryPolicy, policy as policy
     from herness.core.resilience.ports import (
         AsyncCompleter as AsyncCompleter,

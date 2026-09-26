@@ -1,12 +1,14 @@
 """Unit tests for the interim resilience shims of herness.store.ops (U02-38 retry, UT02-28).
 
-`retry_call` and `fault_point` stand in for T08-07 and T08-08; these tests go with them.
+`retry_call` stands in for T08-07 and `fault_point` re-exports the real T08-08 hook; these
+tests go with the module.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from herness.core import resilience
 from herness.core.errors import ConfigError, SchemaViolation, StoreBusy
 from herness.core.resilience import ProcessState
 from herness.store.ops import _shims
@@ -76,6 +78,6 @@ def test_ut02_28_unknown_policy(reset_process_state: ProcessState) -> None:
         _shims.retry_call("llm_default", lambda: None)
 
 
-def test_ut02_28_fault_point_is_noop() -> None:
-    """UT02-28 the fault_point shim loads no plan and returns None."""
-    assert _shims.fault_point("sqlite.write", kind="insert") is None
+def test_ut02_28_fault_point_is_resilience_hook() -> None:
+    """UT02-28 `_shims.fault_point` is the real herness.core.resilience.fault_point (T08-08)."""
+    assert _shims.fault_point is resilience.fault_point

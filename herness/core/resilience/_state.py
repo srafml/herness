@@ -21,13 +21,13 @@ from herness.core.logging import get_logger
 
 if TYPE_CHECKING:
     from herness.core.jobs.ports import JobContext, JobsBackend
+    from herness.core.resilience.faults import FaultPlan
     from herness.core.resilience.policies import RetryPolicy
     from herness.core.resilience.ports import ChainRegistry, ResilienceBackend
     from herness.core.types import JobKind, JobOutcome
 
-# Placeholders for 08 classes of later cards; each becomes a TYPE_CHECKING import then.
+# Placeholder for an 08 class of a later card; it becomes a TYPE_CHECKING import then.
 type CircuitBreaker = Any  # U08-24, T08-06 (herness.core.resilience.breaker.CircuitBreaker)
-type FaultPlan = Any  # U08-33, T08-08 (herness.core.resilience.faults.FaultPlan)
 
 OPS_UNBOUND: Final = (
     "resilience backend not bound; call herness.store.ops.resilience.bind_core_backends()"

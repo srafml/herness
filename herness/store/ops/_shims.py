@@ -1,9 +1,9 @@
-"""Interim stand-ins for two impl 08 functions that ``run_write`` needs (impl 02 U02-38).
+"""Interim stand-in for one impl 08 function that ``run_write`` needs (impl 02 U02-38).
 
 ``retry_call`` replaces ``T08-07 (herness.core.resilience.retry_call)`` for the ``sqlite_write``
-policy only, and ``fault_point`` replaces ``T08-08 (herness.core.resilience.fault_point)`` as a
-no-op. ``core`` calls both through this module's attributes, so tests monkeypatch them here;
-the resilience cards swap the call sites to ``herness.core.resilience`` and delete this module.
+policy only. ``fault_point`` is now a re-export of ``herness.core.resilience.fault_point``
+(T08-08). ``core`` calls both through this module's attributes, so tests monkeypatch them here;
+T08-07 swaps the call sites to ``herness.core.resilience`` and deletes this module.
 """
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ from typing import Final
 
 from herness.core import time as clock
 from herness.core.errors import ConfigError, RetryableError
-from herness.core.resilience import process_state
+from herness.core.resilience import fault_point, process_state
+
+__all__ = ("fault_point", "retry_call")  # fault_point: re-export of the real hook (T08-08)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +60,3 @@ def retry_call[T](name: str, fn: Callable[[], T]) -> T:
             ceiling = min(policy.cap_s, policy.base_s * 2 ** (attempt - 1))
             state.sleep(state.rng.uniform(0, ceiling))
             attempt += 1
-
-
-# T08-08: replace with herness.core.resilience.fault_point (U08-34) and delete this function.
-def fault_point(name: str, **labels: str) -> None:
-    """No-op fault hook with the U08-34 signature; loads no plan."""
-    del name, labels
