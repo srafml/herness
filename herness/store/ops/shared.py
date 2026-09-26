@@ -8,6 +8,7 @@ Messages, hints and log fields carry identifiers only, never payload or note tex
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from collections.abc import Callable, Collection, Mapping
@@ -284,6 +285,13 @@ def _check_decision(item_id: object, status: object, decided_by: object, note: o
         raise ConfigError(msg)
 
 
+def _is_json_object(text: str) -> bool:
+    try:
+        return isinstance(json.loads(text), dict)
+    except (ValueError, RecursionError):
+        return False
+
+
 def decide_review_item(
     item_id: str,
     status: Literal["approved", "rejected"],
@@ -297,6 +305,8 @@ def decide_review_item(
 
     Without ``conn`` a ``memory_write`` item may only be rejected by ``system`` (R-54). Raises
     ConfigError, NotFoundError, ReviewItemConflict, StoreBusy or the audit error (rollback).
+    With ``conn``, ``store.ops.review_item_decided`` is logged before the caller commits, so a
+    later rollback leaves that line (like the audit line) for an attempt (accepted risk, §7.7).
     """
     _check_decision(item_id, status, decided_by, note)
     decided_at = _ts_arg(now, "now")
@@ -310,6 +320,9 @@ def decide_review_item(
         purge = status == "rejected" and decided_by == "system"
         if kind == "memory_write" and conn is None and not purge:
             raise ConfigError(_MEMORY_MSG)
+        if kind == "label_check" and note is not None and not _is_json_object(note):
+            msg = "a label_check note must be a JSON object string"  # the note is never echoed
+            raise ConfigError(msg)
         if current != "pending":
             _log.info("store.ops.review_conflict", item_id=item_id, status=current)
             raise ReviewItemConflict(item_id, current)

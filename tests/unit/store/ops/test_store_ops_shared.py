@@ -220,6 +220,21 @@ def test_ut02_44_approve_updates_row_and_audits_once(
     assert (line["event"], line["actor"], line["fields"]) == ("review_decision", USER, fields)
 
 
+@pytest.mark.parametrize("note", ["yes", "[1, 2]", '"answer"', "{bad", "[" * 1999])
+def test_ut02_44_label_check_note_must_be_a_json_object(
+    store: Path, audit_calls: AuditCalls, note: str
+) -> None:
+    """UT02-44 a `label_check` note that is not a JSON object string → ConfigError, not echoed."""
+    item_id = create_review_item("label_check", {"question": "q1"}, now=T0)
+    with pytest.raises(ConfigError) as bad:
+        decide_review_item(item_id, "approved", decided_by=USER, note=note, now=_t(1))
+    assert note[:4] not in str(bad.value)
+    assert _status(item_id) == "pending"
+    assert audit_calls == []
+    other = create_review_item("weight_change", {"w": "1"}, now=T0)
+    assert decide_review_item(other, "approved", decided_by=USER, note=note, now=_t(1)).note == note
+
+
 def test_ut02_44_note_none_audits_zero_length(store: Path, audit_calls: AuditCalls) -> None:
     """UT02-44 a decision without a note audits `note_len` 0."""
     item_id = create_review_item("weight_change", {"w": "1"}, now=T0)
@@ -411,6 +426,7 @@ def test_ut02_76_memory_write_decisions_need_the_callers_transaction(
     with pytest.raises(RuntimeError):
         core.run_write(raising, op="memory_approve")
     assert _status(mem) == "pending"
+    assert len(audit_calls) == 1  # the raising callback audited once before its rollback
     audit_calls.clear()  # the attempt line of the rolled-back transaction (accepted, §7.7)
 
     def committing(conn: sqlite3.Connection) -> ReviewItem:
