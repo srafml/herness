@@ -12,6 +12,7 @@ from typing import Final
 from tenacity import RetryCallState
 from tenacity.wait import wait_base
 
+from herness.core import config as _config
 from herness.core.config import config_hash, get_config
 from herness.core.errors import ConfigError, RateLimited
 from herness.core.resilience._state import process_state
@@ -65,6 +66,11 @@ GPU_HEALTH_POLICY: Final = RetryPolicy(
     connect_timeout_s=5,
     retry_after_cap_s=0,
 )
+# Design 08 §7 `sqlite_write`, used while no config is cached: `run_write` (impl 02 U02-38)
+# also runs before any config exists (migrations, tooling), as the interim shim did (T08-07).
+SQLITE_WRITE_DEFAULT: Final = RetryPolicy(
+    "sqlite_write", attempts=6, base_s=0.2, cap_s=5, max_elapsed_s=30
+)
 
 
 def _build_cache() -> dict[str, RetryPolicy]:
@@ -91,12 +97,19 @@ def policy(name: PolicyName) -> RetryPolicy:
         raise ConfigError(msg, policy=str(name))
     if name == "gpu_health":
         return GPU_HEALTH_POLICY
-    h = config_hash(get_config())
+    if name == "sqlite_write" and _config._Cache.config is None:
+        return SQLITE_WRITE_DEFAULT  # never load a config just for an ops write
+    cfg = get_config()
     state = process_state()
+    with state.lock:  # the config is frozen: the same object has the same hash (T08-07)
+        seen = state.policies_cfg
+        same = seen is not None and seen[0] is cfg and seen[1] == state.policies_hash
+    h = seen[1] if same and seen is not None else config_hash(cfg)
     with state.lock:
         if state.policies_hash != h or name not in state.policies_cache:
             state.policies_cache = _build_cache()
             state.policies_hash = h
+        state.policies_cfg = (cfg, h)
         found = state.policies_cache.get(name)
     if found is None:  # settings validation requires every name; defensive only
         msg = f"retry policy {name!r} missing from resilience.retry.policies"

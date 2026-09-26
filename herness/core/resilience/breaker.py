@@ -8,6 +8,7 @@ metrics are recorded after the write. The module is callable (`classify` precede
 from __future__ import annotations
 
 import dataclasses
+import importlib
 import re
 import sys
 import threading
@@ -203,6 +204,16 @@ class CircuitBreaker:
         self._emit(["breaker_half_open"], claimed, "probe")
         return True
 
+    def hot(self) -> bool:
+        """True while the cache holds a fresh closed row with no failures: `allow` and
+        `record_success` then do no I/O (the async hot path of U08-29)."""
+        now = clock.now()
+        with self._lock:
+            cached = self._cached
+        if cached is None or not timedelta(0) <= now - cached[1] < _CACHE_TTL:
+            return False
+        return cached[0].state == "closed" and cached[0].failures == 0
+
     def record_success(self) -> None:
         """Record a successful call; no I/O while the cache is closed with no failures."""
         row = self._entry(clock.now())[0]
@@ -308,33 +319,12 @@ def _network_ok(prefix: ProbePrefix, name: str) -> bool:
     return not off_network or get_config().security.egress.enabled
 
 
-# T08-07: replace with call_with_timeout
-def _call_with_timeout[T](fn: Callable[[], T], timeout_s: float) -> T:
-    """Run ``fn`` on a daemon thread; still running after ``timeout_s`` → `ModelUnavailable`."""
-    box: dict[str, object] = {}
-
-    def run() -> None:
-        try:
-            box["value"] = fn()
-        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller's thread
-            box["error"] = exc
-
-    thread = threading.Thread(target=run, name="herness-timeout", daemon=True)
-    thread.start()
-    thread.join(timeout_s)
-    if thread.is_alive():
-        msg = f"call timed out after {timeout_s}s"
-        raise ModelUnavailable(msg)
-    error = box.get("error")
-    if isinstance(error, BaseException):
-        raise error
-    return box["value"]  # type: ignore[return-value]
-
-
 def _run_probe(b: CircuitBreaker, fn: Callable[[str], None], name: str) -> None:
     """Run one claimed probe and record its outcome; a failure always re-opens."""
+    # `retry` imports this module, so its `call_with_timeout` (U08-32) is looked up late.
+    retry = importlib.import_module("herness.core.resilience.retry")
     try:
-        _call_with_timeout(lambda: fn(name), PROBE_TIMEOUT_S)
+        retry.call_with_timeout(lambda: fn(name), PROBE_TIMEOUT_S)
     except (SourceUnavailable, ModelUnavailable) as err:
         b.record_failure(err)
     except Exception as exc:  # noqa: BLE001 - a probe crash is a probe failure

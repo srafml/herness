@@ -61,6 +61,7 @@ class ProcessState:
     kill_service_hook: Callable[[str], None] | None = None
     policies_cache: dict[str, RetryPolicy] = field(default_factory=dict)
     policies_hash: str | None = None  # the config_hash policies_cache was built for (U08-12)
+    policies_cfg: tuple[object, str] | None = None  # (config object, its hash): fast path
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 

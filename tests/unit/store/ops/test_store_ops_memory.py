@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from herness.core import time as clock
-from herness.core.errors import SchemaViolation, StoreBusy, ToolInputError
+from herness.core.errors import FatalError, SchemaViolation, StoreBusy, ToolInputError
 from herness.core.ids import new_ulid
 from herness.store import ops
 from herness.store.ops import _memory_rows, core, memory
@@ -196,7 +196,7 @@ def test_ut07_07_insert_duplicate_and_caller_transaction() -> None:
         assert memory.get_memory_items([other["memory_id"]], conn=conn) == [other]
         raise RuntimeError
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(FatalError):
         core.run_write(fn, op="test_write")
     assert memory.get_memory_items([other["memory_id"]]) == []
 

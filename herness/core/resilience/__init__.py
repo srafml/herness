@@ -23,9 +23,11 @@ _EXPORTS: Final[dict[str, str]] = {
     "ResilienceBackend": "ports",
     "RetryPolicy": "policies",
     "TracerLike": "ports",
+    "aretry_call": "retry",
     "bind_chain_registry": "_state",
     "bind_ops_backend": "_state",
     "breaker": "breaker",
+    "call_with_timeout": "retry",
     "classify": "classify",
     "fault_point": "faults",
     "guard": "breaker",
@@ -34,6 +36,9 @@ _EXPORTS: Final[dict[str, str]] = {
     "process_state": "_state",
     "register_probe": "breaker",
     "reset_process_state": "_state",
+    "retry_call": "retry",
+    "retry_page": "retry",
+    "retrying": "retry",
     "run_due_probes": "breaker",
 }
 
@@ -74,6 +79,13 @@ if TYPE_CHECKING:
         HealthRow as HealthRow,
         ResilienceBackend as ResilienceBackend,
         TracerLike as TracerLike,
+    )
+    from herness.core.resilience.retry import (
+        aretry_call as aretry_call,
+        call_with_timeout as call_with_timeout,
+        retry_call as retry_call,
+        retry_page as retry_page,
+        retrying as retrying,
     )
 # isort: on
 

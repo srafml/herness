@@ -12,7 +12,7 @@ import pytest
 from pydantic import ValidationError
 from tests.support.ops_store import OpsStoreHandle
 
-from herness.core.errors import ConfigError
+from herness.core.errors import ConfigError, FatalError
 from herness.core.types import MetricSample
 from herness.store import ops
 from herness.store.ops import core
@@ -81,7 +81,7 @@ def test_ut08_110_conn_rows_commit_with_the_caller(ops_store: OpsStoreHandle) ->
         msg = "caller fails after writing"
         raise RuntimeError(msg)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(FatalError):
         run_write(fail, op="test")
     assert _count() == 3
 
