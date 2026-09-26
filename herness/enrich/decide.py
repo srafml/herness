@@ -105,7 +105,7 @@ def chain_after(
     else:
         after = swapped[swapped.index(canonical_primary) + 1 :]
     enabled = {"openjev": deciders.openjev.enabled, "jev": deciders.jev.enabled}
-    kept = [name for name in after if enabled.get(name, True)]
+    kept = [name for name in after if name != canonical_primary and enabled.get(name, True)]
     seen: set[str] = set()
     ordered: list[str] = []
     for name in kept:

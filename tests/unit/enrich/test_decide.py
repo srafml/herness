@@ -218,6 +218,24 @@ def test_ut03_69_chain_after_primary_jev_against_jev_authored_chain() -> None:
     assert "jev" not in result
 
 
+def test_ut03_69_chain_after_primary_jev_against_both_listed_chain_openjev_first() -> None:
+    """UT03-69 chain listing both openjev and jev: primary jev matches either slot."""
+    cfg = _cfg(primary="laya", chain=("openjev", "jev", "llm"))
+    deciders = _deciders(openjev_enabled=True, jev_enabled=True)
+    result = chain_after("jev", cfg=cfg, deciders=deciders)
+    assert result == ("llm",)
+    assert "jev" not in result
+
+
+def test_ut03_69_chain_after_primary_jev_against_both_listed_chain_jev_first() -> None:
+    """UT03-69 chain listing jev then openjev: primary jev still never survives the slice."""
+    cfg = _cfg(primary="laya", chain=("jev", "openjev", "llm"))
+    deciders = _deciders(openjev_enabled=True, jev_enabled=True)
+    result = chain_after("jev", cfg=cfg, deciders=deciders)
+    assert result == ("llm",)
+    assert "jev" not in result
+
+
 def test_ut03_69_chain_after_removes_disabled_members() -> None:
     """UT03-69 a disabled openjev is removed from the chain."""
     cfg = _cfg(primary="laya", chain=("openjev", "llm"))
