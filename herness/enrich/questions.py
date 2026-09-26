@@ -33,14 +33,16 @@ _FINGERPRINT_FIELDS: Final = (
     "id", "type", "instructions", "options", "options_source", "levels", "applies_to",
     "threshold", "scoring_use",
 )  # fmt: skip
-_CONFIG_ONLY: Final = frozenset({"acceptance", "primary_decider"})
 _REGISTRY_NAME: Final = "questions.json"
 _REGISTRY_MAX_BYTES: Final = 64 * 1024
 _MIN_OPTIONS: Final = 2
 _MAX_DESCRIPTION: Final = 500
-# U03-02 rule (e), as enforced by herness.core.types.Question
+_FINGERPRINT_RE: Final = re.compile(r"^[0-9a-f]{16}$")
+# U03-02 rule (e): a copy, since OWN041 forbids importing herness.core.types.decisions directly;
+# a unit test pins it to the owner's constants
 _OPTION_KEY_RE: Final = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 _BOOL_WORDS: Final = frozenset({"true", "false", "yes", "no"})
+_VECTOR_SHAPE: Final = (1024,)
 _DYNAMIC_SQL: Final = {
     "core.team": "SELECT team_id, name FROM core.team WHERE active ORDER BY team_id",
     "core.service": "SELECT service_id, name FROM core.service ORDER BY service_id",
@@ -98,31 +100,41 @@ def load_question_set(cfg: DecisionsConfig, /) -> QuestionSet:
 
 
 def _read_registry(path: Path) -> dict[str, str]:
-    """Read ``questions.json`` (≤ 64 KB, object of strings); absent file → empty."""
+    """Read ``questions.json`` once (≤ 64 KB, ``{qid: fingerprint}``); absent file → empty."""
     try:
-        if not path.exists():
-            return {}
-        if path.stat().st_size > _REGISTRY_MAX_BYTES:
-            msg = f"{_REGISTRY_NAME} exceeds 64 KB"
-            raise ConfigError(msg, path=str(path))
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        with path.open("rb") as handle:
+            raw = handle.read(_REGISTRY_MAX_BYTES + 1)
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
         msg = f"{_REGISTRY_NAME} is unreadable"
         raise ConfigError(msg, path=str(path)) from exc
-    valid = isinstance(data, dict) and all(isinstance(v, str) for v in data.values())
+    if len(raw) > _REGISTRY_MAX_BYTES:
+        msg = f"{_REGISTRY_NAME} exceeds 64 KB"
+        raise ConfigError(msg, path=str(path))
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        msg = f"{_REGISTRY_NAME} is unreadable"
+        raise ConfigError(msg, path=str(path)) from exc
+    valid = isinstance(data, dict) and all(
+        isinstance(v, str) and _FINGERPRINT_RE.fullmatch(v) is not None for v in data.values()
+    )
     if not valid:
-        msg = f"{_REGISTRY_NAME} must be an object of fingerprints"
+        msg = f"{_REGISTRY_NAME} is unreadable: not an object of fingerprints"
         raise ConfigError(msg, path=str(path))
     return dict(data)
 
 
 def _write_atomic(path: Path, text: str) -> None:
-    """Write ``text`` to a temp file next to ``path`` and ``os.replace`` it."""
+    """Write ``text`` to a temp file next to ``path``, fsync it and ``os.replace`` it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -194,6 +206,12 @@ def resolve_dynamic_options(
     return QuestionSet(version=qs.version, questions=tuple(questions))
 
 
+def _check_vector(shape: tuple[int, ...], what: str, qid: str) -> None:
+    if shape != _VECTOR_SHAPE:
+        msg = f"{what} of question {qid} must have shape (1024,)"
+        raise ConfigError(msg, question=qid)
+
+
 def shortlist_options(
     q: Question,
     text_vec: np.ndarray,
@@ -202,12 +220,17 @@ def shortlist_options(
     k: int = 64,
 ) -> Question:
     """Keep the top-``k`` options by cosine similarity to ``text_vec`` (U03-19)."""
-    options = q.options or {}
+    if q.type != "choice" or not q.options:
+        msg = f"shortlist needs a choice question with options: {q.id}"
+        raise ConfigError(msg, question=q.id)
+    options = q.options
     labels = sorted(options)
+    _check_vector(np.shape(text_vec), "text vector", q.id)
     for label in labels:
         if label not in option_vecs:
             msg = f"no option vector for {label} of question {q.id}"
             raise ConfigError(msg, question=q.id)
+        _check_vector(np.shape(option_vecs[label]), f"option vector {label}", q.id)
     matrix = np.stack([np.asarray(option_vecs[label], dtype=np.float32) for label in labels])
     sims = matrix @ np.asarray(text_vec, dtype=np.float32)
     order = sorted(range(len(labels)), key=lambda i: (-float(sims[i]), labels[i]))[:k]

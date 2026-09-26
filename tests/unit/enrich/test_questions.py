@@ -27,7 +27,9 @@ from pydantic import ValidationError
 from structlog.testing import capture_logs
 
 from herness.core.errors import ConfigError
-from herness.core.types import Question, QuestionSet
+from herness.core.ids import canonical_json
+from herness.core.types import Question, QuestionSet, decisions
+from herness.enrich import questions as questions_module
 from herness.enrich.layout import EnrichPaths
 from herness.enrich.questions import (
     PAIR_QUESTIONS,
@@ -303,32 +305,42 @@ def _question_fields(draw: st.DrawFn) -> dict[str, object]:
     }
 
 
+def _mutate(q: QuestionConfig, name: str) -> object:
+    """A value of field ``name`` that differs from ``q``'s."""
+    entities = ("incident", "change", "problem")
+    others = tuple(e for e in entities if e not in q.applies_to) or ("incident",)
+    return {
+        "id": f"{q.id}_x",
+        "type": "bool",
+        "instructions": q.instructions + "!",
+        "options": {**(q.options or {}), "zz_extra": "extra option"},
+        "options_source": "core.service",
+        "levels": ("l0", "l1", "l2", "l3"),
+        "applies_to": others,
+        "threshold": round(q.threshold + 0.001, 6) if q.threshold < 0.99 else 0.5,
+        "scoring_use": not q.scoring_use,
+    }[name]
+
+
 @given(fields=_question_fields(), data=st.data())
 def test_pt03_02_fingerprint_key_order_and_mutation(
     fields: dict[str, object], data: st.DataObject
 ) -> None:
-    """PT03-02 fingerprint is invariant to dict key order and changes under any mutation."""
-    base = Question.model_validate(fields)
-    reordered_fields = dict(reversed(list(fields.items())))
+    """PT03-02 fingerprint is invariant to dict key order and changes under any mutation
+    of any of the 9 fingerprinted fields."""
+    base = QuestionConfig.model_validate(fields)
     options = fields["options"]
     assert isinstance(options, dict)
-    reordered_fields["options"] = dict(reversed(list(options.items())))
-    reordered = Question.model_validate(reordered_fields)
-    assert question_fingerprint(reordered) == question_fingerprint(base)
+    shuffled = dict(data.draw(st.permutations(list(fields.items()))))
+    shuffled["options"] = dict(data.draw(st.permutations(list(options.items()))))
+    assert canonical_json(shuffled) == canonical_json(fields)
+    assert question_fingerprint(QuestionConfig.model_validate(shuffled)) == question_fingerprint(
+        base
+    )
+    assert question_fingerprint(Question.model_validate(shuffled)) == question_fingerprint(base)
 
-    name = data.draw(st.sampled_from(["id", "instructions", "options", "threshold", "scoring_use"]))
-    mutated_value: object
-    if name == "id":
-        mutated_value = f"{base.id}_x"
-    elif name == "instructions":
-        mutated_value = base.instructions + "!"
-    elif name == "options":
-        mutated_value = {**options, "zz_extra": "extra option"}
-    elif name == "threshold":
-        mutated_value = round(base.threshold + 0.001, 6) if base.threshold < 0.99 else 0.5
-    else:
-        mutated_value = not base.scoring_use
-    mutated = base.model_copy(update={name: mutated_value})
+    name = data.draw(st.sampled_from(sorted(_MUTATIONS)))
+    mutated = base.model_copy(update={name: _mutate(base, name)})
     assert question_fingerprint(mutated) != question_fingerprint(base)
 
 
@@ -346,8 +358,10 @@ def test_ut03_15_drift_raises_and_logs(tmp_path: Path) -> None:
     with capture_logs() as logs, pytest.raises(ConfigError, match="question root_cause changed"):
         check_fingerprint_registry(qs, paths=paths)
     drift = [e for e in logs if e["event"] == "enrich.config.fingerprint_drift"]
-    assert drift
+    assert len(drift) == 1
+    assert drift[0]["log_level"] == "error"
     assert drift[0]["question"] == "root_cause"
+    assert drift[0]["question_set_version"] == _QSV
     assert json.loads(registry.read_text(encoding="utf-8")) == {"root_cause": "0123456789abcdef"}
 
 
@@ -372,8 +386,16 @@ def test_ut03_15_new_ids_appended(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "content",
-    [b"x" * (64 * 1024 + 1), b"{not json", b"[1, 2]", b'{"root_cause": 5}', b"\xff\xfe"],
-    ids=["oversized", "bad-json", "not-object", "bad-value", "bad-utf8"],
+    [
+        b"x" * (64 * 1024 + 1),
+        b"{not json",
+        b"[1, 2]",
+        b'{"root_cause": 5}',
+        b'{"root_cause": "0123456789ABCDEF"}',
+        b'{"root_cause": "abc"}',
+        b"\xff\xfe",
+    ],
+    ids=["oversized", "bad-json", "not-object", "bad-value", "upper-hex", "short", "bad-utf8"],
 )
 def test_ut03_15_unreadable_registry_rejected(tmp_path: Path, content: bytes) -> None:
     """UT03-15 (U03-17 errors) an oversized or unreadable `questions.json` raises ConfigError."""
@@ -384,6 +406,32 @@ def test_ut03_15_unreadable_registry_rejected(tmp_path: Path, content: bytes) ->
     registry.write_bytes(content)
     with pytest.raises(ConfigError, match=r"questions\.json"):
         check_fingerprint_registry(qs, paths=paths)
+
+
+def test_ut03_15_registry_path_not_a_file(tmp_path: Path) -> None:
+    """UT03-15 (U03-17 errors) a `questions.json` that cannot be opened raises ConfigError."""
+    paths = _paths(tmp_path)
+    qs = load_question_set(_cfg())
+    (paths.cache_dir(qs.version) / "questions.json").mkdir(parents=True)
+    with pytest.raises(ConfigError, match=r"questions\.json is unreadable"):
+        check_fingerprint_registry(qs, paths=paths)
+
+
+def test_ut03_15_failed_write_leaves_no_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-15 (atomic write) a failing replace removes the temp file and propagates."""
+    paths = _paths(tmp_path)
+    qs = load_question_set(_cfg())
+
+    def _fail(*_: object) -> None:
+        msg = "disk full"
+        raise OSError(msg)
+
+    monkeypatch.setattr("herness.enrich.questions.os.replace", _fail)
+    with pytest.raises(OSError, match="disk full"):
+        check_fingerprint_registry(qs, paths=paths)
+    assert list(paths.cache_dir(qs.version).iterdir()) == []
 
 
 # --- U03-18 ---------------------------------------------------------------------------
@@ -479,6 +527,12 @@ def test_ut03_16_empty_redaction_falls_back_to_id() -> None:
     assert resolved.get("owning_team").options == {"team_a": "team_a", "team_b": "team_b"}
 
 
+def test_ut03_16_option_key_rule_matches_owner() -> None:
+    """UT03-16 the skip rule is U03-02 rule (e) exactly as herness.core.types enforces it."""
+    assert questions_module._OPTION_KEY_RE.pattern == decisions._OPTION_KEY_RE.pattern
+    assert questions_module._BOOL_WORDS == decisions._BOOL_WORDS
+
+
 # --- U03-19 ---------------------------------------------------------------------------
 
 
@@ -517,9 +571,22 @@ def test_ut03_17_missing_vector_rejected() -> None:
     """UT03-17 (U03-19 errors) a label without a vector raises ConfigError naming it."""
     options = {f"t{i:03d}": "desc" for i in range(3)}
     question = _question(options=options)
-    vecs = {"t000": np.ones(4, dtype=np.float32), "t002": np.ones(4, dtype=np.float32)}
+    one = np.ones(1024, dtype=np.float32)
     with pytest.raises(ConfigError, match="t001"):
-        shortlist_options(question, np.ones(4, dtype=np.float32), vecs)
+        shortlist_options(question, one, {"t000": one, "t002": one})
+
+
+def test_ut03_17_preconditions_checked() -> None:
+    """UT03-17 (U03-19 preconditions) a non-choice question or a vector that is not
+    1024-d raises ConfigError."""
+    one = np.ones(1024, dtype=np.float32)
+    vecs = {"defect": one, "other": one}
+    with pytest.raises(ConfigError, match="choice question"):
+        shortlist_options(_question(type="bool", options=None), one, vecs)
+    with pytest.raises(ConfigError, match="text vector"):
+        shortlist_options(_question(), np.ones(4, dtype=np.float32), vecs)
+    with pytest.raises(ConfigError, match="option vector other"):
+        shortlist_options(_question(), one, {**vecs, "other": np.ones((2, 1024))})
 
 
 # --- U03-20 ---------------------------------------------------------------------------
@@ -540,20 +607,3 @@ def test_ut03_18_unknown_question_rejected() -> None:
     """UT03-18 (U03-20 errors) an unknown question id raises ConfigError."""
     with pytest.raises(ConfigError, match="nope"):
         acceptance_for(_cfg(), "nope")
-
-
-def test_ut03_15_failed_write_leaves_no_temp_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """UT03-15 (atomic write) a failing replace removes the temp file and propagates."""
-    paths = _paths(tmp_path)
-    qs = load_question_set(_cfg())
-
-    def _fail(*_: object) -> None:
-        msg = "disk full"
-        raise OSError(msg)
-
-    monkeypatch.setattr("herness.enrich.questions.os.replace", _fail)
-    with pytest.raises(OSError, match="disk full"):
-        check_fingerprint_registry(qs, paths=paths)
-    assert list(paths.cache_dir(qs.version).iterdir()) == []

@@ -111,6 +111,22 @@ def test_ut03_11_relative_data_root_rejected() -> None:
         EnrichPaths(data_root=Path("rel"), embedding_path="e", laya_current_file="c")
 
 
+def test_ut03_11_data_root_resolved_once(tmp_path: Path) -> None:
+    """UT03-11 (U03-13) an absolute but unresolved root is resolved once, so every method
+    returns paths from the same root; `resolve_data_path("")` is rejected."""
+    paths = EnrichPaths(
+        data_root=tmp_path / "sub" / "..", embedding_path="data/e", laya_current_file="data/c"
+    )
+    root = tmp_path.resolve()
+    assert paths.data_root == root
+    assert paths.pairs_dir() == root / "cache" / "pairs"
+    assert paths.laya_current() == root / "c"
+    assert paths.cluster_root("NULL") == root / "models" / "clusters" / "NULL"
+    for empty in ("", "."):
+        with pytest.raises(ConfigError, match="empty"):
+            resolve_data_path(empty, data_root=root)
+
+
 def test_ut03_11_path_methods_with_valid_identifiers(tmp_path: Path) -> None:
     """UT03-11 valid versions and deciders give the §4.2-§4.7 paths under the data root."""
     root = tmp_path.resolve()
@@ -152,6 +168,13 @@ def test_ut03_11_path_methods_with_valid_identifiers(tmp_path: Path) -> None:
         (lambda p: p.cluster_root(".."), "algorithm_version"),
         (lambda p: p.cluster_snapshot("v1", "."), "snapshot_id"),
         (lambda p: p.cluster_snapshot("v1", "x" * 97), "snapshot_id"),
+        (lambda p: p.cluster_snapshot("v1", "..."), "snapshot_id"),
+        (lambda p: p.cluster_snapshot("v1", "a."), "snapshot_id"),
+        (lambda p: p.cluster_root("NUL"), "algorithm_version"),
+        (lambda p: p.cluster_root("com1.txt"), "algorithm_version"),
+        (lambda p: p.cluster_root("Lpt9"), "algorithm_version"),
+        (lambda p: p.calibration_file("llm", "...", "qs-2026-10-01"), "decider_version"),
+        (lambda p: p.cache_partition("qs-2026-10-01", "llm", "a.."), "decider_version"),
     ],
 )
 def test_ut03_11_invalid_identifiers_rejected(tmp_path: Path, call: object, argument: str) -> None:

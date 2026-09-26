@@ -46,3 +46,15 @@ def test_st03_10_decider_version_dot_names_rejected(tmp_path: Path) -> None:
             paths.calibration_file("openjev", version, "qs-2026-10-01")
     with pytest.raises(ConfigError, match="snapshot_id"):
         paths.cluster_snapshot("v1", "..")
+
+
+@pytest.mark.parametrize("name", ["...", "a.", "a..", "NUL", "nul.txt", "CON", "aux", "COM1"])
+def test_st03_10_windows_aliasing_identifiers_rejected(tmp_path: Path, name: str) -> None:
+    """ST03-10 identifiers Win32 would alias (trailing dots) or map to a device are refused."""
+    paths = _paths(tmp_path)
+    with pytest.raises(ConfigError, match="snapshot_id"):
+        paths.cluster_snapshot("v1", name)
+    with pytest.raises(ConfigError, match="algorithm_version"):
+        paths.cluster_root(name)
+    with pytest.raises(ConfigError, match="decider_version"):
+        paths.calibration_file("llm", name, "qs-2026-10-01")

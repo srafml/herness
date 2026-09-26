@@ -19,8 +19,7 @@ from herness.enrich.settings import DecidersSettings, EmbeddingSettings
 LabelKind = Literal["teacher", "human", "gold"]
 
 
-def _field_pattern(model: type[BaseModel], name: str) -> re.Pattern[str]:
-    """The ``Field(pattern=...)`` of ``model.name``: one source for the identifier rules."""
+def _field_pattern(model: type[BaseModel], name: str) -> re.Pattern[str]:  # one rule source
     patterns = [getattr(m, "pattern", None) for m in model.model_fields[name].metadata]
     return re.compile(next(p for p in patterns if isinstance(p, str)))
 
@@ -35,7 +34,8 @@ _RULES: dict[str, re.Pattern[str] | frozenset[str]] = {
     "snapshot_id": _SLUG_RE,
     "kind": frozenset(get_args(LabelKind)),
 }
-_DOT_NAMES = frozenset({".", ".."})
+# Win32 strips trailing dots (`...`, `a.` alias a parent or sibling) and maps device names
+_UNSAFE_RE = re.compile(r"(?i)^(?:.*\.|(?:CON|PRN|AUX|NUL|COM\d|LPT\d)(?:\..*)?)$")
 
 
 def resolve_data_path(path: str | Path, /, *, data_root: Path) -> Path:
@@ -46,8 +46,8 @@ def resolve_data_path(path: str | Path, /, *, data_root: Path) -> Path:
     if not candidate.is_absolute() and parts[:1] == ("data",):
         parts = parts[1:]  # an absolute path replaces the root in joinpath
     result = root.joinpath(*parts).resolve()
-    if not result.is_relative_to(root):
-        msg = f"path outside data root: {path}"
+    if not candidate.parts or not result.is_relative_to(root):
+        msg = f"path outside data root (or empty): {path}"
         raise ConfigError(msg)
     return result
 
@@ -55,7 +55,7 @@ def resolve_data_path(path: str | Path, /, *, data_root: Path) -> Path:
 def _valid(argument: str, value: str) -> str:
     rule = _RULES[argument]
     ok = value in rule if isinstance(rule, frozenset) else rule.fullmatch(value) is not None
-    if not ok or value in _DOT_NAMES:
+    if not ok or _UNSAFE_RE.fullmatch(value) is not None:
         msg = f"invalid {argument} for an enrichment path"
         raise ConfigError(msg, argument=argument)
     return value
@@ -97,6 +97,7 @@ class EnrichPaths:
         if not self.data_root.is_absolute():
             msg = "invalid data_root for an enrichment path: not absolute"
             raise ConfigError(msg, argument="data_root")
+        object.__setattr__(self, "data_root", self.data_root.resolve())  # one resolved root
 
     @classmethod
     def from_config(cls, cfg: _EnrichConfig) -> EnrichPaths:
