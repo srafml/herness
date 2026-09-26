@@ -305,7 +305,7 @@ def test_ut10_84_unknown_top_level_key_names_file_and_key(cfg_dir: Path, stem: s
 
 
 def test_ut10_84_stub_sections_are_closed(cfg_dir: Path) -> None:
-    """UT10-84 pipelines, memory and app stubs reject unknown keys until their owners land."""
+    """UT10-84 the pipelines, memory and app owner models (T10-03b) reject unknown keys."""
     for stem in ("pipelines", "memory", "app"):
         _write(cfg_dir / f"{stem}.yaml", "version: 1\nanything: 1\n")
         with pytest.raises(ConfigError, match=rf"{stem}\.anything \({stem}\.yaml\)"):

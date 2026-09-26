@@ -1,0 +1,22 @@
+# Source connectors (impl 01 §9) plus the data-model sections `dq` and `build` (impl 02 §9,
+# R-69). Validated by spec 10 as `cfg.sources` (herness.core.config.SourcesFileConfig).
+# Sensitivity: internal. No source is configured here: every `sources.<s>` section needs
+# `base_url`/`auth` and per-source keys that impl 01 §9 gives no default for; an operator adds
+# each source at deployment. Credentials are `secret:<name>` references only.
+version: 1
+dq:                                   # impl 02 §9 (design 02 §4.8)
+  row_count_drop_max: 0.05
+  incident_service_null_warn: 0.30
+  incident_service_null_error: 0.60
+  work_item_service_null_warn: 0.40
+  cast_fail_warn: 0.005
+  future_timestamp_max: 0
+  resolved_before_opened_warn: 0.001
+  duplicate_key_max: 0
+  decision_coverage_min: 0.95
+  metric_daily_unmapped_warn: 0.05
+build:                                # impl 02 §9 (design 02 §8)
+  keep_last: 3
+  memory_limit: 75%
+  threads: null                       # null = CPU count
+  service_ci_classes: [cmdb_ci_service, cmdb_ci_service_business, cmdb_ci_service_technical]

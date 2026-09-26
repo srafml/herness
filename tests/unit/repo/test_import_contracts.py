@@ -44,7 +44,10 @@ def test_ut00_58_contracts_match_repository() -> None:
     }
     c1 = contracts["herness layers"]
     assert set(_flatten(c1["layers"])) == top
-    assert c1["ignore_imports"] == ["herness.core.config -> herness.**.settings"]
+    exception = ["herness.core.config -> herness.**.settings"]
+    if _exists("herness.core._config_sections"):  # config.py's private sibling (T10-03b)
+        exception.append("herness.core._config_sections -> herness.**.settings")
+    assert c1["ignore_imports"] == exception
     c2 = contracts["herness never imports app or tools"]
     assert c2["forbidden_modules"] == [p for p in ("app", "tools") if _exists(p)]
     base = {m for m in BASE if _exists(m)}

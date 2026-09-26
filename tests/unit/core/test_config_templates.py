@@ -1,9 +1,11 @@
 """Tests for the repository config templates (impl 10 U10-93, U10-94, U10-95; UT10-76).
 
 UT10-76 loads the repository's own `config/` tree (via `tests.support.config_tree.
-write_repo_config`, a copy harness that stands in for the owner files that have not shipped
-yet) for the `local`, `synth` and `hybrid` profiles, and checks the two non-config-loader
-artifacts of U10-95 (`.env.example`, `.streamlit/config.toml`) directly.
+write_repo_config`, which copies every shipped file and adapts only the unversioned owner
+files and the empty T04-08 metric catalog) for all four profiles, and checks the two
+non-config-loader artifacts of U10-95 (`.env.example`, `.streamlit/config.toml`) directly.
+`hybrid` and `premium` load once the copy's `herness.yaml` records the approval U10-09 step 5
+requires; the shipped file records none, so they fail the gate as shipped.
 """
 
 from __future__ import annotations
@@ -118,11 +120,43 @@ def test_ut10_76_hybrid_and_premium_overlays_declare_egress() -> None:
         assert egress["purposes"]
 
 
-def test_ut10_76_stand_in_stems_still_have_no_repo_file() -> None:
-    """UT10-76 the three stems `write_repo_config` stands in still have no repo file to use."""
-    for stem in ("sources", "mappings", "resilience"):
-        assert not (REPO / "config" / f"{stem}.yaml").exists()
-    assert (REPO / "config" / "pipelines.yaml").exists()  # shipped: copied, no stand-in
+def test_ut10_76_owner_files_ship_with_version_1() -> None:
+    """UT10-76 sources, mappings, resilience (T10-03b), pipelines and app ship `version: 1`."""
+    for stem in ("sources", "mappings", "resilience", "pipelines", "app"):
+        data = yaml.safe_load((REPO / "config" / f"{stem}.yaml").read_text(encoding="utf-8"))
+        assert data["version"] == 1, stem
+
+
+def _approve(cfg_dir: Path) -> None:
+    """Record hybrid/premium approval in the copy's `herness.yaml` (never in the repo file)."""
+    path = cfg_dir / "herness.yaml"
+    text = path.read_text(encoding="utf-8")
+    for old, new in (
+        ("hybrid_approved: false", "hybrid_approved: true"),
+        ("premium_approved: false", "premium_approved: true"),
+        ("approved_by: null", "approved_by: ops-lead"),
+        ("approved_on: null", "approved_on: 2026-09-01"),
+    ):
+        assert old in text, old
+        text = text.replace(old, new)
+    path.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_ut10_76_every_profile_loads_with_c13_placeholder_warnings_only(
+    cfg_dir: Path, profile: c.ProfileName
+) -> None:
+    """UT10-76 all four profiles load the repo tree (gated ones with a recorded approval)."""
+    _approve(cfg_dir)
+    cfg = c.load_config(profile, config_dir=cfg_dir, env={})
+    assert cfg.profile == profile
+    issues = cv.run_cross_checks(cfg, offline=True, include_registry=False)
+    assert issues
+    assert {i.severity for i in issues} == {"warn"}
+    assert {i.message.split()[0] for i in issues} <= {"C13", "C08a"}
+    assert cfg.sources.enabled_sources() == []
+    assert cfg.mappings.enums["servicenow.incident_state"]["1"] == "open"
+    assert cfg.resilience.resilience.retry.retry_after_max_s == 86400
 
 
 # --- U10-95: .env.example and .streamlit/config.toml ----------------------------------------

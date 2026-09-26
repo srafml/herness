@@ -1,0 +1,72 @@
+# Source value mappings (impl 02 §9; design 02 §8). Validated by spec 10 as `cfg.mappings`
+# (herness.model.settings.MappingsConfig). Sensitivity: internal. Matching is lower-cased and
+# exact; source values are quoted so numeric codes stay strings.
+version: 1
+enums:                                # impl 02 §9 shipped enum template
+  servicenow.incident_state:
+    "1": open
+    "new": open
+    "2": in_progress
+    "in progress": in_progress
+    "3": on_hold
+    "on hold": on_hold
+    "6": resolved
+    "resolved": resolved
+    "7": closed
+    "closed": closed
+    "8": canceled
+    "canceled": canceled
+    "cancelled": canceled
+  servicenow.change_type:
+    "standard": standard
+    "normal": normal
+    "emergency": emergency
+  servicenow.change_close_code:
+    "successful": successful
+    "successful with issues": successful_with_issues
+    "unsuccessful": unsuccessful
+    "backed out": backed_out
+    "backed_out": backed_out
+    "canceled": canceled
+    "cancelled": canceled
+  monitoring.severity:
+    "critical": critical
+    "major": major
+    "minor": minor
+    "warning": warning
+    "info": info
+    "error": major
+    "warn": warning
+    "informational": info
+  jira.issue_type:
+    "initiative": initiative
+    "epic": epic
+    "feature": feature
+    "story": story
+    "bug": bug
+    "task": task
+    "sub-task": subtask
+    "subtask": subtask
+  jira.status_category_key:
+    "new": todo
+    "indeterminate": in_progress
+    "done": done
+  jira.status_category:
+    "to do": todo
+    "open": todo
+    "backlog": todo
+    "in progress": in_progress
+    "in review": in_progress
+    "done": done
+    "closed": done
+    "resolved": done
+service_overrides: []
+custom_fields:                        # raw lake column names; null = not mapped
+  servicenow:
+    customer_impact_minutes: null     # the synth profile maps u_customer_impact_minutes (T11-16)
+    acknowledged_at: null             # null disables MTTA
+  jira:
+    story_points: null
+    team: null
+    estimate_cost_usd: null
+    epic_link: null

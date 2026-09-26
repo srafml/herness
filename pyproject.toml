@@ -275,8 +275,9 @@ layers = [
     "herness.core",
 ]
 ignore_imports = [
-    # settings exception (ENG §2.1, R-03)
+    # settings exception (ENG §2.1, R-03); _config_sections is config.py's private sibling (T10-03b)
     "herness.core.config -> herness.**.settings",
+    "herness.core._config_sections -> herness.**.settings",
 ]
 # The settings exception matches nothing until impl 10 creates herness.core.config.
 unmatched_ignore_imports_alerting = "none"
@@ -313,6 +314,7 @@ source_modules = [
 forbidden_modules = [
     "herness.core.audit",
     "herness.core.config",
+    "herness.core._config_sections",
     "herness.core.config_checks",
     "herness.core.config_sources",
     "herness.core.config_validate",
@@ -437,7 +439,10 @@ source_modules = ["herness.store"]
 forbidden_modules = ["herness.model", "herness.harness", "herness.enrich"]
 # settings exception (ENG §2.1, R-03): store may reach herness.core.config, which types its
 # root model with the owners' settings modules (T10-03).
-ignore_imports = ["herness.core.config -> herness.**.settings"]
+ignore_imports = [
+    "herness.core.config -> herness.**.settings",
+    "herness.core._config_sections -> herness.**.settings",
+]
 
 [[tool.importlinter.contracts]]
 name = "ops-areas-acyclic"
@@ -476,7 +481,10 @@ source_modules = ["herness.core"]
 forbidden_modules = ["herness.store", "herness.harness"]
 # settings exception (ENG §2.1, R-03): herness.core.config types its root model with
 # herness.harness.llm.settings (T10-03).
-ignore_imports = ["herness.core.config -> herness.**.settings"]
+ignore_imports = [
+    "herness.core.config -> herness.**.settings",
+    "herness.core._config_sections -> herness.**.settings",
+]
 
 [[tool.importlinter.contracts]]
 name = "resilience-settings-light"

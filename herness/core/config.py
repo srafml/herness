@@ -10,15 +10,15 @@ import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, ClassVar, Final
+from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
-from herness.connectors.settings import SourcesConfig
 from herness.core import config_sources as cs
 from herness.core import config_view as view
 from herness.core import time as clock
+from herness.core._config_sections import ModelsFileConfig, SourcesFileConfig, memory_with_patterns
 from herness.core.config_sources import SDK_SOURCE_KINDS, ProfileName
 from herness.core.config_view import ConfigIssue
 from herness.core.errors import ConfigError
@@ -33,12 +33,13 @@ from herness.core.settings import (
     RetentionConfig,
     SecurityConfig,
 )
-from herness.enrich.settings import DecidersSettings, DecisionsConfig
+from herness.enrich.settings import DecisionsConfig
 from herness.eval.settings import EvalConfig
-from herness.harness.llm.settings import ModelsConfig
+from herness.harness.memory.settings import MemoryConfig
 from herness.harness.pipelines.settings import PipelinesConfig
 from herness.metrics.settings import MetricsCatalogConfig, WeightsConfig
-from herness.model.settings import BuildSettings, DqSettings, MappingsConfig
+from herness.model.settings import MappingsConfig
+from herness.reports.settings import AppConfig
 
 __all__ = [
     "GATED_PROFILES",
@@ -62,40 +63,6 @@ GATED_PROFILES: Final[frozenset[str]] = frozenset({"hybrid", "premium"})
 _log = get_logger("core.config")
 
 
-class _Stub(BaseModel):
-    """Closed stand-in for an owner model not yet on the branch (Ruling R2)."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class _MemoryStub(_Stub):
-    """``memory.yaml`` until T07-02 lands ``MemoryConfig``; U10-16 adds the patterns."""
-
-    injection_patterns: tuple[str, ...] = ()
-
-
-class _AppStub(_Stub):
-    """``app.yaml`` until T09-01 lands ``AppConfig``."""
-
-
-class SourcesFileConfig(SourcesConfig):
-    """``sources.yaml``: connector sections (impl 01) plus ``dq`` and ``build`` (impl 02, R-69)."""
-
-    dq: DqSettings = DqSettings()
-    build: BuildSettings = BuildSettings()
-
-
-class ModelsFileConfig(ModelsConfig):
-    """``models.yaml``: ``models`` and ``harness`` (impl 05) plus ``deciders`` (impl 03, R-76).
-
-    ``_PREFIX = None`` leaves a root-level error of this file a ``ValidationError`` so that
-    ``load_config`` can name ``models.yaml`` in the ``ConfigError``.
-    """
-
-    _PREFIX: ClassVar[str | None] = None  # type: ignore[assignment]  # owner narrowed it to str
-    deciders: DecidersSettings
-
-
 class HernessConfig(BaseSettings):
     """The immutable root config (U10-08, design 10 §3.1); built only by ``load_config``."""
 
@@ -117,9 +84,9 @@ class HernessConfig(BaseSettings):
     weights: WeightsConfig
     models: ModelsFileConfig
     pipelines: PipelinesConfig
-    memory: _MemoryStub
+    memory: MemoryConfig
     resilience: ResilienceConfig
-    app: _AppStub
+    app: AppConfig
     eval: EvalConfig | None = None
 
     @model_validator(mode="before")
@@ -133,6 +100,12 @@ class HernessConfig(BaseSettings):
     def _restore_version(cls, value: object) -> object:
         # U10-16 drops the checked ``version: 1``; these two owner models declare it (impl 04).
         return {"version": 1, **value} if isinstance(value, dict) else value
+
+    @field_validator("memory", mode="before")
+    @classmethod
+    def _injection_patterns(cls, value: object) -> object:
+        # U10-16 step 4 via the owner's parser (T07-02 ruling): trailing spaces, line numbers.
+        return memory_with_patterns(value)
 
     @classmethod
     def settings_customise_sources(
