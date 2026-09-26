@@ -282,6 +282,8 @@ source_modules = [
 forbidden_modules = [
     "herness.core.config_sources",
     "herness.core.registry",
+    "herness.core.redact",
+    "herness.core.redact_patterns",
     "herness.core.settings",
     "herness.store",
     "herness.model",
