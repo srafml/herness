@@ -14,12 +14,12 @@ import re
 import statistics
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
-from typing import Any, Final, Literal, Protocol
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict
 from scipy.stats import kendalltau  # type: ignore[import-untyped]  # scipy ships no types
 
-from herness.core.errors import ModelUnavailable
+from herness.core.errors import EgressBlocked, ModelUnavailable
 from herness.core.numbers import find_uncited, parse_markers
 from herness.core.types import ChatAnswer, NumberRef, Paragraph, RecommendationItem
 from herness.eval.golden import (
@@ -33,10 +33,11 @@ from herness.eval.golden import (
     SignRule,
     SuiteError,
 )
+from herness.eval.judge import RubricJudge
 from herness.harness.verifier import compare_value, row_matches
 
 __all__ = [
-    "EvidenceLookup", "GradeResult", "NumberCarrier", "RerunFn", "RubricScorer",
+    "EvidenceLookup", "GradeResult", "NumberCarrier", "RerunFn",
     "UnsupportedReport", "carriers_from", "chat_entity_ids", "count_unsupported",
     "grade_entities", "grade_numeric", "grade_rubric", "grade_rules", "kendall_tau_check",
     "split_sentences",
@@ -85,19 +86,6 @@ class UnsupportedReport(BaseModel):
     orphan_markers: list[str]
     stale_refs: list[str]
     rate: float
-
-
-class _Scored(Protocol):
-    @property
-    def scores(self) -> Mapping[str, int]: ...
-
-
-class RubricScorer(Protocol):
-    """Structural view of `herness.eval.judge.RubricJudge.score` (U11-61)."""
-
-    def score(
-        self, question_id: str, criteria: Sequence[str], min_score: float, final_text: str
-    ) -> _Scored: ...
 
 
 def _result(check: str, ok: bool, **detail: Any) -> GradeResult:  # noqa: ANN401 - JSON values
@@ -286,15 +274,18 @@ def grade_rules(
 
 
 def grade_rubric(
-    exp: RubricExpected, question_id: str, final_text: str, judge: RubricScorer | None
+    exp: RubricExpected, question_id: str, final_text: str, judge: RubricJudge | None
 ) -> GradeResult:
-    """Judge prose against the rubric; skipped without a judge or when it is down (U11-59)."""
+    """Judge prose against the rubric; skipped without a judge, when down or blocked (U11-59)."""
     if judge is None:
         return GradeResult(check="rubric", status="skipped", detail={"reason": "no_judge"})
     try:
         scored = judge.score(question_id, exp.criteria, exp.min_score, final_text)
     except ModelUnavailable:
         return GradeResult(check="rubric", status="skipped", detail={"reason": "judge_unavailable"})
+    except EgressBlocked:  # hosted judge refused by the egress guard (TH11-06)
+        detail = {"reason": "judge_egress_blocked"}
+        return GradeResult(check="rubric", status="skipped", detail=detail)
     scores = dict(scored.scores)
     mean = statistics.fmean(scores.values()) if scores else None
     ok = mean is not None and mean >= exp.min_score
