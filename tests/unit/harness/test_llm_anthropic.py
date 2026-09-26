@@ -601,7 +601,7 @@ def test_ut05_37_sdk_uses_guard_client(
     """UT05-37 hybrid + stub guard: the SDK sent through the guard's transport with guard args."""
     guard = _install(monkeypatch, _json_handler(_message_json([{"type": "text", "text": "ok"}])))
     asyncio.run(client.acomplete(_req()))
-    assert guard.calls == [("reasoning_final", "aggregated_evidence", "run_1", "task_1", 120.0)]
+    assert guard.calls == [("reasoning_final", "aggregated_evidence", "run_1", "task_1", 30.0)]
     [transport] = guard.transports
     assert type(transport) is httpx2.MockTransport
     [request] = guard.requests
@@ -683,32 +683,67 @@ def test_ut05_38_complete_sync_and_inside_loop(
 
 # --- ST05-13 -----------------------------------------------------------------------------
 
-_SDK_CLIENTS = {"Anthropic", "AsyncAnthropic"}
-_HTTPX = {"httpx", "httpx2"}
-_HTTPX_CLIENTS = {"Client", "AsyncClient"}
+_SDK_CLIENTS = frozenset({
+    "Anthropic", "AsyncAnthropic", "Client", "AsyncClient", "AnthropicBedrock",
+    "AsyncAnthropicBedrock", "AnthropicVertex", "AsyncAnthropicVertex",
+})  # fmt: skip
+_SDK_SPECIFIC = _SDK_CLIENTS - {"Client", "AsyncClient"}  # flagged even when not imported
+_HTTPX = frozenset({"httpx", "httpx2"})
+_HTTPX_BUILDERS = frozenset({
+    "Client", "AsyncClient", "HTTPTransport", "AsyncHTTPTransport", "MockTransport",
+})  # fmt: skip
 
 
-def _call_name(node: ast.Call) -> tuple[str | None, str | None]:
-    func = node.func
-    if isinstance(func, ast.Attribute):
-        owner = func.value.id if isinstance(func.value, ast.Name) else None
-        return owner, func.attr
-    if isinstance(func, ast.Name):
-        return None, func.id
-    return None, None
+def _aliases(tree: ast.Module) -> dict[str, str]:
+    """Local name -> dotted origin for every ``import`` / ``from ... import`` in the module."""
+    names: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                local = alias.asname or alias.name.split(".")[0]
+                names[local] = alias.name if alias.asname else local
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            for alias in node.names:
+                names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return names
+
+
+def _qualified(func: ast.expr, aliases: dict[str, str]) -> str | None:
+    """The dotted name a call target resolves to through the module's imports."""
+    parts: list[str] = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if not isinstance(func, ast.Name):
+        return None
+    return ".".join([aliases.get(func.id, func.id), *reversed(parts)])
+
+
+def _violation(qualified: str, keywords: set[str | None]) -> str | None:
+    root = qualified.split(".", 1)[0]
+    last = qualified.rsplit(".", 1)[-1]
+    if root == "anthropic" and last in _SDK_CLIENTS and "http_client" not in keywords:
+        return f"{qualified} without http_client"
+    if "." not in qualified and last in _SDK_SPECIFIC and "http_client" not in keywords:
+        return f"{qualified} without http_client"
+    if root in _HTTPX and last in _HTTPX_BUILDERS:
+        return f"{qualified} constructed"
+    return None
 
 
 def _violations(source: str, path: str) -> list[str]:
+    tree = ast.parse(source)
+    aliases = _aliases(tree)
     found: list[str] = []
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        owner, name = _call_name(node)
-        keywords = {kw.arg for kw in node.keywords}
-        if name in _SDK_CLIENTS and "http_client" not in keywords:
-            found.append(f"{path}:{node.lineno} {name} without http_client")
-        if owner in _HTTPX and name in _HTTPX_CLIENTS:
-            found.append(f"{path}:{node.lineno} {owner}.{name} constructed")
+        qualified = _qualified(node.func, aliases)
+        problem = (
+            None if qualified is None else _violation(qualified, {k.arg for k in node.keywords})
+        )
+        if problem is not None:
+            found.append(f"{path}:{node.lineno} {problem}")
     return found
 
 
@@ -720,13 +755,48 @@ def test_st05_13_ast_lint_harness_builds_no_unguarded_clients() -> None:
     assert found == []
 
 
-def test_st05_13_ast_lint_detects_violations() -> None:
-    """ST05-13 (a) the lint itself flags the forbidden constructions."""
-    bad = (
-        "anthropic.AsyncAnthropic(api_key=k)\nAnthropic()\nhttpx.Client()\n"
-        "httpx2.AsyncClient(timeout=1)\nanthropic.AsyncAnthropic(http_client=h)\n"
-    )
-    assert len(_violations(bad, "x.py")) == 4
+_LINT_BAD = [
+    "import anthropic\nanthropic.AsyncAnthropic(api_key=k)",
+    "Anthropic()",
+    "import anthropic\nanthropic.AsyncClient(api_key=k)",
+    "import anthropic\nanthropic.Client()",
+    "import anthropic as sdk\nsdk.AsyncAnthropic()",
+    "from anthropic import AsyncAnthropic as A\nA(api_key=k)",
+    "from anthropic import AsyncClient\nAsyncClient()",
+    "from anthropic import AnthropicBedrock\nAnthropicBedrock()",
+    "import anthropic\nanthropic.AsyncAnthropicVertex()",
+    "from anthropic.lib.bedrock import AsyncAnthropicBedrock as B\nB()",
+    "import httpx\nhttpx.Client()",
+    "import httpx2\nhttpx2.AsyncClient(timeout=1)",
+    "from httpx import AsyncClient\nAsyncClient()",
+    "import httpx as hx\nhx.AsyncClient()",
+    "from httpx2 import AsyncClient as C\nC(http_client=x)",
+    "import httpx\nhttpx.HTTPTransport()",
+    "from httpx import AsyncHTTPTransport\nAsyncHTTPTransport()",
+    "import httpx2 as h\nh.MockTransport(handler)",
+]
+_LINT_OK = [
+    "import anthropic\nanthropic.AsyncAnthropic(api_key=k, http_client=h)",
+    "import anthropic as sdk\nsdk.AsyncClient(http_client=h)",
+    "from anthropic import AsyncAnthropic as A\nA(http_client=h)",
+    "class Client: ...\nClient()",
+    "AsyncClient()",
+    "import httpx\nhttpx.Request('GET', 'u')",
+    "import httpx2 as hx\nhx.Response(200)",
+    "from herness.core import egress\negress.get_guard().async_http_client('p', 'c')",
+]
+
+
+@pytest.mark.parametrize("source", _LINT_BAD)
+def test_st05_13_ast_lint_flags_bypasses(source: str) -> None:
+    """ST05-13 (a) the lint flags SDK aliases, imported names and httpx builders."""
+    assert len(_violations(source, "x.py")) == 1
+
+
+@pytest.mark.parametrize("source", _LINT_OK)
+def test_st05_13_ast_lint_allows_guarded_and_unrelated(source: str) -> None:
+    """ST05-13 (a) the lint accepts guarded SDK clients and unrelated calls."""
+    assert _violations(source, "x.py") == []
 
 
 def test_st05_13_egress_blocked_inside_transport(

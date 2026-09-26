@@ -61,7 +61,13 @@ class _GuardedClientFactory(Protocol):
     """U10-53 ``EgressGuard.async_http_client``; not on the base yet (T10-17 carry-over)."""
 
     def async_http_client(
-        self, purpose: str, payload_class: str, *, run_id: str | None, task_id: str | None
+        self,
+        purpose: str,
+        payload_class: str,
+        *,
+        run_id: str | None,
+        task_id: str | None,
+        timeout: float,
     ) -> httpx2.AsyncClient: ...
 
 
@@ -273,6 +279,7 @@ class AnthropicClient:
             "aggregated_evidence",
             run_id=meta.run_id,
             task_id=meta.task_id,
+            timeout=req.timeout_s,
         )
 
     def _sdk(self, req: LLMRequest) -> anthropic.AsyncAnthropic:
