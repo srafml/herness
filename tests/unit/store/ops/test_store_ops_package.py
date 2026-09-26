@@ -1,9 +1,8 @@
 """Unit tests for the herness.store.ops namespace (impl 02 U02-62; UT02-68).
 
-Blocks "02 core" (T02-04) and "02 migrate" (T02-05) exist. Block "02 shared" arrives with
-`herness/store/ops/shared.py` (T02-07 adds U02-55 … U02-60, T02-24 adds U02-130 … U02-132);
-until then its test checks that any "shared" block present is third and follows the U02-62
-order.
+Blocks "02 core" (T02-04), "02 migrate" (T02-05) and "02 shared" exist. T02-07 added the
+U02-55 … U02-60 names of "02 shared"; T02-24 adds U02-130 … U02-132, so the shared test checks
+the T02-07 names and that the block is a U02-62-ordered subset.
 """
 
 from __future__ import annotations
@@ -77,6 +76,19 @@ _SHARED_BLOCK = (
 )
 
 
+# The U02-55 … U02-60 names (T02-07); T02-24 adds the other three of _SHARED_BLOCK.
+_SHARED_T02_07 = (
+    "ReviewItem",
+    "ReviewKind",
+    "ReviewStatus",
+    "create_review_item",
+    "get_review_item",
+    "list_review_items",
+    "decide_review_item",
+    "approved_mapping_suggestions",
+)
+
+
 def _blocks() -> list[tuple[str, str, list[str]]]:
     """Parse `__all__` of the package source into (owner spec, area, names) blocks."""
     source = Path(ops.__file__).read_text(encoding="utf-8").splitlines()
@@ -115,16 +127,15 @@ def test_ut02_68_migrate_block_second_and_complete() -> None:
 
 
 def test_ut02_68_shared_block_third_in_u02_62_order() -> None:
-    """UT02-68 block "02 shared", once present, is third and a U02-62-ordered subset."""
+    """UT02-68 block "02 shared" is third and a U02-62-ordered subset holding T02-07's names."""
     blocks = _blocks()
     shared = [i for i, (_, area, _) in enumerate(blocks) if area == "shared"]
-    assert len(shared) <= 1
-    if not shared:  # T02-07 / T02-24 not landed yet: nothing to assert beyond absence
-        return
-    owner, _, names = blocks[shared[0]]
-    assert (shared[0], owner) == (2, "02")
+    assert shared == [2]
+    owner, _, names = blocks[2]
+    assert owner == "02"
     # Only U02-62 names, in U02-62 order (T02-07 lands 8 of them, T02-24 the other 3).
     assert names == [n for n in _SHARED_BLOCK if n in names]
+    assert set(_SHARED_T02_07) <= set(names)
 
 
 def test_ut02_68_names_resolve_to_their_area() -> None:
