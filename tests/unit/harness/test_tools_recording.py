@@ -476,6 +476,38 @@ def test_ut05_61_multiline_cell_never_echoed(
     assert "\r" not in message
 
 
+_PROBE_FORMS = {
+    "integer": "CAST(v AS INTEGER)",
+    "date": "CAST(v AS DATE)",
+    "timestamp": "CAST(v AS TIMESTAMP)",
+    "decimal": "CAST(v AS DECIMAL(10,2))",
+    "uuid": "CAST(v AS UUID)",
+    "boolean": "CAST(v AS BOOLEAN)",
+    "int_list": "CAST(v AS INTEGER[])",
+    "struct": "CAST(v AS STRUCT(a INTEGER))",
+    "json": "CAST(v AS JSON)",
+    "strptime": "strptime(v, '%Y-%m-%d')",
+}
+
+
+@pytest.mark.parametrize("record_id", list(sd.PROBE_VALUES))
+@pytest.mark.parametrize("expr", list(_PROBE_FORMS.values()), ids=list(_PROBE_FORMS))
+def test_ut05_61_error_text_probe(
+    wh: DuckWarehouse, redacted: list[str], expr: str, record_id: str
+) -> None:
+    """UT05-61 R3-I1 probe: quote/line-break values x DuckDB error forms never echo the value.
+
+    Includes strptime on a value with a pair of double quotes (`paired_double`) and a value
+    mixing single and double quotes (`mixed`).
+    """
+    sql = f"SELECT {expr} AS x FROM core.probe WHERE record_id = $rid"  # noqa: S608 - constants
+    with pytest.raises(QueryError) as info:
+        tools.execute_recorded(sd.make_ctx(wh, FakeOps()), sql, {"rid": record_id})
+    assert "secret" not in info.value.message
+    assert "secret" not in redacted[-1]  # masked before redaction, not by the stub redactor
+    assert "<value>" in info.value.message
+
+
 def test_ut05_61_safe_error_text_rules(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT05-61 doubled quotes stay inside one literal; a failed redaction withholds the text."""
     monkeypatch.setattr(rec, "redact_text", lambda text: text)
@@ -487,6 +519,8 @@ def test_ut05_61_safe_error_text_rules(monkeypatch: pytest.MonkeyPatch) -> None:
     assert rec.safe_error_text("x 'a' then 'lone secret") == "x <value>"  # odd count
     assert rec.safe_error_text('y "lone secret\r\nz') == "y <value>"
     assert rec.safe_error_text("it's open") == "it<value>"
+    two_lines = 'Could not parse string "say "hi" secret" as "%Y"\nsay "hi" secret\n^'
+    assert rec.safe_error_text(two_lines) == 'Could not parse string "<value>"'
     assert len(rec.safe_error_text("e" * 900)) == 500
     monkeypatch.setattr(rec, "redact_text", lambda text: None)
     assert rec.safe_error_text("boom 'v'") == "query failed"

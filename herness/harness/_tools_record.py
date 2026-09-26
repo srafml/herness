@@ -205,10 +205,14 @@ def _engine_error(exc: Exception, *, fired: bool, timeout_s: float) -> QueryErro
 def _mask_quoted(text: str, quote: str, token: str) -> str:
     """Mask the first to the last `quote` over the full text (values may hold line breaks and
     quotes; DuckDB escapes neither). An odd count means a value holds a quote: mask from the
-    first one to the end (fail closed). Identifiers between quotes are lost (accepted)."""
+    first one to the end (fail closed), as when the pair spans lines (a later echo line
+    may hold the value's tail). Identifiers between quotes are lost (accepted)."""
     if text.count(quote) % 2:
         return text[: text.index(quote)] + "\x00L"
-    return re.sub(f"{quote}.*{quote}", token, text, flags=re.DOTALL)
+    m = re.search(f"{quote}.*{quote}", text, flags=re.DOTALL)
+    if m is None or len(m[0].splitlines()) > 1:
+        return text if m is None else text[: m.start()] + token
+    return text[: m.start()] + token + text[m.end() :]
 
 
 def safe_error_text(text: str) -> str:
