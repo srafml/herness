@@ -4,7 +4,8 @@ Design 05 §5.4.4-§5.4.5. `execute_recorded` runs one query on the task's build
 its `evidence` and `evidence_use` rows (flow F05-04); `format_result` renders the compact
 table the model sees; `wrap_untrusted` builds the one R-20 `<untrusted_data>` block
 (TH05-01). The execution internals live in the private `_tools_record` module; the tool
-registry and dispatch (U05-33, U05-34) join this module in later cards.
+registry and dispatch (U05-33, U05-34) join this module in later cards. `json_safe` is the
+U05-35 step 6 JSON-safe cell conversion, re-exported for the Verifier's re-run samples.
 """
 
 from __future__ import annotations
