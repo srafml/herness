@@ -261,9 +261,9 @@ _TREES = st.recursive(
 def test_pt10_01_hash_is_order_independent(section: dict[str, Any]) -> None:
     """PT10-01 a random nested section in any key order gives the same config hash."""
     data = dict(_base_dict(), random_section=section)
-    first = c.config_hash(_fake(data))
+    first = c.config_hash(_fake(data), key_id="unresolved")  # fake has no redaction key
     assert HASH_RE.fullmatch(first)
-    assert c.config_hash(_fake(_permuted(data))) == first
+    assert c.config_hash(_fake(_permuted(data)), key_id="unresolved") == first
 
 
 # --- U10-12 effective_dict -----------------------------------------------------------------
