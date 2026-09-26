@@ -1,17 +1,18 @@
 """Guarded transports of the egress component (impl 10 U10-54; design 10 §4.5, §5.4).
 
 Size-forced private sibling of ``herness.core.egress`` (T10-17), which re-exports the
-transports. The guard decides each request before the pool sees it; the body is decoded,
-counted and capped; one ``completed`` line is written on close, on a failed or cancelled
-send, or when an unclosed response is collected (``not_closed``: callers must close streamed
-responses). Nothing here builds a client or transport (ST10-25).
+transports; it builds no client or transport (ST10-25). The guard decides each request
+before the pool sees it; the body is decoded, counted and capped; one ``completed`` line
+follows close, a failed or cancelled send, or gc of an unclosed response (``not_closed``,
+queued by gc and written at the next safe point: callers must close streamed responses).
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import weakref
+from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -33,6 +34,7 @@ __all__ += ["TransportOpts"]
 MAX_RESPONSE_BYTES: Final = 52_428_800  # 50 MiB (U10-50)
 USAGE_MAX_BYTES: Final = 10_485_760  # JSON bodies up to 10 MiB are read for token counts
 _log = get_logger("core.egress")
+_PENDING: Final[deque[Callable[[], None]]] = deque()  # not_closed lines queued by gc
 
 
 @dataclass(frozen=True)
@@ -47,25 +49,6 @@ class TransportOpts:
     def fields(self) -> dict[str, Any]:
         """The four fields as keyword arguments or egress line values."""
         return asdict(self)
-
-
-def _tokens(value: object) -> int | None:
-    ok = isinstance(value, int) and not isinstance(value, bool) and value >= 0
-    return cast(int, value) if ok else None
-
-
-def _provider_usage(body: bytes | None) -> tuple[int | None, int | None]:
-    """``(tokens_in, tokens_out)`` from ``usage``: Anthropic names, else OpenAI-compatible."""
-    try:
-        data = json.loads(body) if body else None
-    except (ValueError, RecursionError):
-        data = None
-    usage = data.get("usage") if isinstance(data, dict) else None
-    if not isinstance(usage, dict):
-        return None, None
-    tokens_in = usage.get("input_tokens", usage.get("prompt_tokens"))
-    tokens_out = usage.get("output_tokens", usage.get("completion_tokens"))
-    return _tokens(tokens_in), _tokens(tokens_out)
 
 
 class _Call:
@@ -102,7 +85,8 @@ class _Call:
         for name in ("content-encoding", "content-length") if encoding else ():
             headers.pop(name, None)  # decoded here: the client must not decode again
         counter = ec.StreamCounter(MAX_RESPONSE_BYTES, counter.keep, error, encoding)
-        weakref.finalize(response, self.complete, status, counter, "not_closed").atexit = False  # type: ignore[misc]  # typeshed lacks the attribute
+        late = partial(self.complete, status, counter, "not_closed")  # queued, never written in gc
+        weakref.finalize(response, _PENDING.append, late).atexit = False  # type: ignore[misc]
         return counter
 
     def closed(self, response: httpx2.Response, counter: ec.StreamCounter) -> None:
@@ -118,7 +102,7 @@ class _Call:
             return
         self._done = True
         ticket, url = self._ticket, self._request.url
-        tokens_in, tokens_out = _provider_usage(counter.body if counter else None)
+        tokens_in, tokens_out = ec.provider_usage(counter.body if counter else None)
         bytes_in = counter.bytes_in if counter else 0
         latency_ms = round((clock.monotonic() - ticket.started_monotonic) * 1000)
         line: dict[str, Any] = dict.fromkeys(LINE_KEYS) | self._opts.fields()
@@ -133,6 +117,21 @@ class _Call:
         # T08-05: herness_egress_bytes_total{direction="in"} += bytes_in
         # T08-05: herness_egress_tokens_total{direction="out", destination} += tokens_out
         # T08-05: herness_egress_latency_seconds.observe(latency_ms / 1000)
+
+
+def _drain() -> None:
+    """Write the ``not_closed`` lines gc queued: at a safe point, never inside gc."""
+    while True:
+        try:
+            job = _PENDING.popleft()  # atomic: several threads may drain at once
+        except IndexError:
+            return
+        job()
+
+
+def _drained_admit(guard: EgressGuard, req: httpx2.Request, opts: TransportOpts) -> EgressTicket:
+    _drain()
+    return guard._admit(req, opts)
 
 
 class GuardedTransport(httpx2.BaseTransport):
@@ -153,7 +152,8 @@ class GuardedTransport(httpx2.BaseTransport):
 
     def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         """Admit ``request`` (``EgressBlocked`` on refusal), send it, count the response."""
-        call = _Call(self._guard, request, self._opts, self._guard._admit(request, self._opts))
+        ticket = _drained_admit(self._guard, request, self._opts)
+        call = _Call(self._guard, request, self._opts, ticket)
         try:
             response = self._inner.handle_request(request)
         except BaseException as exc:  # KeyboardInterrupt too: the line is still written
@@ -170,7 +170,8 @@ class GuardedTransport(httpx2.BaseTransport):
         return response
 
     def close(self) -> None:
-        """Close the inner transport."""
+        """Close the inner transport; flush queued ``not_closed`` lines."""
+        _drain()
         self._inner.close()
 
 
@@ -192,7 +193,7 @@ class AsyncGuardedTransport(httpx2.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """Admit ``request`` (``EgressBlocked`` on refusal), send it, count the response."""
-        ticket = await asyncio.to_thread(self._guard._admit, request, self._opts)
+        ticket = await asyncio.to_thread(_drained_admit, self._guard, request, self._opts)
         call = _Call(self._guard, request, self._opts, ticket)
         try:
             response = await self._inner.handle_async_request(request)
@@ -214,5 +215,6 @@ class AsyncGuardedTransport(httpx2.AsyncBaseTransport):
         return response
 
     async def aclose(self) -> None:
-        """Close the inner transport."""
+        """Close the inner transport; flush queued ``not_closed`` lines."""
+        await asyncio.to_thread(_drain)
         await self._inner.aclose()

@@ -14,6 +14,7 @@ import gzip
 import json
 import ssl
 import threading
+import time
 import zlib
 from collections.abc import Iterator
 from pathlib import Path
@@ -79,7 +80,7 @@ def test_ut10_52_sync_client_configuration(tmp_path: Path, monkeypatch: pytest.M
     real_where = ec.certifi.where
     monkeypatch.setattr(ec.certifi, "where", lambda: where.append(1) or real_where())
     client = _hybrid(tmp_path).http_client("reasoning_final", "aggregated_evidence", timeout=30.0)
-    assert isinstance(client, httpx2.Client)  # noqa: TID251 - type check, no client built
+    assert isinstance(client, httpx2.Client)
     assert client.follow_redirects is False
     assert client.trust_env is False
     assert client.timeout == httpx2.Timeout(30.0, connect=10.0)
@@ -102,7 +103,7 @@ def test_ut10_52_sync_client_configuration(tmp_path: Path, monkeypatch: pytest.M
 def test_ut10_52_async_client_configuration(tmp_path: Path) -> None:
     """UT10-52 async_http_client: httpx2.AsyncClient over AsyncGuardedTransport, same settings."""
     client = _hybrid(tmp_path).async_http_client("reasoning_final", "aggregated_evidence")
-    assert isinstance(client, httpx2.AsyncClient)  # noqa: TID251 - type check, no client built
+    assert isinstance(client, httpx2.AsyncClient)
     assert (client.follow_redirects, client.trust_env) == (False, False)
     assert client.timeout == httpx2.Timeout(120.0, connect=10.0)
     transport = client._transport
@@ -362,17 +363,56 @@ def test_ut10_54_cancelled_async_send_still_completes(tmp_path: Path) -> None:
 def test_ut10_54_unclosed_streamed_response_completes_when_collected(
     tmp_path: Path, net: MockNet
 ) -> None:
-    """UT10-54 a streamed response never closed: completed with reason not_closed on collection."""
+    """UT10-54 a streamed response never closed: not_closed line, written at the next safe point."""
     guard = _hybrid(tmp_path)
     net.route(HOST, json={"ok": True})
     client = guard.http_client("reasoning_final", "aggregated_evidence")
     response = client.send(client.build_request("POST", API, content=EVIDENCE), stream=True)
     assert [ln["decision"] for ln in egress_lines(guard._cfg.paths.logs)] == ["allowed"]
     del response
-    gc.collect()
+    gc.collect()  # queues the line; gc never writes
+    assert [ln["decision"] for ln in egress_lines(guard._cfg.paths.logs)] == ["allowed"]
+    client.close()  # a safe point: queued lines are written
     _allowed, completed = _completed_pair(guard._cfg.paths.logs)
     assert (completed["status_code"], completed["reason"]) == (200, "not_closed")
-    client.close()
+
+
+def test_ut10_54_collection_under_the_log_lock_never_stalls(tmp_path: Path, net: MockNet) -> None:
+    """UT10-54 gc of an unclosed response while this thread holds the egress lock: no stall."""
+    guard = _hybrid(tmp_path)
+    net.route(HOST, json={"ok": True})
+    with guard.http_client("reasoning_final", "aggregated_evidence") as client:
+        response = client.send(client.build_request("POST", API, content=EVIDENCE), stream=True)
+        with guard._log.locked():  # the non-reentrant lock a gc-time write would wait on
+            started = time.monotonic()
+            del response
+            gc.collect()
+            assert time.monotonic() - started < 2.0
+        client.post(API, content=EVIDENCE).close()  # the next request drains the queue first
+    decisions = [(ln["decision"], ln["reason"]) for ln in egress_lines(guard._cfg.paths.logs)]
+    assert decisions == [
+        ("allowed", None),
+        ("completed", "not_closed"),
+        ("allowed", None),
+        ("completed", None),
+    ]
+
+
+def test_ut10_54_async_close_drains_the_queue(tmp_path: Path, net: MockNet) -> None:
+    """UT10-54 aclose of the async transport writes queued not_closed lines."""
+    guard = _hybrid(tmp_path)
+    net.route(HOST, json={"ok": True})
+
+    async def run() -> None:
+        client = guard.async_http_client("reasoning_final", "aggregated_evidence")
+        request = client.build_request("POST", API, content=EVIDENCE)
+        response = await client.send(request, stream=True)
+        del response
+        gc.collect()
+        await client.aclose()
+
+    asyncio.run(run())
+    assert egress_lines(guard._cfg.paths.logs)[-1]["reason"] == "not_closed"
 
 
 def test_ut10_54_completed_log_failure_is_reported_not_raised(
@@ -503,8 +543,8 @@ def test_ut10_74_loopback_clients_are_built_and_reach_the_transport(net: MockNet
     base = "http://127.0.0.1:8000"
     sync_client = eg.loopback_http_client(base, timeout_s=5.0)
     async_client = eg.aloopback_http_client(base, timeout_s=5.0)
-    assert isinstance(sync_client, httpx2.Client)  # noqa: TID251 - type check, no client built
-    assert isinstance(async_client, httpx2.AsyncClient)  # noqa: TID251 - type check, no client
+    assert isinstance(sync_client, httpx2.Client)
+    assert isinstance(async_client, httpx2.AsyncClient)
     for client in (sync_client, async_client):
         assert (client.follow_redirects, client.trust_env) == (False, False)
         assert client.timeout == httpx2.Timeout(5.0, connect=5.0)
@@ -553,7 +593,7 @@ def test_ut10_74_non_loopback_and_bad_timeout(
 ) -> None:
     """UT10-74 10.0.0.5: not_loopback before any client exists; timeout_s=0: ConfigError."""
     built: list[int] = []
-    for cls in (httpx2.Client, httpx2.AsyncClient):  # noqa: TID251 - spies, nothing is built
+    for cls in (httpx2.Client, httpx2.AsyncClient):
         monkeypatch.setattr(cls, "__init__", lambda *_a, **_k: built.append(1))
     with pytest.raises(EgressBlocked, match=r"loopback client used for 10\.0\.0\.5") as info:
         factory("http://10.0.0.5:8000", timeout_s=5.0)

@@ -9,9 +9,14 @@ An AST scan of ``herness/``, ``app/`` and ``tools/`` flags, outside
   (``C = httpx.Client``), a base class, a ``partial`` argument or a from-import;
 - any use of the private modules ``httpx._*`` / ``httpx2._*``;
 - any use of ``requests`` or ``urllib.request``;
-- ``anthropic.Anthropic(`` / ``AsyncAnthropic(`` without ``http_client=``.
+- ``anthropic.Anthropic(`` / ``AsyncAnthropic(`` and ``openai.OpenAI(`` / ``AsyncOpenAI(``
+  without ``http_client=``;
+- ``from httpx import *`` / ``from httpx2 import *``.
 
-Import aliases are resolved. ``getattr``/``importlib`` tricks are out of scope (the socket
+Import aliases and module rebinding (``x = httpx2``) are resolved. Type annotations (argument,
+return and variable annotations, string annotations included) and ``if TYPE_CHECKING:`` blocks
+are not flagged: they build nothing (T10-17 review ruling I5); imports there still bind names.
+``getattr``/``importlib`` tricks are out of scope (the socket
 guard, U10-58, holds those). Vendor SDK constructors (Snowflake, ``pymongo``, ``msal``) are
 not flagged; ST10-55 holds their hosts.
 """
@@ -35,7 +40,9 @@ _FUNCTIONS = ("request", "stream", "get", "post", "put", "patch", "delete", "hea
 BUILDERS = frozenset(
     f"{pkg}.{name}" for pkg in HTTP_PACKAGES for name in (*_BUILDER_NAMES, *_FUNCTIONS, "query")
 )
-ANTHROPIC = frozenset({"anthropic.Anthropic", "anthropic.AsyncAnthropic"})
+SDK_CTORS = frozenset(
+    {"anthropic.Anthropic", "anthropic.AsyncAnthropic", "openai.OpenAI", "openai.AsyncOpenAI"}
+)
 BANNED_MODULES = ("requests", "urllib.request")
 
 
@@ -49,14 +56,53 @@ def _forbidden(name: str) -> bool:
 class _Scanner(ast.NodeVisitor):
     """Collect ``(line, what)`` findings of one module."""
 
-    def __init__(self) -> None:
+    def __init__(self, tree: ast.AST) -> None:
         self.aliases: dict[str, str] = {}
         self.findings: list[tuple[int, str]] = []
+        self._quiet = False  # inside ``if TYPE_CHECKING:``: imports bind, nothing is flagged
+        self._skip: set[int] = set()  # annotation nodes
+        for node in ast.walk(tree):
+            if isinstance(node, ast.arg | ast.AnnAssign) and node.annotation is not None:
+                self._skip.add(id(node.annotation))
+            elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.returns:
+                self._skip.add(id(node.returns))
+
+    def visit(self, node: ast.AST) -> None:
+        if id(node) not in self._skip:
+            super().visit(node)
+
+    def _flag(self, line: int, what: str) -> None:
+        if not self._quiet:
+            self.findings.append((line, what))
+
+    def visit_If(self, node: ast.If) -> None:
+        test = node.test
+        name = test.id if isinstance(test, ast.Name) else getattr(test, "attr", None)
+        if name != "TYPE_CHECKING":
+            self.generic_visit(node)
+            return
+        self._quiet = True
+        for stmt in node.body:
+            if isinstance(stmt, ast.Import | ast.ImportFrom):
+                self.visit(stmt)
+        self._quiet = False
+        for stmt in node.orelse:
+            self.visit(stmt)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.generic_visit(node)
+        bound = self._dotted(node.value)
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                if bound is None:
+                    self.aliases.pop(target.id, None)
+                else:  # ``x = httpx2`` or ``C = httpx.Client``: later uses resolve through it
+                    self.aliases[target.id] = bound
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             if _forbidden(alias.name):
-                self.findings.append((node.lineno, f"import {alias.name}"))
+                self._flag(node.lineno, f"import {alias.name}")
             if alias.asname:
                 self.aliases[alias.asname] = alias.name
             else:  # ``import a.b`` binds ``a``
@@ -67,8 +113,9 @@ class _Scanner(ast.NodeVisitor):
         module = node.module or ""
         for alias in node.names:
             full = f"{module}.{alias.name}" if module else alias.name
-            if node.level == 0 and (_forbidden(module) or _forbidden(full)):
-                self.findings.append((node.lineno, f"from {module} import {alias.name}"))
+            star = alias.name == "*" and module.split(".")[0] in HTTP_PACKAGES
+            if node.level == 0 and (star or _forbidden(module) or _forbidden(full)):
+                self._flag(node.lineno, f"from {module} import {alias.name}")
             self.aliases[alias.asname or alias.name] = full
 
     def _dotted(self, node: ast.expr) -> str | None:
@@ -82,26 +129,27 @@ class _Scanner(ast.NodeVisitor):
     def visit_Name(self, node: ast.Name) -> None:
         name = self._dotted(node)
         if name is not None and _forbidden(name):
-            self.findings.append((node.lineno, name))
+            self._flag(node.lineno, name)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         name = self._dotted(node)
         if name is not None and _forbidden(name):
-            self.findings.append((node.lineno, name))
+            self._flag(node.lineno, name)
             return  # one finding per chain
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         name = self._dotted(node.func)
-        if name in ANTHROPIC and not any(kw.arg == "http_client" for kw in node.keywords):
-            self.findings.append((node.lineno, f"{name}( without http_client="))
+        if name in SDK_CTORS and not any(kw.arg == "http_client" for kw in node.keywords):
+            self._flag(node.lineno, f"{name}( without http_client=")
         self.generic_visit(node)
 
 
 def scan_source(source: str) -> list[tuple[int, str]]:
     """Findings of one module's source text."""
-    scanner = _Scanner()
-    scanner.visit(ast.parse(source))
+    tree = ast.parse(source)
+    scanner = _Scanner(tree)
+    scanner.visit(tree)
     return sorted(scanner.findings)
 
 
@@ -160,6 +208,20 @@ PLANTED = {
     "from urllib import request\n": "from urllib import request",
     "from urllib.request import urlopen\n": "from urllib.request import urlopen",
     "import anthropic\nanthropic.Anthropic()\n": "anthropic.Anthropic( without http_client=",
+    "import openai\nopenai.AsyncOpenAI(api_key=k)\n": "openai.AsyncOpenAI( without http_client=",
+    "from openai import OpenAI\nOpenAI()\n": "openai.OpenAI( without http_client=",
+    "from httpx import *\n": "from httpx import *",
+    "from httpx2 import *\n": "from httpx2 import *",
+    "import httpx2\nx = httpx2\nx.Client(timeout=1)\n": "httpx2.Client",
+    "import httpx2\nx = httpx2\ny = x\nclass Z(y.AsyncClient):\n    pass\n": "httpx2.AsyncClient",
+    (
+        "from typing import TYPE_CHECKING\nimport httpx2\nif TYPE_CHECKING:\n    pass\n"
+        "def f() -> httpx2.AsyncClient:\n    return httpx2.AsyncClient()\n"
+    ): "httpx2.AsyncClient",
+    (
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import httpx2\n"
+        "else:\n    import httpx2\nhttpx2.Client()\n"
+    ): "httpx2.Client",
     "from anthropic import AsyncAnthropic\nAsyncAnthropic(api_key=k)\n": (
         "anthropic.AsyncAnthropic( without http_client="
     ),
@@ -187,6 +249,15 @@ def test_st10_25_planted_violation_fails(tmp_path: Path, source: str, expected: 
         "import httpx\nhttpx.URL('https://x')\nhttpx.Timeout(1.0)\n",
         "import httpx2\nclass T(httpx2.BaseTransport):\n    pass\nhttpx2.MockTransport\n",
         "import httpx\ntry:\n    pass\nexcept httpx.ConnectError:\n    pass\n",
+        "import httpx2\ndef f(c: httpx2.AsyncClient) -> httpx2.Client:\n    x: httpx2.Client\n",
+        "def f(c: 'httpx2.AsyncClient') -> 'httpx2.Client':\n    pass\n",
+        (
+            "import typing\nif typing.TYPE_CHECKING:\n    import httpx2\n"
+            "    from httpx2 import AsyncClient\n    C = httpx2.Client\n"
+            "def f() -> AsyncClient:\n    pass\n"
+        ),
+        "import openai\nopenai.AsyncOpenAI(api_key=k, http_client=c)\n",
+        "import httpx2\nx = httpx2\nx = 3\nx.Client()\n",
         "from herness.core.egress import loopback_http_client as lc\nlc('x', timeout_s=1)\n",
         "Client()\n",
     ],
@@ -204,3 +275,44 @@ def test_st10_25_egress_files_are_the_only_exemption(tmp_path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
     assert scan_tree(tmp_path) == ["app/ui.py:2: httpx.Client"]
+
+
+T05_08_SHAPE = """
+from typing import TYPE_CHECKING, Protocol, cast
+
+import anthropic
+
+from herness.core import egress as _egress
+
+if TYPE_CHECKING:
+    import httpx2
+
+
+class _GuardedClientFactory(Protocol):
+    def async_http_client(
+        self, purpose: str, payload_class: str, *, run_id: str | None, task_id: str | None,
+        timeout: float,
+    ) -> httpx2.AsyncClient: ...
+
+
+class AnthropicClient:
+    def _http_client(self, req: object) -> httpx2.AsyncClient:
+        guard = _egress.get_guard()
+        return cast("_GuardedClientFactory", guard).async_http_client(
+            "reasoning", "aggregated_evidence", run_id=None, task_id=None, timeout=60.0
+        )
+
+    def _sdk(self, req: object) -> anthropic.AsyncAnthropic:
+        return anthropic.AsyncAnthropic(
+            api_key="k", max_retries=0, timeout=60.0, http_client=self._http_client(req)
+        )
+"""
+
+
+def test_st10_25_t05_08_adapter_shape_passes() -> None:
+    """ST10-25 T05-08's adapter shape (TYPE_CHECKING httpx2, annotations, http_client=) passes."""
+    assert scan_source(T05_08_SHAPE) == []
+    built = T05_08_SHAPE.replace("http_client=self._http_client(req)", "max_retries=1")
+    assert [what for _l, what in scan_source(built)] == [
+        "anthropic.AsyncAnthropic( without http_client="
+    ]

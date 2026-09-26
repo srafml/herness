@@ -9,10 +9,11 @@ guarded clients (U10-52 step 1, U10-54 step 4).
 
 from __future__ import annotations
 
+import json
 import ssl
 import zlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from typing import Final
+from typing import Final, cast
 
 import certifi
 import httpx2
@@ -24,7 +25,7 @@ from herness.core.logging import get_logger
 __all__ = ["LOOPBACK_HOSTS", "AsyncCountingStream", "AsyncLoopbackOnlyTransport"]
 __all__ += ["CountingStream", "LoopbackOnlyTransport", "StreamCounter", "aloopback_http_client"]
 __all__ += ["DECODABLE", "check_timeout", "loopback_http_client", "loopback_refusal"]
-__all__ += ["tls_context"]
+__all__ += ["provider_usage", "tls_context"]
 
 LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})  # U10-50
 MAX_TIMEOUT_S: Final = 3_600.0
@@ -135,6 +136,25 @@ def aloopback_http_client(
         trust_env=False,
         timeout=timeout,
     )
+
+
+def _tokens(value: object) -> int | None:
+    ok = isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    return cast(int, value) if ok else None
+
+
+def provider_usage(body: bytes | None) -> tuple[int | None, int | None]:
+    """``(tokens_in, tokens_out)`` from ``usage``: Anthropic names, else OpenAI-compatible."""
+    try:
+        data = json.loads(body) if body else None
+    except (ValueError, RecursionError):
+        data = None
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
+        return None, None
+    tokens_in = usage.get("input_tokens", usage.get("prompt_tokens"))
+    tokens_out = usage.get("output_tokens", usage.get("completion_tokens"))
+    return _tokens(tokens_in), _tokens(tokens_out)
 
 
 # --- counting response stream (U10-54 step 4; reused by the source client, U10-110) --------
