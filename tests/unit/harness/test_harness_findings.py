@@ -16,7 +16,7 @@ from typing import Any
 
 import duckdb
 import pytest
-from hypothesis import given
+from hypothesis import event, find, given
 from hypothesis import strategies as st
 
 from herness.core.types import EntityScope, Finding, NumberRef, ScopeEntityType
@@ -362,16 +362,60 @@ _SEGMENT = st.one_of(
 )
 
 
-@given(
-    segments=st.lists(_SEGMENT, max_size=12),
-    number_ids=st.lists(st.sampled_from(_POOL), max_size=6),
-)
-def test_pt06_02_errors_empty_iff_bijection(segments: list[str], number_ids: list[str]) -> None:
-    """PT06-02 errors empty iff markers and number ids are a bijection (and none malformed)."""
-    text = "".join(segments)
+_PLAIN = st.sampled_from(["text ", "cost ", "42 ", " "])
+_MUTATIONS = st.sampled_from(["none", "none", "malformed", "dup_number", "drop_number", "unknown"])
+type _MarkerCase = tuple[str, list[str]]
+
+
+@st.composite
+def _bijection_case(draw: st.DrawFn) -> _MarkerCase:
+    """Unique ids, each referenced one or more times, then optionally one mutation."""
+    number_ids = draw(st.lists(st.sampled_from(_POOL), min_size=1, max_size=6, unique=True))
+    parts = [f"[[{n}]]" for n in number_ids for _ in range(draw(st.integers(1, 3)))]
+    parts += draw(st.lists(_PLAIN, max_size=4))
+    mutation = draw(_MUTATIONS)
+    if mutation == "malformed":
+        parts.append(draw(st.sampled_from(["[[x]]", "[[n]]", "[[ n1]]"])))
+    elif mutation == "dup_number":
+        number_ids = [*number_ids, draw(st.sampled_from(number_ids))]
+    elif mutation == "drop_number":
+        number_ids = number_ids[1:]
+    elif mutation == "unknown":
+        parts.append("[[n99]]")
+    return "".join(draw(st.permutations(parts))), number_ids
+
+
+@st.composite
+def _random_case(draw: st.DrawFn) -> _MarkerCase:
+    segments = draw(st.lists(_SEGMENT, max_size=12))
+    return "".join(segments), draw(st.lists(st.sampled_from(_POOL), max_size=6))
+
+
+_MARKER_CASE = st.one_of(_bijection_case(), _random_case())
+
+
+def _is_bijection(text: str, number_ids: list[str]) -> bool:
     ids, malformed = extract_markers(text)
+    unique = len(set(number_ids)) == len(number_ids)
+    return not malformed and unique and set(ids) == set(number_ids)
+
+
+@given(case=_MARKER_CASE)
+def test_pt06_02_errors_empty_iff_bijection(case: _MarkerCase) -> None:
+    """PT06-02 errors empty iff markers and number ids are a bijection (and none malformed)."""
+    text, number_ids = case
+    bijection = _is_bijection(text, number_ids)
+    event("non-empty bijection" if bijection and number_ids else "other")
     errors = validate_markers(text, [_num(n) for n in number_ids])
-    bijection = (
-        not malformed and len(set(number_ids)) == len(number_ids) and set(ids) == set(number_ids)
-    )
     assert (errors == []) == bijection
+
+
+def test_pt06_02_strategy_generates_non_empty_bijections() -> None:
+    """PT06-02 the case strategy really yields non-empty bijections and mutated near-misses."""
+    found = find(_MARKER_CASE, lambda c: len(c[1]) >= 2 and _is_bijection(*c))
+    assert validate_markers(found[0], [_num(n) for n in found[1]]) == []
+    near = find(
+        _MARKER_CASE,
+        lambda c: bool(c[1]) and not _is_bijection(*c) and "[[" in c[0] and len(set(c[1])) > 1,
+    )
+    assert validate_markers(near[0], [_num(n) for n in near[1]]) != []
