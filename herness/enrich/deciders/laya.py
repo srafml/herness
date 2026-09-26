@@ -197,6 +197,9 @@ class LayaDecider:
         """
         self.load()
         asked = [_asked(item, questions) for item in items]
+        if self._embed_fn is None and any(_is_wide(q) for qs in asked for q in qs):
+            msg = "laya: choice questions with more than 20 options need embed_fn"
+            raise ConfigError(msg)  # checked before any model call
         groups: dict[tuple[str, ...], list[int]] = {}
         for index, qs in enumerate(asked):
             groups.setdefault(tuple(q.id for q in qs), []).append(index)
@@ -211,9 +214,6 @@ class LayaDecider:
     def _run_group(self, states: list[str], asked: Sequence[Question]) -> list[list[object]]:
         """Raw result parts per state: one batched result plus one per shortlisted question."""
         wide = [q for q in asked if _is_wide(q)]
-        if wide and self._embed_fn is None:
-            msg = "laya: choice questions with more than 20 options need embed_fn"
-            raise ConfigError(msg)
         parts: list[list[object]] = [[] for _ in states]
         narrow = [q for q in asked if not _is_wide(q)]
         if narrow:
