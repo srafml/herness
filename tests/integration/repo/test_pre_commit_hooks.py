@@ -23,6 +23,9 @@ UV = shutil.which("uv")
 _SUBPROCESS_ENV = {**os.environ, "PYTHONUTF8": "1"}
 
 
+# The hook chain nests the unit suite (pytest-unit) and now runs past the global 300 s
+# pytest-timeout on a loaded host; align the test timeout with the subprocess timeout below.
+@pytest.mark.timeout(660)
 def test_it00_01_pre_commit_run_all_files() -> None:
     """IT00-01 `uv run pre-commit run --all-files` exits 0 on a clean checkout."""
     assert UV is not None
