@@ -31,6 +31,7 @@ from tests.unit.connectors._settings_data import files
 
 import herness.connectors.reconcile as reconcile_module
 from herness.connectors.base import KEY_SCHEMA
+from herness.connectors.deletion import DeletionFilter
 from herness.connectors.reconcile import find_missing_keys, reconcile_entity
 from herness.connectors.runner import SyncResult, SyncRunner
 from herness.connectors.settings import FilesSettings
@@ -363,6 +364,10 @@ def test_ut01_42_no_tombstone_under_deletion(ops_store: OpsStoreHandle, lake: Fa
     root = ops_store.data_root
     _seed_abc(root)
     _running_deletion("servicenow:incident:c")
+    deletion = DeletionFilter(_SRC, _ENT)
+    assert deletion.ids.to_pylist() == []  # before reload: empty, never None
+    deletion.reload()
+    assert deletion.ids.to_pylist() == ["servicenow:incident:c"]
     result = _runner(KeyConnector(keys=[_keys(["a", "b"])]), root, lake).run_reconcile(_ENT)
     assert result.tombstones == 0
     assert _written(lake) == []
