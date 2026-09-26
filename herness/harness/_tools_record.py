@@ -4,7 +4,8 @@ Split out so `tools.py` keeps room for the tool registry and dispatch within its
 budget. Holds the guard step (2), the streaming execution (4-5) and the JSON-safe evidence
 sample (6). `result_hash` and `iter_batch_rows` come from `herness.metrics.evidence` and are
 never reimplemented (R-15, UT05-124). `json_safe` is the U05-35 step 6 conversion that the
-Verifier's private stand-in (`_verifier_rerun.json_safe`) is to be replaced with.
+Verifier's private stand-in (`_verifier_rerun.json_safe`) is to be replaced with. DuckDB
+error text reaches the model only through `safe_error_text` (review ruling on step 5).
 """
 
 from __future__ import annotations
