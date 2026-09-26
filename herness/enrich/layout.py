@@ -47,7 +47,7 @@ def resolve_data_path(path: str | Path, /, *, data_root: Path) -> Path:
         parts = parts[1:]  # an absolute path replaces the root in joinpath
     result = root.joinpath(*parts).resolve()
     if not candidate.parts or not result.is_relative_to(root):
-        msg = f"path outside data root (or empty): {path}"
+        msg = f"path outside data root: {path}" if candidate.parts else "empty data path"
         raise ConfigError(msg)
     return result
 

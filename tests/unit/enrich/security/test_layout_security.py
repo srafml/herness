@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -32,9 +33,10 @@ def test_st03_10_configured_path_traversal_rejected(tmp_path: Path) -> None:
     # values come from the real settings models, as a loaded config would carry them
     embedding = EmbeddingSettings(path="../../x").path
     current = DecidersSettings(laya=LayaSettings(current_file="data/../../CURRENT")).laya
-    with pytest.raises(ConfigError, match="path outside data root"):
+    with pytest.raises(ConfigError, match=rf"^path outside data root: {re.escape(embedding)}$"):
         _paths(root, embedding=embedding).embedding_model_dir()
-    with pytest.raises(ConfigError, match="path outside data root"):
+    exact = rf"^path outside data root: {re.escape(current.current_file)}$"
+    with pytest.raises(ConfigError, match=exact):
         _paths(root, current=current.current_file).laya_current()
 
 

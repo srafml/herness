@@ -7,6 +7,7 @@ with a small fake object exposing the three attributes it reads (real settings l
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,6 +18,11 @@ from herness.enrich.layout import EnrichPaths, resolve_data_path
 from herness.enrich.settings import DecidersSettings, EmbeddingSettings
 
 pytestmark = pytest.mark.unit
+
+
+def _outside(path: object) -> str:
+    """The exact U03-12 containment message, as a full-match regex."""
+    return rf"^path outside data root: {re.escape(str(path))}$"
 
 
 @dataclass(frozen=True)
@@ -66,7 +72,7 @@ def test_ut03_10_paths_outside_root_rejected(tmp_path: Path, bad: str) -> None:
     """UT03-10 `../x` and `/etc/x` raise ConfigError("path outside data root: ...")."""
     root = tmp_path / "root"
     root.mkdir()
-    with pytest.raises(ConfigError, match="path outside data root"):
+    with pytest.raises(ConfigError, match=_outside(bad)):
         resolve_data_path(bad, data_root=root)
 
 
@@ -74,7 +80,7 @@ def test_ut03_10_absolute_path_outside_root_rejected(tmp_path: Path) -> None:
     """UT03-10 an absolute path elsewhere on disk is rejected."""
     root = tmp_path / "root"
     root.mkdir()
-    with pytest.raises(ConfigError, match="path outside data root"):
+    with pytest.raises(ConfigError, match=_outside(tmp_path / "other" / "x")):
         resolve_data_path(tmp_path / "other" / "x", data_root=root)
 
 
@@ -89,7 +95,7 @@ def test_ut03_10_symlink_out_of_root_rejected(tmp_path: Path) -> None:
         os.symlink(outside, link, target_is_directory=True)
     except OSError:
         pytest.skip("symlink creation needs privileges on this platform")
-    with pytest.raises(ConfigError, match="path outside data root"):
+    with pytest.raises(ConfigError, match=_outside("data/models/escape/x")):
         resolve_data_path("data/models/escape/x", data_root=root)
 
 
@@ -101,7 +107,7 @@ def test_ut03_10_junction_out_of_root_rejected(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     winapi.CreateJunction(str(outside), str(root / "models" / "escape"))
-    with pytest.raises(ConfigError, match="path outside data root"):
+    with pytest.raises(ConfigError, match=_outside("data/models/escape/x")):
         resolve_data_path("data/models/escape/x", data_root=root)
 
 
@@ -123,7 +129,7 @@ def test_ut03_11_data_root_resolved_once(tmp_path: Path) -> None:
     assert paths.laya_current() == root / "c"
     assert paths.cluster_root("NULL") == root / "models" / "clusters" / "NULL"
     for empty in ("", "."):
-        with pytest.raises(ConfigError, match="empty"):
+        with pytest.raises(ConfigError, match=r"^empty data path$"):
             resolve_data_path(empty, data_root=root)
 
 
