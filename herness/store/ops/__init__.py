@@ -30,6 +30,17 @@ from .migrate import (
     schema_version,
 )
 
+# 10 privacy
+from .privacy import (
+    DeletionRequest,
+    create_deletion_request,
+    deleted_record_ids,
+    get_deletion_request,
+    open_deletion_request,
+    record_deletion_step,
+    set_deletion_status,
+)
+
 __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     # 02 core
     "connection",
@@ -47,4 +58,12 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "schema_version",
     "ops_health",
     "MigrationReport",
+    # 10 privacy
+    "DeletionRequest",
+    "create_deletion_request",
+    "get_deletion_request",
+    "open_deletion_request",
+    "set_deletion_status",
+    "record_deletion_step",
+    "deleted_record_ids",
 ]
