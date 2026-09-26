@@ -39,7 +39,6 @@ class _Mono:
 def mono(monkeypatch: pytest.MonkeyPatch) -> _Mono:
     fake = _Mono()
     monkeypatch.setattr(clock, "monotonic", fake)
-    process_state().metric_buffer.last_flush = fake.now
     return fake
 
 
@@ -48,6 +47,18 @@ class _FailingBackend(SqliteResilienceBackend):
         del rows
         msg = "ops store busy in metric_samples"
         raise StoreBusy(msg, op="metric_samples")
+
+
+class _SecondChunkFails(SqliteResilienceBackend):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def insert_metric_samples(self, rows: Any) -> int:
+        self.calls += 1
+        if self.calls == 2:
+            msg = "ops store busy in metric_samples"
+            raise StoreBusy(msg, op="metric_samples")
+        return super().insert_metric_samples(rows)
 
 
 def _rows(kind: str | None = None) -> list[dict[str, Any]]:
@@ -171,9 +182,11 @@ def test_ut08_32_overflow_dropped_and_logged(
 
 
 def test_ut08_32_auto_flush_rules(ops_db: OpsStoreHandle, mono: _Mono) -> None:
-    """UT08-32 a record call flushes once the last flush is ≥ 10 s old; the 1 000th histogram
+    """UT08-32 a record call flushes once the last flush is ≥ 10 s old (a fresh buffer's
+    interval starts at its first recording, on `clock.monotonic`); the 1 000th histogram
     observation triggers a flush."""
     del ops_db
+    assert process_state().metric_buffer.last_flush is None
     m.record_counter("herness_jobs_enqueued_total", component="jobs")
     mono.now += 9.9
     m.record_counter("herness_jobs_enqueued_total", component="jobs")
@@ -181,6 +194,10 @@ def test_ut08_32_auto_flush_rules(ops_db: OpsStoreHandle, mono: _Mono) -> None:
     mono.now += 0.1
     m.record_counter("herness_jobs_enqueued_total", component="jobs")
     assert [r["value"] for r in _rows("counter")] == [3.0]
+    assert process_state().metric_buffer.last_flush == mono.now
+    mono.now += 9.9
+    m.record_counter("herness_jobs_enqueued_total", component="jobs")
+    assert len(_rows("counter")) == 1
     for i in range(999):
         m.record_histogram("herness_jobs_run_seconds", float(i), component="jobs")
     assert _rows("histogram") == []
@@ -196,7 +213,7 @@ def test_ut08_32_flush_failure_is_logged_and_discarded(
     bind_ops_backend(_FailingBackend())
     m.record_counter("herness_jobs_enqueued_total", component="jobs")
     m.record_gauge("herness_jobs_gpu_vram_used_mb", 812.0, component="jobs")
-    reset_process_state.metric_buffer.last_flush -= 60  # the next call is due to flush
+    reset_process_state.metric_buffer.last_flush = clock.monotonic() - 60  # next call is due
     with structlog.testing.capture_logs() as logs:
         m.record_counter("herness_jobs_enqueued_total", component="jobs")
     failed = next(e for e in logs if e["event"] == "resilience.metrics.flush_failed")
@@ -273,3 +290,22 @@ def test_ut08_32_audit_and_redact_call_sites(
         ("herness_audit_lines_total", (("event", "admin_action"),), "audit"): 2.0,
         ("herness_redact_records_total", (("result", "failed"),), "redact"): 1.0,
     }
+
+
+def test_ut08_32_partial_flush_counts_written_and_discarded(
+    ops_db: OpsStoreHandle, mono: _Mono
+) -> None:
+    """UT08-32 a flush whose second 500-row chunk fails returns the 500 rows written and logs
+    flush_failed with the 200 rows discarded; the first chunk stays committed."""
+    del ops_db, mono
+    backend = _SecondChunkFails()
+    bind_ops_backend(backend)
+    for i in range(700):
+        m.record_histogram("herness_jobs_run_seconds", float(i), component="jobs")
+    with structlog.testing.capture_logs() as logs:
+        assert m.flush_metrics() == 500
+    failed = next(e for e in logs if e["event"] == "resilience.metrics.flush_failed")
+    assert (failed["rows"], failed["written"], failed["error_type"]) == (200, 500, "StoreBusy")
+    assert backend.calls == 2
+    assert len(_rows("histogram")) == 500
+    assert process_state().metric_buffer.histograms == []

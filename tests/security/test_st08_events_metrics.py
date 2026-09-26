@@ -4,6 +4,7 @@ detect-secrets stays quiet."""
 
 from __future__ import annotations
 
+import json
 import sys
 
 import pytest
@@ -25,7 +26,8 @@ pytestmark = pytest.mark.unit
 PLANTED_KNOWN = "Kv7" + "q2Lm9xTz" + "4Rw8Hs1Nd"  # a resolved secret with no pattern shape
 EMAIL = "jane.victim" + "@examplecorp.org"
 PLANTED_BEARER = "eyJhbGciOiJIUzI1NiJ9" + ".abcDEF123456789xyz"
-TICKET = "customer ticket text " * 500  # ~10 KB
+TICKET_MARKER = "TKT" + "LEAKMARK" + "93017"  # past char 200: only a leak can store it
+TICKET = "customer ticket text " * 250 + TICKET_MARKER + " more ticket text" * 300  # ~10 KB
 
 
 @pytest.fixture
@@ -60,8 +62,11 @@ def test_st08_02_planted_values_never_reach_event_rows_or_logs(planted: None) ->
     details = [row["detail"] for row in read_all("SELECT detail FROM resilience_event")]
     assert len(details) == 3
     text = "\n".join(details) + "\n" + "\n".join(str(line) for line in logs)
-    for value in (PLANTED_KNOWN, EMAIL, PLANTED_BEARER, TICKET[:400]):
+    for value in (PLANTED_KNOWN, EMAIL, PLANTED_BEARER, TICKET_MARKER):
         assert value not in text
+    stored = json.loads(details[0])
+    assert stored["to_profile"] == TICKET[:200]
+    assert all(len(v) <= 200 for d in details for v in json.loads(d).values() if isinstance(v, str))
     assert all(len(d) <= 2 * 200 + 64 for d in details)
 
 

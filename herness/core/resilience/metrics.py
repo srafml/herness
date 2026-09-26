@@ -31,6 +31,7 @@ METRIC_FLUSH_INTERVAL_S: Final = 10
 METRIC_BUFFER_MAX: Final = 10_000  # histogram observations per buffer (TH08-10)
 METRIC_GAUGE_KEYS_MAX: Final = 1000
 HISTOGRAM_FLUSH_AT: Final = 1000
+FLUSH_CHUNK_ROWS: Final = 500  # one writer transaction per call, as U08-100 chunks
 MAX_LABELS: Final = 6
 
 _NAME_RE: Final = re.compile(r"herness_[a-z][a-z0-9]*(_[a-z0-9]+)+")
@@ -89,7 +90,11 @@ def _number(name: str, value: float, *, negative_ok: bool = False) -> float:
 
 
 def _interval_due(buffer: MetricBuffer) -> bool:
-    return clock.monotonic() - buffer.last_flush >= METRIC_FLUSH_INTERVAL_S
+    """The 10 s rule on `clock.monotonic`; a fresh buffer starts its interval now."""
+    now = clock.monotonic()
+    if buffer.last_flush is None:
+        buffer.last_flush = now
+    return now - buffer.last_flush >= METRIC_FLUSH_INTERVAL_S
 
 
 def record_counter(
@@ -196,7 +201,9 @@ def flush_metrics() -> int:
     """Move the buffer into `metric_sample` rows and return the number written (U08-22).
 
     With the ops port unbound the buffer is kept (bounded by its caps) and 0 is returned.
-    A store failure logs `resilience.metrics.flush_failed` and discards the rows.
+    Rows go to the port in chunks of 500; a store failure logs
+    `resilience.metrics.flush_failed` with the rows written and discarded, and discards the
+    rest (earlier chunks stay committed).
     """
     state = process_state()
     ops = state.ops
@@ -210,8 +217,14 @@ def flush_metrics() -> int:
     rows = len(buffer.counters) + len(buffer.gauges) + len(buffer.histograms)
     if not rows:
         return 0
+    written = 0
     try:
-        return ops.insert_metric_samples(_samples(buffer, clock.now()))
+        samples = _samples(buffer, clock.now())
+        for start in range(0, rows, FLUSH_CHUNK_ROWS):
+            written += ops.insert_metric_samples(samples[start : start + FLUSH_CHUNK_ROWS])
     except (HernessError, ValidationError) as exc:
-        _log.warning("resilience.metrics.flush_failed", rows=rows, error_type=type(exc).__name__)
-        return 0
+        name = type(exc).__name__
+        _log.warning(
+            "resilience.metrics.flush_failed", rows=rows - written, written=written, error_type=name
+        )
+    return written

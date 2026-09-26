@@ -94,9 +94,8 @@ _DROPPED: Final = object()  # a value that may not be stored
 
 
 def _clean_str(text: str) -> str | object:
-    """Mask known secret values (the log scrubber, U10-32), redact, then cut to 200 chars; a
-    failing scrub or redaction drops the value (fail closed). A text longer than the
-    redaction window loses its last 200 redacted chars, where a split value would sit."""
+    """Mask known secret values (the log scrubber, U10-32), redact the first 4 000 chars,
+    then keep the first 200; a failing scrub or redaction drops the value (fail closed)."""
     scrubbed = scrub_secrets(None, "record_event", {"value": text}).get("value")
     if not isinstance(scrubbed, str):
         return _DROPPED
@@ -106,8 +105,6 @@ def _clean_str(text: str) -> str | object:
         return _DROPPED
     if clean is None:
         return _DROPPED
-    if len(scrubbed) > _REDACT_WINDOW:
-        clean = clean[: max(len(clean) - STRING_MAX_CHARS, 0)]
     return clean[:STRING_MAX_CHARS]
 
 

@@ -6,7 +6,6 @@ module (which imports `_state`). Plain data: every mutation happens under `Proce
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -22,6 +21,6 @@ class MetricBuffer:
     gauges: dict[MetricKey, tuple[float, datetime]] = field(default_factory=dict)
     histograms: list[tuple[MetricKey, float]] = field(default_factory=list)
     dropped: int = 0  # observations and gauge keys refused by the caps since the last flush
-    # `time.monotonic` (what `herness.core.time.monotonic` returns), read directly so building
-    # a ProcessState never consumes a test's patched clock readings.
-    last_flush: float = field(default_factory=time.monotonic)
+    # `herness.core.time.monotonic()` of the last flush; None on a fresh process buffer, whose
+    # 10 s interval starts at its first recording (building one reads no clock).
+    last_flush: float | None = None
