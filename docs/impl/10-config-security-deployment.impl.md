@@ -89,7 +89,7 @@ Line budgets are production lines including docstrings. "Extra imports" lists im
 | `herness/core/config_validate.py` | Cross-checks C01–C25 and the start-up owner-validator hook | `CROSS_CHECKS`, `run_cross_checks`, `OwnerValidator`, `register_owner_validator`, `run_owner_validators`, `reset_owner_validators` | L0 | none | 390 |
 | `herness/core/registry.py` | Implementation registry | `Kind`, `register`, `get`, `available`, `reset_registry` | L0 | `importlib.metadata` | 160 |
 | `herness/core/secrets.py` | Secret references, backends, resolution, scrubber | `SECRET_NAME`, `SecretRef`, `SecretRefStr`, `SecretNameStr`, `resolve`, `resolve_json`, `exists`, `set_secret`, `delete_secret`, `known_values`, `scrub_secrets`, `referenced_secret_names` | L0 | `keyring` | 360 |
-| `herness/core/redact_patterns.py` | Compiled detectors, prefilters, Luhn, normalization | `Detector`, `build_detectors`, `luhn_valid`, `normalize_value`, `TOKEN_PATTERN` | L0 | none | 380 |
+| `herness/core/redact_patterns.py` | Compiled detectors, prefilters, Luhn, normalization | `Detector`, `build_detectors`, `luhn_valid`, `normalize_value`, `TOKEN_PATTERN` | L0 | none | 395 |
 | `herness/core/redact_directory.py` | Name directory and Aho-Corasick matcher | `NameDirectory`, `update_display_names` | L0 | `ahocorasick` | 220 |
 | `herness/core/redact.py` | Redactor, process-wide instance, table redaction | `EntityType`, `Span`, `RedactionResult`, `RedactionFailed`, `Redactor`, `get_redactor`, `reset_redactor`, `redact_text`, `redact_table` | L0 | `pyarrow` | 390 |
 | `herness/core/redact_scan.py` | Fixture scanner behind `python -m herness.core.redact --scan` | `main` | L0 | `pyarrow.parquet` | 200 |

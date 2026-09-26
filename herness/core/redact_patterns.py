@@ -21,15 +21,8 @@ from urllib.parse import unquote_plus, urlsplit
 if TYPE_CHECKING:
     from herness.core.settings import RedactionConfig
 
-__all__ = [
-    "DETECTION_ORDER",
-    "TOKEN_PATTERN",
-    "Detector",
-    "EntityType",
-    "build_detectors",
-    "luhn_valid",
-    "normalize_value",
-]
+__all__ = ["DETECTION_ORDER", "TOKEN_PATTERN", "Detector", "EntityType", "build_detectors"]
+__all__ += ["luhn_valid", "normalize_value"]
 
 EntityType = Literal[
     "EMAIL",
@@ -109,6 +102,9 @@ _URL_KEYS: Final = frozenset(
 
 _EMAIL: Final = re.compile(r"\b[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,253}\.[a-z]{2,24}\b", _I)
 _CARD: Final = re.compile(r"\b(?:[0-9][ -]?){12,18}[0-9]\b")
+_CARD_RUN: Final = re.compile(r"(?<!\w)[0-9](?:[ -]?[0-9]){12,}")  # runs of >= 13 digits
+_WORD: Final = re.compile(r"\w")
+_LUHN2: Final = (0, 2, 4, 6, 8, 1, 3, 5, 7, 9)  # Luhn term of a doubled digit
 
 _PHONE: Final = re.compile(r"(?<![\w+])\+?[0-9][0-9 ().-]{7,20}[0-9](?!\w)")
 _PHONE_EXCLUDE: Final = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,3}(?:\.[0-9]{1,3}){3}")
@@ -246,10 +242,35 @@ def _find_url_tokens(text: str) -> Found:
 
 
 def _find_cards(text: str) -> Found:
+    """Spec CARD matches, then run cuts; Redactor.scan drops a cut overlapping a match."""
     for start, end, value in _spans(_CARD, text):
         digits = "".join(ch for ch in value if ch in _DIGITS)
         if len(digits) in _CARD_DIGITS and luhn_valid(digits):
             yield start, end, value
+    yield from _card_cuts(text)
+
+
+def _card_cuts(text: str) -> Found:
+    """Run cuts find `<card> 10.2.3.4` (T10-10): leftmost, longest Luhn-valid 13-19 digits."""
+    for run in _CARD_RUN.finditer(text):
+        base, value = run.start(), run.group()
+        pos = [i for i, ch in enumerate(value) if ch in _DIGITS]
+        cuts = {k for k in range(len(pos) - 1) if pos[k + 1] - pos[k] > 1}  # sep after k
+        if _WORD.match(text, run.end()) is None:
+            cuts.add(len(pos) - 1)
+        sums = [[0], [0]]  # sums[p][k]: Luhn terms of k digits for a cut ending on parity p
+        for k, d in enumerate(ord(value[i]) - 48 for i in pos):
+            sums[k % 2].append(sums[k % 2][-1] + d)
+            sums[1 - k % 2].append(sums[1 - k % 2][-1] + _LUHN2[d])
+        free = 0
+        for first in range(len(pos)):
+            if first < free or (first and first - 1 not in cuts):
+                continue
+            for last in range(min(first + 18, len(pos) - 1), first + 11, -1):
+                if last in cuts and (sums[last % 2][last + 1] - sums[last % 2][first]) % 10 == 0:
+                    yield base + pos[first], base + pos[last] + 1, value[pos[first] : pos[last] + 1]
+                    free = last + 1
+                    break
 
 
 def _find_phones(text: str) -> Found:
