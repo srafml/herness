@@ -48,7 +48,6 @@ def test_et03_02_eval_json_cross_check(tmp_path: Path) -> None:
     cache = dataset.to_table()
     laya_rows = cache.filter(pc.equal(cache["decider_version"], fx.VERSION))
     stored = CalibrationStore(f.paths).load("laya", fx.VERSION, fx.QSV)
-    frozen = []
     for qid, entry in doc["questions"].items():
         q = f.qs.get(qid)
         g = gold.filter(
@@ -57,7 +56,6 @@ def test_et03_02_eval_json_cross_check(tmp_path: Path) -> None:
                 pc.equal(gold["question_fingerprint"], q.fingerprint),
             )
         ).to_pylist()
-        frozen.extend(g)
         dists = _latest(laya_rows, qid, q.fingerprint)
         space = _SPACES[qid]
         probs = np.array([[dists[r["content_hash"]].get(a, 0.0) for a in space] for r in g])
@@ -76,5 +74,4 @@ def test_et03_02_eval_json_cross_check(tmp_path: Path) -> None:
                 assert laya[name] is None, (qid, name)
             else:
                 assert laya[name] == pytest.approx(expected, abs=_TOL), (qid, name)
-    frozen_table = pa.Table.from_pylist(frozen, schema=gold.schema)
-    assert doc["gold_sha256"] == gold_digest(frozen_table)
+    assert doc["gold_sha256"] == gold_digest(gold)  # spec 11: the whole gold directory

@@ -18,7 +18,7 @@ from herness.enrich.evaluate import (
     macro_metric,
     question_metrics,
 )
-from herness.enrich.labels import GOLD_SCHEMA, gold_digest
+from herness.enrich.labels import gold_digest
 from herness.enrich.questions import load_question_set
 
 pytestmark = pytest.mark.unit
@@ -170,7 +170,7 @@ def test_ut03_125_eval_json_keys_equal_design(
     assert doc["version"] == fx.VERSION
     assert doc["question_set_version"] == fx.QSV
     assert doc["gold_path"] == f"data/labels/{fx.QSV}/gold/"
-    assert doc["gold_sha256"] == gold_digest(f.frozen_gold)
+    assert doc["gold_sha256"] == gold_digest(f.store.read("gold"))  # whole gold directory
     assert doc["evaluated_at"] == "2026-10-04T03:12:00.000000Z"
     questions = doc["questions"]
     assert isinstance(questions, dict)
@@ -262,7 +262,7 @@ def test_ut03_125_no_frozen_gold_empty_questions(tmp_path: Path) -> None:
     doc = _run(f)
     assert doc["questions"] == {}
     assert doc["macro_metric"] == 0.0
-    assert doc["gold_sha256"] == gold_digest(GOLD_SCHEMA.empty_table())
+    assert doc["gold_sha256"] == gold_digest(f.store.read("gold"))
     assert (f.paths.laya_dir(fx.VERSION) / "eval.json").is_file()
 
 
@@ -287,3 +287,18 @@ def test_ut03_125_no_cache_rows_never_proposed(tmp_path: Path) -> None:
         assert entry["system"]["accuracy"] == 0.0
         assert entry["accepted_proposed"] is False
     assert CalibrationStore(f.paths).load("laya", fx.VERSION, fx.QSV)["root_cause"].uncalibrated
+
+
+def test_ut03_125_gold_digest_covers_whole_gold_directory(tmp_path: Path) -> None:
+    """UT03-125 gold_sha256 digests all gold rows, unfrozen and old-fingerprint ones too."""
+    f = fx.build(tmp_path)
+    everything = f.store.read("gold")
+    unfrozen = {"business_impact"} & set(everything.column("question").to_pylist())
+    stale = "0" * 16 in set(everything.column("question_fingerprint").to_pylist())
+    assert unfrozen  # the fixture holds both kinds of non-evaluated rows
+    assert stale
+    doc = _run(f)
+    assert doc["gold_sha256"] == gold_digest(everything)
+    assert doc["gold_sha256"] != gold_digest(f.frozen_gold)
+    assert set(doc["questions"]) == {"root_cause", "change_caused"}  # type: ignore[arg-type]
+    assert doc["questions"]["root_cause"]["n_gold"] == fx.N_CHOICE  # type: ignore[index]

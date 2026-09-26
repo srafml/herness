@@ -151,7 +151,8 @@ def _fingerprint(q: Question) -> str:
 def _frozen_gold(
     store: LabelStore, qs: QuestionSet
 ) -> tuple[pa.Table, dict[str, list[dict[str, object]]]]:
-    """Gold rows of the current fingerprint of every frozen question, and those rows by qid."""
+    """The whole gold table (digested), and by qid the rows of frozen questions at the current
+    fingerprint (evaluated)."""
     gold = store.read("gold")
     keep = [
         (q.id, _fingerprint(q)) for q in qs.questions if store.is_gold_frozen(q.id, _fingerprint(q))
@@ -164,7 +165,7 @@ def _frozen_gold(
     by_qid: dict[str, list[dict[str, object]]] = {qid: [] for qid, _ in keep}
     for row in frozen.select(["question", "content_hash", "answer", "fold"]).to_pylist():
         by_qid[str(row["question"])].append(row)
-    return frozen, by_qid
+    return gold, by_qid
 
 
 def _cache_rows(
@@ -287,6 +288,7 @@ def _question_entry(
         "system": {"accuracy": _system_accuracy(gold, laya, teacher, q)},
         "criteria": criteria,
         "passed": passed,
+        # bool(passed): no criterion at all never proposes (all([]) would be True)
         "accepted_proposed": bool(passed)
         and all(passed.values())
         and not laya.metrics.uncalibrated,
@@ -330,7 +332,7 @@ def evaluate_candidate(  # noqa: PLR0913 - U03-129 keyword-only signature (+ blo
     Questions without frozen gold at the current fingerprint, or in ``blocked`` (blocked from
     training, design 03 §5.8 step 3), are absent from ``questions``. Returns the document.
     """
-    frozen, gold_by_qid = _frozen_gold(store, qs)
+    all_gold, gold_by_qid = _frozen_gold(store, qs)
     laya_cache = _cache_rows(cache, (_LAYA, version), qs)
     teacher_cache = _cache_rows(cache, teacher, qs)
     entries: dict[str, dict[str, object]] = {}
@@ -355,7 +357,7 @@ def evaluate_candidate(  # noqa: PLR0913 - U03-129 keyword-only signature (+ blo
         "version": version,
         "question_set_version": qs.version,
         "gold_path": gold_dir.relative_to(paths.data_root.parent).as_posix() + "/",
-        "gold_sha256": gold_digest(frozen),
+        "gold_sha256": gold_digest(all_gold),  # whole gold directory (F11-09, U03-138)
         "evaluated_at": clock.format_utc(now),
         "questions": entries,
         "macro_metric": macro_metric(metrics, qs),
