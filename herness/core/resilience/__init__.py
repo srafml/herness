@@ -18,9 +18,12 @@ _EXPORTS: Final[dict[str, str]] = {
     "HealthRow": "ports",
     "ProcessState": "_state",
     "ResilienceBackend": "ports",
+    "RetryPolicy": "policies",
     "TracerLike": "ports",
     "bind_chain_registry": "_state",
     "bind_ops_backend": "_state",
+    "classify": "classify",
+    "policy": "policies",
     "process_state": "_state",
     "reset_process_state": "_state",
 }
@@ -37,6 +40,8 @@ if TYPE_CHECKING:
         process_state as process_state,
         reset_process_state as reset_process_state,
     )
+    from herness.core.resilience.classify import classify as classify
+    from herness.core.resilience.policies import RetryPolicy as RetryPolicy, policy as policy
     from herness.core.resilience.ports import (
         AsyncCompleter as AsyncCompleter,
         ChainRegistry as ChainRegistry,
