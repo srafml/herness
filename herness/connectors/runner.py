@@ -5,7 +5,8 @@ Every stream goes through `_write_stream` (loop state in the private `_write_loo
 which filters deleted records before each write (TH01-11), splits lake files on schema
 drift, checkpoints by rows or writer age, and moves the watermark only after
 `LakeWriter.commit()` returned (design 01 §2). Backfill slices run in the `backfill`
-module (U01-43); reconciliation (T01-08) and the files path (T01-10) extend this module.
+module (U01-43), reconciliation in the `reconcile` module (U01-44); the files path (T01-10)
+extends this module.
 """
 
 from __future__ import annotations
@@ -22,7 +23,12 @@ import pyarrow as pa
 
 from herness.connectors._write_loop import StreamOutcome, StreamSpec, WriteLoop
 from herness.connectors._write_loop import metric as _metric
-from herness.connectors.base import UNORDERED_SOURCES, Connector, SupportsToolStreams
+from herness.connectors.base import (
+    UNORDERED_SOURCES,
+    Connector,
+    SupportsKeyListing,
+    SupportsToolStreams,
+)
 from herness.connectors.deletion import DeletionFilter
 from herness.connectors.lakefiles import cleanup_orphan_temp_files
 from herness.connectors.settings import MonitoringSettings
@@ -206,6 +212,20 @@ class SyncRunner:
         if isinstance(conn, SupportsToolStreams):
             return self._over_tools(entity, conn, "backfill", run)
         return run(entity, key=conn.name, fetch_of=_own_sync, workers=self.cfg.max_concurrency)
+
+    def run_reconcile(self, entity: str) -> SyncResult:
+        """Job kind `reconcile` (U01-42, design 01 §5.4); the watermark never changes.
+
+        Needs a `SupportsKeyListing` connector other than `monitoring`, else `ConfigError`.
+        Raises as U01-44."""
+        from herness.connectors.reconcile import reconcile_entity  # noqa: PLC0415 - it imports us
+
+        name = self.connector.name
+        if name == "monitoring" or not isinstance(self.connector, SupportsKeyListing):
+            msg = f"{name} is not reconciled"
+            raise ConfigError(msg, source=name)
+        self._prepare(entity)
+        return reconcile_entity(self, entity)
 
     def _tool_workers(self, tool: str) -> int:
         """The adapter's `max_concurrency` of a monitoring tool, else the source's."""

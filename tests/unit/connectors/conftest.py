@@ -23,14 +23,16 @@ def lake(ops_store: OpsStoreHandle) -> FakeLake:
 
 @pytest.fixture
 def guard(monkeypatch: pytest.MonkeyPatch) -> FakeGuard:
-    """Replace the breaker `guard` of the runner and of the backfill slices; add keys to
-    `open_keys` to trip them."""
+    """Replace the breaker `guard` of the runner, the backfill slices and reconciliation;
+    add keys to `open_keys` to trip them."""
     from tests.unit.connectors._runner_data import FakeGuard  # noqa: PLC0415 - as above
 
     import herness.connectors.backfill as backfill_module  # noqa: PLC0415 - runner tests only
+    import herness.connectors.reconcile as reconcile_module  # noqa: PLC0415 - runner tests only
     import herness.connectors.runner as runner_module  # noqa: PLC0415 - runner tests only
 
     fake = FakeGuard()
     monkeypatch.setattr(runner_module, "guard", fake)
     monkeypatch.setattr(backfill_module, "guard", fake)
+    monkeypatch.setattr(reconcile_module, "guard", fake)
     return fake
