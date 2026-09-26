@@ -7,6 +7,7 @@ with `device="cpu"`.
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 from collections.abc import Iterator
@@ -431,3 +432,27 @@ def test_ut03_127_rlcd_delegates_or_raises(monkeypatch: pytest.MonkeyPatch, tmp_
     assert calls[0] == kwargs
     with pytest.raises(ConfigError, match="no TrainResult"):
         trainer.train(_data(), **kwargs)
+
+
+def test_ut03_127_checkpoint_lookup_and_unreadable_state(tmp_path: Path) -> None:
+    """UT03-127 latest complete checkpoint ignores tmp dirs; unreadable state -> ConfigError."""
+    root = tmp_path / "checkpoints"
+    assert _train_ckpt.latest_checkpoint(root) is None
+    root.mkdir()
+    assert _train_ckpt.latest_checkpoint(root) is None
+    (root / ".tmp-epoch-3").mkdir()
+    for name, body in (("epoch-1", {"epochs_done": 1, "step": 0}),
+                       ("epoch-2-step-4", {"epochs_done": 1, "step": 4})):  # fmt: skip
+        (root / name).mkdir()
+        (root / name / "state.json").write_text(json.dumps(body), encoding="utf-8")
+    latest = _train_ckpt.latest_checkpoint(root)
+    assert latest is not None
+    assert latest.name == "epoch-2-step-4"
+    (root / "epoch-9").mkdir()
+    (root / "epoch-9" / "state.json").write_text("[1]", encoding="utf-8")
+    with pytest.raises(ConfigError, match="unreadable"):
+        _train_ckpt.latest_checkpoint(root)
+    (root / "epoch-9" / "state.json").unlink()
+    with pytest.raises(ConfigError, match="unreadable"):
+        _train_ckpt.read_state(root / "epoch-9")
+    assert _sft_loop.label_order(_QS.questions[0]) == ("true", "false")
