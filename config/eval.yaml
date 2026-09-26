@@ -1,0 +1,13 @@
+suite: tests/eval/golden.yaml
+judge: {profile: local-judge, temperature: 0, cache_dir: data/cache/judge}    # client key local-judge in models.yaml (spec 05 §5.1.3)
+repeat: {fast: 1, standard: 1, deep: 3}
+thresholds:
+  unsupported_number_rate_max: 0
+  correctness_drop_max_pp: 3
+  correctness_floor: {local-standard: 0.80, local-deep: 0.85, hybrid: 0.88, premium: 0.90}
+  tool_success_min: {local: 0.90, hybrid: 0.95, premium: 0.95}
+  latency_p95_ratio_max: 1.25
+  cost_ratio_max: 1.20
+  bench_regression_max: 0.20
+classifier: {gate_recompute_tolerance: 0.005, synthetic_sample: 5000, bootstrap: 1000}
+baseline: synthetic-42-small
