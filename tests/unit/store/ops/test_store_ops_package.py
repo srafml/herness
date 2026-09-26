@@ -1,8 +1,9 @@
 """Unit tests for the herness.store.ops namespace (impl 02 U02-62; UT02-68).
 
-Only block "02 core" exists at T02-04. T02-05 adds the `migrate` assertions (the package
-attribute `migrate` is the function and `from herness.store.ops.migrate import
-pending_migrations` still works) and T02-06 adds block "02 shared"; see the marked TODOs.
+Blocks "02 core" (T02-04) and "02 migrate" (T02-05) exist. Block "02 shared" arrives with
+`herness/store/ops/shared.py` (T02-07 adds U02-55 … U02-60, T02-24 adds U02-130 … U02-132);
+until then its test checks that any "shared" block present is third and follows the U02-62
+order.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import importlib
 import re
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -51,6 +53,28 @@ _CORE_BLOCK = (
     "reset_connections",
     "OPS_JSON_MAX_BYTES",
 )
+_MIGRATE_BLOCK = (
+    "MIGRATION_RANGES",
+    "migrate",
+    "pending_migrations",
+    "schema_version",
+    "ops_health",
+    "MigrationReport",
+)
+
+_SHARED_BLOCK = (
+    "ReviewItem",
+    "ReviewKind",
+    "ReviewStatus",
+    "create_review_item",
+    "create_review_item_if_absent",
+    "get_review_item",
+    "list_review_items",
+    "count_review_items",
+    "decide_review_item",
+    "update_review_payload",
+    "approved_mapping_suggestions",
+)
 
 
 def _blocks() -> list[tuple[str, str, list[str]]]:
@@ -85,6 +109,24 @@ def test_ut02_68_core_block_first_and_complete() -> None:
     assert blocks[0] == ("02", "core", list(_CORE_BLOCK))
 
 
+def test_ut02_68_migrate_block_second_and_complete() -> None:
+    """UT02-68 block "02 migrate" follows "02 core" and lists the U02-62 names in order."""
+    assert _blocks()[1] == ("02", "migrate", list(_MIGRATE_BLOCK))
+
+
+def test_ut02_68_shared_block_third_in_u02_62_order() -> None:
+    """UT02-68 block "02 shared", once present, is third and a U02-62-ordered subset."""
+    blocks = _blocks()
+    shared = [i for i, (_, area, _) in enumerate(blocks) if area == "shared"]
+    assert len(shared) <= 1
+    if not shared:  # T02-07 / T02-24 not landed yet: nothing to assert beyond absence
+        return
+    owner, _, names = blocks[shared[0]]
+    assert (shared[0], owner) == (2, "02")
+    # Only U02-62 names, in U02-62 order (T02-07 lands 8 of them, T02-24 the other 3).
+    assert names == [n for n in _SHARED_BLOCK if n in names]
+
+
 def test_ut02_68_names_resolve_to_their_area() -> None:
     """UT02-68 every name resolves to the attribute of the area named in its block header."""
     for _, area, names in _blocks():
@@ -96,16 +138,18 @@ def test_ut02_68_names_resolve_to_their_area() -> None:
 
 
 def test_ut02_68_no_name_equals_an_area() -> None:
-    """UT02-68 no re-exported name equals an area name (T02-05 adds the `migrate` exception)."""
-    # T02-05: allow exactly `migrate` here and assert `ops.migrate is
-    # herness.store.ops.migrate.migrate` and that `from herness.store.ops.migrate import
-    # pending_migrations` still works.
-    assert not set(ops.__all__) & set(AREAS)
+    """UT02-68 only the function `migrate` shares an area name; the area stays importable."""
+    assert set(ops.__all__) & set(AREAS) == {"migrate"}
+    area = sys.modules["herness.store.ops.migrate"]
+    assert callable(ops.migrate)
+    assert ops.migrate is area.migrate
+    from herness.store.ops.migrate import pending_migrations  # noqa: PLC0415 - the check itself
+
+    assert pending_migrations is ops.pending_migrations is area.pending_migrations
 
 
 def test_ut02_68_review_item_only_in_shared() -> None:
     """UT02-68 no `review_item` function outside block "shared" (R-08)."""
-    # T02-06: block "02 shared" then holds every review_item name.
     for _, area, names in _blocks():
         if area != "shared":
             assert not [n for n in names if "review_item" in n], area
