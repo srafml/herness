@@ -11,6 +11,8 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, runtime_checkable
 
+from herness.core.errors import OutputValidationError
+from herness.core.logging import get_logger
 from herness.core.types import LLMRequest, LLMResponse
 from herness.harness.llm.settings import ClientConfig, RoleParams
 
@@ -31,6 +33,16 @@ BASE_ROLE: Final[Mapping[str, str]] = {
     "judge": "planner",
     "triage": "chat",
 }
+
+# Adapter response bounds (spec constants table; program ruling on the adapter boundary): text
+# over MAX_RESPONSE_TEXT_CHARS fails; text over MAX_RESPONSE_PART_CHARS (the TextPart cap) is
+# cut so that it ends in TRUNCATION_MARKER; more than MAX_TOOL_CALLS tool calls fail.
+MAX_RESPONSE_TEXT_CHARS: Final = 1_000_000
+MAX_RESPONSE_PART_CHARS: Final = 200_000
+MAX_TOOL_CALLS: Final = 64
+TRUNCATION_MARKER: Final = "[truncated]"
+
+_log = get_logger("harness.llm")
 
 _AUTO_ON_FAST_STANDARD: Final = frozenset({"planner", "skeptic"})
 _AUTO_ON_DEEP: Final = frozenset({"planner", "skeptic", "writer"})
@@ -104,6 +116,20 @@ class ResolvedParams:
 def egress_purpose_for(model_role: str) -> Literal["reasoning", "reasoning_final"]:
     """The egress purpose of a model role; every role not listed is ``reasoning`` (R-38)."""
     return EGRESS_PURPOSE_BY_MODEL_ROLE.get(model_role, "reasoning")
+
+
+def bound_response(text: str, n_tool_calls: int, *, client: str) -> str:
+    """Apply the adapter response bounds; return ``text``, cut to the part cap when longer."""
+    if len(text) > MAX_RESPONSE_TEXT_CHARS:
+        msg = "response text exceeds limit"
+        raise OutputValidationError(msg, client=client)
+    if n_tool_calls > MAX_TOOL_CALLS:
+        msg = f"response has more than {MAX_TOOL_CALLS} tool calls"
+        raise OutputValidationError(msg, client=client)
+    if len(text) <= MAX_RESPONSE_PART_CHARS:
+        return text
+    _log.warning("harness.llm.response_truncated", client=client, length=len(text))
+    return text[: MAX_RESPONSE_PART_CHARS - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
 
 
 def _thinking_from_auto(base_role: str, depth: _Depth) -> _Thinking:
