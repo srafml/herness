@@ -1,17 +1,22 @@
 """Tests for the `Decider` protocol (U03-48, T03-11).
 
-No decider class exists yet (T03-12 onwards add them), so UT03-45 checks a minimal
-conforming stub and non-conforming objects; later decider cards extend the table.
+UT03-45 checks a minimal conforming stub, each decider class built so far (T03-14:
+`LayaDecider`, constructed without loading) and non-conforming objects; later decider
+cards extend the table.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 
 from herness.core.types import DecisionInput, DecisionOutput, QuestionSet
 from herness.enrich.decide import Decider
+from herness.enrich.deciders.laya import LayaDecider
+from herness.enrich.layout import EnrichPaths
+from herness.enrich.settings import LayaSettings
 
 pytestmark = pytest.mark.unit
 
@@ -51,10 +56,18 @@ class _NoVersion:
         return None
 
 
-@pytest.mark.parametrize("obj", [_StubDecider()])
-def test_ut03_45_decider_classes_conform(obj: object) -> None:
+def _laya() -> LayaDecider:
+    paths = EnrichPaths(
+        data_root=Path.cwd().resolve(), embedding_path="data/e", laya_current_file="data/c"
+    )
+    return LayaDecider(LayaSettings(device="cpu"), paths=paths, version="laya-20261004-1")
+
+
+@pytest.mark.parametrize("factory", [_StubDecider, _laya])
+def test_ut03_45_decider_classes_conform(factory: object) -> None:
     """UT03-45 each decider class is an instance of the runtime-checkable Decider."""
-    assert isinstance(obj, Decider)
+    assert callable(factory)
+    assert isinstance(factory(), Decider)
 
 
 @pytest.mark.parametrize("obj", [_NoHealth(), _NoVersion(), object()])
