@@ -244,7 +244,7 @@ include_external_packages = false
 name = "herness layers"
 type = "layers"
 layers = [
-    "herness.eval",
+    "herness.eval | herness.reports",
     "herness.metrics",
     "herness.connectors | herness.model",
     "herness.store",
@@ -296,6 +296,7 @@ forbidden_modules = [
     "herness.connectors",
     "herness.eval",
     "herness.metrics",
+    "herness.reports",
 ]
 
 [[tool.importlinter.contracts]]
@@ -323,6 +324,7 @@ source_modules = [
     "herness.connectors.settings",
     "herness.connectors.settings_base",
     "herness.connectors.settings_entities",
+    "herness.reports.settings",
 ]
 forbidden_modules = [
     "herness.core.logging",

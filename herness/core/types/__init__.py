@@ -63,6 +63,7 @@ from herness.core.types.jobs import (
     PolicyName,
     ServiceName,
 )
+from herness.core.types.reports import ReportManifest
 
 __all__: tuple[str, ...] = (
     "AgentResult",
@@ -97,6 +98,7 @@ __all__: tuple[str, ...] = (
     "QuestionSet",
     "QuestionType",
     "ReasoningPart",
+    "ReportManifest",
     "RequestMeta",
     "ServiceName",
     "SqlLimits",
