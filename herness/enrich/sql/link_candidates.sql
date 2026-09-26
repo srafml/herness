@@ -8,7 +8,7 @@
 -- while the change ran (actual_start <= opened_at <= actual_end). Times are compared in
 -- integer microseconds so the window edges are exact. Each change is expanded to the day
 -- buckets its window covers, so the two range joins (by ci_id, by service_id) are bucketed
--- equi-joins. The score is heuristic_link_score (U03-107) evaluated per pair.
+-- equi-joins. Each match is scored as heuristic_link_score (U03-107); max score per pair.
 CREATE OR REPLACE TEMP TABLE link_cand AS
 WITH inc AS (
     SELECT
@@ -50,25 +50,25 @@ chg_day AS (
     FROM chg
 ),
 hits AS (
-    SELECT i.incident_id, c.change_id
+    SELECT i.incident_id, c.change_id, $ci_weight AS m
     FROM inc AS i
     JOIN chg_day AS c ON i.ci_id = c.ci_id AND i.day = c.day
     WHERE (i.opened_us - c.t_us BETWEEN -$after_h * 3600000000.0 AND $before_h * 3600000000.0)
         OR (i.opened_us BETWEEN c.start_us AND c.end_us)
     UNION
-    SELECT i.incident_id, c.change_id
+    SELECT i.incident_id, c.change_id, $service_weight AS m
     FROM inc AS i
     JOIN chg_day AS c ON i.service_id = c.service_id AND i.day = c.day
     WHERE (i.opened_us - c.t_us BETWEEN -$after_h * 3600000000.0 AND $before_h * 3600000000.0)
         OR (i.opened_us BETWEEN c.start_us AND c.end_us)
 ),
-scored AS (
+scored AS (  -- max score per pair over its CI and service matches
     SELECT
         h.incident_id,
         h.change_id,
-        least(
+        max(least(
             1.0,
-            CASE WHEN i.ci_id = c.ci_id THEN $ci_weight ELSE $service_weight END
+            h.m
             * exp(-greatest(0.0, (i.opened_us - c.t_us) / 3600000000.0) / $tau_h)
             * CASE
                 WHEN c.outcome IN ('unsuccessful', 'backed_out', 'successful_with_issues')
@@ -76,10 +76,11 @@ scored AS (
                 ELSE 1.0
             END
             * CASE WHEN c.change_type = 'emergency' THEN 1.1 ELSE 1.0 END
-        ) AS score
+        )) AS score
     FROM hits AS h
     JOIN inc AS i ON i.incident_id = h.incident_id
     JOIN chg AS c ON c.change_id = h.change_id
+    GROUP BY h.incident_id, h.change_id
 ),
 src AS (
     SELECT DISTINCT i.record_id AS incident_id, c.record_id AS change_id

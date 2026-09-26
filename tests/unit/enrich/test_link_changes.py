@@ -346,6 +346,31 @@ def test_ut03_103_top3_min_score_and_source_override() -> None:
     assert len(got) == 5
 
 
+def test_ut03_103_ci_and_service_match_keeps_max_score() -> None:
+    """UT03-103 a pair matching on CI and service keeps the max score (ci_weight < service)."""
+    wh = make_warehouse(
+        [Inc("i1", ci_id="ci1", service_id="svc1")],
+        [Chg("c_both", ci_id="ci1", service_id="svc1", actual_end=T0 - timedelta(hours=3))],
+    )
+    link_candidates(wh, cfg=cfg_with(ci_weight=0.4, service_weight=0.9))
+    expected = 0.9 * math.exp(-3 / 12)
+    got = cand(wh)
+    assert list(got) == [("i1", "c_both")]
+    assert got["i1", "c_both"][0] == "time_ci_window"
+    assert got["i1", "c_both"][1] == pytest.approx(expected)
+    only_service = heuristic_link_score(
+        same_ci=False,
+        same_service=True,
+        delta_h=3.0,
+        outcome=None,
+        change_type=None,
+        tau_h=12.0,
+        ci_weight=0.4,
+        service_weight=0.9,
+    )
+    assert expected == pytest.approx(only_service)
+
+
 def test_ut03_103_missing_table_is_schema_violation() -> None:
     """UT03-103 a missing core table raises SchemaViolation."""
     wh = duckdb.connect()

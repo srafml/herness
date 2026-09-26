@@ -287,7 +287,8 @@ def run_link_stage(  # noqa: PLR0913 - U03-110's signature is binding (wh + 6 ke
 
     Band pairs with a current ``change_caused_pair`` answer of ``pair_decider`` become
     ``method='decider'`` with ``score = 0.5 * heuristic + 0.5 * p'(true)``; source-field rows
-    rank first per incident; at most ``top_n`` rows per incident.
+    rank first per incident; at most ``top_n`` rows per incident. Insert only: expects the
+    fresh, empty ``enrich.incident_change_link`` of this build's warehouse (one run per build).
     """
     decided = (
         _decided_rows(wh, cfg, qs, cache, calibration, pair_decider)
