@@ -6,9 +6,9 @@ in each distribution sum to 1 +/- 1e-9; rates lie in [0, 1].
 """
 
 import math
-from typing import Annotated, ClassVar, Final, Self
+from typing import Annotated, Any, ClassVar, Final, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from herness.core import time as clock
 from herness.core.errors import ConfigError
@@ -24,11 +24,17 @@ def _check_distribution[K](value: dict[K, float]) -> dict[K, float]:
     return value
 
 
-def _check_priorities[V](value: dict[int, V]) -> dict[int, V]:
-    if set(value) != {1, 2, 3, 4, 5}:
-        msg = "keys must be the priorities 1..5"
-        raise ValueError(msg)
-    return value
+def _keys(*allowed: object) -> AfterValidator:
+    """Validator pinning a map's key set to exactly `allowed`."""
+    names = ", ".join(str(k) for k in allowed)
+
+    def check[M: dict[Any, Any]](value: M) -> M:
+        if set(value) != set(allowed):
+            msg = f"keys must be exactly {names}"
+            raise ValueError(msg)
+        return value
+
+    return AfterValidator(check)
 
 
 def check_zone(value: str) -> str:
@@ -41,12 +47,29 @@ def check_zone(value: str) -> str:
     return value
 
 
-Rate = Annotated[float, Field(ge=0.0, le=1.0)]
-Positive = Annotated[float, Field(gt=0.0)]
+def _reject_bool(value: object) -> object:
+    if isinstance(value, bool):
+        msg = "must be a number, not a boolean"
+        raise ValueError(msg)  # noqa: TRY004 - pydantic needs ValueError to report the path
+    return value
+
+
+_NOT_BOOL: Final = BeforeValidator(_reject_bool)
+# Finite numbers (no inf or nan); booleans are rejected. Numeric strings stay accepted
+# because YAML 1.1 reads JSON exponents such as `1e-09` as strings.
+Rate = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False), _NOT_BOOL]
+Positive = Annotated[float, Field(gt=0.0, allow_inf_nan=False), _NOT_BOOL]
+NonNegative = Annotated[float, Field(ge=0.0, allow_inf_nan=False), _NOT_BOOL]
+Percent = Annotated[float, Field(ge=0.0, le=100.0, allow_inf_nan=False), _NOT_BOOL]
+Count = Annotated[int, Field(ge=1, strict=True)]
 Dist = Annotated[dict[str, Rate], AfterValidator(_check_distribution)]
 IntDist = Annotated[dict[int, Rate], AfterValidator(_check_distribution)]
-PriorityDist = Annotated[IntDist, AfterValidator(_check_priorities)]
-PerPriority = Annotated[dict[int, Positive], AfterValidator(_check_priorities)]
+_PRIORITIES: Final = _keys(1, 2, 3, 4, 5)
+PriorityDist = Annotated[IntDist, _PRIORITIES]
+PerPriority = Annotated[dict[int, Positive], _PRIORITIES]
+_CLOSE_CODES: Final = _keys("successful", "successful_with_issues", "unsuccessful", "backed_out")
+_SEVERITIES: Final = _keys("critical", "major", "minor", "warning", "info")
+_ISSUE_TYPES: Final = _keys("initiative", "epic", "feature", "story", "bug", "task")
 MonthDay = Annotated[str, Field(pattern=r"^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")]
 
 # Hour weights in business_timezone (U11-07): 2.2 for 10-15, 0.3 for 0-6 and 20-23, else 1.0.
@@ -73,9 +96,9 @@ class _Group(BaseModel):
 class OrgParams(_Group):
     _ordered = (("teams_per_org_min", "teams_per_org_max"),)
     teams_per_org_mean: Positive = 12.5
-    teams_per_org_min: int = Field(default=6, ge=1)
-    teams_per_org_max: int = Field(default=20, ge=1)
-    criticality: IntDist = {1: 0.10, 2: 0.25, 3: 0.40, 4: 0.25}
+    teams_per_org_min: Count = 6
+    teams_per_org_max: Count = 20
+    criticality: Annotated[IntDist, _keys(1, 2, 3, 4)] = {1: 0.10, 2: 0.25, 3: 0.40, 4: 0.25}
 
 
 class IncidentParams(_Group):
@@ -112,8 +135,8 @@ class MttrParams(_Group):
 
 
 class ReassignParams(_Group):
-    base_mean: float = Field(default=0.6, ge=0.0)
-    extra_mean: float = Field(default=0.8, ge=0.0)
+    base_mean: NonNegative = 0.6
+    extra_mean: NonNegative = 0.8
     extra_threshold: Positive = 1.3  # team MTTR multiplier above which extra_mean applies
     reopen_rate: Rate = 0.04
     reopen_rate_p4_p5: Rate = 0.06
@@ -131,8 +154,12 @@ class ImpactParams(_Group):
 
 
 class ChangeParams(_Group):
-    types: Dist = {"standard": 0.60, "normal": 0.35, "emergency": 0.05}
-    close_codes: Dist = {
+    types: Annotated[Dist, _keys("standard", "normal", "emergency")] = {
+        "standard": 0.60,
+        "normal": 0.35,
+        "emergency": 0.05,
+    }
+    close_codes: Annotated[Dist, _CLOSE_CODES] = {
         "successful": 0.90,
         "successful_with_issues": 0.05,
         "unsuccessful": 0.03,
@@ -142,12 +169,12 @@ class ChangeParams(_Group):
 
 
 class ProblemParams(_Group):
-    incidents_per_problem: int = Field(default=80, ge=1)
+    incidents_per_problem: Count = 80
     known_error_rate: Rate = 0.40
 
 
 class EventParams(_Group):
-    severities: Dist = {
+    severities: Annotated[Dist, _SEVERITIES] = {
         "critical": 0.05,
         "major": 0.15,
         "minor": 0.30,
@@ -160,13 +187,13 @@ class EventParams(_Group):
 
 class MetricDailyParams(_Group):
     _ordered = (("availability_min", "availability_max"),)
-    availability_min: float = Field(default=99.5, ge=0.0, le=100.0)
-    availability_max: float = Field(default=99.99, ge=0.0, le=100.0)
+    availability_min: Percent = 99.5
+    availability_max: Percent = 99.99
 
 
 class JiraParams(_Group):
     # stories/bugs/tasks share 0.80, split 0.60/0.25/0.15 (U11-08)
-    issue_types: Dist = {
+    issue_types: Annotated[Dist, _ISSUE_TYPES] = {
         "initiative": 0.01,
         "epic": 0.05,
         "feature": 0.14,
@@ -174,7 +201,14 @@ class JiraParams(_Group):
         "bug": 0.20,
         "task": 0.12,
     }
-    story_points: IntDist = {1: 0.15, 2: 0.25, 3: 0.25, 5: 0.20, 8: 0.10, 13: 0.05}
+    story_points: Annotated[IntDist, _keys(1, 2, 3, 5, 8, 13)] = {
+        1: 0.15,
+        2: 0.25,
+        3: 0.25,
+        5: 0.20,
+        8: 0.10,
+        13: 0.05,
+    }
     cycle_time_median_days: Positive = 6.0
     cycle_time_sigma: Positive = 0.8
     reenter_in_progress_rate: Rate = 0.12
@@ -193,9 +227,9 @@ class PiiParams(_Group):
     _ordered = (("spans_min", "spans_max"),)
     incident_share: Rate = 0.03
     jira_share: Rate = 0.01
-    spans_min: int = Field(default=1, ge=1)
-    spans_max: int = Field(default=3, ge=1)
-    person_names: int = Field(default=500, ge=1)
+    spans_min: Count = 1
+    spans_max: Count = 3
+    person_names: Count = 500
 
 
 class DirtyRates(_Group):

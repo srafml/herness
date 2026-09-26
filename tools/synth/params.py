@@ -75,6 +75,7 @@ SCALE_PRESETS: Final[dict[str, ScalePreset]] = {
 SOURCES: Final = ("servicenow", "jira", "monitoring", "files")
 PARAMS_FILE_MAX_BYTES: Final = 256 * 1024
 _MAX_NODES: Final = 100_000  # caps YAML alias expansion while merging (TH11-08)
+_MAX_DEPTH: Final = 32
 # Set by CLI arguments; a params file may override only parameter groups.
 _ARGUMENT_KEYS: Final = ("scale", "preset", "start", "end", "sources", "dirty", "fetch_mode")
 
@@ -147,21 +148,37 @@ def _read_params_file(path: Path) -> Mapping[str, object]:
         _fail("params_file", "is not valid UTF-8 YAML")
     if not isinstance(loaded, Mapping | None):
         _fail("params_file", "must hold a mapping")
-    tree: dict[str, object] = _normalize(loaded or {}, [0])  # type: ignore[assignment]
+    try:
+        tree = _normalize_map(loaded or {}, (), [0])
+    except RecursionError:  # self-referential alias such as `a: &a [*a]`
+        _fail("params_file", "is too deeply nested or self-referential")
     for key in set(tree) & set(_ARGUMENT_KEYS):
         _fail(key, "is set by a command-line argument, not the params file")
     return tree
 
 
-def _normalize(value: object, seen: list[int]) -> object:
+def _normalize_map(
+    value: Mapping[object, object], path: tuple[str, ...], seen: list[int]
+) -> dict[str, object]:
+    """Copy a mapping with string keys; keys that collide after conversion are rejected."""
+    out: dict[str, object] = {}
+    for raw_key, item in value.items():
+        key = str(raw_key)
+        if key in out:
+            _fail(".".join((*path, key)), "is given more than once")
+        out[key] = _normalize(item, (*path, key), seen)
+    return out
+
+
+def _normalize(value: object, path: tuple[str, ...], seen: list[int]) -> object:
     """Copy the loaded tree with string keys, counting nodes against `_MAX_NODES`."""
     seen[0] += 1
-    if seen[0] > _MAX_NODES:
-        _fail("params_file", "has too many nodes")
+    if seen[0] > _MAX_NODES or len(path) > _MAX_DEPTH:
+        _fail("params_file", "has too many nodes or is nested too deeply")
     if isinstance(value, Mapping):
-        return {str(k): _normalize(v, seen) for k, v in value.items()}
+        return _normalize_map(value, path, seen)
     if isinstance(value, list):
-        return [_normalize(v, seen) for v in value]
+        return [_normalize(v, (*path, str(i)), seen) for i, v in enumerate(value)]
     return value
 
 
@@ -170,8 +187,10 @@ def _merge(base: Mapping[str, object], override: Mapping[str, object]) -> dict[s
     merged = dict(base)
     for key, value in override.items():
         current = merged.get(key)
-        both_maps = isinstance(current, Mapping) and isinstance(value, Mapping)
-        merged[key] = _merge(current, value) if both_maps else value  # type: ignore[arg-type]
+        if isinstance(current, Mapping) and isinstance(value, Mapping):
+            merged[key] = _merge(current, value)
+        else:
+            merged[key] = value
     return merged
 
 

@@ -83,11 +83,6 @@ def test_ut11_01_scale_presets_match_design() -> None:
         SCALE_PRESETS["tiny"].incidents = 1  # type: ignore[misc]
 
 
-def test_ut11_01_generator_version() -> None:
-    """UT11-01 the package exposes GENERATOR_VERSION 2.0.0."""
-    assert GENERATOR_VERSION == "2.0.0"
-
-
 # --- UT11-02 ---------------------------------------------------------------------------
 
 
@@ -110,6 +105,7 @@ def test_ut11_02_tiny_span_ignores_start() -> None:
 
 def test_ut11_02_defaults_equal_design() -> None:
     """UT11-02 defaults equal design §5.1.3, §5.1.4 and §5.1.6 plus delta DD11-05."""
+    assert GENERATOR_VERSION == "2.0.0"  # fixtures regenerate when this or a default changes
     p = _load()
     assert p.sources == _ALL_SOURCES
     assert (p.dirty, p.fetch_mode, p.business_timezone) == ("default", "initial", "UTC")
@@ -288,6 +284,43 @@ def test_ut11_03_missing_params_file(tmp_path: Path) -> None:
         _load(params_file=tmp_path / "missing.yaml")
 
 
+def test_ut11_03_yaml_alias_bomb_hits_node_cap(tmp_path: Path) -> None:
+    """UT11-03 an alias-expansion bomb raises SynthUsageError instead of exhausting memory."""
+    lines = ["a0: &a0 [x, x, x, x, x, x, x, x, x, x]"]
+    for i in range(1, 9):
+        refs = ", ".join([f"*a{i - 1}"] * 10)
+        lines.append(f"a{i}: &a{i} [{refs}]")
+    with pytest.raises(SynthUsageError, match="params_file") as info:
+        _load(params_file=_write(tmp_path, "\n".join(lines) + "\n"))
+    assert info.value.context["key"] == "params_file"
+
+
+@pytest.mark.parametrize("text", ["a: &a [*a]\n", "a: &a {b: *a}\n"])
+def test_ut11_03_self_referential_alias_rejected(tmp_path: Path, text: str) -> None:
+    """UT11-03 a self-referential YAML alias raises SynthUsageError, not RecursionError."""
+    with pytest.raises(SynthUsageError, match="params_file") as info:
+        _load(params_file=_write(tmp_path, text))
+    assert info.value.context["key"] == "params_file"
+
+
+@pytest.mark.parametrize(
+    ("text", "key"),
+    [
+        ("event:\n  severities: {critical: 0.0, critcal: 0.05}\n", "event.severities"),
+        ("jira:\n  story_points: {4: 0.15, 1: 0.0}\n", "jira.story_points"),
+        ("text:\n  typo_rate: true\n", "text.typo_rate"),
+        ("mttr:\n  sigma: .inf\n", "mttr.sigma"),
+        ("pii:\n  person_names: '500'\n", "pii.person_names"),
+        ("mttr:\n  median_hours: {1: 2.0, '1': 3.0}\n", "mttr.median_hours.1"),
+    ],
+)
+def test_ut11_03_strict_values_and_fixed_keys(tmp_path: Path, text: str, key: str) -> None:
+    """UT11-03 unknown map keys, bool/str/inf numbers and colliding keys name the key path."""
+    with pytest.raises(SynthUsageError) as info:
+        _load(params_file=_write(tmp_path, text))
+    assert info.value.context["key"].startswith(key)
+
+
 # --- PT11-04 ---------------------------------------------------------------------------
 
 _RATE_KEYS = [
@@ -333,14 +366,3 @@ def test_pt11_04_params_hash_invariant_to_key_order_and_yaml_format(
     c = _write(tmp_path, json.dumps(shuffled, indent=indent), "c.yaml")
     hashes = {params_hash(_load(params_file=path)) for path in (a, b, c)}
     assert len(hashes) == 1
-
-
-def test_ut11_03_yaml_alias_bomb_hits_node_cap(tmp_path: Path) -> None:
-    """UT11-03 an alias-expansion bomb raises SynthUsageError instead of exhausting memory."""
-    lines = ["a0: &a0 [x, x, x, x, x, x, x, x, x, x]"]
-    for i in range(1, 9):
-        refs = ", ".join([f"*a{i - 1}"] * 10)
-        lines.append(f"a{i}: &a{i} [{refs}]")
-    with pytest.raises(SynthUsageError, match="params_file") as info:
-        _load(params_file=_write(tmp_path, "\n".join(lines) + "\n"))
-    assert info.value.context["key"] == "params_file"
