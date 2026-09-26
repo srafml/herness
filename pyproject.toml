@@ -385,6 +385,7 @@ forbidden_modules = [
     "herness.metrics._catalog_checks",
     "herness.metrics._encode",
     "herness.metrics._encode_nested",
+    "herness.metrics._recorded",
     "herness.metrics.catalog",
     "herness.metrics.evidence",
     "herness.metrics.render",
