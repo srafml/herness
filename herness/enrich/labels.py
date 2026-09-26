@@ -142,8 +142,9 @@ class LabelStore:
         SchemaViolation when the schema differs, StoreBusy or FatalError on OS errors.
         """
         schema = _schema(kind)
-        if not rows.schema.equals(schema, check_metadata=False):
-            msg = f"label rows do not match the {kind} schema"
+        bad = not rows.schema.equals(schema, check_metadata=False)
+        if bad or any(rows.column(name).null_count for name in _KEY):  # keys sort and hash
+            msg = f"label rows do not match the {kind} schema or have null keys"
             raise SchemaViolation(msg, question_set_version=self.qsv)
         if kind == "gold":
             for qid, fingerprint in sorted(set(_pair_list(rows))):
@@ -295,14 +296,12 @@ def _answer(item: ReviewItem) -> object:
 
 def _label_row(item: ReviewItem, qs: QuestionSet) -> tuple[ItemKind, dict[str, object]] | None:
     """The target kind and human-schema row of an approved item; None to skip it."""
-    kind = _PURPOSE_KIND.get(str(item.payload.get("purpose")))
-    if kind is None:
-        return None
+    kind = _PURPOSE_KIND.get(str(item.payload.get("purpose")))  # unknown purpose: invalid
     answer = _answer(item)
     fields = {name: item.payload.get(name) for name in _PAYLOAD_TEXT}
     question = next((q for q in qs.questions if q.id == fields["question"]), None)
     valid = all(isinstance(v, str) for v in fields.values()) and isinstance(answer, str)
-    if question is None or not valid or not _valid_label(question, str(answer)):
+    if kind is None or question is None or not valid or not _valid_label(question, str(answer)):
         _log.warning("enrich.labels.invalid_answer", item_id=item.item_id)
         return None
     row = {**fields, "answer": answer, "labeled_by": item.decided_by}

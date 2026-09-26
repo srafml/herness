@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 import errno
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -171,6 +172,11 @@ def test_ut03_72_wrong_schema(paths: EnrichPaths) -> None:
         store.append("gold", _human())
     with pytest.raises(SchemaViolation):
         store.append("human", _human().drop_columns(["item_id"]))
+    null_key = _human().set_column(0, "content_hash", pa.array([None, H1], type=pa.string()))
+    with pytest.raises(SchemaViolation, match="null keys"):
+        store.append("human", null_key)
+    with pytest.raises(SchemaViolation):
+        store.append("gold", _gold([(None, FP_A, H1, "true", 0)]))  # type: ignore[list-item]
     with pytest.raises(ConfigError):
         store.append("silver", _human())  # type: ignore[arg-type]
     with pytest.raises(ConfigError):
@@ -356,7 +362,7 @@ def test_ut03_74_sync_twice(ops_store: OpsStoreHandle, paths: EnrichPaths) -> No
         counts = sync_label_checks(store, qs=QS_OLD)
     assert counts == {"human": 5, "gold_reviews": 1, "skipped": 5}
     invalid = [e for e in logs if e["event"] == "enrich.labels.invalid_answer"]
-    assert len(invalid) == 3
+    assert len(invalid) == 4  # items 5, 10, 11 and the unknown purpose 12
     assert all(e["log_level"] == "warning" and "item_id" in e for e in invalid)
     assert any(e["event"] == "enrich.labels.synced" for e in logs)
     human = store.read("human")
@@ -420,6 +426,23 @@ def test_ut03_74_bad_watermark_and_busy_lock(
         sync_label_checks(store, qs=QS_OLD)
 
 
+def test_ut03_74_last_page_ends_on_other_version(
+    ops_store: OpsStoreHandle, paths: EnrichPaths
+) -> None:
+    """UT03-74: a last page ending on another version's item advances the watermark past it."""
+    store = LabelStore(paths, OLD)
+    _item(1)
+    last = _item(2, question_set_version=OTHER)
+    assert sync_label_checks(store, qs=QS_OLD) == {"human": 1, "gold_reviews": 0, "skipped": 0}
+    watermark = json.loads((paths.data_root / "labels" / OLD / "_sync.json").read_text("utf-8"))
+    assert watermark["last_item_id"] == last
+    assert datetime.datetime.fromisoformat(watermark["last_decided_at"]) == T0 + datetime.timedelta(
+        minutes=2
+    )
+    assert sync_label_checks(store, qs=QS_OLD) == {"human": 0, "gold_reviews": 0, "skipped": 0}
+    assert store.read("human").num_rows == 1
+
+
 def test_ut03_74_dynamic_choice_labels(ops_store: OpsStoreHandle, paths: EnrichPaths) -> None:
     """UT03-74: a dynamic choice question accepts any option-key-shaped answer."""
     team = _q("q_team", FP_A, "choice", options_source="core.team")
@@ -457,6 +480,25 @@ def test_ut03_75_digest_independent_of_parts(paths: EnrichPaths, tmp_path: Path)
     changed = _gold([*_GOLD_ROWS[:3], ("q_b", FP_B, H3, "db", 1)])
     assert gold_digest(changed) != digest
     assert gold_digest(_gold([])) == gold_digest(GOLD_SCHEMA.empty_table())
+
+
+def test_ut03_75_digest_known_answer() -> None:
+    """UT03-75: the digest equals a hand-computed SHA-256 of the spec's canonical lines."""
+    # sorted by (question, content_hash); canonical JSON of
+    # [question, question_fingerprint, content_hash, answer, fold]; joined with a newline
+    lines = [
+        f'["q_a","{FP_A}","{H1}","true",0]',
+        f'["q_b","{FP_B}","{H1}","db",1]',
+    ]
+    expected = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+    # a SHA-256 known answer, not a secret
+    known = (
+        "d55758a759c8d4abaca339ac56e1b45d"  # pragma: allowlist secret
+        "df443f18926ee566ceae159231b096e9"  # pragma: allowlist secret
+    )
+    assert expected == known
+    table = _gold([("q_b", FP_B, H1, "db", 1), ("q_a", FP_A, H1, "true", 0)])
+    assert gold_digest(table) == expected
 
 
 @given(st.permutations(list(range(len(_GOLD_ROWS) + 2))))
