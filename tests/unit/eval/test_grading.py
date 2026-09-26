@@ -14,7 +14,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from herness.core.errors import ModelUnavailable
+from herness.core.errors import EgressBlocked, ModelUnavailable
 from herness.core.types.harness.evidence import NumberRef
 from herness.core.types.swarm.drafts import ChatAnswer, Paragraph, RecommendationItem
 from herness.eval import grading as g
@@ -250,6 +250,19 @@ def test_ut11_91_rubric_skipped_reasons() -> None:
     assert none.detail["reason"] == "no_judge"
     assert down.detail["reason"] == "judge_unavailable"
     assert none.check == "rubric"
+
+
+def test_ut11_91_rubric_skipped_on_egress_blocked() -> None:
+    """UT11-91 a judge refused by the egress guard skips with its own reason."""
+
+    class _Blocked:
+        def score(self, *_args: object) -> _Score:
+            msg = "egress refused"
+            raise EgressBlocked(msg, reason="profile_local")
+
+    exp = RubricExpected(criteria=["clarity"], min_score=3)
+    result = g.grade_rubric(exp, "G01", "text", _Blocked())
+    assert (result.status, result.detail) == ("skipped", {"reason": "judge_egress_blocked"})
 
 
 def test_ut11_92_rubric_mean() -> None:
