@@ -57,8 +57,9 @@ def mig_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ops_store: Path) ->
     target = tmp_path / "migrations"
     target.mkdir()
     for name, data in _package_sql().items():
-        (target / name).write_bytes(data)
-    assert len(list(target.glob("00[1-6]_*.sql"))) == 6
+        if int(name[:3]) <= 6:  # impl 02 files only; later owners' files (090 ...) stay out
+            (target / name).write_bytes(data)
+    assert len(list(target.glob("*.sql"))) == 6
     monkeypatch.setattr(_MOD, "_migrations_root", lambda: target)
     return target
 
