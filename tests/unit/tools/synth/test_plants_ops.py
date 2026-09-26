@@ -15,6 +15,7 @@ from tools.synth.catalog_plan import background_count, plant_range
 from tools.synth.monitoring import gen_metric_daily
 from tools.synth.params import SynthParams, SynthUsageError, load_params
 from tools.synth.pii import build_name_list
+from tools.synth.plants_delivery import planned_counts_t6
 from tools.synth.plants_ops import (
     T4_TITLES,
     planned_counts_t1,
@@ -117,9 +118,10 @@ def test_ut11_13_planners_are_registered_and_t1_adds_nothing(
     )
     assert planned_counts_t1(cat, params) == {}
     base = build_catalog(42, params, planners=())
+    thinned = planned_counts_t6(base, params)  # T6 shrinks S6p post-effect background
     for key, count in cat.month_counts.items():
         plants = count - background_count(cat, key)
-        assert background_count(cat, key) == base.month_counts[key]
+        assert background_count(cat, key) == base.month_counts[key] + min(0, thinned.get(key, 0))
         assert plants >= 0
     first = dict(cat.seq_start)
     for key in cat.month_counts:  # plant ranges follow the background, gap-free

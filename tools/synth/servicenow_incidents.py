@@ -7,7 +7,7 @@ is `tools.synth.servicenow.gen_incidents`. Step numbers refer to the U11-07 algo
 import dataclasses
 import math
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
@@ -125,9 +125,12 @@ def _state(t: _Times) -> Pair:
     return pair("7", "Closed") if t.closed is not None else pair("6", "Resolved")
 
 
-def _impact(params: SynthParams, rng: np.random.Generator, priority: int, t: _Times) -> Pair:
-    """Step 8: customer impact minutes on `impact.share` of P1/P2, empty otherwise."""
-    if priority not in _HIGH_PRIORITIES or rng.random() >= params.impact.share:
+def _impact(
+    params: SynthParams, rng: np.random.Generator, priority: int, t: _Times, *, force: bool
+) -> Pair:
+    """Step 8: customer impact minutes on `impact.share` of P1/P2 (on every incident when
+    `force`, for plant clusters), empty otherwise."""
+    if not force and (priority not in _HIGH_PRIORITIES or rng.random() >= params.impact.share):
         return pair("")
     factor = float(rng.uniform(params.impact.min_factor, params.impact.max_factor))
     return pair(str(round(t.duration.total_seconds() / 60.0 * factor)))
@@ -143,6 +146,7 @@ class _Draw:
     times: _Times
     member: bool
     text: RenderedText
+    impact: bool = False  # customer impact on every incident (T2/T2c plant clusters)
 
 
 def _record(
@@ -182,7 +186,7 @@ def _record(
         "caused_by": pair(""),
         "made_sla": pair("false" if t.duration > limit else "true"),
         "business_duration": _duration_pair(t),
-        "u_customer_impact_minutes": _impact(params, rng, d.priority, t),
+        "u_customer_impact_minutes": _impact(params, rng, d.priority, t, force=d.impact),
         "sys_updated_on": updated_on(rng, (t.opened, t.ack, t.resolved, t.closed), end),
     }
 
@@ -267,13 +271,20 @@ def generate(
 @dataclasses.dataclass(frozen=True, slots=True)
 class IncidentSpec:
     """A plant incident's fixed values: service, open time, sequence number, optional CI
-    (else drawn from the service's CIs) and change-flavored text (T3)."""
+    (else drawn from the service's CIs), change-flavored text (T3), and for plant
+    clusters (T2, T2c) a fixed priority, template family and slot set, repeat-flavored
+    text and customer impact on every incident."""
 
     service: ServiceRow
     opened: datetime
     seq: int
     ci: CiRow | None = None
     change_flavored: bool = False
+    priority: int | None = None  # None: drawn from the service's priority mix
+    family: str | None = None
+    slots: Mapping[str, str] | None = None
+    repeat: bool = False
+    customer_impact: bool = False
 
 
 def make_incident(
@@ -284,24 +295,26 @@ def make_incident(
     spec: IncidentSpec,
 ) -> tuple[Record, list[dict[str, str]]]:
     """One plant incident drawn like a background one (priority mix, MTTR model of the
-    service's support team, text), with no problem cluster and no PII; returns the record
-    and its label rows (`change_caused` true for change-flavored incidents)."""
-    service = spec.service
-    priority = int(rng.choice(5, p=priority_probs(params, service.criticality))) + 1
+    service's support team, text), with no problem cluster and no PII, unless `spec` fixes
+    them; returns the record and its label rows (`change_caused` true for change-flavored
+    incidents, `repeat_issue` true for `spec.repeat`)."""
+    service, priority = spec.service, spec.priority
+    if priority is None:
+        priority = int(rng.choice(5, p=priority_probs(params, service.criticality))) + 1
     team = index.support(service)
     rendered = render_incident_text(
         bank,
         rng,
-        family=None,
-        slots=None,
+        family=spec.family,
+        slots=spec.slots,
         change_flavored=spec.change_flavored,
-        repeat_flavored=False,
+        repeat_flavored=spec.repeat,
         impact_level=_IMPACT_LEVEL[priority],
         component=service.name,
         text=params.text,
     )
     times = _times(params, rng, priority, team, spec.opened, span_end(params))
-    draw = _Draw(service, team, priority, times, False, rendered)
+    draw = _Draw(service, team, priority, times, spec.repeat, rendered, spec.customer_impact)
     record = _record(params, rng, index, draw, spec.seq, rendered.description)
     if spec.ci is not None:
         record["cmdb_ci"] = ref(spec.ci.sys_id, spec.ci.name)

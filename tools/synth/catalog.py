@@ -29,6 +29,7 @@ from tools.synth.catalog_rows import (
     TeamRow,
 )
 from tools.synth.params import SynthParams, SynthUsageError
+from tools.synth.plants_delivery import planned_counts_t2, planned_counts_t2c, planned_counts_t6
 from tools.synth.plants_ops import (
     planned_counts_t1,
     planned_counts_t3,
@@ -320,7 +321,8 @@ def _change_schedule(seed: int, params: SynthParams) -> tuple[ChangeSlot, ...]:
 
 def default_planners() -> tuple[Planner, ...]:
     """`planned_counts` of the plant units U11-10..U11-15, in plant-numbering order."""
-    return (planned_counts_t1, planned_counts_t3, planned_counts_t4, planned_counts_t5)
+    ops = (planned_counts_t1, planned_counts_t3, planned_counts_t4, planned_counts_t5)
+    return (*ops, planned_counts_t2, planned_counts_t2c, planned_counts_t6)
 
 
 def build_catalog(

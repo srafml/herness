@@ -15,6 +15,7 @@ from tools.synth.catalog import Catalog, build_catalog
 from tools.synth.catalog_plan import background_count, planner_id
 from tools.synth.catalog_rows import MonthKey, ServiceRow
 from tools.synth.params import SynthParams, SynthUsageError, load_params
+from tools.synth.plants_delivery import planned_counts_t6
 
 pytestmark = pytest.mark.unit
 
@@ -286,19 +287,26 @@ def test_ut11_05_month_counts_split_preset_totals() -> None:
 
 
 def test_ut11_05_default_planners_add_plant_records(small: Catalog) -> None:
-    """UT11-05 the default plan adds the T3 changes and follow-ups, 7 % S4 events and the
-    T5 peak-day incidents to the background totals; plant ranges close each month."""
+    """UT11-05 the default plan adds the T3 changes and follow-ups, 7 % S4 events, the
+    T5 peak-day incidents, the T2/T2c clusters and four epics (E2, E2d, E6p, E6u) to the
+    background totals and removes 40 % of S6p's expected post-effect incidents (T6);
+    plant ranges close each month."""
     totals: dict[tuple[str, str], int] = {}
     for (source, entity, _), count in small.month_counts.items():
         totals[source, entity] = totals.get((source, entity), 0) + count
     follow_ups = sum(s.follow_up_incidents for s in small.change_schedule)
     assert totals["servicenow", "change_request"] == 10_000 + 80
     assert totals["monitoring", "event"] == 40_000 + 2_800
-    t5 = totals["servicenow", "incident"] - 100_000 - follow_ups
+    clusters = round(0.03 * 100_000) + round(10 * ((_END - _START).days + 1) / 30)
+    params = _load("small")
+    thinned = planned_counts_t6(build_catalog(42, params, planners=()), params)
+    t6 = sum(n for key, n in thinned.items() if key[1] == "incident")
+    assert -0.4 * 100_000 < t6 < 0  # 40 % of S6p's expected post-effect incidents
+    t5 = totals["servicenow", "incident"] - 100_000 - follow_ups - clusters - t6
     assert 0 < t5 < 100_000  # three peak windows of S5 extras
-    assert totals["jira", "issue"] == 4_000
+    assert totals["jira", "issue"] == 4_000 + 4
     for (pid, key), (first, n) in small.plant_seq.items():
-        assert pid.startswith("tools.synth.plants_ops")
+        assert pid.startswith(("tools.synth.plants_ops", "tools.synth.plants_delivery"))
         assert small.seq_start[key] <= first
         assert first + n <= small.seq_start[key] + small.month_counts[key]
 
