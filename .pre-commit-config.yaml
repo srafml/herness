@@ -1,0 +1,94 @@
+minimum_pre_commit_version: "3.2.0"
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0  # pragma: allowlist secret
+    hooks:
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+        exclude: ^tests/fixtures/
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff-check
+        entry: uv run --frozen ruff check --fix --exit-non-zero-on-fix
+        language: system
+        files: \.py$
+        pass_filenames: true
+
+      - id: ruff-format
+        name: ruff-format
+        entry: uv run --frozen ruff format
+        language: system
+        files: \.py$
+        pass_filenames: true
+
+      - id: mypy
+        name: mypy
+        entry: uv run --frozen mypy
+        language: system
+        files: \.py$
+        pass_filenames: false
+
+      - id: import-linter
+        name: import-linter
+        entry: uv run --frozen lint-imports
+        language: system
+        files: (\.py|pyproject\.toml)$
+        pass_filenames: false
+
+      - id: detect-secrets
+        name: detect-secrets
+        entry: uv run --frozen detect-secrets-hook --baseline .secrets.baseline
+        language: system
+        exclude: ^(uv\.lock|\.secrets\.baseline|tests/fixtures/pii_corpus\.jsonl)$
+        pass_filenames: true
+
+      - id: fixtures-pii-scan
+        name: fixtures-pii-scan
+        entry: uv run --frozen python -m herness.core.redact --scan tests/fixtures
+        language: system
+        files: ^tests/fixtures/
+        pass_filenames: false
+
+      - id: module-size
+        name: module-size
+        entry: uv run --frozen python -m tools.check_module_size
+        language: system
+        files: \.py$
+        pass_filenames: false
+
+      - id: type-ownership
+        name: type-ownership
+        entry: uv run --frozen python -m tools.check_type_ownership
+        language: system
+        files: ^(herness|app)/.*\.py$
+        pass_filenames: false
+
+      - id: pytest-unit
+        name: pytest-unit
+        entry: uv run --frozen pytest -m unit -x -q
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: pytest-cpu
+        name: pytest-cpu
+        entry: uv run --frozen pytest -m "(unit or integration or fault) and not gpu and not slow" --cov
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
