@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import functools
 import multiprocessing
 import time
 from collections.abc import Iterator
@@ -25,6 +26,10 @@ from herness.store.ops.resilience import SqliteResilienceBackend
 pytestmark = pytest.mark.integration
 
 RACES = 100
+
+
+def _seed_row(row: HealthRow, _before: HealthRow | None) -> HealthRow:
+    return row
 
 
 @pytest.fixture
@@ -52,7 +57,7 @@ def test_it08_01_one_probe_winner_per_race(shared: tuple[str, str]) -> None:
     keys = [f"src_{n:03d}" for n in range(RACES)]
     for key in keys:
         row = HealthRow(key, "open", 8, 1, opened, None, opened)
-        backend.health_apply(key, lambda _before, row=row: row, opened)
+        backend.health_apply(key, functools.partial(_seed_row, row), opened)
     ctx = multiprocessing.get_context("spawn")
     barrier, results = ctx.Barrier(2), ctx.Queue()
     procs = [

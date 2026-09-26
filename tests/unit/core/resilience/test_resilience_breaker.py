@@ -18,6 +18,7 @@ from tests.support.fake_clock import FakeClock
 from tests.support.fake_keyring import MemoryKeyring
 from tests.support.ops_store import OpsStoreHandle
 
+import herness.core.resilience.breaker as bmod
 from herness.core import config as c
 from herness.core import redact as r
 from herness.core import resilience
@@ -32,7 +33,6 @@ from herness.core.errors import (
     SourceUnavailable,
 )
 from herness.core.resilience import ProcessState, bind_chain_registry, bind_ops_backend
-from herness.core.resilience import breaker as bmod
 from herness.core.resilience.breaker import (
     CircuitBreaker,
     breaker,
@@ -387,7 +387,7 @@ def test_ut08_18_invalid_keys_raise(key: str, reset_process_state: ProcessState)
 def test_ut08_18_package_exports(reset_process_state: ProcessState) -> None:
     """UT08-18 the package exports the breaker API; `breaker` is the callable module."""
     del reset_process_state
-    assert resilience.breaker is bmod
+    assert id(resilience.breaker) == id(bmod)  # mypy sees the function, runtime the module
     assert resilience.CircuitBreaker is CircuitBreaker
     assert resilience.guard is guard
     assert resilience.register_probe is register_probe
@@ -429,6 +429,29 @@ def test_ut08_19_open_probe_claimed_once(
     assert transitions == [("model:m", "open"), ("model:m", "half_open"), ("model:m", "closed")]
     (half_open,) = _events("breaker_half_open")
     assert '"reason":"probe"' in half_open["detail"].replace(" ", "")
+
+
+@pytest.mark.parametrize("prime", ["record_failure", "state"])
+def test_ut08_19_cache_read_after_due_is_rechecked(env: FakeClock, prime: str) -> None:
+    """UT08-19 (review round 1, I-1a) a row cached after the probe fell due (by a failure
+    recorded while open, or by `state()`) is re-read before claiming: another process has
+    probed, failed and re-opened it in the meantime."""
+    key = "model:m"
+    a, b = CircuitBreaker(key), CircuitBreaker(key)  # two processes over one store
+    a.force_open(ModelUnavailable("down"))
+    env.advance(61)
+    if prime == "record_failure":
+        b.record_failure(ModelUnavailable("in-flight call failed"))
+    else:
+        assert b.state() == "open"
+    assert a.allow()
+    a.record_failure(ModelUnavailable("probe failed"))
+    env.advance(1)
+    assert b.allow() is False
+    row = _read(key)
+    assert row is not None
+    assert (row.state, row.trips) == ("open", 2)
+    assert len(_events("breaker_half_open")) == 1
 
 
 def test_ut08_19_stale_cache_rechecks_probe_due(env: FakeClock) -> None:
@@ -573,6 +596,29 @@ def test_ut08_104_model_probe_network_rules(
     assert calls == ["claude-opus"]
 
 
+def test_ut08_104_rechecks_rows_probed_during_the_tick(env: FakeClock) -> None:
+    """UT08-104 (review round 1, I-1b) a row another process probed and re-opened while an
+    earlier probe of the same tick ran is re-read and not probed again."""
+    now = env.now()
+    calls: list[str] = []
+
+    def probe(name: str) -> None:
+        calls.append(name)
+        if name == "confluence":  # meanwhile another process probes jira and fails
+            other = CircuitBreaker("jira")
+            assert other.allow()
+            other.record_failure(SourceUnavailable("jira probe failed"))
+
+    register_probe("source", probe)
+    _open("confluence", now - timedelta(seconds=301))
+    _open("jira", now - timedelta(seconds=301))
+    assert run_due_probes(now) == 1
+    assert calls == ["confluence"]
+    jira = _read("jira")
+    assert jira is not None
+    assert (jira.state, jira.trips) == ("open", 2)
+
+
 def test_ut08_104_probe_due_boundary(env: FakeClock) -> None:
     """UT08-104 (review M-2) a row opened exactly cooldown_s ago is due; 1 s less is not."""
     now = env.now()
@@ -622,7 +668,11 @@ def test_ut08_104_probe_timeout_counts_as_failure(
     """UT08-104 a probe still running after the timeout re-opens with ModelUnavailable."""
     now = env.now()
     release = threading.Event()
-    register_probe("source", lambda _name: release.wait(5) and None)
+
+    def slow(_name: str) -> None:
+        release.wait(5)
+
+    register_probe("source", slow)
     monkeypatch.setattr(bmod, "PROBE_TIMEOUT_S", 0.05)
     _open("jira", now - timedelta(seconds=301))
     try:

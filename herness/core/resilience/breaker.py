@@ -1,9 +1,8 @@
 """Circuit breakers and probes (U08-23..U08-27; design 08 §3.1, §5.3; TH08-05).
 
-State lives in `source_health`, cached per process for `BREAKER_CACHE_S`; transitions are
-written through `health_apply`, the probe is claimed by one conditional `UPDATE`, and events
-and metrics are recorded after the write returns. The module is callable (`breaker(key)`,
-U08-25, shares its name; the `classify` precedent).
+State lives in `source_health`, cached per process for `BREAKER_CACHE_S`; transitions go
+through `health_apply`, the probe is claimed by one conditional `UPDATE`, and events and
+metrics are recorded after the write. The module is callable (`classify` precedent).
 """
 
 from __future__ import annotations
@@ -68,10 +67,8 @@ def _closed_row(key: str, now: datetime) -> HealthRow:
 
 
 def _to_open(row: HealthRow, now: datetime, failures: int) -> _Result:
-    opened = dataclasses.replace(
-        row, state="open", failures=failures, trips=row.trips + 1, opened_at=now
-    )
-    return opened, ["breaker_open"]
+    opened = dataclasses.replace(row, state="open", failures=failures, opened_at=now)
+    return dataclasses.replace(opened, trips=row.trips + 1), ["breaker_open"]
 
 
 def _on_failure(row: HealthRow, now: datetime, settings: BreakerSettings) -> _Result:
@@ -182,9 +179,9 @@ class CircuitBreaker:
         now = clock.now()
         row, read_at = self._entry(now)
         due = self._claimable(row, now)
-        if due is not None and row.state == "open" and read_at < due:
-            row = self._refresh(now)  # read before the probe fell due: another process
-            due = self._claimable(row, now)  # may have probed and re-opened it since
+        if due is not None and row.state == "open" and read_at < now:
+            row = self._refresh(now)  # another process may have probed and re-opened it
+            due = self._claimable(row, now)
         if row.state == "closed":
             return True
         return due is not None and self._claim(row, now, due)
@@ -246,9 +243,8 @@ class CircuitBreaker:
     def _emit(self, kinds: list[TransitionKind], row: HealthRow, reason: str | None) -> None:
         """One `resilience_event` and one transitions counter increment per kind."""
         due = probe_due(row, _family(self.key)) if row.state == "open" else None
-        detail = {"key": self.key, "failures": row.failures, "trips": row.trips}
-        extra = {"reason": reason, "probe_due": due}
-        detail |= {k: v for k, v in extra.items() if v is not None}
+        fields = {"key": self.key, "failures": row.failures, "trips": row.trips, "reason": reason}
+        detail = {k: v for k, v in (fields | {"probe_due": due}).items() if v is not None}
         for kind in kinds:
             record_event(kind, component="resilience", target=self.key, detail=detail)
             labels = {"key": self.key[:_LABEL_MAX_CHARS], "to_state": _TO_STATE[kind]}
@@ -349,20 +345,22 @@ def _run_probe(b: CircuitBreaker, fn: Callable[[str], None], name: str) -> None:
 
 def run_due_probes(now: datetime) -> int:
     """Run the registered probe of every open breaker whose probe is due; return the count."""
-    state = process_state()
-    count = 0
-    for row in require_ops_backend().health_list(["open"]):
+    state, ops, count = process_state(), require_ops_backend(), 0
+    for row in ops.health_list(["open"]):
         if _KEY_RE.fullmatch(row.source) is None:
             _log.debug("resilience.probe.invalid_key")  # the key text stays out of the log
             continue
         prefix, name = _split(row.source)
         with state.lock:
             fn = state.probes.get(prefix)
-        due = probe_due(row, _family(row.source))
-        if fn is None or now < due or not _network_ok(prefix, name):
+        fresh = None if fn is None else ops.health_get(row.source)  # earlier probes of this
+        if fn is None or fresh is None or fresh.state != "open":  # tick may take 30 s each
+            continue
+        due = probe_due(fresh, _family(row.source))
+        if now < due or not _network_ok(prefix, name):
             continue
         b = breaker(row.source)
-        if not b._claim(row, now, due):
+        if not b._claim(fresh, now, due):
             continue
         _run_probe(b, fn, name)
         count += 1
