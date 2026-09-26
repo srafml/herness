@@ -58,6 +58,27 @@ from .evidence import (
 )
 
 # isort: split
+# 06 runs
+from .runs import (
+    RunRow,
+    TaskRow,
+    count_open,
+    count_tasks,
+    find_run_by_escalation,
+    find_run_by_job,
+    get_run,
+    get_task,
+    get_task_by_dedup,
+    insert_run,
+    insert_tasks,
+    ready_tasks,
+    select_runs,
+    select_tasks,
+    set_run_status,
+    update_run_fields,
+)
+
+# isort: split
 # 10 privacy
 from .privacy import (
     DeletionRequest,
@@ -105,6 +126,23 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "get_evidence",
     "finding_statuses",
     "scrub_record_from_evidence",
+    # 06 runs
+    "RunRow",
+    "TaskRow",
+    "insert_run",
+    "get_run",
+    "find_run_by_job",
+    "find_run_by_escalation",
+    "select_runs",
+    "set_run_status",
+    "update_run_fields",
+    "insert_tasks",
+    "get_task",
+    "get_task_by_dedup",
+    "select_tasks",
+    "ready_tasks",
+    "count_open",
+    "count_tasks",
     # 10 privacy
     "DeletionRequest",
     "create_deletion_request",
