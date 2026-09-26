@@ -119,6 +119,7 @@ def test_it02_18_work_item_rules(build_harness: BuildHarness) -> None:
                 labels=_j(["p1"]),
                 status=_j({"name": "Done", "statusCategory": {"key": "done"}}),
                 resolutiondate="2024-03-02T10:00:00.000+0000",
+                description="Card *declined* on retry",
                 customfield_10016="3",
                 customfield_10050="10.5",
                 customfield_10001="Payments Team",
@@ -173,8 +174,15 @@ def test_it02_18_work_item_rules(build_harness: BuildHarness) -> None:
         ("PAY-1", "Done", "done", created, done, at(0), 3.0, Decimal("10.50")),
         ("PAY-2", "In Progress", "in_progress", created, None, at(1), None, None),
     ]
-    texts = build_harness.query('SELECT "key", summary, description FROM core.work_item')
-    assert ("PAY-1", "summary of PAY-1", None) in texts
+    texts = build_harness.query(
+        'SELECT "key", summary, description FROM core.work_item'
+        " WHERE record_id IN (?, ?) ORDER BY record_id",
+        [ISSUE + "1", ISSUE + "2"],
+    )
+    assert texts == [
+        ("PAY-1", "summary of PAY-1", "Card *declined* on retry"),  # DC wiki text as staged
+        ("PAY-2", "summary of PAY-2", None),
+    ]
     rerun(build_harness, 280)  # idempotent
     assert build_harness.query(shape_sql) == shape
     assert build_harness.query(mapped_sql) == mapped

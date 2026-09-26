@@ -1,7 +1,7 @@
 {#
   Canonical Jira work items, transitions and links (impl 02 U02-123; design 02 §4.3).
   `component` is the first component in source order. Service: the `core.service_map`
-  rows with role `delivery` matching (project, component), else — when there is none —
+  rows with role `delivery` matching (project, component), else (when there is none)
   those matching (project, NULL component); the single service_id of the chosen rows, NULL
   when zero or several. Team: the team of the matched delivery rows when it is one
   non-NULL team, else the single `core.team` whose lower-cased name is the lower-cased
