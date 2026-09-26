@@ -1,11 +1,13 @@
 """Security test for SQL rendering against injection through config values (ST02-10)."""
 
+import shutil
 from pathlib import Path
 
 import duckdb
 import pyarrow as pa
 import pytest
 from pydantic import ValidationError
+from tests.support.build_harness import BuildHarness, RefData
 
 from herness.core.errors import ConfigError
 from herness.model import sqlfiles
@@ -112,3 +114,39 @@ def test_st02_10_render_then_execute(tmp_path: Path) -> None:
         assert _core_tables(con) == 1
     finally:
         con.close()
+
+
+ENUM_PROBE = """\
+{% import "_macros.jinja" as m %}
+CREATE OR REPLACE TABLE stg.enum_probe AS
+SELECT i.state, e.canonical FROM core.incident AS i
+{{ m.enum('e', 'servicenow.incident_state', 'i.state') }};
+"""
+
+
+def test_st02_10_enum_value_via_refdata_matched_literally(
+    build_harness: BuildHarness, tmp_path: Path
+) -> None:
+    """ST02-10 a quoted enum value registered by U02-87 is data and the enum macro matches it."""
+    sql_dir = tmp_path / "sql"
+    sql_dir.mkdir()
+    shutil.copy(Path(sqlfiles.__file__).parent / "sql" / "_macros.jinja", sql_dir)
+    (sql_dir / "100_enum_probe.sql").write_text(ENUM_PROBE, encoding="utf-8")
+    build_harness.run(0, 99)
+    build_harness.con.execute(
+        "CREATE TABLE core.incident AS SELECT * FROM (VALUES (?), (?), ('open')) t(state)",
+        [ENUM_VALUE, ENUM_VALUE.upper()],
+    )
+    mappings = MappingsConfig.model_validate(
+        {"enums": {"servicenow.incident_state": {ENUM_VALUE: "closed"}}}
+    )
+    ran = build_harness.run(100, 100, refdata=RefData(mappings=mappings), sql_dir=sql_dir)
+    assert ran == ["100_enum_probe.sql"]
+    rendered = build_harness.render(100, 100, sql_dir=sql_dir)["100_enum_probe.sql"]
+    assert "DROP" not in rendered
+
+    stored = build_harness.query("SELECT domain, source_value_lc, canonical FROM stg.enum_map")
+    assert stored == [("servicenow.incident_state", ENUM_VALUE.lower(), "closed")]
+    probe = build_harness.query("SELECT state, canonical FROM stg.enum_probe ORDER BY state")
+    assert probe == sorted([(ENUM_VALUE, "closed"), (ENUM_VALUE.upper(), "closed"), ("open", None)])
+    assert _core_tables(build_harness.con) == 1

@@ -2,7 +2,8 @@
 
 `pytester` is loaded for the plugin's own tests (UT11-31..UT11-37). T08-03 registers the
 opt-in `reset_process_state` fixture (impl 08 §11); T11-40 registers `tests.support.ops_store`
-(U11-78) in place of the interim `tests.support.ops_core_store` (T02-04).
+(U11-78) in place of the interim `tests.support.ops_core_store` (T02-04). T02-12 registers
+`tests.support.build_harness` (`build_harness`, `fake_job_context`; impl 02 §11).
 """
 
 import random
@@ -24,6 +25,7 @@ pytest_plugins = [
     "tests.support.fake_clock",
     "tests.support.ops_store",
     "tests.support.fake_keyring",
+    "tests.support.build_harness",
 ]
 
 collect_ignore = ["support", "fixtures"]
