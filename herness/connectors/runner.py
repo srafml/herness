@@ -20,7 +20,7 @@ from typing import Literal
 
 import pyarrow as pa
 
-from herness.connectors._write_loop import LAKE_MAX_OPEN_S, StreamOutcome, StreamSpec, WriteLoop
+from herness.connectors._write_loop import StreamOutcome, StreamSpec, WriteLoop
 from herness.connectors._write_loop import metric as _metric
 from herness.connectors.base import UNORDERED_SOURCES, Connector, SupportsToolStreams
 from herness.connectors.deletion import DeletionFilter
@@ -34,7 +34,7 @@ from herness.core.resilience import guard
 from herness.store.lake import LakeWriter
 from herness.store.ops import get_watermark, record_metric_samples, set_watermark
 
-__all__ = ["LAKE_MAX_OPEN_S", "StreamOutcome", "SyncResult", "SyncRunner"]
+__all__ = ["SyncResult", "SyncRunner"]
 
 type Mode = Literal["incremental", "backfill", "reconcile"]
 type Fetch = Callable[[str, datetime | None, datetime], Iterator[pa.RecordBatch]]
