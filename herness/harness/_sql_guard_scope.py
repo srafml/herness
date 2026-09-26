@@ -62,6 +62,11 @@ def _is_table_function(source: exp.Table | Scope) -> bool:
     return not isinstance(source.expression, exp.Query)  # UDTF scope such as unnest
 
 
+def has_residual_star(q: exp.Expr) -> bool:
+    """True when qualify left a `*` / `t.*` unexpanded anywhere except `count(*)`."""
+    return any(not isinstance(star.parent, exp.Count) for star in q.find_all(exp.Star))
+
+
 def has_leaky_star(q: exp.Expr, by_expr: Mapping[int, Scope]) -> bool:
     """True when an unexpanded `*` (not `count(*)`) has a scope source that is not a table
     function, or an unknown scope (fail closed)."""

@@ -212,6 +212,8 @@ _TEMPLATES = (
     "WITH x AS (SELECT {c} FROM x) SELECT * FROM x",
     "WITH a1 AS (SELECT * FROM b1), b1 AS (SELECT {c} FROM {t}) SELECT * FROM a1",
     "WITH x AS MATERIALIZED (FROM x) SELECT {c} FROM {t}, x",
+    "SELECT * FROM unnest((SELECT list({c}) FROM {t}))",
+    "SELECT * FROM unnest([(SELECT max({c}) FROM {t})]) u",
 )
 _HINTS = {
     "free text is not available; join enrich.text_redacted on record_id",
@@ -364,3 +366,55 @@ _CTE_BYPASSES = (
 def test_st05_05_self_and_forward_cte_bypass_rejected(sql: str, *, catalog: bool) -> None:
     """ST05-05 (I2b) self/forward CTE references and leftover stars never reach main.*."""
     assert _rejected(sql, allow_catalog=catalog)
+
+
+# --- ST05-05 fix round 3 (C4): untrusted text through table-function arguments ------------
+
+_TF_ARG_STARS = (
+    "SELECT * FROM unnest((SELECT list(summary) FROM core.work_item))",
+    "SELECT * FROM unnest([(SELECT max(summary) FROM core.work_item)])",
+    "SELECT * FROM unnest((SELECT list(title) FROM score.funding)) t",
+    "SELECT * FROM range((SELECT count(*) FROM core.event WHERE alert_name = 'x'))",
+    "SELECT * FROM generate_series(1, (SELECT length(max(label)) FROM enrich.cluster))",
+)
+
+
+@pytest.mark.parametrize("sql", _TF_ARG_STARS)
+@pytest.mark.parametrize("catalog", [False, True])
+def test_st05_05_star_over_table_function_with_table_subquery_rejected(
+    sql: str, *, catalog: bool
+) -> None:
+    """ST05-05 (C4) a leftover `*` is rejected whenever the query reads a warehouse table."""
+    with pytest.raises(QueryError) as info:
+        GUARD.check(sql, allow_catalog=catalog)
+    assert info.value.hint == "* cannot be expanded here; list the columns by name"
+
+
+@pytest.mark.parametrize(
+    ("sql", "output", "redact"),
+    [
+        ("SELECT u FROM unnest((SELECT list(summary) FROM core.work_item)) t(u)", "u", True),
+        ("SELECT (SELECT max(summary) FROM core.work_item) AS s", "s", True),
+        ("SELECT (SELECT max(title) FROM score.funding) AS s", "s", True),
+        ("SELECT unnest((SELECT list(summary) FROM core.work_item)) AS v", "v", True),
+        ("SELECT x FROM range((SELECT length(max(summary)) FROM core.work_item)) r(x)", "x", True),
+        ("SELECT (SELECT max(alert_name) FROM core.event) AS a", "a", False),
+    ],
+)
+@pytest.mark.parametrize("catalog", [False, True])
+def test_st05_05_named_forms_through_subqueries_flagged(
+    sql: str, output: str, *, redact: bool, catalog: bool
+) -> None:
+    """ST05-05 (C4) named outputs fed by untrusted subqueries are flagged (redact if needed)."""
+    guarded = GUARD.check(sql, allow_catalog=catalog)
+    assert output in guarded.untrusted_output_columns
+    if redact:
+        assert output in guarded.redact_output_columns
+
+
+def test_st05_05_bare_unnest_column_name_rejected() -> None:
+    """ST05-05 (C4) `SELECT unnest FROM unnest([...])` is rejected (column cannot resolve)."""
+    assert _rejected("SELECT unnest FROM unnest([(SELECT max(title) FROM score.funding)])")
+    assert _rejected(
+        "SELECT unnest FROM unnest([(SELECT max(title) FROM score.funding)])", allow_catalog=True
+    )
