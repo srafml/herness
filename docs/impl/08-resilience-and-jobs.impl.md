@@ -773,6 +773,7 @@ Returns `tuple[HealthRow, list[Literal["breaker_open","breaker_half_open","break
 | `force_open(err)` | `(err: HernessError) -> None` |
 | `state()` | `-> BreakerState` |
 | `retry_at()` | `-> datetime \| None` (probe due time while open) |
+| `hot()` | `-> bool` (True while the cached row is `closed`, `failures == 0` and younger than `BREAKER_CACHE_S`: `allow` and `record_success` then do no I/O; U08-29 keeps such calls on the event loop; T08-07) |
 
 | Field | Content |
 |-------|---------|

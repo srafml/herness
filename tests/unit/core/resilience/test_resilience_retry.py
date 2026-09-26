@@ -365,6 +365,50 @@ def test_ut08_25_nested_retry_while_writing_an_event_skips_its_row(env: ProcessS
     assert _counted("sqlite_write", "StoreBusy") == 1
 
 
+class _BusyFlushBackend(SqliteResilienceBackend):
+    """Its metric flush hits one sqlite_write retry (counter → flush → write → retry)."""
+
+    def insert_metric_samples(self, rows: Any) -> int:
+        resilience.retry_call("sqlite_write", _Flaky(StoreBusy("flush busy")))
+        return super().insert_metric_samples(rows)
+
+
+def test_ut08_25_retry_inside_a_triggered_metric_flush_writes_no_row(env: ProcessState) -> None:
+    """UT08-25 (review m1) a sqlite_write retry inside the metric flush that the retry counter
+    triggers is guarded too: it logs and counts but writes no `retry` row of its own."""
+    bind_ops_backend(_BusyFlushBackend())
+    env.metric_buffer.last_flush = clock.monotonic() - 60  # the counter flushes at once
+    with structlog.testing.capture_logs() as logs:
+        assert resilience.retry_call("tool_store", _Flaky(StoreBusy("busy"))) == "ok"
+    assert [row["target"] for row in _retry_rows()] == ["tool_store"]
+    nested = [e for e in logs if e["event"] == "resilience.call.retry_scheduled"]
+    assert [e["target"] for e in nested] == ["sqlite_write", "tool_store"]
+
+
+def test_ut08_24_async_failure_without_breaker_key_stays_on_the_loop(
+    cfg: ProcessState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-24 (review m2) with no breaker key a failed async attempt needs no breaker I/O:
+    no `asyncio.to_thread` hop (the retry event still leaves the loop)."""
+    hops: list[str] = []
+    real = asyncio.to_thread
+
+    async def spy(fn: Callable[..., Any], /, *a: Any, **kw: Any) -> Any:
+        hops.append(getattr(fn, "__name__", type(fn).__name__))
+        return await real(fn, *a, **kw)
+
+    monkeypatch.setattr(rmod.asyncio, "to_thread", spy)
+    aflaky = _Flaky(ModelUnavailable("down"), httpx.ConnectError("refused"))
+
+    async def call() -> str:
+        return aflaky()
+
+    assert asyncio.run(resilience.aretry_call("llm_local", call)) == "ok"
+    assert aflaky.calls == 3
+    assert "_fail" not in hops
+    assert hops == ["emit", "emit"]
+
+
 def test_ut08_25_sqlite_write_retry_through_run_write(env: ProcessState) -> None:
     """UT08-25 (ruling) a sqlite_write retry inside real run_write records its retry row and
     flushes its metric after the rollback: no nested-write ConfigError."""

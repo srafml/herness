@@ -3745,7 +3745,7 @@ All cards are Phase 1.
 | Goal | Per-thread connections, `run_write` with retry and fault point, JSON helpers, package namespace. |
 | Depends on | T02-01, `T08-07 (herness.core.resilience.retry_call)`, `T08-08 (herness.core.resilience.fault_point)` |
 | Units | U02-36…U02-43, U02-62 (spec 02 blocks and the block layout of §2.3 rule 4) |
-| Files | `herness/store/ops/__init__.py`, `herness/store/ops/core.py`, `herness/store/ops/_shims.py` (interim) |
+| Files | `herness/store/ops/__init__.py`, `herness/store/ops/core.py`, `herness/store/ops/_shims.py` (re-exports of `retry_call` (T08-07) and `fault_point` (T08-08) that `core` calls; kept, see §2) |
 | Tests | UT02-25…UT02-31, UT02-68, FT02-02, ST02-18, BT02-06 |
 | Threats | TH02-07, TH02-18 |
 | Acceptance checks | listed tests pass; `BT02-06` p95 < 10 ms on CI |

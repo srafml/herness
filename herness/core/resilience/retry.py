@@ -123,20 +123,19 @@ class _Retry:
             "retry_after_s": exc.retry_after if isinstance(exc, RateLimited) else None,
         }
         labels = {"policy": self.p.name, "error_class": error_type}
-        record_counter(RETRIES_METRIC, component="resilience", labels=labels)
-        target = self.key or self.p.name
-        if process_state().ops is None or getattr(_emitting, "active", False):
-            _log.warning(
-                "resilience.call.retry_scheduled", kind="retry", target=target, detail=detail
-            )
-            return
-        _emitting.active = True
+        target, nested = self.key or self.p.name, getattr(_emitting, "active", False)
+        _emitting.active = True  # also covers a metric flush the counter triggers
         try:
+            record_counter(RETRIES_METRIC, component="resilience", labels=labels)
+            if process_state().ops is None or nested:
+                log_detail = {"kind": "retry", "target": target, "detail": detail}
+                _log.warning("resilience.call.retry_scheduled", **log_detail)
+                return
             record_event(
                 "retry", component="resilience", target=target, detail=detail, tracer=self.tracer
             )
         finally:
-            _emitting.active = False
+            _emitting.active = nested
 
     async def aemit(self, retry_state: RetryCallState) -> None:
         """`emit` off the event loop: its writes are synchronous SQLite (ENG §2.5)."""
@@ -172,13 +171,13 @@ async def _ainvoke[T](fn: Callable[[], Awaitable[T]], key: str | None, family: E
         await _breaker_io(key, functools.partial(guard, key))
     try:
         value = await fn()
-    except HernessError as err:
-        await asyncio.to_thread(_fail, key, err)
-        raise
     except Exception as exc:
-        mapped = classify(exc, family=family)
-        await asyncio.to_thread(_fail, key, mapped)
-        raise mapped from exc
+        err = exc if isinstance(exc, HernessError) else classify(exc, family=family)
+        if key is not None:  # no breaker key: no breaker I/O, no thread hop
+            await asyncio.to_thread(_fail, key, err)
+        if err is exc:
+            raise
+        raise err from exc
     if key is not None:
         await _breaker_io(key, breaker(key).record_success)
     return value
