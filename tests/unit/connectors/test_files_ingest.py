@@ -230,6 +230,26 @@ def test_ut01_52_snapshot_missing_key_one_tombstone(ops_store: OpsStoreHandle) -
     assert len(_ingest_rows()) == 2
 
 
+def test_ut01_52_snapshot_valve_raises_after_record(ops_store: OpsStoreHandle) -> None:
+    """UT01-52 a snapshot missing most keys trips the reconcile valve: `SchemaViolation` is
+    raised after the file was recorded (the operator reviews it), and no tombstone is
+    written."""
+    lake = ParquetLake(ops_store.data_root / "raw")
+    inbox, _, runner = _setup(ops_store, lake, _SNAPSHOT)
+    keys = [f"k{i:03d}" for i in range(100)]
+    drop(inbox, f"{_ENT}/day1.csv", _csv(keys), age_s=7200)
+    runner.run_incremental(_ENT)
+    day2 = drop(inbox, f"{_ENT}/day2.csv", _csv(keys[:10]), age_s=3600)
+
+    with pytest.raises(SchemaViolation, match="reconcile safety valve"):
+        runner.run_incremental(_ENT)
+
+    assert get_file_ingest(_sha(day2)) is not None
+    assert not any(
+        row["_deleted"] for w in lake.writers for b in w.batches for row in b.to_pylist()
+    )
+
+
 def test_ut01_52_snapshot_too_large_raises_before_write(
     ops_store: OpsStoreHandle, lake: FakeLake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
