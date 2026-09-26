@@ -13,6 +13,7 @@ _EXPORTS: Final[dict[str, str]] = {
     "ChainRegistry": "ports",
     "CircuitBreaker": "breaker",
     "ClientInfo": "ports",
+    "DeciderChain": "deciders",
     "DeciderLike": "ports",
     "EventRow": "ports",
     "FaultRule": "faults",
@@ -34,6 +35,7 @@ _EXPORTS: Final[dict[str, str]] = {
     "fault_point": "faults",
     "guard": "breaker",
     "load_fault_plan": "faults",
+    "loop_signal_policy": "loop_policy",
     "policy": "policies",
     "process_state": "_state",
     "register_probe": "breaker",
@@ -68,12 +70,14 @@ if TYPE_CHECKING:
         complete_validated as complete_validated,
     )
     from herness.core.resilience.classify import classify as classify
+    from herness.core.resilience.deciders import DeciderChain as DeciderChain
     from herness.core.resilience.faults import (
         NAMED_POINTS as NAMED_POINTS,
         FaultRule as FaultRule,
         fault_point as fault_point,
         load_fault_plan as load_fault_plan,
     )
+    from herness.core.resilience.loop_policy import loop_signal_policy as loop_signal_policy
     from herness.core.resilience.policies import RetryPolicy as RetryPolicy, policy as policy
     from herness.core.resilience.ports import (
         AsyncCompleter as AsyncCompleter,
