@@ -162,6 +162,8 @@ VIOLATIONS: list[_Case] = [
         "harness.sql.blocked_columns[0]",
     ),
     _case("range_concurrency", f"{L30}/max_concurrency", 201),
+    _case("range_client_timeout_high", f"{L30}/timeout_s", 3600.5),
+    _case("range_client_timeout_zero", f"{L30}/timeout_s", 0),
     _case("range_price_negative", f"{L30}/price_per_mtok/input", "-1"),
     _case("range_price_float", f"{L30}/price_per_mtok/input", 0.1),
     _case("range_price_text", f"{L30}/price_per_mtok/input", "abc"),
