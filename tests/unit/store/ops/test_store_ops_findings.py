@@ -443,9 +443,38 @@ def test_ut06_95_scrub_key_only_and_edge_ids(ops_store: Path) -> None:
     assert _write(lambda conn: scrub("pla", conn=conn)) == 0
     assert _write(lambda conn: scrub("plain", conn=conn)) == 1
     assert _raw(1)["numbers"] == "[]"
-    for bad in ("", "x" * 301):
-        with pytest.raises(SchemaViolation, match="invalid record_id"):
+    for bad in ("", "x" * 301, "src:kind:", "::"):
+        with pytest.raises(SchemaViolation, match=r"^invalid record_id$"):
             _write(lambda conn, bad=bad: scrub(bad, conn=conn))
+
+
+def test_ut06_95_reads_skip_fully_scrubbed_rows(ops_store: Path) -> None:
+    """UT06-95 after a full scrub every finding read still works; the emptied row is absent."""
+    _run_row(1, "funding_review", "done", _T0 + timedelta(hours=1))
+    gone = _finding(1, status="verified", numbers=[_number(1, row_key={"x": "plain"})])
+    kept = _finding(2, status="verified")
+    _insert(gone, kept)
+    scrub = findings.scrub_record_from_findings
+    assert _write(lambda conn: scrub("plain", conn=conn)) == 1
+    assert _raw(1)["numbers"] == "[]"
+    assert findings.query_findings(_rid(1), limit=1) == [kept]
+    assert findings.get_findings([_fid(1), _fid(2)]) == {_fid(2): kept}
+    assert findings.list_task_findings(_tid(1)) == [kept]
+    assert findings.query_verified_findings_recent(limit=1) == [kept]
+
+
+def test_ut06_95_scrub_matches_string_at_depth_four(ops_store: Path) -> None:
+    """UT06-95 a string at exactly depth 4 inside an element is matched (depth 5 is not)."""
+    at_four = {"a": {"b": {"c": {"d": "plain"}}}}
+    _insert(_finding(1, numbers=[_number(1, row_key={"x": "keep"}), _number(2)]))
+    _sql(
+        "UPDATE finding SET numbers = ? WHERE finding_id = ?",
+        core.dump_json([at_four, _number(2)], field="t"),
+        _fid(1),
+    )
+    scrub = findings.scrub_record_from_findings
+    assert _write(lambda conn: scrub("plain", conn=conn)) == 1
+    assert _raw(1)["numbers"] == core.dump_json([_number(2)], field="t")
 
 
 def test_ut06_95_scrub_depth_limit_and_invalid_json(ops_store: Path) -> None:

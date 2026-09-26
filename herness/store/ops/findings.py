@@ -28,7 +28,9 @@ _COLS: Final = (
     "finding_id, run_id, task_id, author_role, claim, entity_type, entity_id, supersedes,"
     " merged_into, numbers, query_ids, confidence, status, challenge, verification, created_at"
 )
-_SELECT: Final = f"SELECT {_COLS} FROM finding"  # noqa: S608 - constant column list
+_SELECT: Final = f"SELECT {_COLS} FROM finding AS f"  # noqa: S608 - constant column list
+# Reads skip rows whose numbers a full privacy scrub emptied (U06-144; Finding needs 1-20).
+_KEPT: Final = "(json_type(f.numbers) <> 'array' OR json_array_length(f.numbers) > 0)"
 _ORDER: Final = " ORDER BY created_at, finding_id"
 _REVIEW_KINDS: Final = ("funding_review", "org_review")
 _MAX_LIMIT: Final = 500
@@ -186,8 +188,8 @@ def query_findings(  # noqa: PLR0913 - U06-43 signature
     if min_confidence is not None:
         clauses.append("f.confidence >= ?")
         params.append(min_confidence)
-    where = " AND ".join(["f.run_id = ?", *clauses])
-    sql = f"SELECT {_COLS} FROM finding AS f WHERE {where}{_ORDER} LIMIT ?"  # noqa: S608
+    where = " AND ".join(["f.run_id = ?", _KEPT, *clauses])
+    sql = f"{_SELECT} WHERE {where}{_ORDER} LIMIT ?"
     rows = core.read_all(sql, [run_id, *params, limit])
     return [_from_row(r) for r in rows]
 
@@ -195,13 +197,13 @@ def query_findings(  # noqa: PLR0913 - U06-43 signature
 def get_findings(finding_ids: Collection[str]) -> dict[str, Finding]:
     """The findings with ``finding_ids`` by id; unknown ids are absent (U06-43)."""
     marks, params = _in(finding_ids)
-    rows = core.read_all(f"{_SELECT} WHERE finding_id IN {marks}{_ORDER}", params)
+    rows = core.read_all(f"{_SELECT} WHERE {_KEPT} AND finding_id IN {marks}{_ORDER}", params)
     return {r["finding_id"]: _from_row(r) for r in rows}
 
 
 def list_task_findings(task_id: str) -> list[Finding]:
     """Findings posted by ``task_id``, ordered by ``created_at, finding_id`` (U06-43)."""
-    rows = core.read_all(f"{_SELECT} WHERE task_id = ?{_ORDER}", (task_id,))
+    rows = core.read_all(f"{_SELECT} WHERE {_KEPT} AND task_id = ?{_ORDER}", (task_id,))
     return [_from_row(r) for r in rows]
 
 
@@ -220,7 +222,7 @@ def query_verified_findings_recent(
         msg = "max_runs must be >= 1"
         raise ValueError(msg)
     clauses, params = _filters(entity_type, (("entity_id", entity_ids),))
-    where = " AND ".join(["f.status = 'verified'", *clauses])
+    where = " AND ".join(["f.status = 'verified'", _KEPT, *clauses])
     columns = ", ".join(f"f.{c.strip()}" for c in _COLS.split(","))
     sql = (
         f"SELECT {columns} FROM finding AS f JOIN ("  # noqa: S608 - constants and placeholders
@@ -261,11 +263,11 @@ def scrub_record_from_findings(record_id: str, *, conn: sqlite3.Connection) -> i
     (the text after the second ``:``); its ``[[nX]]`` markers in ``claim`` become
     ``[redacted]``. Returns the rows changed; a second call returns 0. Values are never
     logged. Invalid ``numbers`` JSON → SchemaViolation("finding invalid: finding_id=<id>")."""
-    if not 1 <= len(record_id) <= _MAX_RECORD_ID:
-        msg = "invalid record_id"
-        raise SchemaViolation(msg)
     parts = record_id.split(":", 2)
     key = parts[2] if len(parts) == 3 else record_id  # noqa: PLR2004 - <source>:<kind>:<key>
+    if not key or len(record_id) > _MAX_RECORD_ID:  # an empty key would match everything
+        msg = "invalid record_id"
+        raise SchemaViolation(msg)
     targets = frozenset({record_id, key})
     # Needles are the JSON-escaped forms, as the values appear inside the stored TEXT.
     needles = [core.dump_json(t, field="record_id")[1:-1] for t in (record_id, key)]
