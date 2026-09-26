@@ -120,8 +120,9 @@ FROM {{ m.latest('servicenow', 'problem', prb_cols) }} AS l;
 
 {# ---------------------------------------------------------------- cmdb_ci ∪ cmdb_ci_service #}
 {#- One row per sys_id (= _source_key). The newest row (a cmdb_ci_service row on a tie)
-    gives the record columns; a cmdb_ci_service row, when one exists, gives name and
-    criticality (`busines_criticality`, the source's spelling, R-60). -#}
+    gives the record columns; a cmdb_ci_service row, when one exists, gives name (unless
+    NULL there) and criticality (`busines_criticality`, the source's spelling, R-60). A
+    NULL class on the newest row falls back to the service row's class. -#}
 {% set ci_cols = [
     ('name', V), ('owned_by', V), ('support_group', V), ('cost_center', V), ('company', V),
     ('sys_class_name', V)
@@ -150,13 +151,14 @@ base AS (
     ) = 1
 ),
 svc AS (
-    SELECT _source_key, name, busines_criticality FROM ci_rows WHERE is_service
+    SELECT _source_key, name, ci_class, busines_criticality FROM ci_rows WHERE is_service
 )
 SELECT
     {{ meta('b') }},
     b._source_key AS sys_id,
-    CASE WHEN svc._source_key IS NOT NULL THEN svc.name ELSE b.name END AS name,
-    b.owned_by, b.support_group, b.cost_center, b.company, b.ci_class,
+    coalesce(svc.name, b.name) AS name,
+    b.owned_by, b.support_group, b.cost_center, b.company,
+    coalesce(b.ci_class, svc.ci_class) AS ci_class,
     {{ m.typed('svc.busines_criticality', 'CAST(lead_int(svc.busines_criticality, 1, 4) AS SMALLINT)', 'criticality') }}
 FROM base AS b
 LEFT JOIN svc ON svc._source_key = b._source_key;

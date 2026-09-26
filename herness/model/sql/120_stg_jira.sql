@@ -140,6 +140,8 @@ edges AS (
 )
 SELECT DISTINCT from_key, to_key, link_type
 FROM edges
+-- Clarification beyond U02-110: an element without the linked issue's key (an issue link
+-- with no outwardIssue/inwardIssue key) has no endpoint, so it yields no link row.
 WHERE from_key IS NOT NULL AND to_key IS NOT NULL;
 
 {# ---------------------------------------------------------------- cast stats #}
