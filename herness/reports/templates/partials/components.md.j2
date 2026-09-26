@@ -94,9 +94,10 @@ Findings: {% for fid in card.finding_ids %}{{ one(fid) }}{{ ', ' if not loop.las
 Evidence not found for this build.
 
 {% else %}
-{% set ns = namespace(run=0) %}
-{% for n in range(1, e.sql.count('`') + 1) if '`' * n in e.sql %}
-{% set ns.run = n %}
+{#- runs are contiguous: once '`' * n is absent no longer run exists, so stop checking -#}
+{% set ns = namespace(run=0, done=false) %}
+{% for n in range(1, e.sql.count('`') + 1) if not ns.done %}
+{% if '`' * n in e.sql %}{% set ns.run = n %}{% else %}{% set ns.done = true %}{% endif %}
 {% endfor %}
 {% set fence = '`' * ([3, ns.run + 1]|max) %}
 {{ fence }}sql

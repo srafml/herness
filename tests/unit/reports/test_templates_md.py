@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -222,6 +223,8 @@ def test_ut09_92_watermark_leading_line(name: str) -> None:
         ("SELECT ```a``` FROM t", "````"),
         ("SELECT 1 -- `````x`` ` ", "``````"),
         ("```", "````"),
+        ("SELECT 1 -- x````", "`````"),
+        ("SELECT 1\n````\nFROM t", "`````"),
     ],
 )
 def test_ut09_92_sql_fence_longer_than_backtick_runs(sql: str, fence: str) -> None:
@@ -317,3 +320,39 @@ def test_ut09_92_evidence_without_row_count_or_time() -> None:
     assert "- Row count: n/a\n- Executed at: n/a\n" in md
     assert "_Sample not stored for this build_" in md
     assert "| parameter | value |" not in md
+
+
+def test_ut09_92_fence_scan_stops_at_first_missing_run() -> None:
+    """UT09-92 hostile 20,000-char alternating-backtick SQL renders fast with a 3-tick fence."""
+    sql = "`a" * 10_000
+    start = time.perf_counter()
+    md = _render("funding_review.md.j2", _context(evidence=[_entry(sql=sql)]))
+    assert time.perf_counter() - start < 1.0
+    assert _fences(md) == ["```"]
+    assert f"```sql\n{sql}\n```\n" in md
+
+
+FOLD = "one\ntwo\r\nthree\rfour"
+
+
+def test_ut09_92_newlines_folded_in_headings_and_cells() -> None:
+    """UT09-92 LF, CRLF and CR in headings, cells and inline segments fold to spaces."""
+    base = _data()
+    fold_table = Table(("col",), [[_cell(FOLD)], [_cell(FOLD, Q1)]], [False, False])
+    data = dataclasses.replace(
+        base, header=base.header._replace(title=_text(FOLD)),
+        section_titles={"executive_summary": FOLD},
+        cards=[base.cards[0]._replace(headline=_text(FOLD, Q1))],
+        funding_table=fold_table,
+    )  # fmt: skip
+    md = _render("funding_review.md.j2", _context(data))
+    assert "\r" not in md
+    folded = "one two  three four"
+    lines = md.splitlines()
+    assert f"# {folded}" in lines
+    assert f"## {folded}" in lines
+    assert f"### 1. {folded}[1.2k](#ev-{Q1})" in lines
+    assert f"| {folded} |" in lines
+    assert f"| [{folded}](#ev-{Q1}) |" in lines
+    assert not any(line.startswith(("two", "three", "four")) for line in lines)
+    assert all(line.endswith("|") for line in lines if line.startswith("|"))
