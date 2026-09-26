@@ -22,6 +22,7 @@ pytest_plugins = [
     "tests.support.plugin",
     "tests.support.fake_clock",
     "tests.support.ops_core_store",
+    "tests.support.fake_keyring",
 ]
 
 collect_ignore = ["support", "fixtures"]

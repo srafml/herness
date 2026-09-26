@@ -1,4 +1,4 @@
-"""Fault tests for impl 10 security paths (FT10-01, T10-05)."""
+"""Fault tests for impl 10 security paths (FT10-01 T10-05, FT10-05 T10-06)."""
 
 from __future__ import annotations
 
@@ -8,11 +8,14 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from keyring.errors import KeyringError
 from tests.support.config_tree import write_full_config
+from tests.support.fake_keyring import MemoryKeyring
 
 from herness.core import audit as a
 from herness.core import config as c
-from herness.core.errors import FatalError
+from herness.core import secrets
+from herness.core.errors import ConfigError, FatalError
 
 pytestmark = pytest.mark.fault
 
@@ -69,3 +72,42 @@ def test_ft10_01_lock_held_elsewhere_blocks_the_audited_action(
     assert not list(logs.glob("audit-*.jsonl"))
     set_secret("snow.token", "v")  # lock released: the action proceeds
     assert backend == {"snow.token": "v"}
+
+
+def test_ft10_05_keyring_failure_is_config_error_with_hint(
+    fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FT10-05 keyring raises (KeyringError or any error): ConfigError, hint, log event."""
+    events: list[tuple[str, dict[str, object]]] = []
+
+    class _Log:
+        def error(self, event: str, **kw: object) -> None:
+            events.append((event, kw))
+
+    monkeypatch.setattr(secrets, "_log", _Log())
+    fake_keyring.store[("herness", "vllm.api_key")] = "Fault-Sentinel-Value-1"
+
+    class _WinError(Exception):  # stands in for a raw pywintypes.error from WinVaultKeyring
+        pass
+
+    errors = (
+        KeyringError("locked vault Fault-Sentinel-Value-1"),
+        RuntimeError("no backend"),
+        _WinError(5, "Access is denied", "Fault-Sentinel-Value-1"),
+    )
+    for error in errors:
+        fake_keyring.error = error
+        for call in (
+            lambda: secrets.resolve("secret:vllm.api_key"),
+            lambda: secrets.exists("vllm.api_key"),
+        ):
+            with pytest.raises(ConfigError, match=r"^secret backend unavailable: keyring$") as exc:
+                call()
+            assert exc.value.hint == "run as the account that owns the credential"
+            assert exc.value.__cause__ is None
+            assert "Fault-Sentinel" not in str(exc.value)
+    assert len(events) == 6
+    assert {e[0] for e in events} == {"secrets.backend.unavailable"}
+    assert all(e[1]["backend"] == "keyring" for e in events)
+    assert all("Fault-Sentinel" not in str(e[1]) for e in events)
+    assert "Fault-Sentinel-Value-1" not in secrets.known_values()
