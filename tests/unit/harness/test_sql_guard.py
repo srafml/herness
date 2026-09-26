@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -292,6 +293,15 @@ def test_ut05_55_non_identifier_table_rejected(guard: sg.SqlGuard) -> None:
     assert info.value.args[1] == "qualify as core.<table>"
 
 
+def test_ut05_55_cte_name_only_visible_in_its_scope(guard: sg.SqlGuard) -> None:
+    """UT05-55 (I2) a CTE name used outside the scope that defines it fails rule 4."""
+    sql = "SELECT * FROM (WITH t AS (SELECT 1 AS a) SELECT * FROM t), t"
+    assert _reject(guard, sql).hint == "qualify as core.t"
+    guard.check("WITH t AS (SELECT 1 AS a) SELECT a FROM (SELECT a FROM t) s")
+    guard.check("WITH t AS (SELECT 1 AS a) SELECT a FROM t UNION SELECT a FROM t")
+    guard.check("SELECT a FROM (WITH t AS (SELECT 1 AS a) SELECT a FROM t) s")
+
+
 # --- UT05-56 --------------------------------------------------------------------------------
 
 _DENIED_FUNCS = (
@@ -367,14 +377,9 @@ def test_ut05_57_unknown_column_no_close_match(guard: sg.SqlGuard) -> None:
     assert err.hint == "column not found; check names with describe_table"
 
 
-def test_ut05_57_unresolved_catalog_column_fails_closed(guard: sg.SqlGuard) -> None:
-    """UT05-57 with allow_catalog, an unresolvable blocked-named column is still rejected."""
-    err = _reject(
-        guard,
-        "SELECT short_description FROM duckdb_columns(), core.incident",
-        allow_catalog=True,
-    )
-    assert err.hint == "free text is not available; join enrich.text_redacted on record_id"
+def test_ut05_57_catalog_only_blocked_name_accepted_as_catalog(guard: sg.SqlGuard) -> None:
+    """UT05-57 a catalog-only query naming a blocked column reaches no warehouse table."""
+    guard.check("SELECT column_name FROM duckdb_columns()", allow_catalog=True)
 
 
 # --- UT05-58 --------------------------------------------------------------------------------
@@ -472,6 +477,29 @@ def test_ut05_60_catalog_functions_only_with_flag(guard: sg.SqlGuard, sql: str) 
     guard.check(sql, allow_catalog=True)
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT i FROM core.incident i, duckdb_tables()",
+        "SELECT to_json(i) FROM core.incident i, duckdb_tables() d",
+        "SELECT i FROM core.incident i WHERE EXISTS (SELECT 1 FROM duckdb_tables())",
+        "SELECT * FROM core.incident, duckdb_tables()",
+        "SELECT short_description FROM duckdb_columns(), core.incident",
+    ],
+)
+def test_ut05_60_catalog_functions_never_mix_with_tables(guard: sg.SqlGuard, sql: str) -> None:
+    """UT05-60 (I1) with allow_catalog, a catalog function plus a warehouse table is rejected."""
+    err = _reject(guard, sql, allow_catalog=True)
+    assert err.message == "SQL guard: table_function"
+    assert err.hint == "catalog functions cannot be combined with warehouse tables"
+
+
+def test_ut05_51_star_without_warehouse_tables_accepted(guard: sg.SqlGuard) -> None:
+    """UT05-51 an unexpanded `*` over table functions only reads no warehouse column."""
+    guard.check("SELECT * FROM range(3)")
+    guard.check("SELECT count(*) FROM core.incident, range(2)")
+
+
 # --- rejection logging (U05-37 side effects) ------------------------------------------------
 
 
@@ -488,3 +516,18 @@ def test_ut05_52_rejection_logs_rule_and_hash_never_sql(guard: sg.SqlGuard) -> N
     assert len(event["query_hash"]) == 16
     int(event["query_hash"], 16)
     assert "secret-ticket-text" not in repr(event)
+
+
+def test_ut05_52_sqlglot_command_fallback_warning_suppressed() -> None:
+    """UT05-52 (M1) sqlglot's Command-fallback warning, which quotes the SQL, is filtered."""
+    records: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = records.append  # type: ignore[method-assign]
+    logger = logging.getLogger("sqlglot")
+    logger.addHandler(handler)
+    try:
+        with pytest.raises(QueryError):
+            sg.SqlGuard(SCHEMA, BLOCKED_COLUMNS).check("LOAD httpfs_secret_marker")
+    finally:
+        logger.removeHandler(handler)
+    assert not [r for r in records if "httpfs_secret_marker" in r.getMessage()]

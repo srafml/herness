@@ -32,6 +32,7 @@ from sqlglot.schema import MappingSchema
 from herness.core.errors import QueryError
 from herness.core.ids import normalize_sql
 from herness.core.logging import get_logger
+from herness.harness import _sql_guard_scope as sc
 
 ALLOWED_SCHEMAS: Final = frozenset({"core", "enrich", "metrics", "score", "meta"})
 DENIED_SCHEMAS: Final = frozenset({"stg", "information_schema", "pg_catalog"})
@@ -196,25 +197,6 @@ def _check_limits(root: exp.Expr) -> None:
             _fail("limits", f"too many {what} (max {cap})")
 
 
-def _enclosing_scope(node: exp.Expr, by_expr: Mapping[int, Scope]) -> Scope | None:
-    parent = node.parent
-    while parent is not None:
-        scope = by_expr.get(id(parent))
-        if scope is not None:
-            return scope
-        parent = parent.parent
-    return None
-
-
-def _resolve(scope: Scope | None, name: str) -> exp.Table | Scope | None:
-    while scope is not None:
-        source = scope.sources.get(name)
-        if isinstance(source, exp.Table | Scope):
-            return source
-        scope = scope.parent
-    return None
-
-
 class SqlGuard:
     """Rejects any SQL that is not one read-only query over the allowed schemas (U05-37)."""
 
@@ -258,25 +240,26 @@ class SqlGuard:
         _check_nodes(root)
         tables = self._check_tables(root)
         uses_catalog = _check_functions(root, allow_catalog=allow_catalog)
+        if uses_catalog and tables:
+            _fail("table_function", "catalog functions cannot be combined with warehouse tables")
         _check_limits(root)
         qualified = self._qualify(root, tables, validate=not uses_catalog)
         scopes = traverse_scope(qualified)
         by_expr = {id(s.expression): s for s in scopes}
-        refs = self._check_columns(qualified, by_expr)
+        refs = self._check_columns(qualified, by_expr, tables)
         untrusted, redact = self._lineage(qualified, refs, scopes[-1], by_expr)
         self._second_parse(sql)
         return GuardedQuery(sql, normalize_sql(sql), ordered, tables, untrusted, redact)
 
     def _check_tables(self, root: exp.Expr) -> frozenset[str]:
         """Rule 4; returns the referenced `<schema>.<table>` names."""
-        ctes = {cte.alias_or_name for cte in root.find_all(exp.CTE)}
         found: set[str] = set()
         for table in root.find_all(exp.Table):
             if isinstance(table.this, exp.Func):
                 continue  # table functions are rule 5
             if not isinstance(table.this, exp.Identifier):
                 _fail("table", "qualify as core.<table>")
-            if not table.db and not table.catalog and table.name in ctes:
+            if not table.db and not table.catalog and table.name in sc.visible_ctes(table):
                 continue
             found.add(self._check_table_name(table))
         return frozenset(found)
@@ -319,7 +302,7 @@ class SqlGuard:
         return {f"{table.db}.{table.name}.{c}" for c in cols if aliased or c == column}
 
     def _column_sources(self, col: exp.Column, by_expr: Mapping[int, Scope]) -> set[str]:
-        source = _resolve(_enclosing_scope(col, by_expr), col.table)
+        source = sc.resolve(sc.enclosing_scope(col, by_expr), col.table)
         if isinstance(source, exp.Table):
             return self._table_columns(source, col.name)
         if source is not None:
@@ -327,8 +310,14 @@ class SqlGuard:
         tables = col.root().find_all(exp.Table)  # unresolved: all tables with it (fail closed)
         return set[str]().union(*(self._table_columns(t, col.name) for t in tables))
 
-    def _check_columns(self, q: exp.Expr, by_expr: Mapping[int, Scope]) -> set[str]:
-        """Rule 6, second half: no referenced column (after star expansion) is blocked."""
+    def _check_columns(
+        self, q: exp.Expr, by_expr: Mapping[int, Scope], tables: frozenset[str]
+    ) -> set[str]:
+        """Rule 6, second half: no `#n`, no unexpanded `*`, no blocked column (fail closed)."""
+        if sc.has_positional_column(q):
+            _fail("column", "positional columns (#n) are not allowed; name the columns")
+        if tables and sc.has_residual_star(q):
+            _fail("column", "* cannot be expanded here; list the columns by name")
         cols = q.find_all(exp.Column)
         refs = set[str]().union(*(self._column_sources(c, by_expr) for c in cols))
         if refs & self._blocked:
@@ -363,12 +352,14 @@ class SqlGuard:
             return set[str]().union(*(self._reach(b, idx, by_expr, seen) for b in branches))
         out: set[str] = set()
         for col in cast("exp.Select", expr).selects[idx].find_all(exp.Column):
-            source = _resolve(_enclosing_scope(col, by_expr), col.table)
-            if isinstance(source, Scope):
-                sub_idx = cast("exp.Query", source.expression).named_selects.index(col.name)
+            source = sc.resolve(sc.enclosing_scope(col, by_expr), col.table)
+            if isinstance(source, Scope) and isinstance(source.expression, exp.Query):
+                sub_idx = source.expression.named_selects.index(col.name)
                 out |= self._reach(source, sub_idx, by_expr, seen)
-            else:
-                out |= self._column_sources(col, by_expr)
+            elif isinstance(source, exp.Table) and source.db:
+                out |= self._table_columns(source, col.name)
+            else:  # table-function alias or unresolvable source: fail closed
+                out |= self._untrusted | self._redact
         return out
 
     def _parser(self) -> duckdb.DuckDBPyConnection:  # step 11: private, one per thread

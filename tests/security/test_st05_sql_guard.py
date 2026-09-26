@@ -203,7 +203,18 @@ _TEMPLATES = (
     "SELECT string_agg({c}, ',') FROM {t}",
     "SELECT record_id FROM {t} i WHERE EXISTS (SELECT 1 WHERE i.{c} = 'x')",
     "SELECT list_transform([1], v -> {c}) AS z FROM {t}",
+    "SELECT u FROM {t}, unnest([{c}]) t(u)",
+    "SELECT * FROM {t}, range(1)",
+    "SELECT * FROM {t} x CROSS JOIN unnest([1])",
+    "SELECT * LIKE '%desc%' FROM {t}",
+    "SELECT #3 FROM {t}",
+    "SELECT count(*) FROM {t} WHERE #3 IS NOT NULL",
 )
+_HINTS = {
+    "free text is not available; join enrich.text_redacted on record_id",
+    "* cannot be expanded here; list the columns by name",
+    "positional columns (#n) are not allowed; name the columns",
+}
 
 
 def _fullwidth(text: str, mask: list[bool]) -> str:
@@ -249,7 +260,7 @@ def test_st05_05_every_template_rejected_plain(column: str, template: str) -> No
     db, table, col = column.split(".")
     with pytest.raises(QueryError) as info:
         GUARD.check(template.format(c=col, t=f"{db}.{table}"))
-    assert info.value.hint == "free text is not available; join enrich.text_redacted on record_id"
+    assert info.value.hint in _HINTS
 
 
 def test_st05_05_fullwidth_identifier_resolves_to_blocked() -> None:
@@ -258,4 +269,71 @@ def test_st05_05_fullwidth_identifier_resolves_to_blocked() -> None:
     sql = 'SELECT "' + col + '" FROM core.incident'  # noqa: S608 - test SQL
     with pytest.raises(QueryError) as info:
         GUARD.check(sql)
+    assert info.value.hint == "free text is not available; join enrich.text_redacted on record_id"
+
+
+# --- ST05-05 fix round 1 regressions (C1 positional, C2 residual star, C3 lineage) ----------
+
+_POSITIONAL = (
+    "SELECT #10 FROM core.incident",
+    "SELECT #9 FROM core.incident",
+    "SELECT upper(#11) FROM core.incident",
+    "SELECT count(*) FROM core.incident WHERE #10 LIKE 'SECRET%'",
+    "SELECT #8 FROM core.work_item",
+    "SELECT #1 FROM meta.build_info",
+)
+
+
+@pytest.mark.parametrize("sql", _POSITIONAL)
+def test_st05_05_positional_columns_rejected(sql: str) -> None:
+    """ST05-05 (C1) DuckDB `#n` positional columns are rejected anywhere."""
+    with pytest.raises(QueryError) as info:
+        GUARD.check(sql)
+    assert info.value.hint == "positional columns (#n) are not allowed; name the columns"
+
+
+_RESIDUAL_STARS = (
+    "SELECT * FROM core.incident, range(1)",
+    "SELECT * FROM core.incident CROSS JOIN unnest([1])",
+    "SELECT * FROM core.incident i JOIN generate_series(1, 2) g ON true",
+    "SELECT * FROM range(1), core.incident",
+    "SELECT * EXCLUDE (number) FROM core.incident, range(1)",
+    "SELECT * FROM core.incident i, LATERAL unnest([i.number])",
+    "SELECT x.* FROM (SELECT * FROM core.incident i, range(1)) x",
+    "SELECT * LIKE '%desc%' FROM core.incident",
+    "SELECT * SIMILAR TO '.*desc.*' FROM core.incident",
+    "SELECT * FROM core.event, range(1)",
+    "SELECT i.* FROM core.incident i, range(1)",
+)
+
+
+@pytest.mark.parametrize("sql", _RESIDUAL_STARS)
+def test_st05_05_unexpanded_star_rejected(sql: str) -> None:
+    """ST05-05 (C2) a `*` qualify cannot expand next to a warehouse table is rejected."""
+    with pytest.raises(QueryError) as info:
+        GUARD.check(sql, allow_catalog=False)
+    assert info.value.hint in _HINTS  # `t.*` over one table expands, then hits the text rule
+
+
+@pytest.mark.parametrize(
+    ("sql", "output"),
+    [
+        ("SELECT u FROM core.work_item, unnest([summary]) t(u)", "u"),
+        ("SELECT g FROM core.work_item w, LATERAL unnest([w.summary]) AS x(g)", "g"),
+        ("SELECT x FROM core.work_item, unnest([{'a': summary}]) t(x)", "x"),
+        ("SELECT u FROM core.event, unnest([alert_name]) t(u)", "u"),
+        ("SELECT x, title FROM score.funding, range(2) r(x)", "x"),
+    ],
+)
+def test_st05_05_lineage_through_table_function_alias_fails_closed(sql: str, output: str) -> None:
+    """ST05-05 (C3) outputs sourced from a table-function alias are untrusted and redacted."""
+    guarded = GUARD.check(sql)
+    assert output in guarded.untrusted_output_columns
+    assert output in guarded.redact_output_columns
+
+
+def test_st05_05_blocked_column_inside_table_function_args() -> None:
+    """ST05-05 (C3 invariant) a blocked column used only inside unnest(...) is rejected."""
+    with pytest.raises(QueryError) as info:
+        GUARD.check("SELECT u FROM core.incident, unnest([short_description]) t(u)")
     assert info.value.hint == "free text is not available; join enrich.text_redacted on record_id"
