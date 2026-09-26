@@ -288,6 +288,7 @@ source_modules = [
     "herness.core.errors",
 ]
 forbidden_modules = [
+    "herness.core.config_sources",
     "herness.core.registry",
     "herness.core.settings",
     "herness.core.resilience",
