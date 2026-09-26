@@ -5,8 +5,8 @@ Every stream goes through `_write_stream` (loop state in the private `_write_loo
 which filters deleted records before each write (TH01-11), splits lake files on schema
 drift, checkpoints by rows or writer age, and moves the watermark only after
 `LakeWriter.commit()` returned (design 01 §2). Backfill slices run in the `backfill`
-module (U01-43), reconciliation in the `reconcile` module (U01-44); the files path (T01-10)
-extends this module.
+module (U01-43), reconciliation in the `reconcile` module (U01-44), inbox files in the
+`files_ingest` module (U01-50).
 """
 
 from __future__ import annotations
@@ -184,7 +184,10 @@ class SyncRunner:
         `CircuitOpen` and every §6 error, after the writer is aborted.
         """
         self._prepare(entity)
-        # T01-10: connector.name == "files" -> return ingest_files(self, entity) (U01-50)
+        if self.connector.name == "files":  # the files path (U01-50, design 01 §5.10)
+            from herness.connectors.files_ingest import ingest_files  # noqa: PLC0415 - cycle
+
+            return ingest_files(self, entity)
         conn = self.connector
         if isinstance(conn, SupportsToolStreams):
             return self._over_tools(entity, conn, "incremental", self._incremental_stream)
