@@ -1,0 +1,112 @@
+# Root config template (owner spec 10; validated by herness.core.settings, U10-93).
+# Every value here equals the design default (design 10 §4.2, §7.2-§7.4). Secure defaults
+# (ENG §5.7): egress off, loopback bind, default_role viewer, mask_ip true. Operators fill in
+# the `deploy.*` pins (marked with <angle-bracket> placeholders) before deploy; until then
+# `herness config validate` reports them as C13 warnings, never errors.
+version: 1
+
+paths:
+  data: data
+  logs: data/logs
+  backup_target: "E:/herness-backup"
+
+security:
+  # Recorded approvals gate the hybrid and premium profiles and the chat cloud mode (R-38).
+  # Record an approval only after the data-processing agreement is signed (design 10 §9.1).
+  data_policy:
+    hybrid_approved: false
+    premium_approved: false
+    chat_approved: false
+    approved_by: null
+    approved_on: null
+  secrets:
+    backend: keyring
+  redaction:
+    mask_ip: true
+    directory_file: "D:/herness/private/directory.csv"   # columns: display_name, alt_names
+    extra_names: []
+    id_patterns:
+      EMPLOYEE_ID: ['\bE\d{6}\b']
+      USER_ID: []
+    national_id_patterns: ['\b\d{3}-\d{2}-\d{4}\b']
+    custom_patterns: {}
+    ner: none              # none | presidio
+    key: "secret:redact.hmac_key"  # pragma: allowlist secret - a secret: reference, not a value
+    denylist_domains: []   # O-8 open: corporate domains supplied at Phase 1
+  egress:
+    enabled: false
+    destinations: []
+    purposes: []
+    max_request_bytes: 2000000
+    max_tokens_per_request: 200000
+    max_tokens_per_day: 3000000
+  network:
+    extra_allowed_hosts: []
+    http_proxy: null
+  ui:
+    bind: 127.0.0.1
+    port: 8501
+    expose:
+      enabled: false                    # LAN access only behind the reverse proxy (§9.2)
+      trusted_proxy: null               # e.g. "127.0.0.1" when Caddy on this host fronts the app
+      identity_header: X-Forwarded-User
+    roles:
+      admins: []                        # usernames, case-insensitive
+      reviewers: []
+      default_role: viewer              # viewer | denied; use denied when expose.enabled
+
+logging:
+  level: INFO
+
+retention:
+  raw_lake_months: 36
+  traces_days: 90
+  egress_log_days: 365
+  audit_log_days: 730
+  app_log_days: 30
+  reports_days: 365
+  chat_days: 180
+
+backup:
+  nightly_at: "01:30"
+  keep_daily: 14
+  keep_weekly: 8
+  include_lake: false
+  include_cache: false
+
+deploy:
+  wsl_distro: herness
+  model_root: /opt/herness/hf           # ext4 inside WSL2, not /mnt/d
+  env_file: /opt/herness/docker.env
+  reasoning:
+    image: "<reasoning-image-digest>"           # vllm/vllm-openai pinned by sha256 digest
+    model: Qwen/Qwen3-30B-A3B-Instruct          # pinned weights; = models.yaml clients.local-30b.model family
+    revision: "<reasoning-revision>"            # HF commit sha
+    served_name: local-30b                      # = models.yaml clients.local-30b.model (spec 05, C07)
+    gpu_memory_utilization: 0.90
+    max_model_len: 32768                        # >= models.yaml clients.local-30b.context_window
+    tool_call_parser: "<tool-call-parser>"       # per model; vLLM --tool-call-parser value
+    reasoning_parser: qwen3
+    port: 8000
+  openjev:
+    image: "<openjev-image-digest>"             # razorback16/openjev pinned by sha256 digest
+    model: nvidia/diffusiongemma-26B-A4B-it-NVFP4
+    revision: "<openjev-revision>"               # HF commit sha
+    gpu_util: 0.9
+    max_num_seqs: 64
+    canvas: 64
+    port: 8100
+  large:
+    image: "<large-image-digest>"                # ghcr.io/ggml-org/llama.cpp server-cuda digest
+    gguf: "<large-gguf-file>"                    # pinned .gguf file name
+    sha256: "<large-sha256>"                     # pinned file hash
+    ctx: 32768
+    gpu_layers: 20
+    port: 8200
+  service:
+    manager: nssm                                # nssm | task_scheduler
+    account: svc-herness
+  release:
+    repo: null
+    signer_workflow: null
+    licence_exceptions: []

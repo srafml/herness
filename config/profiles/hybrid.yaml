@@ -1,0 +1,18 @@
+# Hybrid profile overlay (design 10 §4.3, design 05 §7, U10-94). Routes skeptic_final and
+# writer to claude-opus; every other role stays local. Requires
+# security.data_policy.hybrid_approved (+ approved_by, approved_on) recorded in herness.yaml;
+# never set security.data_policy here (TH10-03, U10-17).
+version: 1
+models:
+  models:
+    roles:
+      skeptic_final: claude-opus
+      writer: claude-opus
+    fallback:                              # first entry must equal roles.<role> (C01)
+      skeptic_final: [claude-opus, local-30b]
+      writer: [claude-opus, local-30b]
+security:
+  egress:
+    enabled: true
+    destinations: [api.anthropic.com]
+    purposes: [reasoning_final]

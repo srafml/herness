@@ -5,8 +5,21 @@ Copies the repository's shipped owner files (``decisions``, ``eval``, ``metrics`
 applied to the copies, both reported as open items of T10-03:
 
 * ``decisions.yaml``, ``eval.yaml`` and ``models.yaml`` ship without the ``version: 1`` line
-  U10-16 requires; it is prepended.
+  U10-16 requires; it is prepended. T10-13 confirmed this is permanent, not transitional:
+  ``DecisionsConfig``, ``load_eval_config`` and the ``set(_raw()) <= {...}`` assertion of
+  ``test_ut05_125_repository_config_loads`` each reject an extra ``version`` key, so the real
+  files cannot carry it (Ruling R2); ``_versioned`` only ever touches these test copies.
 * ``metrics.yaml`` ships ``metrics: []`` until T04-08; one catalog entry is inserted.
+
+``write_repo_config`` (T10-13) is the templates-era counterpart: it copies the real
+``config/herness.yaml`` and ``config/profiles/*.yaml`` (shipped by T10-13) plus the owner files
+above, verbatim except for the same two adaptations, so it starts exercising each remaining
+owner file (``sources``, ``mappings``, ``pipelines``, ``resilience``) the moment it ships.
+``app.yaml`` and ``memory.yaml`` are already shipped with real content, but ``HernessConfig``
+still mounts them as closed no-field stand-ins (``_AppStub``, ``_MemoryStub``) pending the T09
+and T07 cards that wire in ``AppConfig`` and ``MemoryConfig``; loading either file's real
+content raises today regardless of this module, so ``write_repo_config`` stands in the minimal
+``version: 1`` content for both, same as ``write_full_config`` (T10-13 report carries this over).
 """
 
 from __future__ import annotations
@@ -128,6 +141,49 @@ def write_checked_config(root: Path) -> Path:
     (cfg / "herness.yaml").write_text(text, encoding="utf-8")
     (root / "docker").mkdir()
     shutil.copyfile(COMPOSE_FIXTURE, root / "docker" / "compose.yaml")
+    return cfg
+
+
+# Stems with no repo file yet (T06-03, T10-23 wiring aside, none of these has shipped: UT10-76
+# asserts it stays that way so this stand-in drops out the moment the file lands).
+_MISSING_STEMS: tuple[str, ...] = ("sources", "mappings", "pipelines", "resilience")
+# Stems shipped with real content that ``HernessConfig`` still mounts as a closed stand-in.
+_STUBBED_STEMS: tuple[str, ...] = ("app", "memory")
+_PROFILES: tuple[str, ...] = ("local", "hybrid", "premium", "synth")
+
+
+def write_repo_config(root: Path) -> Path:
+    """Copy the repository's shipped ``config/`` templates verbatim; stand in the rest.
+
+    Copies ``herness.yaml`` and ``profiles/*.yaml`` (T10-13) plus the owner files already
+    loadable through ``HernessConfig`` (``decisions``, ``eval``, ``metrics``, ``models``,
+    ``weights``, ``injection_patterns.txt``), byte for byte apart from the two adaptations the
+    module docstring explains. ``_MISSING_STEMS`` and ``_STUBBED_STEMS`` get the same minimal
+    stand-in ``write_full_config`` uses; see the docstring for why each is still needed.
+    """
+    cfg = root / "config"
+    (cfg / "profiles").mkdir(parents=True)
+    shutil.copyfile(SHIPPED / "herness.yaml", cfg / "herness.yaml")
+    for name in ("decisions", "eval", "models"):
+        text = (SHIPPED / f"{name}.yaml").read_text(encoding="utf-8")
+        (cfg / f"{name}.yaml").write_text(_versioned(text), encoding="utf-8")
+    shutil.copyfile(SHIPPED / "weights.yaml", cfg / "weights.yaml")
+    shutil.copyfile(SHIPPED / "injection_patterns.txt", cfg / "injection_patterns.txt")
+    metrics = (SHIPPED / "metrics.yaml").read_text(encoding="utf-8")
+    assert "\nmetrics: []\n" in metrics
+    (cfg / "metrics.yaml").write_text(metrics.replace("metrics: []\n", METRIC_ENTRY), "utf-8")
+    for stem in _MISSING_STEMS:
+        assert not (SHIPPED / f"{stem}.yaml").exists(), f"{stem}.yaml shipped: drop this stand-in"
+        if stem == "resilience":
+            shutil.copyfile(RESILIENCE_FIXTURE, cfg / "resilience.yaml")
+            text = (cfg / "resilience.yaml").read_text(encoding="utf-8")
+            (cfg / "resilience.yaml").write_text(_versioned(text), encoding="utf-8")
+        else:
+            (cfg / f"{stem}.yaml").write_text("version: 1\n", encoding="utf-8")
+    for stem in _STUBBED_STEMS:
+        (cfg / f"{stem}.yaml").write_text("version: 1\n", encoding="utf-8")
+    for name in _PROFILES:
+        shutil.copyfile(SHIPPED / "profiles" / f"{name}.yaml", cfg / "profiles" / f"{name}.yaml")
     return cfg
 
 
