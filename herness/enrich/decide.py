@@ -94,14 +94,18 @@ def chain_after(
     before `primary`'s position removed. For `primary == "laya"` the whole chain is
     returned. No duplicates; never contains `primary`.
     """
-    chain = cfg.escalation_chain
-    if primary == "laya" or primary not in chain:
-        after: tuple[str, ...] = chain
+
+    def _swap(name: str) -> str:
+        return "jev" if name == "openjev" and deciders.jev.enabled else name
+
+    swapped = tuple(_swap(name) for name in cfg.escalation_chain)
+    canonical_primary = _swap(primary)
+    if primary == "laya" or canonical_primary not in swapped:
+        after: tuple[str, ...] = swapped
     else:
-        after = chain[chain.index(primary) + 1 :]
-    swapped = tuple("jev" if name == "openjev" and deciders.jev.enabled else name for name in after)
+        after = swapped[swapped.index(canonical_primary) + 1 :]
     enabled = {"openjev": deciders.openjev.enabled, "jev": deciders.jev.enabled}
-    kept = [name for name in swapped if enabled.get(name, True)]
+    kept = [name for name in after if enabled.get(name, True)]
     seen: set[str] = set()
     ordered: list[str] = []
     for name in kept:

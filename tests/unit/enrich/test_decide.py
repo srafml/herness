@@ -200,6 +200,24 @@ def test_ut03_69_chain_after_primary_openjev_leaves_llm() -> None:
     assert chain_after("openjev", cfg=cfg, deciders=deciders) == ("llm",)
 
 
+def test_ut03_69_chain_after_primary_jev_against_openjev_authored_chain() -> None:
+    """UT03-69 primary jev matches the openjev slot it replaced; result never contains it."""
+    cfg = _cfg(primary="laya", chain=("openjev", "llm"))
+    deciders = _deciders(openjev_enabled=True, jev_enabled=True)
+    result = chain_after("jev", cfg=cfg, deciders=deciders)
+    assert result == ("llm",)
+    assert "jev" not in result
+
+
+def test_ut03_69_chain_after_primary_jev_against_jev_authored_chain() -> None:
+    """UT03-69 primary jev against a chain that already lists jev literally."""
+    cfg = _cfg(primary="laya", chain=("jev", "llm"))
+    deciders = _deciders(openjev_enabled=True, jev_enabled=True)
+    result = chain_after("jev", cfg=cfg, deciders=deciders)
+    assert result == ("llm",)
+    assert "jev" not in result
+
+
 def test_ut03_69_chain_after_removes_disabled_members() -> None:
     """UT03-69 a disabled openjev is removed from the chain."""
     cfg = _cfg(primary="laya", chain=("openjev", "llm"))
@@ -540,9 +558,13 @@ def _rows_strategy(draw: st.DrawFn) -> dict[str, CachedAnswer]:
     return rows
 
 
+_human_strategy = st.none() | st.tuples(st.sampled_from(_ANSWERS), st.just(_T1))
+
+
 @given(
     primary=st.sampled_from(["laya", "openjev", "jev", "llm"]),
     rows=_rows_strategy(),
+    human=_human_strategy,
     threshold=st.floats(min_value=0.0, max_value=1.0, allow_nan=False),
     in_scope=st.booleans(),
     pending_review=st.booleans(),
@@ -550,14 +572,22 @@ def _rows_strategy(draw: st.DrawFn) -> dict[str, CachedAnswer]:
 def test_pt03_08_final_iff_fields_set_and_escalated_iff_not_primary(
     primary: str,
     rows: dict[str, CachedAnswer],
+    human: tuple[str, datetime] | None,
     threshold: float,
     in_scope: bool,
     pending_review: bool,
 ) -> None:
-    """PT03-08 final iff fields set; escalated iff decider != primary (ensemble rule aside)."""
+    """PT03-08 final iff fields set; escalated iff decider != primary (ensemble rule aside).
+
+    `human` is drawn too: `final ⇔ fields set` holds unconditionally, including on the
+    human branch. Only `escalated ⇔ decider != primary` is genuinely in tension with a
+    human correction (U03-74 step 2 hard-codes `escalated=False, decider="human"`
+    regardless of `primary`), so that half of the property is skipped when `decider ==
+    "human"`.
+    """
     chain = tuple(name for name in ("openjev", "jev", "llm") if name != primary)
     res = resolve_pair(
-        human=None,
+        human=human,
         rows=rows,
         primary=primary,
         chain=chain,
@@ -573,7 +603,7 @@ def test_pt03_08_final_iff_fields_set_and_escalated_iff_not_primary(
         and res.decided_at is not None
     )
     assert (res.status == "final") == fields_set
-    if res.status == "final":
+    if res.status == "final" and res.decider != "human":
         if res.decider == "ensemble":
             laya = rows.get("laya")
             expected_escalated = laya is None or rows["ensemble"].answer != laya.answer
