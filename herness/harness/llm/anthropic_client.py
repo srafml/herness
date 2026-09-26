@@ -2,15 +2,14 @@
 
 Every SDK client this module builds gets ``max_retries=0`` (spec 08 owns retries) and an
 ``http_client`` from the egress guard, never one of its own (R-06, TH05-13). Opaque thinking
-blocks go back only to Anthropic (TH05-14). Errors and logs carry no key, prompt or body
-(TH05-15).
+blocks go back only to Anthropic (TH05-14). Errors and logs carry no key, prompt or body (TH05-15).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast
 
 import anthropic
@@ -34,9 +33,13 @@ from herness.core.types import (
     ToolResultPart,
     Usage,
 )
+from herness.harness.llm import _anthropic_batch
+from herness.harness.llm._anthropic_batch import BATCH_MAX_WAIT_S
 from herness.harness.llm.base import Done, StreamEvent, TextDelta, ToolCallDelta, egress_purpose_for
 from herness.harness.llm.errors import translate_anthropic_error
 from herness.harness.llm.pricing import cost_usd
+
+__all__ = ["BATCH_MAX_WAIT_S", "AnthropicClient"]
 
 if TYPE_CHECKING:
     import httpx2
@@ -154,7 +157,7 @@ def _usage(raw: anthropic.types.Message) -> Usage:
 
 @register("llm_client", "anthropic")
 class AnthropicClient:
-    """Anthropic adapter: ``LLMClient`` and ``StreamCapable`` (batch methods: T05-09)."""
+    """Anthropic adapter: ``LLMClient``, ``StreamCapable`` and ``BatchCapable`` (T05-09)."""
 
     def __init__(self, cfg: ClientConfig) -> None:
         if cfg.kind != "anthropic":
@@ -173,6 +176,8 @@ class AnthropicClient:
         self.name = cfg.name
         self.cfg = cfg
         self._api_key = _secrets.resolve(cfg.api_key)
+        self._pending: dict[str, LLMRequest] = {}
+        self._pending_lock = asyncio.Lock()
 
     def _to_anthropic_messages(self, messages: list[Message]) -> list[dict[str, object]]:
         """Map messages to Messages API turns; consecutive user turns merge, results first."""
@@ -267,27 +272,29 @@ class AnthropicClient:
             batch=batch,
         )
 
-    def _http_client(self, req: LLMRequest) -> httpx2.AsyncClient:
-        """The guard's client for this request; fails closed without one (R-06, TH05-13)."""
+    def _sdk(self, req: LLMRequest | None) -> anthropic.AsyncAnthropic:
+        """The guarded SDK client for ``req``, or the batch-admin client when ``None`` (U05-29).
+
+        Fails closed without a guarded client (R-06, TH05-13); a batch is not scoped to one task.
+        """
+        if req is None:
+            purpose, run_id, task_id, timeout = "reasoning", None, None, self.cfg.timeout_s
+        else:
+            meta = req.metadata
+            purpose = egress_purpose_for(meta.model_role)
+            run_id, task_id, timeout = meta.run_id, meta.task_id, req.timeout_s
         guard = _egress.get_guard()
         if not hasattr(guard, "async_http_client"):
             msg = f"anthropic client {self.name}: egress guard has no guarded http client"
             raise EgressBlocked(msg, reason="guard_client_unavailable")
-        meta = req.metadata
-        return cast("_GuardedClientFactory", guard).async_http_client(
-            egress_purpose_for(meta.model_role),
-            "aggregated_evidence",
-            run_id=meta.run_id,
-            task_id=meta.task_id,
-            timeout=req.timeout_s,
+        http_client: httpx2.AsyncClient = cast("_GuardedClientFactory", guard).async_http_client(
+            purpose, "aggregated_evidence", run_id=run_id, task_id=task_id, timeout=timeout
         )
-
-    def _sdk(self, req: LLMRequest) -> anthropic.AsyncAnthropic:
         return anthropic.AsyncAnthropic(
             api_key=self._api_key.get_secret_value(),
             max_retries=0,
-            timeout=req.timeout_s,
-            http_client=self._http_client(req),
+            timeout=timeout,
+            http_client=http_client,
         )
 
     async def acomplete(self, req: LLMRequest) -> LLMResponse:
@@ -302,14 +309,13 @@ class AnthropicClient:
                 else:
                     raw = await client.messages.create(**params)
         except (anthropic.AnthropicError, EgressBlocked) as exc:
-            self._fail(exc, req)
+            self._fail(exc, req.metadata.task_id)
         return self._map_message(raw, req, _elapsed_ms(start), batch=False)
 
-    def _fail(self, exc: anthropic.AnthropicError | EgressBlocked, req: LLMRequest) -> NoReturn:
+    def _fail(self, exc: anthropic.AnthropicError | EgressBlocked, task_id: str | None) -> NoReturn:
         """Translate per U05-30 and log the §8 adapter events (no body, prompt or key)."""
         err = exc if isinstance(exc, EgressBlocked) else translate_anthropic_error(exc)
         if isinstance(err, EgressBlocked):
-            task_id = req.metadata.task_id
             _log.warning("harness.llm.egress_blocked", client=self.name, task_id=task_id)
             raise err from None  # the guard's own exception; chaining ``exc`` would form a cycle
         if isinstance(err, ConfigError) and isinstance(exc, anthropic.APIStatusError):
@@ -337,8 +343,47 @@ class AnthropicClient:
                         yield ToolCallDelta(tool[0], tool[1], event.partial_json)
                 raw = await stream.get_final_message()
         except (anthropic.AnthropicError, EgressBlocked) as exc:
-            self._fail(exc, req)
+            self._fail(exc, req.metadata.task_id)
         yield Done(self._map_message(raw, req, _elapsed_ms(start), batch=False))
+
+    async def submit_batch(self, reqs: Sequence[LLMRequest]) -> str:
+        """Create a Message Batch; record ``request_key -> LLMRequest`` pending (U05-29)."""
+        sdk_requests, pending = _anthropic_batch.prepare_submit(self.cfg, reqs, self._build_params)
+        try:
+            async with self._sdk(None) as client:
+                batch = await client.messages.batches.create(requests=cast("Any", sdk_requests))
+        except (anthropic.AnthropicError, EgressBlocked) as exc:
+            self._fail(exc, None)
+        async with self._pending_lock:
+            self._pending.update(pending)
+        return batch.id
+
+    async def collect_batch(self, batch_id: str, poll_s: float = 30.0) -> dict[str, LLMResponse]:
+        """Poll until ended; map succeeded results, log the rest, drop collected keys (U05-29)."""
+        _anthropic_batch.validate_collect(self.cfg, batch_id, poll_s)
+        try:
+            async with self._sdk(None) as client:
+                await _anthropic_batch.poll_until_ended(
+                    batch_id,
+                    poll_s,
+                    retrieve=client.messages.batches.retrieve,
+                    sleep=asyncio.sleep,
+                    monotonic=clock.monotonic,
+                )
+                async with self._pending_lock:
+                    snapshot = dict(self._pending)
+                responses, seen = await _anthropic_batch.collect_results(
+                    batch_id,
+                    await client.messages.batches.results(batch_id),
+                    snapshot,
+                    lambda msg, req: self._map_message(msg, req, 0, batch=True),
+                )
+        except (anthropic.AnthropicError, EgressBlocked) as exc:
+            self._fail(exc, None)
+        async with self._pending_lock:
+            for key in seen:
+                self._pending.pop(key, None)
+        return responses
 
 
 def _elapsed_ms(start: float) -> int:
