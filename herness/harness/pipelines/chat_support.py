@@ -8,7 +8,7 @@ trimming of sentences whose numbers failed verification, and chunking of the ans
 import asyncio
 import inspect
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final, Literal, cast
 
@@ -78,15 +78,22 @@ _SENTENCE_SPLIT_RE: Final = re.compile(r"(?<=[.!?])\s+")
 class ObservedTool:
     """Wraps a tool so each call emits one `ToolEvent` and then new `EvidenceEvent`s (U06-130).
 
-    One instance serves one chat turn: a query id is emitted as evidence at most once per
-    instance. Sync tools run in a worker thread. A raised error emits `ToolEvent(ok=False)`
-    and re-raises.
+    A query id is emitted as evidence at most once per turn: `ChatService` passes one `seen`
+    set to every wrapper of the turn (without it, the set is private to this wrapper). Sync
+    tools run in a worker thread and an awaitable they return is awaited. A raised error emits
+    `ToolEvent(ok=False)` and re-raises.
     """
 
-    def __init__(self, inner: Tool | AsyncTool, emit: Callable[[ChatEvent], None]) -> None:
+    def __init__(
+        self,
+        inner: Tool | AsyncTool,
+        emit: Callable[[ChatEvent], None],
+        *,
+        seen: set[str] | None = None,
+    ) -> None:
         self._inner = inner
         self._emit = emit
-        self._seen: set[str] = set()
+        self._seen: set[str] = set() if seen is None else seen
 
     @property
     def name(self) -> str:
@@ -119,9 +126,17 @@ class ObservedTool:
         return result
 
     async def _invoke(self, ctx: ToolContext, kwargs: dict[str, JsonValue]) -> ToolResult:
+        call = cast("Callable[..., object]", self._inner)
         if inspect.iscoroutinefunction(self._inner.__call__):
-            return await cast("AsyncTool", self._inner)(ctx, **kwargs)
-        return await asyncio.to_thread(cast("Tool", self._inner), ctx, **kwargs)
+            result = await cast("Awaitable[object]", call(ctx, **kwargs))
+        else:
+            result = await asyncio.to_thread(call, ctx, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+        if not isinstance(result, ToolResult):
+            msg = "tool returned a value that is not a ToolResult"
+            raise TypeError(msg)
+        return result
 
 
 def has_review_intent(
@@ -148,15 +163,35 @@ def has_review_intent(
     return True, "org_review"
 
 
-def _sentences(text: str) -> list[tuple[int, int]]:
-    """Offsets of the sentences of `text`, split at `(?<=[.!?])\\s+`."""
-    spans: list[tuple[int, int]] = []
+def _sentences(text: str) -> list[tuple[int, int, str]]:
+    """Offsets of the sentences of `text` split at `(?<=[.!?])\\s+`, each with the separator
+    that follows it (empty for the last)."""
+    spans: list[tuple[int, int, str]] = []
     start = 0
     for sep in _SENTENCE_SPLIT_RE.finditer(text):
-        spans.append((start, sep.start()))
+        spans.append((start, sep.start(), sep.group()))
         start = sep.end()
-    spans.append((start, len(text)))
+    spans.append((start, len(text), ""))
     return spans
+
+
+def _join(parts: list[tuple[str, str, bool]]) -> str:
+    """Join the kept `(sentence, separator_after, kept)` parts with their original separators.
+
+    Between two kept sentences the separator with the most line breaks among those around the
+    removed sentences is used, so paragraph breaks and list items survive a removal.
+    """
+    out: list[str] = []
+    pending: str | None = None
+    for sentence, sep, kept in parts:
+        if kept:
+            if pending is not None:
+                out.append(pending)
+            out.append(sentence)
+            pending = sep
+        elif pending is not None:
+            pending = max(pending, sep, key=lambda s: s.count("\n"))
+    return "".join(out)
 
 
 def _failing_ids(v: VerificationResult) -> set[str]:
@@ -173,25 +208,27 @@ def trim_failing_claims(answer: ChatAnswer, v: VerificationResult) -> tuple[Chat
     """
     failing = _failing_ids(v)
     uncited = [(span.start, span.end) for item in v.items for span in item.uncited]
-    kept: list[str] = []
+    parts: list[tuple[str, str, bool]] = []
     removed: list[str] = []
-    for start, end in _sentences(answer.text):
+    for start, end, sep in _sentences(answer.text):
         sentence = answer.text[start:end]
         if not sentence:
             continue
         cites_failing = any(m.id in failing for m in parse_markers(sentence).markers)
-        overlaps = any(s < end and start < e for s, e in uncited)
-        (removed if cites_failing or overlaps else kept).append(sentence)
+        drop = cites_failing or any(s < end and start < e for s, e in uncited)
+        if drop:
+            removed.append(sentence)
+        parts.append((sentence, sep, not drop))
     if not removed:
         return answer, []
-    text = " ".join(kept)
+    text = _join(parts)
     cited = {m.id for m in parse_markers(text).markers}
     numbers: list[NumberRef] = [n for n in answer.numbers if n.id in cited]
-    kept_queries = {n.query_id for n in numbers}
-    dropped_queries = {n.query_id for n in answer.numbers} - kept_queries
+    dropped_queries = {n.query_id for n in answer.numbers} - {n.query_id for n in numbers}
     query_ids = [q for q in answer.query_ids if q not in dropped_queries]
     if not text:
-        text = NO_VERIFIED_ANSWER
+        # Nothing verified is left, so no query supports the fallback text.
+        text, query_ids = NO_VERIFIED_ANSWER, []
     update = {"text": text, "numbers": numbers, "query_ids": query_ids}
     return answer.model_copy(update=update), removed
 

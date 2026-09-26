@@ -160,7 +160,7 @@ def test_ut06_87_unknown_marker_and_uncited_span_drop_sentences() -> None:
 def test_ut06_87_everything_removed_gives_fallback_text() -> None:
     """UT06-87 an empty result text becomes the fixed no-answer sentence."""
     n1 = _num("n1", Q1, 4)
-    answer = ChatAnswer(text="Payments had [[n1]] incidents.", numbers=[n1], query_ids=[Q1])
+    answer = ChatAnswer(text="Payments had [[n1]] incidents.", numbers=[n1], query_ids=[Q1, Q3])
     trimmed, removed = trim_failing_claims(answer, _verification([_check(n1, "query_failed")]))
     assert trimmed.text == "No verified answer could be produced."
     assert trimmed.numbers == []
@@ -175,6 +175,25 @@ def test_ut06_87_passing_answer_unchanged() -> None:
     trimmed, removed = trim_failing_claims(answer, _verification([_check(n1, "match")]))
     assert trimmed == answer
     assert removed == []
+
+
+def test_ut06_87_original_separators_kept_between_sentences() -> None:
+    """UT06-87 paragraph breaks and list items between kept sentences survive a removal."""
+    n1, n2 = _num("n1", Q1, 4), _num("n2", Q2, 7)
+    text = (
+        "Summary first.\n\nPayments had [[n1]] incidents. Search had [[n2]] incidents.\n"
+        "- Checkout is stable.\n- Search is not. Fixed [[n2]] times!\nDone."
+    )
+    answer = ChatAnswer(text=text, numbers=[n1, n2], query_ids=[Q1, Q2])
+    trimmed, removed = trim_failing_claims(
+        answer, _verification([_check(n1, "match"), _check(n2, "mismatch")])
+    )
+    assert trimmed.text == (
+        "Summary first.\n\nPayments had [[n1]] incidents.\n- Checkout is stable.\n"
+        "- Search is not.\nDone."
+    )
+    assert removed == ["Search had [[n2]] incidents.", "Fixed [[n2]] times!"]
+    assert trimmed.query_ids == [Q1]
 
 
 def test_ut06_87_trailing_whitespace_leaves_no_empty_sentence() -> None:
@@ -320,6 +339,69 @@ async def test_ut06_90_async_tool_and_repeat_query_ids_not_reemitted() -> None:
     await tool(CTX)
     assert len(events) == 4
     assert events[3:] == [ToolEvent(name="get_metric", query_id=Q1, ok=True)]
+
+
+@pytest.mark.asyncio
+async def test_ut06_90_wrappers_sharing_seen_emit_each_query_id_once_per_turn() -> None:
+    """UT06-90 two wrappers sharing one `seen` set emit a query id as evidence once."""
+    events: list[ChatEvent] = []
+    seen: set[str] = set()
+    sql = ObservedTool(
+        _SyncTool(ToolResult(ok=True, content="a", query_ids=[Q1, Q2])), events.append, seen=seen
+    )
+    metric = ObservedTool(
+        _AsyncTool(ToolResult(ok=True, content="b", query_ids=[Q2, Q3])), events.append, seen=seen
+    )
+    await sql(CTX)
+    await metric(CTX)
+    assert events == [
+        ToolEvent(name="run_sql", query_id=Q1, ok=True),
+        EvidenceEvent(query_id=Q1),
+        EvidenceEvent(query_id=Q2),
+        ToolEvent(name="get_metric", query_id=Q2, ok=True),
+        EvidenceEvent(query_id=Q3),
+    ]
+    assert seen == {Q1, Q2, Q3}
+
+
+class _AwaitableReturningTool:
+    """A tool whose plain `__call__` returns a coroutine instead of being `async def`."""
+
+    name = "get_scores"
+    description = "Get scores."
+    input_schema: dict[str, JsonValue] = {"type": "object"}  # noqa: RUF012 - test double
+
+    def __init__(self, result: object) -> None:
+        self.result = result
+
+    def __call__(self, ctx: ToolContext, **kwargs: JsonValue) -> Any:
+        async def run() -> object:
+            return self.result
+
+        return run()
+
+
+@pytest.mark.asyncio
+async def test_ut06_90_awaitable_returned_by_plain_call_is_awaited() -> None:
+    """UT06-90 an awaitable returned by a non-async `__call__` is awaited."""
+    events: list[ChatEvent] = []
+    result = ToolResult(ok=True, content="s", query_ids=[Q1])
+    tool = ObservedTool(cast("Any", _AwaitableReturningTool(result)), events.append)
+    assert await tool(CTX) is result
+    assert events == [
+        ToolEvent(name="get_scores", query_id=Q1, ok=True),
+        EvidenceEvent(query_id=Q1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ut06_90_non_tool_result_raises_and_emits_failed_event() -> None:
+    """UT06-90 a tool returning something other than a ToolResult fails like a raised error."""
+    events: list[ChatEvent] = []
+    tool = ObservedTool(cast("Any", _AwaitableReturningTool("oops")), events.append)
+    with pytest.raises(TypeError, match="ToolResult"):
+        await tool(CTX)
+    assert events == [ToolEvent(name="get_scores", query_id=None, ok=False)]
 
 
 @pytest.mark.asyncio
