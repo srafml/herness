@@ -5,7 +5,8 @@ budget. Holds the guard step (2), the streaming execution (4-5) and the JSON-saf
 sample (6). `result_hash` and `iter_batch_rows` come from `herness.metrics.evidence` and are
 never reimplemented (R-15, UT05-124). `json_safe` is the U05-35 step 6 conversion that the
 Verifier's private stand-in (`_verifier_rerun.json_safe`) is to be replaced with. DuckDB
-error text reaches the model only through `safe_error_text` (review ruling on step 5).
+error text reaches the model only through `safe_error_text` (review rulings on step 5),
+which masks quoted values over the full text and fails closed on unmatched quotes.
 """
 
 from __future__ import annotations
