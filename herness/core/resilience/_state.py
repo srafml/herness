@@ -14,7 +14,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
@@ -22,13 +22,11 @@ from herness.core.resilience._metric_buffer import MetricBuffer
 
 if TYPE_CHECKING:
     from herness.core.jobs.ports import JobContext, JobsBackend
+    from herness.core.resilience.breaker import CircuitBreaker
     from herness.core.resilience.faults import FaultPlan
     from herness.core.resilience.policies import RetryPolicy
     from herness.core.resilience.ports import ChainRegistry, ResilienceBackend
     from herness.core.types import JobKind, JobOutcome
-
-# Placeholder for an 08 class of a later card; it becomes a TYPE_CHECKING import then.
-type CircuitBreaker = Any  # U08-24, T08-06 (herness.core.resilience.breaker.CircuitBreaker)
 
 OPS_UNBOUND: Final = (
     "resilience backend not bound; call herness.store.ops.resilience.bind_core_backends()"
