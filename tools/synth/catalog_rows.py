@@ -73,13 +73,18 @@ class ProjectRow:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class ChangeSlot:
-    """One T3 change on C3; `seq` is its 0-based position in `work_end` order."""
+    """One T3 change on C3; `seq` is its 0-based position in `work_end` order.
+
+    `caused_by` holds one flag per follow-up incident (in opening-draw order): true when
+    that incident's `caused_by` names the change. The flags are drawn once at catalog
+    build from the `plants:t3` stream, so every shard agrees (U11-12)."""
 
     sys_id: str
     seq: int
     work_end: datetime
     emergency: bool
     follow_up_incidents: int
+    caused_by: tuple[bool, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -131,6 +136,9 @@ class Catalog:
     plants: PlantTargets
     month_counts: dict[MonthKey, int]
     seq_start: dict[MonthKey, int]
+    # (planner id, month key) -> (first seq, count) of that planner's plant records; plant
+    # records follow the month's background records in planner order (see catalog_plan).
+    plant_seq: dict[tuple[str, MonthKey], tuple[int, int]] = dataclasses.field(default_factory=dict)
 
 
 Planner = Callable[[Catalog, SynthParams], Mapping[MonthKey, int]]

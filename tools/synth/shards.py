@@ -1,12 +1,14 @@
 """Generation shards of the synthetic lake (U11-19, design §5.1.8).
 
-Only the `Shard` and `IncidentTimeIndex` value types live here for now; the U11-19 card
-adds `plan_shards`, `run_shard`, `run_all_shards` and builds the index after phase A.
+Only the `Shard`, `IncidentTimeIndex` and `PlantOutput` value types live here for now;
+the U11-19 card adds `plan_shards`, `run_shard`, `run_all_shards` and builds the index
+after phase A.
 """
 
 import dataclasses
 from collections.abc import Mapping
 from datetime import date
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -42,4 +44,16 @@ class IncidentTimeIndex:
     numbers: Mapping[str, tuple[str, ...]]
 
 
-__all__ = ["IncidentTimeIndex", "Shard"]
+@dataclasses.dataclass(frozen=True, slots=True)
+class PlantOutput:
+    """What one plant adds to a shard (U11-11): source-shaped `records`, truth label rows
+    `{record_id, question, answer}`, `members` (incident record ids of the plant) and
+    `links` (pair rows such as T3 `{incident_record_id, change_record_id}`). Data only."""
+
+    records: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    labels: list[dict[str, str]] = dataclasses.field(default_factory=list)
+    members: list[str] = dataclasses.field(default_factory=list)
+    links: list[dict[str, str]] = dataclasses.field(default_factory=list)
+
+
+__all__ = ["IncidentTimeIndex", "PlantOutput", "Shard"]

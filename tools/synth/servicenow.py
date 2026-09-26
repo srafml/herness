@@ -62,8 +62,8 @@ _CLOSE_LABELS: Final = {
     "unsuccessful": "Unsuccessful",
     "backed_out": "Backed out",
 }
-_WINDOW_H: Final = (1.0, 8.0)  # planned window length
-_WORK_SHIFT_MIN: Final = 30.0  # work window within +/- 30 min of plan
+WINDOW_H: Final = (1.0, 8.0)  # planned window length
+WORK_SHIFT_MIN: Final = 30.0  # work window within +/- 30 min of plan
 _LEAD_H: Final = (1.0, 168.0)  # opened_at before start_date; the spec leaves it open
 _PROBLEM_MEDIAN_DAYS: Final = 30.0  # problem resolution; the spec leaves it open
 _MIN_WORK: Final = timedelta(minutes=1)
@@ -202,39 +202,51 @@ def _change_state(
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class _ChangeCtx:
+class ChangeCtx:
+    """Per-shard context of change generation; build it with `change_context`."""
+
     params: SynthParams
     bank: TemplateBank
     index: ServiceIndex
     end: datetime
 
 
-def _change(
-    ctx: _ChangeCtx, rng: np.random.Generator, service: ServiceRow, start: datetime, seq: int
-) -> Record:
-    params = ctx.params
-    types = params.change.types
-    keys = sorted(types)
-    kind = keys[int(rng.choice(len(keys), p=np.array([types[k] for k in keys])))]
-    planned_end = start + timedelta(hours=float(rng.uniform(*_WINDOW_H)))
-    shift = rng.uniform(-_WORK_SHIFT_MIN, _WORK_SHIFT_MIN, 2)
-    work_start = start + timedelta(minutes=float(shift[0]))
-    work_end = max(planned_end + timedelta(minutes=float(shift[1])), work_start + _MIN_WORK)
+def change_context(cat: Catalog, params: SynthParams, bank: TemplateBank) -> ChangeCtx:
+    return ChangeCtx(params, bank, service_index(cat), span_end(params))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ChangeDraw:
+    """A change's fixed values: planned (`start_date`, `end_date`) and work windows; the
+    CI is drawn from the service's CIs when `ci` is None."""
+
+    service: ServiceRow
+    seq: int
+    kind: str
+    planned: tuple[datetime, datetime]
+    work: tuple[datetime, datetime]
+    ci: CiRow | None = None
+
+
+def change_record(ctx: ChangeCtx, rng: np.random.Generator, d: ChangeDraw) -> Record:
+    """A `change_request` record: lead time, state, close code and text drawn from `rng`."""
+    params, service = ctx.params, d.service
+    start, planned_end = d.planned
     # the lead time never takes opened_at before the span start (planned starts lie inside)
     lead = timedelta(hours=float(rng.uniform(*_LEAD_H)))
     opened = max(start - lead, span_start(params))
-    state, actual_start, actual_end, code = _change_state(
-        params, rng, kind, (work_start, work_end), ctx.end
-    )
-    text = render_change_text(ctx.bank, rng, component=service.name, emergency=kind == "emergency")
-    ci, team = ctx.index.ci(rng, service), ctx.index.support(service)
+    state, actual_start, actual_end, code = _change_state(params, rng, d.kind, d.work, ctx.end)
+    emergency = d.kind == "emergency"
+    text = render_change_text(ctx.bank, rng, component=service.name, emergency=emergency)
+    ci = ctx.index.ci(rng, service) if d.ci is None else d.ci
+    team = ctx.index.support(service)
     stamps = (opened, start, planned_end, actual_start, actual_end)
     return {
         "sys_id": pair(new_sys_id(rng)),
-        "number": pair(number("CHG", seq)),
-        "type": pair(kind, _CHANGE_TYPES[kind]),
+        "number": pair(number("CHG", d.seq)),
+        "type": pair(d.kind, _CHANGE_TYPES[d.kind]),
         "state": state,
-        "risk": pair(*_RISK[kind]),
+        "risk": pair(*_RISK[d.kind]),
         "opened_at": ts_pair(opened),
         "start_date": ts_pair(start),
         "end_date": ts_pair(planned_end),
@@ -250,13 +262,27 @@ def _change(
     }
 
 
+def _change(
+    ctx: ChangeCtx, rng: np.random.Generator, service: ServiceRow, start: datetime, seq: int
+) -> Record:
+    types = ctx.params.change.types
+    keys = sorted(types)
+    kind = keys[int(rng.choice(len(keys), p=np.array([types[k] for k in keys])))]
+    planned_end = start + timedelta(hours=float(rng.uniform(*WINDOW_H)))
+    shift = rng.uniform(-WORK_SHIFT_MIN, WORK_SHIFT_MIN, 2)
+    work_start = start + timedelta(minutes=float(shift[0]))
+    work_end = max(planned_end + timedelta(minutes=float(shift[1])), work_start + _MIN_WORK)
+    draw = ChangeDraw(service, seq, kind, (start, planned_end), (work_start, work_end))
+    return change_record(ctx, rng, draw)
+
+
 def gen_changes(
     cat: Catalog, params: SynthParams, shard: Shard, rng: np.random.Generator, bank: TemplateBank
 ) -> list[Record]:
     """`shard.n_records` background changes numbered `CHG` + `seq_start + i`; the arrival
     model places the planned start, services follow incident weight."""
     check_shard(shard, "change_request")
-    ctx = _ChangeCtx(params, bank, service_index(cat), span_end(params))
+    ctx = change_context(cat, params, bank)
     starts = arrival_times(params, shard, rng, shard.n_records)
     services = ctx.index.draw(rng, len(starts))
     return [
@@ -302,7 +328,13 @@ def gen_problems(
 
 
 __all__ = [
+    "WINDOW_H",
+    "WORK_SHIFT_MIN",
+    "ChangeCtx",
+    "ChangeDraw",
     "IncidentBatch",
+    "change_context",
+    "change_record",
     "close_code_probs",
     "gen_changes",
     "gen_cis",
