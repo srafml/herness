@@ -158,6 +158,7 @@ ignore = ["TRY003"]
 "herness/core/numbers.py" = ["A005"]
 "herness/core/types/__init__.py" = ["A005"]
 "herness/core/egress.py" = ["TID251"]
+"herness/core/egress_clients.py" = ["TID251"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
@@ -326,6 +327,8 @@ forbidden_modules = [
     "herness.core.egress",
     "herness.core.egress_log",
     "herness.core._egress_scan",
+    "herness.core.egress_clients",
+    "herness.core._egress_transport",
     "herness.core.secrets",
     "herness.core.settings",
     "herness.core.resilience",

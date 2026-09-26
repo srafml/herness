@@ -1,6 +1,6 @@
 """Pure checks of the egress guard: URL shape (step 3) and PII re-scan (step 6) (U10-51).
 
-Size-forced private sibling of ``herness.core.egress`` (T10-16 ruling), which leaves room
+Size-forced private sibling of ``herness.core.egress`` (w07-s10 ruling), which leaves room
 there for the guarded transports and clients of T10-17. Results are reason codes and
 per-type counts only; no text ever leaves these functions (TH10-22).
 """
