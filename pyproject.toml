@@ -313,7 +313,9 @@ source_modules = [
 forbidden_modules = [
     "herness.core.audit",
     "herness.core.config",
+    "herness.core.config_checks",
     "herness.core.config_sources",
+    "herness.core.config_validate",
     "herness.core.config_view",
     "herness.core.registry",
     "herness.core.redact",

@@ -17,6 +17,7 @@ from herness.core import config as c
 from herness.core import config_sources as cs
 from herness.core import secrets as s
 from herness.core.errors import ConfigError, FatalError
+from herness.core.logging import configure_logging, get_logger, reset_logging
 
 pytestmark = pytest.mark.unit
 
@@ -33,14 +34,17 @@ def _isolate(fake_keyring: MemoryKeyring) -> Iterator[None]:
     c.reset_config()
 
 
-def _dotenv_config(tmp_path: Path, profile: str = "local") -> c.HernessConfig:
+def _dotenv_config(
+    tmp_path: Path, profile: str = "local", env: dict[str, str] | None = None
+) -> c.HernessConfig:
     cfg_dir = write_full_config(tmp_path)
     herness = cfg_dir / "herness.yaml"
     text = herness.read_text("utf-8").replace(
         "security:\n", "security:\n  secrets: {backend: dotenv}\n"
     )
     herness.write_text(text, "utf-8")
-    return c.init_config(profile, config_dir=cfg_dir, env={})  # type: ignore[arg-type]
+    # C12 (T10-12) refuses dotenv at load unless the load env has HERNESS_ENV=dev or synth.
+    return c.init_config(profile, config_dir=cfg_dir, env=env or {})  # type: ignore[arg-type]
 
 
 # --- UT10-28 resolve, exists, referenced_secret_names --------------------------------------------
@@ -217,7 +221,7 @@ def test_ut10_31_resolve_through_dotenv_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT10-31 backend: dotenv in config with HERNESS_ENV=dev: resolve reads .env; set refused."""
-    _dotenv_config(tmp_path)
+    _dotenv_config(tmp_path, env={"HERNESS_ENV": "dev"})
     _write_env(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HERNESS_ENV", "dev")
@@ -372,3 +376,119 @@ def test_ut10_31_dotenv_root_fallbacks(tmp_path: Path, monkeypatch: pytest.Monke
     assert s._dotenv_root() == Path.cwd()
     with cs.load_context("synth", tmp_path / "other" / "config", {}):
         assert s._dotenv_root() == (tmp_path / "other").resolve()
+
+
+# --- U10-32 scrub_secrets --------------------------------------------------------------------
+
+
+def test_ut10_34_nested_known_value_masked(fake_keyring: MemoryKeyring) -> None:
+    """UT10-34 a resolved sentinel is replaced by *** wherever it sits, nested or not."""
+    fake_keyring.store[(SVC, "svc.key")] = VALUE
+    s.resolve("svc.key")
+    event: dict[str, Any] = {
+        "event": "core.test.value",
+        "nested": {"list": [{"inner": f"prefix {VALUE} suffix"}, (VALUE, "kept")]},
+        "top": VALUE,
+    }
+    out = s.scrub_secrets(None, "info", event)
+    dumped = json.dumps(out)
+    assert VALUE not in dumped
+    assert "***" in dumped
+    assert out["top"] == "***"
+
+
+def test_ut10_35_credential_and_url_token_masked() -> None:
+    """UT10-35 a password= field and a SAS URL query value both become [SECRET]."""
+    event = {
+        "event": "core.test.creds",
+        "line": "auth failed: password=abc123xyz please retry",
+        "url": "https://acct.blob.core.windows.net/c/f?sv=2021&se=2026&sig=AbCdEfGh12345%3D",
+    }
+    out = s.scrub_secrets(None, "info", event)
+    assert "[SECRET]" in out["line"]
+    assert "abc123xyz" not in out["line"]
+    assert "[SECRET]" in out["url"]
+    assert "AbCdEfGh12345" not in out["url"]
+
+
+def test_ut10_35_scrub_secrets_is_idempotent() -> None:
+    """UT10-35 running scrub_secrets again on its own output changes nothing further."""
+    event = {"event": "core.test.creds", "line": "password=abc123xyz"}
+    once = s.scrub_secrets(None, "info", event)
+    twice = s.scrub_secrets(None, "info", dict(once))
+    assert once == twice
+
+
+def test_ut10_34_scrub_secrets_failure_returns_fixed_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT10-34 any internal failure replaces the whole event with log.scrub.failed (TH10-07)."""
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(s, "_scrub_value", _boom)
+    event = {"event": "core.test.x", "secret": VALUE, "other": "kept"}
+    out = s.scrub_secrets(None, "info", event)
+    assert out == {"event": "log.scrub.failed"}
+
+
+def _nest(depth: int, leaf: object) -> object:
+    return leaf if depth == 0 else {"child": _nest(depth - 1, leaf)}
+
+
+def test_ut10_34_depth_beyond_six_left_unscrubbed(fake_keyring: MemoryKeyring) -> None:
+    """UT10-34 a container first reached past depth 6 is returned unwalked, secrets and all.
+
+    The depth cap only stops recursion *into* a dict/list/tuple; a string is masked regardless
+    of how deep it sits once reached. So a value wrapped in 6 dicts (the leaf string is reached
+    directly, not as a container) is still masked, but wrapped in 7 the innermost dict itself is
+    handed back unwalked at depth 7 and the string inside is never visited.
+    """
+    fake_keyring.store[(SVC, "deep.key")] = VALUE
+    s.resolve("deep.key")
+    shallow = s.scrub_secrets(None, "info", {"event": "x", "top": _nest(6, VALUE)})
+    deep = s.scrub_secrets(None, "info", {"event": "x", "top": _nest(7, VALUE)})
+    assert VALUE not in json.dumps(shallow)
+    assert VALUE in json.dumps(deep)
+
+
+def test_ut10_34_known_value_scrub_is_idempotent(fake_keyring: MemoryKeyring) -> None:
+    """UT10-34 the *** known-value path is idempotent: scrubbing its own output changes nothing."""
+    fake_keyring.store[(SVC, "idem.key")] = VALUE
+    s.resolve("idem.key")
+    event = {"event": "core.test.x", "field": f"prefix {VALUE} suffix"}
+    once = s.scrub_secrets(None, "info", event)
+    twice = s.scrub_secrets(None, "info", dict(once))
+    assert once == twice
+    assert once["field"] == "prefix *** suffix"
+
+
+def test_ut10_35_long_string_truncated_before_scanning() -> None:
+    """UT10-35 a string over 64 KiB is cut to 64 KiB before any pattern is scanned."""
+    long_value = "a" * 70_000 + "TAIL_MARKER_ABC"
+    out = s.scrub_secrets(None, "info", {"event": "x", "field": long_value})
+    assert len(out["field"]) == 64 * 1024
+    assert "TAIL_MARKER_ABC" not in out["field"]
+
+
+def test_st10_15_exception_with_secret_is_scrubbed(
+    fake_keyring: MemoryKeyring, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ST10-15 a resolved secret inside a logged exception's message never reaches stderr."""
+    fake_keyring.store[(SVC, "exc.secret")] = VALUE
+    s.resolve("exc.secret")
+    configure_logging("INFO", scrubber=s.scrub_secrets)
+    try:
+        log = get_logger("core.test")
+        try:
+            msg = f"boom: {VALUE}"
+            raise ValueError(msg)  # noqa: TRY301 - needs a real traceback frame
+        except ValueError:
+            log.exception("core.test.exc")
+        err = capsys.readouterr().err
+        assert VALUE not in err
+        assert "***" in err
+    finally:
+        reset_logging()

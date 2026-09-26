@@ -54,6 +54,7 @@ __all__ = [
     "init_config",
     "load_config",
     "reset_config",
+    "validate",
 ]
 
 GATED_PROFILES: Final[frozenset[str]] = frozenset({"hybrid", "premium"})
@@ -215,15 +216,31 @@ def load_config(
             cfg = HernessConfig(**override_dict, profile=name)
         except ValidationError as exc:
             raise view.validation_error(exc, cs.FILE_STEMS) from None
-    _check_gate(name, cfg.security.data_policy)
-    cs.check_profile_egress(name, cfg.security)
-    cfg = _absolute_paths(cfg, config_dir)
-    # T10-12: run_cross_checks(cfg, offline=True, include_registry=False) (U10-09 step 8).
+        _check_gate(name, cfg.security.data_policy)
+        cs.check_profile_egress(name, cfg.security)
+        cfg = _absolute_paths(cfg, config_dir)
+        from herness.core import config_validate  # noqa: PLC0415 - cycle: it imports config
+
+        config_validate.enforce_offline_checks(cfg)  # step 8, inside the load context (C12, C08a)
     duration_ms = round((clock.monotonic() - started) * 1000)
     _log.info(
         "config.load.completed", profile=name, config_hash=config_hash(cfg), duration_ms=duration_ms
     )
     return cfg
+
+
+def validate(cfg_dir: Path, profile: ProfileName, *, offline: bool = False) -> list[ConfigIssue]:
+    """Full validation for ``config validate`` and ``doctor``; problems are issues (U10-13)."""
+    from herness.core import config_validate as cv  # noqa: PLC0415 - cycle: cv imports config
+
+    try:
+        cfg = load_config(profile, config_dir=cfg_dir)
+    except ConfigError as exc:
+        found = [issue for issue in exc.issues if isinstance(issue, ConfigIssue)]
+        return cv.sort_issues(found or [ConfigIssue("error", "config", exc.message[:300], None)])
+    compose = cfg_dir.resolve().parent / "docker" / "compose.yaml"
+    issues = cv.run_cross_checks(cfg, offline=offline, include_registry=True, compose_path=compose)
+    return cv.sort_issues([*issues, *cv.run_owner_validators(cfg, offline=offline)])
 
 
 # --- U10-10 process cache -----------------------------------------------------------------

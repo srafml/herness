@@ -1,0 +1,74 @@
+# Test-local copy of docker/compose.yaml (impl 10 U10-80: design 10 §5.6.2 verbatim plus
+# `environment: *offline` on llamacpp-large). The repository file itself lands with T10-23.
+name: herness
+x-gpu: &gpu
+  deploy: {resources: {reservations: {devices: [{driver: nvidia, count: all, capabilities: [gpu]}]}}}
+  ipc: host
+  restart: "no"                     # the worker (08) starts and stops services
+x-offline-env: &offline
+  HF_HUB_OFFLINE: "1"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  DO_NOT_TRACK: "1"
+services:
+  vllm-reasoning:
+    <<: *gpu
+    profiles: ["reasoning"]
+    image: ${REASONING_IMAGE}                      # vllm/vllm-openai@sha256:...
+    ports: ["127.0.0.1:${REASONING_PORT}:8000"]
+    volumes: ["${MODEL_ROOT}:/root/.cache/huggingface"]
+    environment:
+      <<: *offline
+      VLLM_NO_USAGE_STATS: "1"
+      VLLM_API_KEY: ${VLLM_API_KEY}
+    command:                                       # entrypoint form: verify at Phase 4
+      - --model=${REASONING_MODEL}
+      - --revision=${REASONING_REVISION}
+      - --served-model-name=${REASONING_SERVED_NAME}
+      - --gpu-memory-utilization=${REASONING_GPU_UTIL}
+      - --max-model-len=${REASONING_MAX_MODEL_LEN}
+      - --enable-auto-tool-choice
+      - --tool-call-parser=${REASONING_TOOL_PARSER}
+      - --reasoning-parser=${REASONING_PARSER}
+      - --host=0.0.0.0
+      - --port=8000
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 900s
+  openjev:
+    <<: *gpu
+    profiles: ["decider"]
+    image: ${OPENJEV_IMAGE}                        # razorback16/openjev@sha256:... (tag 0.4.0)
+    ports: ["127.0.0.1:${OPENJEV_PORT}:8080"]
+    volumes: ["${MODEL_ROOT}:/root/.cache/huggingface"]
+    environment:
+      <<: *offline                                 # OpenJev honoring HF_HUB_OFFLINE: verify at Phase 4
+      OPENJEV_BACKEND: vllm
+      OPENJEV_MODEL: ${OPENJEV_MODEL}
+      OPENJEV_GPU_UTIL: ${OPENJEV_GPU_UTIL}
+      OPENJEV_MAX_NUM_SEQS: ${OPENJEV_MAX_NUM_SEQS}
+      OPENJEV_CANVAS: ${OPENJEV_CANVAS}
+      OPENJEV_API_KEY: ${OPENJEV_API_KEY}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import os,urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8080/v1/models', headers={'Authorization':'Bearer '+os.environ['OPENJEV_API_KEY']}), timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 900s
+  llamacpp-large:                                  # deep-mode lever 7: large model with CPU-RAM offload
+    <<: *gpu
+    profiles: ["large"]
+    image: ${LARGE_IMAGE}                          # ghcr.io/ggml-org/llama.cpp server-cuda@sha256:...
+    ports: ["127.0.0.1:${LARGE_PORT}:8080"]
+    volumes: ["${MODEL_ROOT}/gguf:/models:ro"]
+    environment: *offline                          # U10-80 addition: offline flags on every service
+    command: ["-m", "/models/${LARGE_GGUF}", "--host", "0.0.0.0", "--port", "8080",
+              "-c", "${LARGE_CTX}", "-ngl", "${LARGE_GPU_LAYERS}", "--api-key", "${VLLM_API_KEY}"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]   # tool present in image: verify at Phase 4
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 1200s

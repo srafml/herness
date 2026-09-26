@@ -14,9 +14,13 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from herness.core import registry
+
 REPO = Path(__file__).resolve().parents[2]
 SHIPPED = REPO / "config"
-RESILIENCE_FIXTURE = REPO / "tests" / "unit" / "core" / "fixtures" / "resilience.yaml"
+FIXTURES = REPO / "tests" / "unit" / "core" / "fixtures"
+RESILIENCE_FIXTURE = FIXTURES / "resilience.yaml"
+COMPOSE_FIXTURE = FIXTURES / "compose.yaml"  # U10-80 test copy until T10-23 ships docker/
 
 HERNESS_YAML = """\
 version: 1
@@ -41,6 +45,13 @@ models:
     fallback: {skeptic_final: [claude-opus, local-30b], writer: [claude-opus, local-30b]}
 security:
   egress: {enabled: true, destinations: [api.anthropic.com], purposes: [reasoning_final]}
+"""
+
+# C24 (U10-20): premium needs at least one destination and one purpose.
+PREMIUM_YAML = """\
+version: 1
+security:
+  egress: {enabled: true, destinations: [api.anthropic.com], purposes: [reasoning]}
 """
 
 METRIC_ENTRY = """\
@@ -85,7 +96,52 @@ def write_full_config(root: Path) -> Path:
         (cfg / f"{stem}.yaml").write_text("version: 1\n", encoding="utf-8")
     (cfg / "herness.yaml").write_text(HERNESS_YAML, encoding="utf-8")
     (cfg / "injection_patterns.txt").write_text("# patterns\nignore previous\n", "utf-8")
-    for name in ("local", "premium", "synth"):
+    for name in ("local", "synth"):
         (cfg / "profiles" / f"{name}.yaml").write_text("version: 1\n", encoding="utf-8")
     (cfg / "profiles" / "hybrid.yaml").write_text(HYBRID_YAML, encoding="utf-8")
+    (cfg / "profiles" / "premium.yaml").write_text(PREMIUM_YAML, encoding="utf-8")
     return cfg
+
+
+def _pins() -> dict[str, str]:
+    # Built at run time so no digest-like literal is committed (detect-secrets).
+    return {
+        "<reasoning-image>": "vllm/vllm-openai@sha256:" + "a" * 64,
+        "<openjev-image>": "razorback16/openjev@sha256:" + "b" * 64,
+        "<large-image>": "ghcr.io/ggml-org/llama.cpp@sha256:" + "c" * 64,
+        "<rev>": ("0123456789abcdef" * 3)[:40],
+        "<gguf>": "qwen3-large.gguf",
+        "<sha256>": "d" * 64,
+    }
+
+
+def write_checked_config(root: Path) -> Path:
+    """``write_full_config`` with pinned deploy values plus ``<root>/docker/compose.yaml``.
+
+    Every offline cross-check (U10-20) passes on this tree: C13 finds no placeholder and
+    C08a finds the compose file (the U10-80 test copy).
+    """
+    cfg = write_full_config(root)
+    text = (cfg / "herness.yaml").read_text(encoding="utf-8")
+    for placeholder, value in _pins().items():
+        text = text.replace(f'"{placeholder}"', value)
+    (cfg / "herness.yaml").write_text(text, encoding="utf-8")
+    (root / "docker").mkdir()
+    shutil.copyfile(COMPOSE_FIXTURE, root / "docker" / "compose.yaml")
+    return cfg
+
+
+# Every registry name the checked tree references (C03): client kinds and enabled deciders.
+CHECKED_NAMES: tuple[tuple[registry.RegistryKind, str], ...] = (
+    ("llm_client", "openai_compat"),
+    ("llm_client", "anthropic"),
+    ("decider", "laya"),
+    ("decider", "openjev"),
+    ("decider", "llm"),
+)
+
+
+def register_checked_names() -> None:
+    """Register stand-ins for ``CHECKED_NAMES`` so C03 passes; tests call ``reset_registry``."""
+    for kind, name in CHECKED_NAMES:
+        registry.register(kind, name)(object())

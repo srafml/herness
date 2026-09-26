@@ -35,7 +35,10 @@ def test_st10_26_dotenv_backend_refused_in_local_without_dev(
     (tmp_path / ".env").write_text("HERNESS_SECRET__VLLM_API_KEY=Dotenv-Bypass-1\n", "utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("HERNESS_ENV", raising=False)
-    cfg = c.init_config("local", config_dir=cfg_dir, env={})
+    with pytest.raises(ConfigError, match=r"C12 dotenv only with HERNESS_ENV=dev"):
+        c.init_config("local", config_dir=cfg_dir, env={})  # C12 refuses at load (T10-12)
+    # Loaded under dev, then used in a process without HERNESS_ENV: U10-33 refuses every use.
+    cfg = c.init_config("local", config_dir=cfg_dir, env={"HERNESS_ENV": "dev"})
     assert cfg.security.secrets.backend == "dotenv"
     fake_keyring.store[("herness", "vllm.api_key")] = "Keyring-Value-1"
     calls = (

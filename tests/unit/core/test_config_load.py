@@ -11,6 +11,7 @@ from tests.unit.connectors.test_settings_config import EXAMPLE
 
 from herness.core import config as c
 from herness.core import config_sources as cs
+from herness.core.config_validate import reset_owner_validators
 from herness.core.errors import ConfigError
 
 pytestmark = pytest.mark.unit
@@ -22,6 +23,7 @@ SENTINEL = "SENTINEL-9f3a"
 def _reset() -> Iterator[None]:
     yield
     c.reset_config()  # local reset until T11-40 wires reset_config into tests/conftest.py (R3)
+    reset_owner_validators()  # reset_core (impl 10 §11): owner registrations
 
 
 @pytest.fixture
