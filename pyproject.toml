@@ -294,6 +294,7 @@ source_modules = [
     "herness.core.errors",
 ]
 forbidden_modules = [
+    "herness.core.audit",
     "herness.core.config",
     "herness.core.config_sources",
     "herness.core.config_view",
