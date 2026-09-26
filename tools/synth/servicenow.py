@@ -169,13 +169,20 @@ def gen_incidents(
     return IncidentBatch(records, labels, pii)
 
 
-def _close_code(params: SynthParams, rng: np.random.Generator, kind: str) -> str:
-    """Close code; emergency changes multiply the non-success shares, renormalized."""
+def close_code_probs(params: SynthParams, kind: str) -> dict[str, float]:
+    """Close-code probabilities in sorted code order; emergency changes multiply the
+    non-success shares by `emergency_failure_multiplier`, renormalized."""
     codes = params.change.close_codes
     boost = params.change.emergency_failure_multiplier if kind == "emergency" else 1.0
     keys = sorted(codes)
     weights = np.array([codes[k] * (1.0 if k == "successful" else boost) for k in keys])
-    return keys[int(rng.choice(len(keys), p=weights / weights.sum()))]
+    return dict(zip(keys, (weights / weights.sum()).tolist(), strict=True))
+
+
+def _close_code(params: SynthParams, rng: np.random.Generator, kind: str) -> str:
+    probs = close_code_probs(params, kind)
+    keys = list(probs)
+    return keys[int(rng.choice(len(keys), p=np.array(list(probs.values()))))]
 
 
 def _change_state(
@@ -213,7 +220,9 @@ def _change(
     shift = rng.uniform(-_WORK_SHIFT_MIN, _WORK_SHIFT_MIN, 2)
     work_start = start + timedelta(minutes=float(shift[0]))
     work_end = max(planned_end + timedelta(minutes=float(shift[1])), work_start + _MIN_WORK)
-    opened = start - timedelta(hours=float(rng.uniform(*_LEAD_H)))
+    # the lead time never takes opened_at before the span start (planned starts lie inside)
+    lead = timedelta(hours=float(rng.uniform(*_LEAD_H)))
+    opened = max(start - lead, span_start(params))
     state, actual_start, actual_end, code = _change_state(
         params, rng, kind, (work_start, work_end), ctx.end
     )
@@ -294,6 +303,7 @@ def gen_problems(
 
 __all__ = [
     "IncidentBatch",
+    "close_code_probs",
     "gen_changes",
     "gen_cis",
     "gen_groups",

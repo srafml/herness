@@ -33,6 +33,8 @@ _UPDATE_LAG_S: Final = 2 * 3600.0  # sys_updated_on = latest timestamp + U(0, 2 
 _SATURDAY, _SUNDAY = 5, 6
 _DAYS_PER_YEAR: Final = 365.0
 _CLUSTER_KEY: Final = "servicenow_cluster"
+_ONE_DAY: Final = timedelta(days=1)
+_ONE_MICRO: Final = timedelta(microseconds=1)
 
 
 def pair(value: str, display: str | None = None) -> Pair:
@@ -102,7 +104,10 @@ def arrival_times(
     params: SynthParams, shard: Shard, rng: np.random.Generator, n: int
 ) -> list[datetime]:
     """`n` sorted UTC times: weighted day of the shard month, hour curve in
-    `business_timezone`, then uniform minute, second and microsecond (U11-07 step 1)."""
+    `business_timezone`, then uniform minute, second and microsecond (U11-07 step 1).
+
+    Every time lies in the shard's UTC days (shard month within the span), so no record
+    opens after the span end and durations are never negative."""
     days = _shard_days(params, shard.month)
     if n and not days:
         msg = "shard month lies outside the generated span"
@@ -121,7 +126,19 @@ def arrival_times(
         datetime.combine(days[d], time(int(h), int(m), int(s), int(us)), zone).astimezone(UTC)
         for d, h, m, s, us in local
     ]
-    return sorted(times)
+    lo = datetime.combine(days[0], time(), UTC)
+    hi = datetime.combine(days[-1] + timedelta(days=1), time(), UTC)
+    return sorted(_within(t, lo, hi) for t in times)
+
+
+def _within(at: datetime, lo: datetime, hi: datetime) -> datetime:
+    """Fold a time the zone offset pushed outside `[lo, hi)` back by one day, keeping its
+    local hour; clamp as a last resort (a one-day window). No rng draw, so deterministic."""
+    if at >= hi:
+        at -= _ONE_DAY
+    elif at < lo:
+        at += _ONE_DAY
+    return min(max(at, lo), hi - _ONE_MICRO)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

@@ -13,6 +13,7 @@ from tools.synth.params import SynthParams, SynthUsageError, load_params
 from tools.synth.pii import build_name_list
 from tools.synth.servicenow import (
     IncidentBatch,
+    close_code_probs,
     gen_changes,
     gen_cis,
     gen_groups,
@@ -20,6 +21,7 @@ from tools.synth.servicenow import (
     gen_problems,
     gen_rels,
 )
+from tools.synth.servicenow_incidents import priority_probs
 from tools.synth.shards import Shard
 from tools.synth.text import ROOT_CAUSE_OPTIONS, TemplateBank
 
@@ -415,3 +417,69 @@ def test_ut11_09_changes_in_progress_at_span_end(
             assert not _v(record, "close_code")
             assert not _v(record, "work_end")
         assert _ts(_v(record, "sys_updated_on")) <= _END_DT + timedelta(hours=2)
+
+
+@pytest.mark.parametrize("zone", ["America/New_York", "Asia/Tokyo"])
+@pytest.mark.parametrize("month", [date(2024, 1, 1), date(2024, 3, 1)])
+def test_ut11_09_non_utc_zone_keeps_incidents_inside_span(
+    cat: Catalog,
+    params: SynthParams,
+    bank: TemplateBank,
+    names: tuple[tuple[str, str], ...],
+    zone: str,
+    month: date,
+) -> None:
+    """UT11-09 a non-UTC business_timezone never opens an incident outside the span; no
+    negative duration or customer impact (review M1)."""
+    shifted = params.model_copy(update={"business_timezone": zone})
+    rng = np.random.default_rng(21)
+    batch = gen_incidents(cat, shifted, _shard("incident", 20_000, month=month), rng, bank, names)
+    lo = max(datetime.combine(params.start, datetime.min.time(), UTC),
+             datetime(month.year, month.month, 1, tzinfo=UTC))  # fmt: skip
+    hi = min(_END_DT, datetime(month.year, month.month + 1, 1, tzinfo=UTC))
+    for record in batch.records:
+        opened = _ts(_v(record, "opened_at"))
+        assert lo <= opened < hi
+        if impact := _v(record, "u_customer_impact_minutes"):
+            assert int(impact) >= 0
+        if resolved := _v(record, "resolved_at"):
+            assert _ts(resolved) >= opened
+    assert any(_v(r, "u_customer_impact_minutes") for r in batch.records)
+
+
+def test_ut11_09_change_opened_at_not_before_span_start(
+    cat: Catalog, params: SynthParams, bank: TemplateBank
+) -> None:
+    """UT11-09 the change lead time never takes opened_at before the span start (review M4)."""
+    rng = np.random.default_rng(22)
+    rows = gen_changes(cat, params, _shard("change_request", 3000, month=date(2024, 1, 1)), rng,
+                       bank)  # fmt: skip
+    start = f"{params.start.isoformat()} 00:00:00"
+    assert min(_v(r, "opened_at") for r in rows) == start  # early changes were clamped
+    assert all(_v(r, "opened_at") <= _v(r, "start_date") for r in rows)
+
+
+def test_ut11_09_emergency_close_code_boost(params: SynthParams) -> None:
+    """UT11-09 emergency changes multiply each non-success close-code share by 3 (review M3)."""
+    assert params.change.emergency_failure_multiplier == 3.0
+    normal = close_code_probs(params, "normal")
+    emergency = close_code_probs(params, "emergency")
+    assert set(normal) == set(emergency) == _CLOSE_CODES
+    assert sum(emergency.values()) == pytest.approx(1.0)
+    for code in _CLOSE_CODES - {"successful"}:
+        ratio = emergency[code] / emergency["successful"]
+        assert ratio == pytest.approx(3.0 * normal[code] / normal["successful"])
+    assert close_code_probs(params, "standard") == pytest.approx(normal)
+
+
+def test_ut11_09_criticality1_doubles_p1_p2(params: SynthParams) -> None:
+    """UT11-09 criticality-1 services double the P1/P2 shares, taken from P4 (review M3)."""
+    assert params.priority.criticality1_high_multiplier == 2.0
+    base = priority_probs(params, 2)
+    crit1 = priority_probs(params, 1)
+    assert crit1.sum() == pytest.approx(1.0)
+    assert crit1[0] == pytest.approx(2.0 * base[0])
+    assert crit1[1] == pytest.approx(2.0 * base[1])
+    assert crit1[2] == pytest.approx(base[2])
+    assert crit1[3] == pytest.approx(base[3] - base[0] - base[1])
+    assert crit1[4] == pytest.approx(base[4])
