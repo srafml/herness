@@ -28,6 +28,7 @@ from herness.core.types import (
 )
 from herness.harness.findings import impact_usd
 from herness.harness.pipelines.settings import DepthKnobs
+from herness.harness.tools import RecordedResult
 
 __all__ = [
     "Pipeline",
@@ -43,22 +44,9 @@ __all__ = [
 # --- reader contract (design 06 §3.7) ---------------------------------------------------------
 
 
-class _RecordedResult(Protocol):
-    """Minimal shape of one recorded read; retyped to `RecordedResult` when U05-35 lands."""
-
-    @property
-    def query_id(self) -> str: ...
-    @property
-    def columns(self) -> list[str]: ...
-    @property
-    def rows(self) -> list[tuple[object, ...]]: ...
-    @property
-    def row_count(self) -> int: ...
-
-
 # `execute_recorded(ctx, sql, params, guard=True)` bound to the planner task's `ToolContext`
 # (design 06 §3.7); every call gets a `query_id` and an `evidence` row.
-type RecordedReader = Callable[[str, dict[str, object]], _RecordedResult]
+type RecordedReader = Callable[[str, dict[str, JsonValue]], RecordedResult]
 
 
 # --- plan context (U06-67) --------------------------------------------------------------------

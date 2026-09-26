@@ -103,6 +103,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (spec 00
 | `herness/harness/pipelines/base.py` | Pipeline protocol, plan context, shared helpers | `Pipeline`, `PlanContext`, `default_challenge_priority`, `build_ranked_entities`, `to_recommendation_drafts`, `get_pipeline` | L4 | none | 260 |
 | `herness/harness/pipelines/funding_review.py` | Funding review pipeline | `FundingReviewPipeline` | L4 | `herness.metrics.portfolio` (L3) | 360 |
 | `herness/harness/pipelines/org_review.py` | Org review pipeline | `OrgReviewPipeline` | L4 | none | 330 |
+| `herness/harness/pipelines/_review_common.py` | Private helpers shared by the review pipelines (reads, task fields, planner and writer inputs; `base_priority`/`default_tools` stand-ins until T06-15/T06-13) | — (private) | L4 | none | 260 |
 | `herness/harness/pipelines/chat_support.py` | Chat constants and pure helpers | `MODE_MESSAGES`, `CHAT_TOOLS`, `ObservedTool`, `has_review_intent`, `detect_entities`, `trim_failing_claims`, `chunk_text` | L4 | none | 300 |
 | `herness/harness/pipelines/chat.py` | `ChatService` and the `chat` job handler | `ChatService`, `chat_job_handler` | L4 | `herness.core.jobs` | 390 |
 | `herness/harness/swarm/escalation.py` | Escalation to a mini swarm and its summary message | `escalate_to_review`, `post_escalation_summary` | L4 | `herness.core.jobs` | 220 |
