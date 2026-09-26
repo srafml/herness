@@ -87,14 +87,24 @@ def test_ut01_92_failed_tool_does_not_stop_others(
 def test_ut01_92_aggregate_result(
     ops_store: OpsStoreHandle, lake: FakeLake, guard: FakeGuard
 ) -> None:
-    """UT01-92 all tools succeed: sums, concatenated files and the minimum watermarks."""
+    """UT01-92 all tools succeed: sums, concatenated files and the minimum watermarks; the
+    per-tool started/completed events name their stream key `monitoring:<tool>`."""
     _seed(_PROM, T)
     _seed(_DD, T - datetime.timedelta(minutes=10))
     conn = FakeToolConnector({"prometheus": [_rows("p")], "datadog": [_rows("d", T + 5 * _SEC)]})
 
-    result = make_runner(conn, monitoring_cfg(), lake, ops_store.data_root).run_incremental(_ENT)
+    runner = make_runner(conn, monitoring_cfg(), lake, ops_store.data_root)
+    with capture_logs() as logs:
+        result = runner.run_incremental(_ENT)
 
     assert guard.calls == [_PROM, _DD]
+    started = [e for e in logs if e["event"] == "connectors.sync.started"]
+    assert [(e["source"], e["stream"]) for e in started] == [
+        ("monitoring", _PROM),
+        ("monitoring", _DD),
+    ]
+    done = [e for e in logs if e["event"] == "connectors.sync.completed"]
+    assert [e["source"] for e in done] == [_PROM, _DD]
     assert result.source == "monitoring"
     assert result.mode == "incremental"
     assert result.rows == 4

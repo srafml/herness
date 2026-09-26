@@ -269,8 +269,9 @@ class SyncRunner:
         counts = (out.rows, out.tombstones, out.skipped_deleted, out.files)
         after = _utc(None if wm is None else wm.value)
         result = SyncResult(self.connector.name, entity, mode, *counts, before, after)
-        fields = dataclasses.asdict(result) | {"files": len(out.files), "duration_s": duration}
-        _log.info("connectors.sync.completed", **fields)
+        # §8.1 gives this event no `stream` field, so `source` names the stream key.
+        extra = {"source": key, "files": len(out.files), "duration_s": duration}
+        _log.info("connectors.sync.completed", **(dataclasses.asdict(result) | extra))
         stream = {"source": key, "entity": entity}
         labels = stream | {"mode": mode}
         samples = [
