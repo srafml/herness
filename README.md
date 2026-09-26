@@ -44,7 +44,7 @@ Markers and selections are defined in design 11 §4.1–4.2: `unit`, `integratio
 
 ## 9. CI and releases
 
-The `main` branch is protected: the hosted CI checks must pass, and releases are cut from signed annotated tags `vX.Y.Z`. A release produces the wheel, the sdist, a CycloneDX SBOM and signed build provenance. Verify an attestation with `gh attestation verify <wheel> --repo <owner>/<repo>`. The target box installs only the release wheel, through `herness deploy install`, which runs that verification and the SBOM check first (R-58, design 10).
+The `main` branch is protected: the hosted CI checks must pass (branch protection in the repository settings requires the five status checks `lint`, `types`, `test (ubuntu-latest)`, `test (windows-latest)` and `audit` of `.github/workflows/ci.yml`), and releases are cut from signed annotated tags `vX.Y.Z`. A release produces the wheel, the sdist, a CycloneDX SBOM and signed build provenance. Verify an attestation with `gh attestation verify <wheel> --repo <owner>/<repo>`. The target box installs only the release wheel, through `herness deploy install`, which runs that verification and the SBOM check first (R-58, design 10).
 
 ## 10. Security
 

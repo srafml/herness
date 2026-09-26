@@ -1,0 +1,144 @@
+# Release (U00-60): SLSA Build L2 — signed-tag build, SBOM, licence gate, provenance.
+# Rules (impl 00 §3.8): third-party actions pinned by commit SHA, read-only default token,
+# checkout without persisted credentials, untrusted values only through env, hosted runners only.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1"
+  PYTHONUTF8: "1"
+  HERNESS_ENV: test
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1  # pragma: allowlist secret
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0  # pragma: allowlist secret
+        with:
+          version: "0.11.8"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras
+      - name: verify the tag is a verified, annotated tag
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          obj_type=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type')
+          if [ "$obj_type" != "tag" ]; then
+            msg="tag $TAG is not an annotated tag"
+            echo "$msg" >&2
+            exit 1
+          fi
+          obj_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')
+          verified=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$obj_sha" --jq '.verification.verified')
+          if [ "$verified" != "true" ]; then
+            msg="tag $TAG signature is not verified"
+            echo "$msg" >&2
+            exit 1
+          fi
+      - name: check the tag matches the project version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "$TAG" != "v$version" ]; then
+            msg="tag $TAG does not match project version v$version"
+            echo "$msg" >&2
+            exit 1
+          fi
+          echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
+      - run: uv build
+      - name: runtime environment for the SBOM (as the ci audit job)
+        env:
+          UV_PROJECT_ENVIRONMENT: build/runtime-venv
+        run: uv sync --no-dev --all-extras --no-install-project
+      - name: SBOM and licence gate (as the ci audit job)
+        run: |
+          uv run cyclonedx-py environment build/runtime-venv --output-reproducible --of JSON -o "dist/herness-$PROJECT_VERSION.cdx.json"
+          uv run python -m tools.check_licences --sbom "dist/herness-$PROJECT_VERSION.cdx.json" --mode enforce
+      - name: download the DuckDB excel extension (impl 10 D10-28)
+        run: |
+          duckdb_version=$(uv run python -c "
+          import tomllib
+          lock = tomllib.load(open('uv.lock', 'rb'))
+          print(next(p['version'] for p in lock['package'] if p['name'] == 'duckdb'))
+          ")
+          mkdir -p dist/duckdb
+          curl -fsSL -o "$RUNNER_TEMP/excel.duckdb_extension.gz" \
+            "https://extensions.duckdb.org/v$duckdb_version/linux_amd64/excel.duckdb_extension.gz"
+          gunzip -c "$RUNNER_TEMP/excel.duckdb_extension.gz" > dist/duckdb/excel.duckdb_extension
+          (cd dist/duckdb && sha256sum excel.duckdb_extension > SHA256SUMS)
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2  # pragma: allowlist secret
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/duckdb/excel.duckdb_extension
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0  # pragma: allowlist secret
+        with:
+          subject-path: dist/*.whl
+          sbom-path: dist/*.cdx.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1  # pragma: allowlist secret
+        with:
+          name: dist
+          path: dist/*
+          retention-days: 90
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1  # pragma: allowlist secret
+        with:
+          name: dist
+          path: dist
+      - name: generate release notes from the tag annotation
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          obj_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$obj_sha" --jq '.message' > "$RUNNER_TEMP/tag-notes.md"
+      - name: create the GitHub release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        # dist/* is a bash glob (does not descend into dist/duckdb/), so the assets
+        # are listed explicitly rather than relying on it to pick up the extension.
+        run: |
+          gh release create "$TAG" dist/*.whl dist/*.tar.gz dist/*.cdx.json dist/duckdb/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/tag-notes.md"
