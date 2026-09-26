@@ -486,6 +486,12 @@ ignore_imports = [
     # impl 08 U08-94 / R-12: SqliteResilienceBackend.insert_metric_samples delegates to the
     # single metric_sample writer; metrics imports only core, so the graph stays acyclic.
     "herness.store.ops.resilience -> herness.store.ops.metrics",
+    # impl 08 U08-96 / T08-11: SqliteJobsBackend inherits WorkerSqlMixin; worker imports only
+    # core, so the graph stays acyclic.
+    "herness.store.ops.jobs -> herness.store.ops.worker",
+    # T08-11: private sibling of area `jobs` (constant SQL), kept apart for the impl 08 §2 line
+    # budget of jobs.py; no other module imports it.
+    "herness.store.ops.jobs -> herness.store.ops._job_sql",
 ]
 # The area -> core ignore matches `migrate` (T02-05), `shared` (T02-07) and each area its card
 # adds later.

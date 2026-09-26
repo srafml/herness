@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Annotated, Any, Final, Literal, NamedTuple, Protocol
+from typing import Annotated, Final, Literal, NamedTuple, Protocol
 
 from pydantic import (
     AfterValidator,
@@ -38,8 +38,7 @@ type JsonMap = Mapping[str, JsonValue]
 type CheckpointKey = Literal["loop", "state", "scratchpad"]
 type CancelResult = Literal["canceled", "cancel_requested", "not_active"]
 type RetryResult = Literal["queued", "not_failed", "conflict", "missing"]
-# Placeholder: U08-41 names `QueueStats` without defining it (T08-11 or T08-22 will).
-type QueueStats = Any
+type ClaimSlot = Literal["gpu", "cpu", "cli"]  # U08-48 slot rule (R-43), from the owner suffix
 
 JOBS_UNBOUND: Final = (
     "jobs backend not bound; call herness.store.ops.resilience.bind_core_backends()"
@@ -158,6 +157,24 @@ class SchedCheck(NamedTuple):
     fire_at: str
 
 
+class NextJob(NamedTuple):
+    """The queued job the next claim would take, or the earliest one not yet due (U08-91)."""
+
+    job_id: str
+    kind: JobKind
+    priority: int
+    scheduled_for: datetime
+
+
+class QueueStats(NamedTuple):
+    """`queue_stats` result (U08-41) for `status_snapshot` `queue`, `failed_24h`, `dead_letters`."""
+
+    queued: int
+    next_job: NextJob | None
+    failed_24h: int  # status 'failed' with finished_at >= since
+    dead_letters: int  # every status 'failed' job
+
+
 class ServiceControl(Protocol):
     """In-class GPU service control handed to handlers (U08-04)."""
 
@@ -204,6 +221,8 @@ class JobsBackend(Protocol):
         job_id: str | None,
         min_priority: int | None,
         priority_exempt_kinds: Sequence[JobKind],
+        slot: ClaimSlot,
+        gpu_slot_kinds: Sequence[JobKind],
     ) -> JobRow | None: ...
     def claimable_counts(
         self,
@@ -213,16 +232,13 @@ class JobsBackend(Protocol):
         exclusive_kinds: Sequence[JobKind],
         min_priority: int | None,
         priority_exempt_kinds: Sequence[JobKind],
+        gpu_slot_kinds: Sequence[JobKind],
     ) -> dict[GpuClass, int]: ...
     def heartbeat_job(self, job_id: str, owner: str, lease_until: datetime) -> bool: ...
     def finish_done(self, job_id: str, owner: str, result: JsonMap, now: datetime) -> bool: ...
     def finish_yield(self, job_id: str, owner: str, resume_at: datetime, now: datetime) -> bool: ...
-    def finish_requeue(
-        self, job_id: str, owner: str, at: datetime, last_error: JsonMap
-    ) -> bool: ...
-    def finish_failed(
-        self, job_id: str, owner: str, last_error: JsonMap, now: datetime
-    ) -> bool: ...
+    def finish_requeue(self, job_id: str, owner: str, at: datetime, error: JsonMap) -> bool: ...
+    def finish_failed(self, job_id: str, owner: str, error: JsonMap, now: datetime) -> bool: ...
     def finalize_canceled(self, job_id: str, owner: str, now: datetime) -> bool: ...
     def save_job_state(self, job_id: str, owner: str, state_json: bytes) -> bool: ...
     def load_job_state(self, job_id: str) -> dict[str, JsonValue]: ...
