@@ -122,11 +122,11 @@ class RunBudget:
             if type(value) is int and value >= 0:
                 counts.append(value)
         cost = _parse_cost(snap.get("cost_used"))
-        absent = any(key not in snap for key in _EXTRA_KEYS)
+        flags = (snap.get("exhausted"), snap.get("cost_cap_reached"))
+        absent = any(k not in snap for k in _EXTRA_KEYS) or any(type(f) is not bool for f in flags)
         if snap.get("name") != self.name or len(counts) != len(_INT_KEYS) or cost is None or absent:
-            raise SchemaViolation(f"budget snapshot invalid: run_id={self.run_id}")  # noqa: EM102
-        if any(type(f) is not bool for f in (snap.get("exhausted"), snap.get("cost_cap_reached"))):
-            raise SchemaViolation(f"budget snapshot invalid: run_id={self.run_id}")  # noqa: EM102
+            msg = f"budget snapshot invalid: run_id={self.run_id}"
+            raise SchemaViolation(msg)
         with self._lock:
             self.tokens_in, self.tokens_out, self.calls = counts
             self.cost_used = cost
