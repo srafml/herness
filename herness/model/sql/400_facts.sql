@@ -157,3 +157,79 @@ SELECT b.record_id, b.number, b.opened_at, b.resolved_at, b.priority, b.service_
        b.sla_breached,
        b.change_caused
 FROM money b
+-- @statement metrics.change_fact
+{#- U04-44: one row per core.change, columns in design 04 §4.2 order. Linked incidents are the
+    distinct non-excluded rows of metrics.incident_fact (built by the previous statement) that
+    name the change in caused_by_change_id or in a qualifying enrich.incident_change_link. -#}
+WITH cause AS (
+    SELECT i.caused_by_change_id AS change_id, i.record_id AS incident_id
+    FROM core.incident i
+    WHERE i.caused_by_change_id IS NOT NULL
+    UNION
+    SELECT l.change_id, l.incident_id
+    FROM enrich.incident_change_link l
+    WHERE l.score >= {{ p('d_change_link_min_score') }}
+),
+linked AS (
+    SELECT c.change_id, count(DISTINCT c.incident_id) AS n
+    FROM cause c
+    JOIN metrics.incident_fact f ON f.record_id = c.incident_id AND NOT f.excluded
+    GROUP BY c.change_id
+),
+base AS (
+    SELECT c.record_id, c.type, c.service_id, c.team_id, t.org_id, c.opened_at, c.actual_end,
+           c.actual_end IS NOT NULL AND coalesce(c.outcome, '') <> 'canceled' AS deployed,
+           list_contains({{ p('d_failure_outcomes') }}, coalesce(c.outcome, ''))
+               AS failure_outcome,
+           CAST(coalesce(k.n, 0) AS INTEGER) AS linked_incident_count
+    FROM core.change c
+    LEFT JOIN core.team t ON t.team_id = c.team_id
+    LEFT JOIN linked k ON k.change_id = c.record_id
+)
+SELECT b.record_id, b.type, b.service_id, b.team_id, b.org_id, b.actual_end, b.deployed,
+       b.deployed AND (b.failure_outcome OR b.linked_incident_count > 0) AS failed,
+       b.linked_incident_count,
+       CASE WHEN b.opened_at IS NOT NULL AND b.actual_end IS NOT NULL
+                 AND b.opened_at <= b.actual_end
+            THEN CAST(date_diff('second', b.opened_at, b.actual_end) AS DOUBLE) / 3600.0
+       END AS lead_time_h
+FROM base b
+-- @statement metrics.work_item_fact
+{#- U04-45: one row per core.work_item, columns in design 04 §4.2 order. done_at is NULL for
+    items not currently done (OI04-07); no free-form column is read (TH04-04). -#}
+WITH moves AS (
+    SELECT t.record_id,
+           min(t."at") FILTER (WHERE t.to_category = 'in_progress') AS first_in_progress_at,
+           max(t."at") FILTER (WHERE t.to_category = 'done') AS last_done_at
+    FROM core.work_item_transition t
+    GROUP BY t.record_id
+),
+mentions AS (
+    SELECT l.from_key AS key
+    FROM core.work_item_link l
+    WHERE l.link_type = 'mentions_incident'
+    UNION
+    SELECT l.to_key
+    FROM core.work_item_link l
+    WHERE l.link_type = 'mentions_incident'
+),
+base AS (
+    SELECT w.record_id, w.key, w.type, w.parent_key, w.status_category, w.service_id,
+           w.team_id, t.org_id, w.story_points, w.created_at, m.first_in_progress_at,
+           CASE WHEN w.status_category = 'done' THEN coalesce(m.last_done_at, w.resolved_at)
+           END AS done_at,
+           coalesce(w.type = 'bug', false) OR u.key IS NOT NULL AS is_unplanned
+    FROM core.work_item w
+    LEFT JOIN core.team t ON t.team_id = w.team_id
+    LEFT JOIN moves m ON m.record_id = w.record_id
+    LEFT JOIN mentions u ON u.key = w.key
+)
+SELECT b.record_id, b.key, b.type, b.parent_key, b.status_category, b.service_id, b.team_id,
+       b.org_id, b.story_points, b.created_at, b.first_in_progress_at, b.done_at,
+       CASE WHEN b.first_in_progress_at IS NOT NULL AND b.done_at IS NOT NULL
+                 AND b.done_at >= b.first_in_progress_at
+            THEN CAST(date_diff('second', b.first_in_progress_at, b.done_at) AS DOUBLE)
+                 / 86400.0
+       END AS cycle_days,
+       b.is_unplanned
+FROM base b

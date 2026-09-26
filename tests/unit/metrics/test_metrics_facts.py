@@ -346,6 +346,8 @@ GOOD = (
     "-- @statement metrics.org_closure\nSELECT 1 AS a\n"
     "-- @statement metrics.work_item_closure\nSELECT 2 AS a\n"
     "-- @statement metrics.incident_fact  \r\nSELECT 3 AS a\n"
+    "-- @statement metrics.change_fact\nSELECT 4 AS a\n"
+    "-- @statement metrics.work_item_fact\nSELECT 5 AS a\n"
 )
 
 
@@ -361,11 +363,10 @@ def test_ut04_35_fact_tables_constant() -> None:
 
 
 def test_ut04_35_split_shipped_file() -> None:
-    """UT04-35 the shipped stage file splits into the fact statements in order, markers removed.
-
-    T04-07: the change_fact and work_item_fact statements join once that card lands."""
+    """UT04-35 the shipped stage file splits into the five fact statements in order, markers
+    removed."""
     segments = split_statements(facts._stage_text())
-    assert [t for t, _ in segments] == list(FACT_TABLES[:3])
+    assert [t for t, _ in segments] == list(FACT_TABLES)
     assert all("@statement" not in body for _, body in segments)
 
 
@@ -375,6 +376,8 @@ def test_ut04_35_split_segments_in_order() -> None:
         ("metrics.org_closure", "SELECT 1 AS a"),
         ("metrics.work_item_closure", "SELECT 2 AS a"),
         ("metrics.incident_fact", "SELECT 3 AS a"),
+        ("metrics.change_fact", "SELECT 4 AS a"),
+        ("metrics.work_item_fact", "SELECT 5 AS a"),
     ]
 
 
@@ -387,7 +390,7 @@ def test_ut04_35_split_segments_in_order() -> None:
         ("{% set x = 1 %}\n" + GOOD, "only whitespace and Jinja comments"),
         (GOOD.replace("SELECT 2 AS a\n", "  \n"), "empty statement body"),
         (
-            GOOD.replace("metrics.incident_fact", "metrics.change_fact"),
+            GOOD.replace("metrics.incident_fact", "metrics.work_item_fact"),
             "statements must be exactly",
         ),
         ("{# only a comment #}\n", "statements must be exactly"),
@@ -409,7 +412,7 @@ def test_ut04_35_materialize_records_evidence(con: duckdb.DuckDBPyConnection) ->
     every fact row's query_id has its evidence row; the log line per table carries no SQL."""
     with capture_logs() as logs:
         query_ids = _materialize(con)
-    assert len(query_ids) == 3  # T04-07: five once change_fact and work_item_fact land
+    assert len(query_ids) == 5
     rows = con.execute(
         "SELECT query_id, producer, row_count, executed_at, params->>'$.template.name',"
         " params->>'$.template.statement' FROM meta.evidence ORDER BY executed_at, query_id"
@@ -418,15 +421,17 @@ def test_ut04_35_materialize_records_evidence(con: duckdb.DuckDBPyConnection) ->
     assert {r[1] for r in rows} == {"facts"}
     assert {r[3] for r in rows} == {NOW}
     assert {r[4] for r in rows} == {"400_facts"}
-    assert sorted(str(r[5]) for r in rows) == sorted(FACT_TABLES[:3])
-    for table, qid in zip(FACT_TABLES[:3], query_ids, strict=True):
+    assert sorted(str(r[5]) for r in rows) == sorted(FACT_TABLES)
+    for table, qid in zip(FACT_TABLES, query_ids, strict=True):
         found = con.execute(
-            f"SELECT DISTINCT f.query_id, e.row_count = (SELECT count(*) FROM {table})"  # noqa: S608
-            f" FROM {table} f JOIN meta.evidence e USING (query_id)"
-        ).fetchall()
-        assert found == [(qid, True)]
+            f"SELECT count(*) FILTER (f.query_id IS DISTINCT FROM $q),"  # noqa: S608
+            " count(*) = (SELECT row_count FROM meta.evidence WHERE query_id = $q)"
+            f" FROM {table} f",
+            {"q": qid},
+        ).fetchone()
+        assert found == (0, True)  # change_fact is empty on metrics_tiny (no core.change rows)
     events = [e for e in logs if e["event"] == "metrics.facts.materialized"]
-    assert [e["table"] for e in events] == list(FACT_TABLES[:3])
+    assert [e["table"] for e in events] == list(FACT_TABLES)
     assert all(e["build_id"] == BUILD_ID and "sql" not in e for e in events)
     assert events[2]["row_count"] == 4
     assert events[2]["query_id"] == query_ids[2]
@@ -437,7 +442,7 @@ def test_ut04_35_materialize_is_repeatable(con: duckdb.DuckDBPyConnection) -> No
     first = _materialize(con)
     assert _materialize(con) == first
     count = con.execute("SELECT count(*) FROM meta.evidence").fetchone()
-    assert count == (3,)
+    assert count == (5,)
 
 
 def test_ut04_35_binds_are_only_the_used_ones(con: duckdb.DuckDBPyConnection) -> None:
@@ -451,6 +456,8 @@ def test_ut04_35_binds_are_only_the_used_ones(con: duckdb.DuckDBPyConnection) ->
     assert "d_cluster_min_membership" in rows[query_ids[2]]
     assert "w_engineer_hour" in rows[query_ids[2]]
     assert "s_org_metrics" not in rows[query_ids[2]]
+    assert sorted(rows[query_ids[3]]) == ["d_change_link_min_score", "d_failure_outcomes"]
+    assert rows[query_ids[4]] == []
 
 
 def _stage(monkeypatch: pytest.MonkeyPatch, third: str) -> None:
@@ -458,6 +465,8 @@ def _stage(monkeypatch: pytest.MonkeyPatch, third: str) -> None:
         "-- @statement metrics.org_closure\nSELECT 'o' AS org_id\n"
         "-- @statement metrics.work_item_closure\nSELECT 'w' AS record_id\n"
         f"-- @statement metrics.incident_fact\n{third}\n"
+        "-- @statement metrics.change_fact\nSELECT 'c' AS record_id\n"
+        "-- @statement metrics.work_item_fact\nSELECT 'w' AS record_id\n"
     )
     monkeypatch.setattr(facts, "_stage_text", lambda: text)
 

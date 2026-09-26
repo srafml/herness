@@ -27,11 +27,10 @@ FACT_TABLES: Final[tuple[str, ...]] = (
     *("metrics.org_closure", "metrics.work_item_closure", "metrics.incident_fact"),
     *("metrics.change_fact", "metrics.work_item_fact"),
 )
-# T04-07: switch to FACT_TABLES and add the U04-44/U04-45 inputs to _INPUT_TABLES.
-_SHIPPED_TABLES: Final[tuple[str, ...]] = FACT_TABLES[:3]
 _INPUT_TABLES: Final[tuple[str, ...]] = (
-    *("core.org", "core.work_item", "core.incident", "core.team", "core.service"),
-    *("enrich.cluster_member", "enrich.incident_change_link", "meta.build", "meta.evidence"),
+    *("core.org", "core.work_item", "core.incident", "core.team", "core.service", "core.change"),
+    *("core.work_item_transition", "core.work_item_link", "enrich.cluster_member"),
+    *("enrich.incident_change_link", "meta.build", "meta.evidence"),
 )
 _MARKER: Final = re.compile(r"^-- @statement (metrics\.[a-z_]+)\s*$")
 _JINJA_COMMENT: Final = re.compile(r"\{#.*?#\}", re.DOTALL)
@@ -50,8 +49,8 @@ def _problem(prefix: list[str], segments: list[tuple[str, str]], malformed: bool
         return "only whitespace and Jinja comments may precede the first statement"
     if any(not body.strip() for _, body in segments):
         return "empty statement body"
-    if tuple(table for table, _ in segments) != _SHIPPED_TABLES:
-        return "statements must be exactly " + ", ".join(_SHIPPED_TABLES) + " in order"
+    if tuple(table for table, _ in segments) != FACT_TABLES:
+        return "statements must be exactly " + ", ".join(FACT_TABLES) + " in order"
     return None
 
 
@@ -131,10 +130,9 @@ def _materialize(
 
 
 def materialize_facts(con: duckdb.DuckDBPyConnection, build_id: str, /) -> list[str]:
-    """Materialize the fact tables in one transaction; query IDs in `FACT_TABLES` order (U04-47).
-
-    T04-07: three IDs until the change and work-item statements land. Raises SchemaViolation
-    (missing input, failed statement after ROLLBACK) and ConfigError (stage file, template).
+    """Materialize the five fact tables in one transaction; their query IDs in `FACT_TABLES`
+    order (U04-47). Raises SchemaViolation (missing input, failed statement after ROLLBACK)
+    and ConfigError (stage file, template).
     """
     _check_inputs(con)
     segments = split_statements(_stage_text())
