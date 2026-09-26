@@ -6,12 +6,10 @@ path under `<root>/truth/`. `TruthManifest` is the typed contract shared by the
 synthetic-data generator (writer, T11-13) and the evaluation harness (reader, this
 card and later).
 
-`SuiteError` is declared here rather than in its eventual home `herness/eval/golden.py`
-(module map row, impl spec §3 header): this card (T11-04) is the first unit in the
-build order of spec 11 that needs a question-level suite-defect error, and golden.py's
-card (which depends on the whole generator pipeline) has not landed yet. When that
-module is built it should import `SuiteError` from here instead of redeclaring it, to
-keep a single class.
+`SuiteError` is declared here rather than in `herness/eval/golden.py` (impl spec §3
+header): `plant_value` raises it, and golden imports this module (`TruthManifest`,
+`plant_value`), so defining it in golden would create an import cycle. golden.py
+(T11-25) re-exports this single class as `herness.eval.golden.SuiteError`.
 """
 
 from __future__ import annotations
