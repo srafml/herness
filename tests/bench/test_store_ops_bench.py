@@ -1,4 +1,7 @@
-"""Ops store benchmark (impl 02 BT02-06). Run: pytest -m "integration and slow" tests/bench."""
+"""Ops store benchmarks (impl 02 BT02-06, BT02-07).
+
+Run: pytest -m "integration and slow" tests/bench.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from herness.store.ops import core
+from herness.store.ops import core, migrate
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
-# Test-local table shaped like migration 001's `review_item` (T02-05 creates the real one;
+# Test-local table shaped like `review_item` (migration 005, T02-06, creates the real one;
 # re-point this benchmark to it then).
 _REVIEW_ITEM = """
 CREATE TABLE review_item (
@@ -51,3 +54,13 @@ def test_bt02_06_single_row_write_p95(ops_store: Path) -> None:
     p95 = durations[int(0.95 * (len(durations) - 1))]
     sys.stderr.write(f"BT02-06 p95={p95 * 1000:.3f} ms\n")
     assert p95 < 0.010
+
+
+def test_bt02_07_fresh_migration_under_2_s(ops_store: Path) -> None:
+    """BT02-07 `migrate()` on an empty ops file completes in under 2 s."""
+    start = time.perf_counter()
+    report = migrate()
+    elapsed = time.perf_counter() - start
+    sys.stderr.write(f"BT02-07 fresh migrate={elapsed * 1000:.1f} ms ({len(report.applied)})\n")
+    assert report.applied
+    assert elapsed < 2.0

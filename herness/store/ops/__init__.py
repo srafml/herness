@@ -20,6 +20,16 @@ from .core import (
     run_write,
 )
 
+# 02 migrate
+from .migrate import (
+    MIGRATION_RANGES,
+    MigrationReport,
+    migrate,
+    ops_health,
+    pending_migrations,
+    schema_version,
+)
+
 __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     # 02 core
     "connection",
@@ -30,4 +40,11 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "load_json",
     "reset_connections",
     "OPS_JSON_MAX_BYTES",
+    # 02 migrate
+    "MIGRATION_RANGES",
+    "migrate",
+    "pending_migrations",
+    "schema_version",
+    "ops_health",
+    "MigrationReport",
 ]

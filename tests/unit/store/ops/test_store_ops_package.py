@@ -1,8 +1,7 @@
 """Unit tests for the herness.store.ops namespace (impl 02 U02-62; UT02-68).
 
-Only block "02 core" exists at T02-04. T02-05 adds the `migrate` assertions (the package
-attribute `migrate` is the function and `from herness.store.ops.migrate import
-pending_migrations` still works) and T02-06 adds block "02 shared"; see the marked TODOs.
+Blocks "02 core" (T02-04) and "02 migrate" (T02-05) exist; block "02 shared" is added with
+the `review_item` functions (T02-07, after migration 005 of T02-06); see the marked TODO.
 """
 
 from __future__ import annotations
@@ -10,6 +9,7 @@ from __future__ import annotations
 import importlib
 import re
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -51,6 +51,14 @@ _CORE_BLOCK = (
     "reset_connections",
     "OPS_JSON_MAX_BYTES",
 )
+_MIGRATE_BLOCK = (
+    "MIGRATION_RANGES",
+    "migrate",
+    "pending_migrations",
+    "schema_version",
+    "ops_health",
+    "MigrationReport",
+)
 
 
 def _blocks() -> list[tuple[str, str, list[str]]]:
@@ -85,6 +93,11 @@ def test_ut02_68_core_block_first_and_complete() -> None:
     assert blocks[0] == ("02", "core", list(_CORE_BLOCK))
 
 
+def test_ut02_68_migrate_block_second_and_complete() -> None:
+    """UT02-68 block "02 migrate" follows "02 core" and lists the U02-62 names in order."""
+    assert _blocks()[1] == ("02", "migrate", list(_MIGRATE_BLOCK))
+
+
 def test_ut02_68_names_resolve_to_their_area() -> None:
     """UT02-68 every name resolves to the attribute of the area named in its block header."""
     for _, area, names in _blocks():
@@ -96,11 +109,14 @@ def test_ut02_68_names_resolve_to_their_area() -> None:
 
 
 def test_ut02_68_no_name_equals_an_area() -> None:
-    """UT02-68 no re-exported name equals an area name (T02-05 adds the `migrate` exception)."""
-    # T02-05: allow exactly `migrate` here and assert `ops.migrate is
-    # herness.store.ops.migrate.migrate` and that `from herness.store.ops.migrate import
-    # pending_migrations` still works.
-    assert not set(ops.__all__) & set(AREAS)
+    """UT02-68 only the function `migrate` shares an area name; the area stays importable."""
+    assert set(ops.__all__) & set(AREAS) == {"migrate"}
+    area = sys.modules["herness.store.ops.migrate"]
+    assert callable(ops.migrate)
+    assert ops.migrate is area.migrate
+    from herness.store.ops.migrate import pending_migrations  # noqa: PLC0415 - the check itself
+
+    assert pending_migrations is ops.pending_migrations is area.pending_migrations
 
 
 def test_ut02_68_review_item_only_in_shared() -> None:

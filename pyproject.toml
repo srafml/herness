@@ -441,7 +441,7 @@ ignore_imports = [
     "herness.store.ops.* -> herness.store.ops.core",
     "herness.store.ops.core -> herness.store.ops._shims",
 ]
-# The area -> core ignore matches nothing until the first area (T02-05 migrate) exists.
+# The area -> core ignore matches `migrate` (T02-05) and each area its card adds later.
 unmatched_ignore_imports_alerting = "none"
 
 [[tool.importlinter.contracts]]
@@ -487,8 +487,3 @@ ignore_imports = [
     "herness.model.promote -> herness.store._warehouse_rw",
 ]
 unmatched_ignore_imports_alerting = "none"
-
-# ops-areas-acyclic (impl 02 §2.2, §2.3 rule 5) is deferred: herness.store.ops and its area
-# modules (T02-04..T02-07) have not landed on this branch, so the contract cannot name any
-# concrete module without inventing a file that does not exist. Add it as a real contract
-# in the card that creates herness/store/ops/__init__.py and its first area module.
