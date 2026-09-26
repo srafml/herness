@@ -207,7 +207,7 @@ class Redactor:
         return [
             Span(start, end, "PERSON", self.pseudonym("PERSON", text[start:end]))
             for start, end in found
-            if start < end and taken.claim(start, end)
+            if 0 <= start < end <= len(text) and taken.claim(start, end)
         ]
 
     def redact(self, text: str | None) -> RedactionResult | None:
@@ -303,7 +303,8 @@ def redact_text(text: str | None) -> str | None:
     try:
         result = redactor.redact(text)
     except RedactionFailed as exc:
-        _log.warning("redact.record.failed", error_type=type(exc).__name__)
+        # The message is the entity type or "text too long", never text (U10-48).
+        _log.warning("redact.record.failed", error_type=type(exc).__name__, reason=exc.message)
         return None
     return None if result is None else result.text
 

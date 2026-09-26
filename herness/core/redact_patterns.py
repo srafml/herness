@@ -102,7 +102,7 @@ _URL_KEYS: Final = frozenset(
 
 _EMAIL: Final = re.compile(r"\b[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,253}\.[a-z]{2,24}\b", _I)
 _CARD: Final = re.compile(r"\b(?:[0-9][ -]?){12,18}[0-9]\b")
-_CARD_RUN: Final = re.compile(r"(?<!\w)[0-9](?:[ -]?[0-9])*")
+_CARD_RUN: Final = re.compile(r"(?<!\w)[0-9](?:[ -]?[0-9]){12,}")  # runs of >= 13 digits
 _WORD: Final = re.compile(r"\w")
 _LUHN2: Final = (0, 2, 4, 6, 8, 1, 3, 5, 7, 9)  # Luhn term of a doubled digit
 
