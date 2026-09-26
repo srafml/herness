@@ -41,6 +41,7 @@ from herness.core.egress_clients import (
     tls_context,
 )
 from herness.core.egress_log import LINE_KEYS, EgressLog
+from herness.core.egress_socket import install_socket_guard
 from herness.core.errors import ConfigError, EgressBlocked, FatalError, StoreBusy
 from herness.core.ids import new_ulid
 from herness.core.logging import get_logger
@@ -50,8 +51,8 @@ from herness.core.redact_patterns import EntityType
 __all__ = ["BLOCKING_TYPES", "CHARS_PER_TOKEN", "LOOPBACK_HOSTS", "MAX_RESPONSE_BYTES"]
 __all__ += ["MODEL_DOWNLOAD_HOSTS", "PAYLOAD_CLASSES_BY_PROFILE", "EgressGuard", "EgressTicket"]
 __all__ += ["AsyncGuardedTransport", "GuardedTransport", "PayloadClass", "Purpose"]
-__all__ += ["aloopback_http_client", "cloud_chat_allowed", "get_guard", "loopback_http_client"]
-__all__ += ["reset_guard"]
+__all__ += ["aloopback_http_client", "cloud_chat_allowed", "get_guard", "install_socket_guard"]
+__all__ += ["loopback_http_client", "reset_guard"]
 
 Purpose = Literal["reasoning_final", "reasoning", "bulk_classification", "model_download"]
 PayloadClass = Literal["aggregated_evidence", "redacted_text", "none"]
