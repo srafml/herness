@@ -103,6 +103,29 @@ def test_ut08_29_record_retry_filters_and_redacts(
     assert "prompt" not in str(dropped)
 
 
+def test_ut08_29_value_split_at_redaction_window_does_not_leak(
+    ops_db: OpsStoreHandle, test_redactor: r.Redactor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-29 a long redactable token first, then an e-mail straddling char 4 000: the
+    redacted window shrinks below 200 chars, yet the undetected fragment is not stored.
+
+    The known-value scrub runs first and today also masks credential spans over the whole
+    text; it is made a pass-through here so the window edge of `redact_text` is what is
+    tested (a token only `redact_text` detects reaches the same state)."""
+    del ops_db, test_redactor
+    from herness.core.resilience import events  # noqa: PLC0415 - module under test
+
+    monkeypatch.setattr(events, "scrub_secrets", lambda _l, _m, event: dict(event))
+    token = "api" + "_key=" + "A" * 3975  # redacts to a short placeholder
+    text = token + " x " + EMAIL + " tail"
+    assert text.index(EMAIL) < 4000 < text.index(EMAIL) + len(EMAIL)
+    record_event("fallback", component="resilience", detail={"reason": text})
+    (row,) = _rows()
+    reason = json.loads(row["detail"]).get("reason", "")
+    assert "ops.person" not in reason
+    assert "AAAA" not in reason
+
+
 def test_ut08_29_scalar_conversions(
     ops_db: OpsStoreHandle, test_redactor: r.Redactor, fake_clock: FakeClock
 ) -> None:
