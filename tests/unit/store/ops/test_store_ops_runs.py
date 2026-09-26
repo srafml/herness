@@ -117,6 +117,17 @@ def test_ut06_21_insert_idempotent_and_get(store: Path) -> None:
     assert runs.get_run(_run_id(99)) is None
 
 
+def test_ut06_21_insert_run_constraint_violation_raises(store: Path) -> None:
+    """UT06-21 a CHECK violation raises instead of reading as an idempotent replay."""
+    with pytest.raises(SchemaViolation, match="ops constraint failed"):
+        _insert_runs(_run(kind="bogus"))
+    assert runs.get_run(_run_id(1)) is None
+    _insert_runs(_run())
+    _sql("UPDATE run SET meta = '[1]' WHERE run_id = ?", _run_id(1))
+    with pytest.raises(SchemaViolation, match=f"run.meta is not an object: run_id={_run_id(1)}$"):
+        runs.get_run(_run_id(1))
+
+
 def test_ut06_21_find_by_job_and_escalation(store: Path) -> None:
     """UT06-21 find_run_by_job picks the newest run of the job; escalation lookup matches."""
     esc = {"escalated_from": {"session_id": "s1", "message_id": "m1"}}
@@ -173,7 +184,9 @@ def test_ut06_21_task_row_spec_and_last_error(store: Path) -> None:
     assert t2b is not None
     assert t2b.last_error == {"message": "quoted"}
     _sql(sql, "7", "[1]", None, _task_id(2))
-    with pytest.raises(SchemaViolation, match=r"task\.checkpoint is not an object"):
+    with pytest.raises(
+        SchemaViolation, match=rf"task\.checkpoint is not an object: task_id={_task_id(2)}$"
+    ):
         runs.get_task(_task_id(2))
     _sql(sql, "7", None, None, _task_id(2))
     t2c = runs.get_task(_task_id(2))
@@ -317,14 +330,17 @@ def test_ut06_25_ready_tasks_order(store: Path) -> None:
     _insert_tasks([_spec(2, priority=9.5)], now=_T0 - timedelta(minutes=100))
     _insert_tasks([_spec(3, priority=10.0)])  # ties with 1 -> task_id breaks it
     _insert_tasks([_spec(4, priority=99.0, depth=1)])
-    skeptic = {"role": "skeptic", "round": 1, "inputs": {"finding_ids": [f"fnd_{_ulid(1)}"]}}
-    _insert_tasks([_spec(5, priority=500.0, **skeptic)])
+    inputs = {"finding_ids": [f"fnd_{_ulid(1)}"]}
+    _insert_tasks([_spec(5, role="skeptic", round=1, inputs=inputs, priority=500.0)])
     _insert_tasks([_spec(6, role="writer", priority=1_000.0)])
     _insert_tasks([_spec(7)])
     _sql("UPDATE task SET status = 'running' WHERE task_id = ?", _task_id(7))
     got = runs.ready_tasks(_run_id(1), {"analyst", "skeptic"}, now=_T0, aging_per_min=0.01)
     assert [t.task_id for t in got] == [_task_id(n) for n in (2, 1, 3, 4, 5)]
     assert runs.ready_tasks(_run_id(1), (), now=_T0, aging_per_min=0.01) == []
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="aging_per_min must be finite"):
+            runs.ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=bad)
 
 
 # PT06-08 ---------------------------------------------------------------------------------
@@ -402,8 +418,8 @@ def test_ut06_26_count_open_and_count_tasks(store: Path) -> None:
     assert runs.count_tasks(run, statuses=()) == 0
 
 
-def test_ut06_26_timestamps_are_fixed_width(store: Path) -> None:
-    """UT06-26 stored timestamps use the spec 00 fixed-width UTC text."""
+def test_ut06_24_timestamps_are_fixed_width(store: Path) -> None:
+    """UT06-24 insert_tasks stores created_at in the spec 00 fixed-width UTC text."""
     _insert_runs(_run())
     _insert_tasks([_spec(1)])
     raw = core.read_one("SELECT created_at FROM task")

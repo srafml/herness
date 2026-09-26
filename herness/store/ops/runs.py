@@ -9,6 +9,7 @@ count of values (ENG §3.5). Later task status changes belong to the spec 08 hel
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -79,20 +80,17 @@ def _in(values: Collection[str]) -> tuple[str, list[str]]:
     return "(" + ", ".join("?" * len(items)) + ")", items
 
 
-def _obj(text: str | None, field: str) -> dict[str, object] | None:
+def _obj(text: str | None, field: str, ref: str) -> dict[str, object] | None:
+    """A JSON object column or None; ``ref`` (``<key>=<id>``) names the row, never content."""
     value = core.load_json(text, field=field)
     if value is None or isinstance(value, dict):
         return value
-    msg = f"JSON in {field} is not an object"
+    msg = f"JSON in {field} is not an object: {ref}"
     raise SchemaViolation(msg)
 
 
-def _req_obj(text: str | None, field: str) -> dict[str, object]:
-    return _obj(text, field) or {}
-
-
 def _run_from_row(row: sqlite3.Row) -> RunRow:
-    cost, finished = row["cost_usd"], row["finished_at"]
+    cost, finished, ref = row["cost_usd"], row["finished_at"], f"run_id={row['run_id']}"
     return RunRow(
         run_id=row["run_id"],
         kind=row["kind"],
@@ -102,10 +100,10 @@ def _run_from_row(row: sqlite3.Row) -> RunRow:
         status=row["status"],
         started_at=clock.parse_utc(row["started_at"]),
         finished_at=None if finished is None else clock.parse_utc(finished),
-        token_usage=_req_obj(row["token_usage"], "run.token_usage"),
+        token_usage=_obj(row["token_usage"], "run.token_usage", ref) or {},
         cost_usd=Decimal("0") if cost is None else Decimal(cost),
         config_hash=row["config_hash"],
-        meta=_req_obj(row["meta"], "run.meta"),
+        meta=_obj(row["meta"], "run.meta", ref) or {},
     )
 
 
@@ -138,8 +136,8 @@ def _task_from_row(row: sqlite3.Row) -> TaskRow:
         status=row["status"],
         attempts=int(row["attempts"]),
         last_error=_last_error(row["last_error"]),
-        checkpoint=_obj(row["checkpoint"], "task.checkpoint"),
-        result=_obj(row["result"], "task.result"),
+        checkpoint=_obj(row["checkpoint"], "task.checkpoint", f"task_id={task_id}"),
+        result=_obj(row["result"], "task.result", f"task_id={task_id}"),
         created_at=clock.parse_utc(row["created_at"]),
         updated_at=clock.parse_utc(row["updated_at"]),
     )
@@ -159,10 +157,11 @@ def _one_task(where: str, params: Sequence[object]) -> TaskRow | None:
 
 
 def insert_run(conn: sqlite3.Connection, row: RunRow) -> bool:
-    """Insert a ``run`` row; False when ``run_id`` exists already (U06-33)."""
+    """Insert a ``run`` row; False when ``run_id`` exists (U06-33); other violations raise."""
     finished = None if row.finished_at is None else clock.format_utc(row.finished_at)
     cursor = conn.execute(
-        f"INSERT OR IGNORE INTO run ({_RUN_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",  # noqa: S608
+        f"INSERT INTO run ({_RUN_COLS}) VALUES ({', '.join('?' * 12)})"  # noqa: S608 - constants
+        " ON CONFLICT(run_id) DO NOTHING",
         (
             row.run_id,
             row.kind,
@@ -239,7 +238,7 @@ def update_run_fields(
     conn: sqlite3.Connection,
     run_id: str,
     *,
-    token_usage: dict[str, object] | None = None,
+    token_usage: Mapping[str, object] | None = None,
     cost_usd: Decimal | None = None,
     meta_patch: Mapping[str, object] | None = None,
 ) -> None:
@@ -259,7 +258,7 @@ def update_run_fields(
         sets.append("cost_usd = ?")
         params.append(str(cost_usd))
     if meta_patch is not None:
-        meta = _req_obj(row["meta"], "run.meta") | dict(meta_patch)
+        meta = (_obj(row["meta"], "run.meta", f"run_id={run_id}") or {}) | dict(meta_patch)
         sets.append("meta = ?")
         params.append(core.dump_json(meta, field="run.meta"))
     if sets:
@@ -342,8 +341,11 @@ def select_tasks(
 def ready_tasks(
     run_id: str, roles: Collection[str], *, now: datetime, aging_per_min: float
 ) -> list[TaskRow]:
-    """Pending tasks of ``roles`` in design 06 §5.4 order (U06-39): ``spec.round``,
-    ``spec.depth``, aged priority descending, then ``task_id``."""
+    """Pending ``roles`` tasks in design 06 §5.4 order (U06-39): round, depth, aged priority
+    descending, task_id. ``aging_per_min`` must be finite (ValueError)."""
+    if not math.isfinite(aging_per_min):
+        msg = "aging_per_min must be finite"
+        raise ValueError(msg)
     tasks = select_tasks(run_id, roles=roles, statuses=("pending",))
 
     def key(task: TaskRow) -> tuple[int, int, float, str]:
