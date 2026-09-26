@@ -41,7 +41,7 @@ _META_SQL: Final = (
     "SELECT sql, params, result_hash, row_count, result_sample FROM meta.evidence"
     " WHERE query_id = $q"
 )
-_EXACT_NUMERIC: Final = frozenset(
+_NUMERIC_TYPES: Final = frozenset(
     {"TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "FLOAT", "REAL", "DOUBLE"}
 )
 
@@ -131,18 +131,19 @@ def load_meta(pool: WarehousePool, query_id: str, build_id: str) -> StoredEviden
     if row is None:
         return None
     sql_text, params_text, stored_hash, row_count, sample_text = row
+    usable = isinstance(sql_text, str) and isinstance(stored_hash, str)
+    if not usable or not isinstance(row_count, int) or isinstance(row_count, bool):
+        return None  # a NULL sql, hash or row_count: the row cannot be re-run or compared
     try:
         params = json.loads(params_text) if isinstance(params_text, str) else params_text
         sample = json.loads(sample_text) if isinstance(sample_text, str) else sample_text
-        recomputed = compute_query_id(str(sql_text), params, build_id)
+        recomputed = compute_query_id(sql_text, params, build_id)
     except (ValueError, TypeError, SchemaViolation):
         return None
     if recomputed != query_id:
         return None  # step 5b: tampered meta.evidence row
     rows = sample if isinstance(sample, list) else []
-    return StoredEvidence(
-        str(sql_text), _bind_of(params), str(stored_hash), int(row_count), rows, False
-    )
+    return StoredEvidence(sql_text, _bind_of(params), stored_hash, row_count, rows, False)
 
 
 @dataclass(slots=True)
@@ -165,10 +166,12 @@ class Rerun:
     error: str | None
     matches: Mapping[str, RefMatch] = field(default_factory=dict)
     keys: Mapping[str, RowKey] = field(default_factory=dict)
+    reason: str | None = None  # loggable category of `error`: never DuckDB message text
 
 
-def failed(error: str, keys: Mapping[str, RowKey]) -> Rerun:
-    return Rerun((), (), None, "", 0, error, {}, dict(keys))
+def failed(error: str, keys: Mapping[str, RowKey], reason: str | None = None) -> Rerun:
+    """A failed re-run; ``reason`` defaults to ``error`` (a fixed category text)."""
+    return Rerun((), (), None, "", 0, error, {}, dict(keys), reason or error)
 
 
 class _TooLargeError(Exception):
@@ -216,7 +219,7 @@ class _Scan:
 
 def _is_numeric(duckdb_type: str) -> bool:
     norm = duckdb_type.upper().strip()
-    return norm.lstrip("U") in _EXACT_NUMERIC or norm.startswith("DECIMAL")
+    return norm.lstrip("U") in _NUMERIC_TYPES or norm.startswith("DECIMAL")
 
 
 def hash_kind(stored: StoredEvidence, rerun: Rerun) -> HashKind | None:
@@ -285,11 +288,11 @@ class RerunCache:
     def _compute(self, stored: StoredEvidence, build_id: str, keys: Mapping[str, RowKey]) -> Rerun:
         try:
             wh = self._pool.get(build_id)
-        except (FileNotFoundError, ConfigError, QueryError):
-            return failed("build unavailable", keys)
-        if stored.guard:
             # A schema without tables allows nothing; sqlglot rejects empty mappings.
             schema = {name: tables for name, tables in wh.schema().items() if tables}
+        except (FileNotFoundError, ConfigError, QueryError, duckdb.Error):
+            return failed("build unavailable", keys)  # incl. a handle closed by another thread
+        if stored.guard:
             try:
                 SqlGuard(schema, self._sql.blocked_columns).check(stored.sql, allow_catalog=True)
             except QueryError as exc:
@@ -299,7 +302,10 @@ class RerunCache:
     def _execute(
         self, wh: DuckWarehouse, stored: StoredEvidence, keys: Mapping[str, RowKey]
     ) -> Rerun:
-        cur = wh.cursor()
+        try:
+            cur = wh.cursor()
+        except duckdb.Error:
+            return failed("build unavailable", keys)  # the pool closed the handle meanwhile
         timer = threading.Timer(self._cfg.rerun_timeout_s, cur.interrupt)
         timer.daemon = True
         timer.start()
@@ -314,7 +320,8 @@ class RerunCache:
         except _TooLargeError:
             return failed("too large", keys)
         except (duckdb.Error, SchemaViolation) as exc:
-            return failed((str(exc) or type(exc).__name__)[:_ERROR_CHARS], keys)
+            reason = f"duckdb: {type(exc).__name__}"
+            return failed((str(exc) or type(exc).__name__)[:_ERROR_CHARS], keys, reason)
         finally:
             timer.cancel()
         return Rerun(columns, types, scan.rows, digest, scan.count, None, scan.matches, dict(keys))

@@ -329,6 +329,9 @@ class Verifier:
         rerun = self._cache.get(query_id, stored, build_id, keys)  # U05-63 `_rerun`
         kind = None if rerun.error is not None else rr.hash_kind(stored, rerun)
         if kind is None:  # a re-run error, or `result drift`
+            # The category only: DuckDB message text may quote ticket text or personal data.
+            reason = "result drift" if rerun.error is None else rerun.reason or "error"
+            _log.info("harness.verifier.query_failed", query_id=query_id, reason=reason)
             return [it.make_check(ref, "query_failed") for ref in refs]
         setattr(counts, kind, getattr(counts, kind) + 1)
         return [self._check_ref(ref, rerun) for ref in refs]

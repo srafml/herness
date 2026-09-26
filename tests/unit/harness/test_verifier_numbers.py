@@ -767,3 +767,74 @@ def test_ut05_129_actual_json_safe_cases() -> None:
     assert vitems.actual_value([1, 2]) == "[1, 2]"
     assert vitems.actual_value(None) is None
     assert vitems.actual_value(Decimal("2.50")) == "2.50"
+
+
+# --- Fix round 1 (review M1, M2) --------------------------------------------------------
+
+
+def _closed(*_args: object) -> Any:
+    msg = "Connection already closed!"
+    raise duckdb.ConnectionException(msg)
+
+
+@pytest.mark.parametrize("method", ["schema", "cursor"])
+def test_ut05_118_handle_closed_by_other_thread_is_query_failed(
+    env: Env, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """UT05-118 a handle closed by the pool mid-verify (schema or cursor) -> query_failed."""
+    team = env.add(sd.TEAM_SQL).query_id
+    monkeypatch.setattr(env.pool.get(sd.BUILD_ID), method, _closed)
+    numbers = [sd.ref("n1", 12, team, "incidents", PAY_WEEK)]
+    result = env.verifier.verify_numbers(sd.item("[[n1]]", numbers), sd.BUILD_ID)
+    assert _results(result) == ["query_failed"]
+    cached = env.verifier._cache.peek(team, sd.BUILD_ID)
+    assert cached is not None
+    assert cached.error == "build unavailable"
+
+
+@pytest.mark.parametrize("column", ["row_count", "sql", "result_hash"])
+def test_ut05_117_meta_evidence_null_fields_missing_query(tmp_path: Path, column: str) -> None:
+    """UT05-117 a `meta.evidence` row with a NULL row_count, sql or hash -> missing_query."""
+    path = sd.make_build(tmp_path)
+    con = duckdb.connect(str(path))
+    con.execute(f"UPDATE meta.evidence SET {column} = NULL")  # noqa: S608 - fixed column names
+    con.close()
+    pool = WarehousePool(tmp_path, SqlSettings())
+    try:
+        verifier = _verifier(pool, FakeOps(), None)
+        numbers = [sd.ref("n1", 7, sd.meta_query_id(), "incidents", {"team": "payments"})]
+        result = verifier.verify_numbers(sd.item("[[n1]]", numbers), sd.BUILD_ID)
+    finally:
+        pool.close_all()
+    assert _results(result) == ["missing_query"]
+
+
+def test_ut05_118_query_failed_logs_category_only(env: Env) -> None:
+    """UT05-118 each query_failed logs `harness.verifier.query_failed` with query_id and the
+    failure category; DuckDB message text (which may quote data) is not logged."""
+    quoting_sql = "SELECT CAST('Jane Doe INC0099999' AS INTEGER) AS a FROM metrics.team_week"
+    bad = sd.foreign_evidence(quoting_sql)
+    env.ops.record_evidence(bad)
+    rejected = sd.foreign_evidence(sd.REJECTED_SQL)
+    env.ops.record_evidence(rejected)
+    drifted = _with(sd.record(env.pool, sd.ONE_ROW_SQL), result_hash="2" * 64, result_sample=[])
+    env.ops.record_evidence(drifted)
+    numbers = [
+        sd.ref("n1", 1, bad.query_id, "a", None),
+        sd.ref("n2", 1, rejected.query_id, "a", None),
+        sd.ref("n3", 5, drifted.query_id, "n", None),
+    ]
+    with capture_logs() as logs:
+        result = env.verifier.verify_numbers(sd.item("[[n1]] [[n2]] [[n3]]", numbers), sd.BUILD_ID)
+    assert _results(result) == ["query_failed"] * 3
+    events = [e for e in logs if e["event"] == "harness.verifier.query_failed"]
+    by_query = {e["query_id"]: e["reason"] for e in events}
+    assert by_query[bad.query_id] == "duckdb: ConversionException"
+    assert by_query[rejected.query_id].startswith("guard: ")
+    assert by_query[drifted.query_id] == "result drift"
+    assert all(e["log_level"] == "info" for e in events)
+    assert "Jane" not in repr(events)
+    cached = env.verifier._cache.peek(bad.query_id, sd.BUILD_ID)
+    assert cached is not None
+    assert cached.error is not None
+    assert "Jane" in cached.error  # the cached error keeps the DuckDB text; the log does not
