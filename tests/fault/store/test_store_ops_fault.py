@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pytest
+from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.errors import StoreBusy
 from herness.core.resilience import ProcessState
@@ -34,7 +34,7 @@ def _insert(conn: sqlite3.Connection) -> None:
 
 @pytest.mark.parametrize(("count", "succeeds"), [(4, True), (7, False)])
 def test_ft02_02_store_busy_plan(
-    ops_store: Path,
+    ops_store: OpsStoreHandle,
     reset_process_state: ProcessState,
     monkeypatch: pytest.MonkeyPatch,
     count: int,

@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 from pydantic import BaseModel
 from structlog.testing import capture_logs
+from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.errors import ConfigError, NotFound, SchemaViolation, StoreBusy
 from herness.core.resilience import ProcessState
@@ -30,9 +31,9 @@ def _create_table(conn: sqlite3.Connection) -> None:
 
 
 @pytest.fixture
-def item_table(ops_store: Path) -> Path:
+def item_table(ops_store: OpsStoreHandle) -> Path:
     core.run_write(_create_table, op="create_item")
-    return ops_store
+    return ops_store.db_path
 
 
 def _count() -> int:
@@ -44,7 +45,7 @@ def _count() -> int:
 # --- UT02-25 connection PRAGMAs --------------------------------------------------------
 
 
-def test_ut02_25_connection_pragmas(ops_store: Path) -> None:
+def test_ut02_25_connection_pragmas(ops_store: OpsStoreHandle) -> None:
     """UT02-25 the connection carries every PRAGMA of U02-37, Row factory and autocommit."""
     conn = core.connection()
     pragma = {
@@ -70,17 +71,24 @@ def test_ut02_25_connection_pragmas(ops_store: Path) -> None:
     }
     assert conn.row_factory is sqlite3.Row
     assert conn.isolation_level is None
-    assert ops_store.is_file()
+    assert ops_store.db_path.is_file()
     assert core.OPS_JSON_MAX_BYTES == 65_536
 
 
-def test_ut02_25_old_sqlite_rejected(ops_store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT02-25 SQLite older than 3.38 is a ConfigError naming the requirement."""
-    core._check_sqlite.cache_clear()
-    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 37, 2))
-    with pytest.raises(ConfigError, match=r"SQLite 3\.38\+ with FTS5 required"):
-        core.connection()
-    core._check_sqlite.cache_clear()
+def test_ut02_25_old_sqlite_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT02-25 SQLite older than 3.38 is a ConfigError naming the requirement.
+
+    Needs a thread with no connection opened yet, so it does not use `ops_store` (already
+    connected by its `migrate()` during setup, T11-40)."""
+    core.reset_connections(path=tmp_path / "ops.sqlite")
+    try:
+        core._check_sqlite.cache_clear()
+        monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 37, 2))
+        with pytest.raises(ConfigError, match=r"SQLite 3\.38\+ with FTS5 required"):
+            core.connection()
+    finally:
+        core._check_sqlite.cache_clear()
+        core.reset_connections()
 
 
 def test_ut02_25_non_wal_rejected(tmp_path: Path) -> None:
@@ -137,7 +145,7 @@ def test_ut02_25_unopenable_path_is_schema_violation(tmp_path: Path) -> None:
 # --- UT02-26 one connection per thread -------------------------------------------------
 
 
-def test_ut02_26_connection_per_thread(ops_store: Path) -> None:
+def test_ut02_26_connection_per_thread(ops_store: OpsStoreHandle) -> None:
     """UT02-26 different objects in two threads; the same object on repeat in one thread."""
     seen: dict[str, sqlite3.Connection] = {}
 
@@ -155,7 +163,7 @@ def test_ut02_26_connection_per_thread(ops_store: Path) -> None:
 
 
 def test_ut02_26_foreign_pid_entry_not_reused(
-    ops_store: Path, monkeypatch: pytest.MonkeyPatch
+    ops_store: OpsStoreHandle, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT02-26 a cached connection from another pid (fork) is replaced, not reused."""
     first = core.connection()
@@ -345,23 +353,30 @@ def test_ut02_28_nested_run_write_not_retried(
 
 
 def test_ut02_28_busy_while_opening_is_retried(
-    ops_store: Path, reset_process_state: ProcessState, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, reset_process_state: ProcessState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT02-28 StoreBusy while a thread first opens its connection is retried by run_write."""
-    real_open = core._open
-    opens: list[Path] = []
+    """UT02-28 StoreBusy while a thread first opens its connection is retried by run_write.
 
-    def busy_once(path: Path) -> sqlite3.Connection:
-        opens.append(path)
-        if len(opens) == 1:
-            msg = "ops store busy while opening"
-            raise StoreBusy(msg)
-        return real_open(path)
+    Needs a thread with no connection opened yet, so it does not use `ops_store` (already
+    connected by its `migrate()` during setup, T11-40)."""
+    core.reset_connections(path=tmp_path / "ops.sqlite")
+    try:
+        real_open = core._open
+        opens: list[Path] = []
 
-    monkeypatch.setattr(core, "_open", busy_once)
-    core.run_write(_create_table, op="create_item")
-    assert len(opens) == 2
-    assert _count() == 0
+        def busy_once(path: Path) -> sqlite3.Connection:
+            opens.append(path)
+            if len(opens) == 1:
+                msg = "ops store busy while opening"
+                raise StoreBusy(msg)
+            return real_open(path)
+
+        monkeypatch.setattr(core, "_open", busy_once)
+        core.run_write(_create_table, op="create_item")
+        assert len(opens) == 2
+        assert _count() == 0
+    finally:
+        core.reset_connections()
 
 
 def _insert_named(name: str) -> Callable[[sqlite3.Connection], object]:

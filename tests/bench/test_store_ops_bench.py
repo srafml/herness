@@ -8,10 +8,12 @@ from __future__ import annotations
 import sqlite3
 import sys
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.ids import query_id as compute_query_id
 from herness.core.types.harness.evidence import Evidence
@@ -26,9 +28,17 @@ _INSERT = (
 )
 
 
-def test_bt02_06_single_row_write_p95(ops_store: Path) -> None:
+@pytest.fixture
+def fresh_ops_store(tmp_path: Path) -> Iterator[Path]:
+    """BT02-07 needs an un-migrated store; the plugin `ops_store` is already migrated."""
+    db_path = tmp_path / "ops.sqlite"
+    core.reset_connections(path=db_path)
+    yield db_path
+    core.reset_connections()
+
+
+def test_bt02_06_single_row_write_p95(ops_store: OpsStoreHandle) -> None:
     """BT02-06 1,000 run_write inserts into review_item (migration 005): p95 under 10 ms."""
-    migrate()
     payload = core.dump_json({"source": "jira", "value": "team-a"}, field="payload")
     durations: list[float] = []
     for i in range(1_000):
@@ -45,7 +55,7 @@ def test_bt02_06_single_row_write_p95(ops_store: Path) -> None:
     assert p95 < 0.010
 
 
-def test_bt02_07_fresh_migration_under_2_s(ops_store: Path) -> None:
+def test_bt02_07_fresh_migration_under_2_s(fresh_ops_store: Path) -> None:
     """BT02-07 `migrate()` on an empty ops file completes in under 2 s."""
     start = time.perf_counter()
     report = migrate()

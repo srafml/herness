@@ -6,6 +6,7 @@ the store parts.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
@@ -39,6 +40,16 @@ _TS = "2026-09-26T10:00:00.000000Z"
 def _package_sql() -> dict[str, bytes]:
     root = resources.files("herness.store.migrations")
     return {e.name: e.read_bytes() for e in root.iterdir() if e.name.endswith(".sql")}
+
+
+@pytest.fixture
+def ops_store(tmp_path: Path) -> Iterator[Path]:
+    """Local override: the stepwise variant upgrades 001-002 then 003+ itself, so it needs an
+    empty, un-migrated store, not the plugin `ops_store` (which is pre-migrated, T11-40)."""
+    db_path = tmp_path / "ops.sqlite"
+    core.reset_connections(path=db_path)
+    yield db_path
+    core.reset_connections()
 
 
 @pytest.fixture(params=["fresh", "stepwise"])

@@ -6,6 +6,7 @@ The 001-002 parts of UT02-37 live in test_store_ops_migrate.py next to the runne
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,17 @@ from herness.store.ops import core
 from herness.store.ops.migrate import MigrationReport, migrate, schema_version
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def ops_store(tmp_path: Path) -> Iterator[Path]:
+    """Local override: every test here drives `migrate()` itself, so it needs an empty,
+    un-migrated store, not the plugin `ops_store` (which is pre-migrated, T11-40)."""
+    db_path = tmp_path / "ops.sqlite"
+    core.reset_connections(path=db_path)
+    yield db_path
+    core.reset_connections()
+
 
 _TS = "2026-09-26T10:00:00.000000Z"
 _TS2 = "2026-09-26T11:00:00.000000Z"
