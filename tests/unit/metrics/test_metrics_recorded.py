@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import decimal
 import json
@@ -428,3 +429,12 @@ def test_st04_06_edited_stored_value_detected(
     with pytest.raises(SchemaViolation, match="nondeterministic result"):
         run_recorded(con, SELECT, PARAMS, "score")
     assert len(_evidence_rows(con)) == 1
+
+
+def test_ut04_08_rows_invariant(con: duckdb.DuckDBPyConnection, samples: list[Any]) -> None:
+    """UT04-08 RecordedQuery refuses rows whose length differs from row_count; None is allowed."""
+    rq = run_recorded(con, SELECT, PARAMS, None)
+    assert rq.rows is not None
+    with pytest.raises(SchemaViolation, match="recorded rows do not match row_count"):
+        dataclasses.replace(rq, rows=rq.rows[:1])
+    assert dataclasses.replace(rq, rows=None).rows is None

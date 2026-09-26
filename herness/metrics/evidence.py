@@ -248,6 +248,11 @@ class RecordedQuery:
     executed_at: datetime.datetime
     duration_ms: int
 
+    def __post_init__(self) -> None:
+        if self.rows is not None and len(self.rows) != self.row_count:
+            msg = "recorded rows do not match row_count"
+            raise SchemaViolation(msg)
+
     def to_evidence(self, run_id: str | None) -> Evidence:
         """The ops ``Evidence``: fields copied 1:1 plus ``run_id`` (design 05 §4.6)."""
         fields = {name: getattr(self, name) for name in _EVIDENCE_FIELDS}
