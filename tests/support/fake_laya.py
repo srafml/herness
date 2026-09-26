@@ -10,6 +10,15 @@ shortlist use. `fake_laya_module` wraps an agent in a module object exposing `lo
 No torch model is involved.
 
 `write_laya_version` writes a minimal, hash-consistent version directory with a manifest.
+
+Training (T03-31, verification item V-11): `trainable_fake_laya` builds a tiny torch module
+(byte `EmbeddingBag` encoder + one linear head per question) exposing the training-mode call
+frozen for `SoftLabelSftTrainer`:
+`question_logits(states, questions, *, max_len) -> {qid: Tensor[len(states), K]}` where
+`questions` is Jev wire shape and K is 1 for `noul` (logit of "true") or the number of
+`criteria` in wire order. Encoder parameters are named `encoder.*`, head ones `head.*`.
+`fake_laya_train_module(factory)` is a `laya` stand-in whose `load` builds a fresh agent per
+call (a new process after a kill).
 """
 
 from __future__ import annotations
@@ -21,6 +30,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 WireQuestions = Mapping[str, Mapping[str, object]]
 
@@ -168,3 +178,69 @@ def write_laya_version(laya_root: Path, version: str, *, status: str = "accepted
     payload = manifest_dict(version, weights, status=status)
     (directory / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
     return directory
+
+
+def trainable_fake_laya(
+    questions: WireQuestions,
+    *,
+    dim: int = 8,
+    seed: int = 0,
+    fail_with: BaseException | None = None,
+) -> Any:
+    """A tiny trainable Laya-shaped torch module answering `question_logits` (V-11 fixture)."""
+    import torch  # noqa: PLC0415 - keep torch out of imports of this helper module
+
+    class TrainableFakeLaya(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(seed)
+                self.encoder = torch.nn.EmbeddingBag(256, dim, mode="mean")
+                self.head = torch.nn.ModuleDict(
+                    {
+                        qid: torch.nn.Linear(dim, 1 if spec["type"] == "noul" else _width(spec))
+                        for qid, spec in questions.items()
+                    }
+                )
+            self.head_checkpointing = False
+            self.checkpointing_enabled = False
+            self.logit_calls: list[tuple[int, tuple[str, ...], bool]] = []
+            self.fail_with = fail_with
+
+        def gradient_checkpointing_enable(self) -> None:
+            self.checkpointing_enabled = True
+
+        def question_logits(
+            self, states: Sequence[str], questions: WireQuestions, *, max_len: int
+        ) -> dict[str, Any]:
+            self.logit_calls.append((len(states), tuple(questions), self.training))
+            if self.fail_with is not None:
+                raise self.fail_with
+            ids = [list(state.encode("utf-8")[:max_len]) or [0] for state in states]
+            offsets = torch.tensor([0, *[len(x) for x in ids[:-1]]]).cumsum(0)
+            flat = torch.tensor([b for x in ids for b in x])
+            embedded = self.encoder(flat, offsets)
+            return {qid: self.head[qid](embedded) for qid in questions}
+
+    return TrainableFakeLaya()
+
+
+def _width(spec: Mapping[str, object]) -> int:
+    criteria = spec["criteria"]
+    assert isinstance(criteria, Mapping | list)
+    return len(criteria)
+
+
+def fake_laya_train_module(factory: Callable[[], Any]) -> types.ModuleType:
+    """A stand-in `laya` module whose `load` returns a fresh `factory()` agent per call."""
+    module = types.ModuleType("laya")
+    loaded: list[Any] = []
+
+    def load(path: str, fast: bool = False) -> Any:
+        agent = factory()
+        loaded.append(agent)
+        return agent
+
+    module.load = load  # type: ignore[attr-defined]
+    module.loaded = loaded  # type: ignore[attr-defined]
+    return module
