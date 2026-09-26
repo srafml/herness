@@ -180,6 +180,8 @@ def build(tmp_path: Path) -> Fixture:
     old = _cache_rows(qs, teacher_row, when=T0)[:1]
     old[0] |= {"distribution": _choice_dist("unknown", 0.99), "decided_at": T0.replace(day=1)}
     old.append(old[0] | {"question_fingerprint": "0" * 16, "decided_at": NOW})
+    other_fp = qs.get("change_caused").fingerprint  # another question's fingerprint: ignored
+    old.append(old[0] | {"question_fingerprint": other_fp, "decided_at": NOW})
     rows = _cache_rows(qs, teacher_row, when=T0.replace(day=2))
     write_part(teacher_part, pa.Table.from_pylist(old + rows, CACHE_SCHEMA))
     return Fixture(
