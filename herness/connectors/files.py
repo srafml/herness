@@ -32,16 +32,6 @@ from herness.core.errors import ConfigError, SchemaViolation, SourceUnavailable
 from herness.core.logging import get_logger
 from herness.core.registry import register
 
-__all__ = [
-    "FILE_READ_MEMORY_LIMIT",
-    "FINGERPRINT_CHUNK_BYTES",
-    "MAX_INBOX_FILE_BYTES",
-    "FilesConnector",
-    "InboxFile",
-    "InboxFileChanged",
-    "fingerprint_file",
-]
-
 MAX_INBOX_FILE_BYTES: Final = 1_073_741_824  # 1 GiB
 FILE_READ_MEMORY_LIMIT: Final = "1GB"
 FINGERPRINT_CHUNK_BYTES: Final = 1_048_576
@@ -54,6 +44,8 @@ _CSV_SQL: Final = "SELECT * FROM read_csv($path, all_varchar = true, header = tr
 _PARQUET_SQL: Final = "SELECT * FROM read_parquet($path)"
 _XLSX_SQL: Final = "SELECT * FROM read_xlsx($path, all_varchar = true)"
 _XLSX_SHEET_SQL: Final = "SELECT * FROM read_xlsx($path, all_varchar = true, sheet = $sheet)"
+_KEY_RE2: Final = r"^[^\x00-\x1f]{1,512}$"  # the record_id key rule, vectorised
+_JSON: Final = json.JSONEncoder(ensure_ascii=False, separators=(",", ":"), default=str)
 
 _log = get_logger("connectors.files")
 
@@ -161,20 +153,19 @@ def _source_keys(keys: list[pa.Array], f: InboxFile, offset: int) -> pa.Array:
 
 
 def _payloads(raw: pa.RecordBatch) -> pa.Array:
+    """Per row ``json.dumps`` of the original names and values (one reused encoder)."""
     names = raw.schema.names
-    values = [column.to_pylist() for column in raw.columns]
-    return pa.array(
-        [
-            json.dumps(
-                dict(zip(names, row, strict=True)),
-                ensure_ascii=False,
-                separators=(",", ":"),
-                default=str,
-            )
-            for row in zip(*values, strict=True)
-        ],
-        pa.string(),
-    )
+    rows = zip(*(column.to_pylist() for column in raw.columns), strict=True)
+    return pa.array([_JSON.encode(dict(zip(names, row, strict=True))) for row in rows], pa.string())
+
+
+def _record_ids(entity: str, keys: pa.Array) -> pa.Array:
+    """``record_id`` of every key, vectorised; the first key validates source and entity."""
+    record_id(_SOURCE, entity, keys[0].as_py())
+    if not pc.all(pc.match_substring_regex(keys, _KEY_RE2)).as_py():
+        msg = "invalid record key"
+        raise SchemaViolation(msg, source=_SOURCE, entity=entity)
+    return pc.binary_join_element_wise(pa.scalar(f"{_SOURCE}:{entity}:"), keys, "")
 
 
 @register("connector", "files")
@@ -342,7 +333,7 @@ class FilesConnector:
             column = _column(columns, cfg.updated_field, "updated field", entity)
             updated = parse_arrow_timestamps(column, field=cfg.updated_field)
         meta = [
-            pa.array([record_id(_SOURCE, entity, k) for k in keys.to_pylist()], pa.string()),
+            _record_ids(entity, keys),
             pa.repeat(pa.scalar(_SOURCE, pa.string()), n),
             pa.repeat(pa.scalar(entity, pa.string()), n),
             keys,

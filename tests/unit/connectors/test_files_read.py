@@ -282,3 +282,15 @@ def test_ut01_45_list_keys_rules(tmp_path: Path) -> None:
     d.drop(tmp_path, "teams/old.csv", "id\n1\n2\n", age_s=9000)
     d.drop(tmp_path, "teams/new.csv", "id\n2\n3\n", age_s=5000)
     assert [k for b in conn.list_keys("teams") for k in b.column(0).to_pylist()] == ["2", "3"]
+
+
+def test_ut01_47_invalid_key_rejected(tmp_path: Path) -> None:
+    """UT01-47 a key with a control character fails like ``record_id``, without its value."""
+    (tmp_path / "sites").mkdir()
+    path = tmp_path / "sites" / "s.parquet"
+    pq.write_table(pa.table({"id": ["ok", "bad" + chr(1)]}), path)
+    os.utime(path, ns=(d.mtime_ns(3600), d.mtime_ns(3600)))
+    entities = {"sites": {"pattern": "*.parquet", "key_field": ["id"]}}
+    with pytest.raises(SchemaViolation, match="invalid record key") as info:
+        _read(d.connector(tmp_path, entities), "sites")
+    assert "bad" not in str(info.value)
