@@ -23,11 +23,13 @@ from typing import Any
 import httpcore2
 import httpx2
 import pytest
+import structlog
 from pydantic import SecretStr
 from tests.support.egress_harness import API, audit_fields, egress_lines, load, make_guard
 from tests.support.egress_mock import MockNet
 from tests.support.fake_keyring import MemoryKeyring
 
+from herness.core import _egress_streams as streams
 from herness.core import _egress_transport as et
 from herness.core import config as c
 from herness.core import egress as eg
@@ -613,3 +615,183 @@ def test_ut10_74_bearer_header_is_set() -> None:
     )
     assert client.headers["Authorization"] == f"Bearer {value}"
     assert "Authorization" not in eg.loopback_http_client("http://127.0.0.1:1", timeout_s=1).headers
+
+
+# --- UT10-54 queue hygiene (review round 3: m4, m5) ------------------------------------------
+
+
+def test_ut10_54_closed_response_queues_nothing(tmp_path: Path, net: MockNet) -> None:
+    """UT10-54 a response closed in time detaches its finalizer: gc queues nothing."""
+    guard = _hybrid(tmp_path)
+    net.route(HOST, json={"ok": True})
+    streams.PENDING.clear()
+    with guard.http_client("reasoning_final", "aggregated_evidence") as client:
+        response = client.send(client.build_request("POST", API, content=EVIDENCE), stream=True)
+        response.read()
+        response.close()
+        del response
+        gc.collect()
+        assert len(streams.PENDING) == 0
+
+
+class _Inner(httpx2.BaseTransport):
+    def __init__(self) -> None:
+        self.closed = False
+
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200)  # pragma: no cover - never sent
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _AsyncInner(httpx2.AsyncBaseTransport):
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _opts() -> dict[str, Any]:
+    return {"purpose": "reasoning_final", "payload_class": "aggregated_evidence"} | {
+        "run_id": None,
+        "task_id": None,
+    }
+
+
+def test_ut10_54_a_failing_queued_job_does_not_stop_the_rest(tmp_path: Path) -> None:
+    """UT10-54 a queued job that raises is logged and skipped; later jobs still run."""
+    ran: list[int] = []
+
+    def bad() -> None:
+        msg = "planted"
+        raise RuntimeError(msg)
+
+    streams.PENDING.clear()
+    streams.PENDING.extend([bad, lambda: ran.append(1)])
+    inner = _Inner()
+    with structlog.testing.capture_logs() as logs:
+        eg.GuardedTransport(inner, guard=_hybrid(tmp_path), **_opts()).close()
+    assert ran == [1]
+    assert inner.closed
+    failed = [e["error_type"] for e in logs if e["event"] == "egress.log.failed"]
+    assert failed == ["RuntimeError"]
+
+
+def test_ut10_54_close_always_closes_the_inner_transport(tmp_path: Path) -> None:
+    """UT10-54 a queued job raising a BaseException: close()/aclose() still close the inner."""
+
+    def interrupt() -> None:
+        raise KeyboardInterrupt
+
+    guard = _hybrid(tmp_path)
+    streams.PENDING.clear()
+    streams.PENDING.append(interrupt)
+    inner = _Inner()
+    with pytest.raises(KeyboardInterrupt):
+        eg.GuardedTransport(inner, guard=guard, **_opts()).close()
+    assert inner.closed
+    streams.PENDING.append(interrupt)
+    ainner = _AsyncInner()
+    transport = eg.AsyncGuardedTransport(ainner, guard=guard, **_opts())
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(transport.aclose())
+    assert ainner.closed
+
+
+# --- UT10-74 loopback response ceiling (review round 3 ruling) ------------------------------
+
+LOCAL = "http://127.0.0.1:8000"
+
+
+def test_ut10_74_identity_is_forced_on_loopback_requests(net: MockNet) -> None:
+    """UT10-74 every loopback request carries Accept-Encoding: identity, whatever was asked."""
+    route = net.route("127.0.0.1", content=b"ok")
+    with eg.loopback_http_client(LOCAL, timeout_s=5.0) as client:
+        client.get("/health", headers={"Accept-Encoding": "gzip, br"})
+    assert route.calls[0].headers["Accept-Encoding"] == "identity"
+
+
+def test_ut10_74_content_length_over_the_ceiling_is_refused_unread(net: MockNet) -> None:
+    """UT10-74 a content-length past max_response_bytes: response_too_large, no byte read."""
+    read: list[int] = []
+
+    def body() -> Iterator[bytes]:
+        read.append(1)
+        yield b"x" * 10
+
+    net.route("127.0.0.1", content=body(), headers={"content-length": "2000"})
+    with eg.loopback_http_client(LOCAL, timeout_s=5.0, max_response_bytes=1000) as client:
+        assert _reason(client.get, "/v1/models") == "response_too_large"
+    assert read == []
+
+
+@pytest.mark.parametrize("ceiling", [1000, 4096])
+def test_ut10_74_streamed_body_over_the_ceiling(net: MockNet, ceiling: int) -> None:
+    """UT10-74 a streamed body past a custom ceiling: response_too_large, sync and async."""
+    net.route("127.0.0.1", "/big", content=[b"x" * 512] * 20)
+    net.route("127.0.0.1", "/small", content=[b"y" * 100] * 5)
+    with eg.loopback_http_client(LOCAL, timeout_s=5.0, max_response_bytes=ceiling) as client:
+        assert _reason(client.get, "/big") == "response_too_large"
+        assert client.get("/small").content == b"y" * 500
+
+    async def run() -> None:
+        async with eg.aloopback_http_client(
+            LOCAL, timeout_s=5.0, max_response_bytes=ceiling
+        ) as aclient:
+            await aclient.get("/big")
+
+    assert _reason(asyncio.run, run()) == "response_too_large"
+
+
+def test_ut10_74_unsupported_encoding_is_refused(net: MockNet) -> None:
+    """UT10-74 a loopback body in br: unsupported_encoding, unread."""
+    net.route("127.0.0.1", content=b"\x0b\x02\x80", headers={"content-encoding": "br"})
+    with eg.loopback_http_client(LOCAL, timeout_s=5.0) as client:
+        assert _reason(client.get, "/x") == "unsupported_encoding"
+
+
+@pytest.mark.parametrize("ceiling", [0, -1, et.MAX_RESPONSE_BYTES + 1, True, 1.5])
+def test_ut10_74_invalid_ceiling_is_a_config_error(ceiling: object) -> None:
+    """UT10-74 max_response_bytes outside (0, MAX_RESPONSE_BYTES] or not an int: ConfigError."""
+    for factory in (eg.loopback_http_client, eg.aloopback_http_client):
+        with pytest.raises(ConfigError, match="max_response_bytes"):
+            factory(LOCAL, timeout_s=5.0, max_response_bytes=ceiling)  # type: ignore[arg-type]
+    assert eg.loopback_http_client(LOCAL, timeout_s=5.0, max_response_bytes=et.MAX_RESPONSE_BYTES)
+
+
+def test_ut10_74_openai_sdk_completes_through_the_loopback_client(net: MockNet) -> None:
+    """UT10-74 openai.AsyncOpenAI with http_client=aloopback_http_client() returns a completion."""
+    import openai  # noqa: PLC0415 - SDK import only for this acceptance check
+
+    completion = {
+        "id": "cmpl-1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "local-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+    }
+    route = net.route("127.0.0.1", "/v1/chat/completions", "POST", json=completion)
+
+    async def ask() -> str | None:
+        http = eg.aloopback_http_client(LOCAL, timeout_s=10.0, max_response_bytes=1_000_000)
+        client = openai.AsyncOpenAI(
+            api_key="-".join(("local", "key")), base_url=f"{LOCAL}/v1", http_client=http
+        )
+        async with client:
+            reply = await client.chat.completions.create(
+                model="local-model", messages=[{"role": "user", "content": "hi"}]
+            )
+        return reply.choices[0].message.content
+
+    assert asyncio.run(ask()) == "hello"
+    assert route.call_count == 1
+    assert route.calls[0].headers["Accept-Encoding"] == "identity"

@@ -395,3 +395,31 @@ def test_st10_54_async_absolute_url_off_loopback(connects: list[object]) -> None
 
     assert _blocked(asyncio.run, send()).reason == "not_loopback"  # user info refused too
     assert connects == []
+
+
+@pytest.mark.parametrize("factory", [eg.loopback_http_client, eg.aloopback_http_client])
+def test_st10_54_gzip_bomb_through_the_loopback_client(net: MockNet, factory: Any) -> None:
+    """ST10-54 a local server's gzip bomb: cut on decoded bytes (response_too_large)."""
+    wire = _bomb()
+    chunks = [wire[i : i + 65536] for i in range(0, len(wire), 65536)]
+    net.route("127.0.0.1", content=chunks, headers={"content-encoding": "gzip"})
+    client = factory("http://127.0.0.1:8000", timeout_s=5.0)
+
+    async def aget() -> None:
+        async with client:
+            await client.get("/v1/models")
+
+    def get() -> None:
+        with client:
+            client.get("/v1/models")
+
+    run = get if factory is eg.loopback_http_client else lambda: asyncio.run(aget())
+    assert _blocked(run).reason == "response_too_large"
+
+
+def test_st10_54_small_gzip_body_decodes_through_the_loopback_client(net: MockNet) -> None:
+    """ST10-54 a small gzip body from a local server is decoded once, under the ceiling."""
+    body = b'{"data": []}'
+    net.route("127.0.0.1", content=gzip.compress(body), headers={"content-encoding": "gzip"})
+    with eg.loopback_http_client("http://127.0.0.1:8000", timeout_s=5.0) as client:
+        assert client.get("/v1/models").content == body

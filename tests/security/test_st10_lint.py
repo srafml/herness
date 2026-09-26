@@ -14,8 +14,10 @@ An AST scan of ``herness/``, ``app/`` and ``tools/`` flags, outside
 - ``from httpx import *`` / ``from httpx2 import *``.
 
 Import aliases and module rebinding (``x = httpx2``) are resolved. Type annotations (argument,
-return and variable annotations, string annotations included) and ``if TYPE_CHECKING:`` blocks
-are not flagged: they build nothing (T10-17 review ruling I5); imports there still bind names.
+return and variable annotations, string annotations included), except calls and walrus
+expressions inside them, and ``if TYPE_CHECKING:`` blocks, where the flag resolves to
+``typing.TYPE_CHECKING``, are not flagged: they build nothing (T10-17 review rulings I5, m1,
+m2); imports there still bind names.
 ``getattr``/``importlib`` tricks are out of scope (the socket
 guard, U10-58, holds those). Vendor SDK constructors (Snowflake, ``pymongo``, ``msal``) are
 not flagged; ST10-55 holds their hosts.
@@ -70,15 +72,21 @@ class _Scanner(ast.NodeVisitor):
     def visit(self, node: ast.AST) -> None:
         if id(node) not in self._skip:
             super().visit(node)
+            return
+        stack = [node]  # an annotation: only a call or a walrus inside it can build anything
+        while stack:
+            sub = stack.pop()
+            if isinstance(sub, ast.Call | ast.NamedExpr):
+                super().visit(sub)
+            else:
+                stack.extend(ast.iter_child_nodes(sub))
 
     def _flag(self, line: int, what: str) -> None:
         if not self._quiet:
             self.findings.append((line, what))
 
     def visit_If(self, node: ast.If) -> None:
-        test = node.test
-        name = test.id if isinstance(test, ast.Name) else getattr(test, "attr", None)
-        if name != "TYPE_CHECKING":
+        if self._dotted(node.test) != "typing.TYPE_CHECKING":  # only the real flag
             self.generic_visit(node)
             return
         self._quiet = True
@@ -208,6 +216,15 @@ PLANTED = {
     "from urllib import request\n": "from urllib import request",
     "from urllib.request import urlopen\n": "from urllib.request import urlopen",
     "import anthropic\nanthropic.Anthropic()\n": "anthropic.Anthropic( without http_client=",
+    "import httpx2\ndef f(c: httpx2.Client()) -> None:\n    pass\n": "httpx2.Client",
+    "import httpx2\nx: httpx2.Client() = 1\n": "httpx2.Client",
+    "import httpx2\ndef f() -> (c := httpx2.AsyncClient()):\n    pass\n": "httpx2.AsyncClient",
+    "TYPE_CHECKING = True\nif TYPE_CHECKING:\n    import httpx2\n    httpx2.Client()\n": (
+        "httpx2.Client"
+    ),
+    "class K:\n    TYPE_CHECKING = True\nif K.TYPE_CHECKING:\n    import requests\n": (
+        "import requests"
+    ),
     "import openai\nopenai.AsyncOpenAI(api_key=k)\n": "openai.AsyncOpenAI( without http_client=",
     "from openai import OpenAI\nOpenAI()\n": "openai.OpenAI( without http_client=",
     "from httpx import *\n": "from httpx import *",
@@ -252,7 +269,7 @@ def test_st10_25_planted_violation_fails(tmp_path: Path, source: str, expected: 
         "import httpx2\ndef f(c: httpx2.AsyncClient) -> httpx2.Client:\n    x: httpx2.Client\n",
         "def f(c: 'httpx2.AsyncClient') -> 'httpx2.Client':\n    pass\n",
         (
-            "import typing\nif typing.TYPE_CHECKING:\n    import httpx2\n"
+            "import typing as t\nif t.TYPE_CHECKING:\n    import httpx2\n"
             "    from httpx2 import AsyncClient\n    C = httpx2.Client\n"
             "def f() -> AsyncClient:\n    pass\n"
         ),
