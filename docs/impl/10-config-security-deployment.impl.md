@@ -97,7 +97,7 @@ Line budgets are production lines including docstrings. "Extra imports" lists im
 | `herness/core/egress_log.py` | Egress JSONL writer and daily token counter | `EgressLog` | L0 | none | 200 |
 | `herness/core/egress_clients.py` | Loopback and source client factories and their host-restricting transports (part of the egress component; public names re-exported from `herness.core.egress`, R-06) | `LoopbackOnlyTransport`, `loopback_http_client`, `aloopback_http_client`, `SourceHostTransport`, `source_http_client` | L0 | `httpx`, `certifi` | 300 |
 | `herness/core/egress_socket.py` | Process socket guard (audit hook) | `SocketPolicy`, `install_socket_guard`, `reset_socket_guard` | L0 | none | 220 |
-| `herness/core/audit.py` | Audit JSONL with hash chain, locked append, config-change record | `AuditEvent`, `audit`, `append_jsonl_locked`, `verify_chain`, `ChainReport`, `record_config_change`, `last_secret_set_times` | L0 | none | 360 |
+| `herness/core/audit.py` | Audit JSONL with hash chain, locked append, config-change record | `AuditEvent`, `audit`, `append_jsonl_locked`, `verify_chain`, `ChainReport`, `record_config_change`, `last_secret_set_times` | L0 | none | 395 |
 | `herness/admin/__init__.py` | Package marker; registers the `maintenance` job handler | `register_handlers` | L5 | — | 30 |
 | `herness/admin/commands_config.py` | `config validate|show|hash` behavior | `cmd_config_validate`, `cmd_config_show`, `cmd_config_hash` | L5 | none | 180 |
 | `herness/admin/commands_secrets.py` | `secrets init|set|status|rekey` behavior | `cmd_secrets_init`, `cmd_secrets_set`, `cmd_secrets_status`, `cmd_secrets_rekey` | L5 | none | 260 |
