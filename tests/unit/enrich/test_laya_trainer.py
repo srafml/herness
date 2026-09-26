@@ -355,15 +355,17 @@ def test_ut03_127_config_errors(
     no_val = replace(data, val=data.val.slice(0, 0))
     with pytest.raises(ConfigError, match="validation rows"):
         trainer.train(no_val, init_dir=init_dir, out_dir=tmp_path / "a", hyper=_HYPER, ctx=_ctx())
-    (init_dir / "rl_agent_config.json").unlink()
-    with pytest.raises(ConfigError, match=r"rl_agent_config\.json"):
-        trainer.train(data, init_dir=init_dir, out_dir=tmp_path / "b", hyper=_HYPER, ctx=_ctx())
     monkeypatch.setitem(sys.modules, "laya", fake_laya_train_module(object))
     with pytest.raises(ConfigError, match="no torch module"):
         trainer.train(data, init_dir=init_dir, out_dir=tmp_path / "c", hyper=_HYPER, ctx=_ctx())
     monkeypatch.setitem(sys.modules, "laya", None)
     with pytest.raises(ConfigError, match="not installed"):
         trainer.train(data, init_dir=init_dir, out_dir=tmp_path / "d", hyper=_HYPER, ctx=_ctx())
+    monkeypatch.setitem(sys.modules, "laya", laya)
+    (init_dir / "rl_agent_config.json").unlink()
+    with pytest.raises(ConfigError, match=r"rl_agent_config\.json"):  # checked before training
+        trainer.train(data, init_dir=init_dir, out_dir=tmp_path / "b", hyper=_HYPER, ctx=_ctx())
+    assert not laya.loaded[-1].logit_calls
 
 
 def test_ut03_127_targets_and_schedule() -> None:

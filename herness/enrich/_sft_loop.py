@@ -128,6 +128,15 @@ def _prepare(
     return module, torch.optim.AdamW(params, weight_decay=hyper.weight_decay)
 
 
+def _side_files(init_dir: Path) -> list[Path]:
+    """Config and tokenizer files copied next to the new weights; the config is required."""
+    side = sorted({p for pattern in _SIDE_FILES for p in init_dir.glob(pattern) if p.is_file()})
+    if not any(p.name == _SIDE_FILES[0] for p in side):
+        msg = f"{_SIDE_FILES[0]} missing from the initial model directory"
+        raise ConfigError(msg)
+    return side
+
+
 def _log_probs(logits: torch.Tensor) -> torch.Tensor:
     """Log-softmax over labels; a single `noul` logit becomes the two-way (true, false)."""
     import torch  # noqa: PLC0415 - lazy import
@@ -167,6 +176,7 @@ class SftLoop:
         import torch  # noqa: PLC0415 - lazy import
 
         init_dir, out_dir = dirs
+        side = _side_files(init_dir)
         torch.manual_seed(self.hyper.seed)
         self.agent: Any = agent
         self.device = device
@@ -181,7 +191,7 @@ class SftLoop:
             epoch = self.state["epochs_done"] + 1
             self._train_epoch(epoch)
             self._end_epoch(epoch, self._val_nll())
-        return self._outputs(init_dir, out_dir)
+        return self._outputs(side, out_dir)
 
     def _progress(self) -> dict[str, Any]:
         elapsed = self.state["elapsed_s"] + clock.monotonic() - self.started
@@ -275,14 +285,11 @@ class SftLoop:
                 "enrich.distill.wall_clock_cap", epochs_run=epoch, best_epoch=state["best_epoch"]
             )
 
-    def _outputs(self, init_dir: Path, out_dir: Path) -> Outcome:
+    def _outputs(self, side: list[Path], out_dir: Path) -> Outcome:
+        """Best epoch's weights plus the config and tokenizer files into `out_dir`."""
         from safetensors.torch import save_model  # noqa: PLC0415 - lazy import
 
         ckpt.load_weights(self.root / f"epoch-{self.state['best_epoch']}", self.module, self.device)
-        side = sorted({p for pattern in _SIDE_FILES for p in init_dir.glob(pattern) if p.is_file()})
-        if not any(p.name == _SIDE_FILES[0] for p in side):
-            msg = f"{_SIDE_FILES[0]} missing from the initial model directory"
-            raise ConfigError(msg)
         save_model(self.module, str(out_dir / ckpt.MODEL_FILE))
         for path in side:
             shutil.copyfile(path, out_dir / path.name)
