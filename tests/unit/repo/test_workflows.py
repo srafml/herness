@@ -13,6 +13,7 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
+RELEASE = WORKFLOWS / "release.yml"
 # ci.yml lands with T00-14; release.yml with T00-15 (skipped until it exists).
 WORKFLOW_NAMES = ("ci.yml", "release.yml")
 PINNED = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}$")
@@ -154,3 +155,54 @@ def test_st00_06_workflow_hardening(name: str) -> None:
     _check_runners_and_checkout(path, doc)
     if path == CI:
         _check_ci_contract(doc)
+
+
+def test_st00_08_release_workflow() -> None:
+    """ST00-08 release.yml: trigger, job topology, build permissions, attestations, order.
+
+    Trigger is tag push ``v*.*.*`` only; ``build`` needs ``ci``; ``build`` has
+    ``id-token: write`` and ``attestations: write`` and no other job does; ``build``
+    calls ``attest-build-provenance`` on the wheel and sdist and ``attest-sbom``; the
+    tag-verification and version-match steps precede ``uv build``.
+    """
+    doc = _load(RELEASE)
+    triggers = _triggers(doc)
+    assert set(triggers) == {"push"}
+    assert triggers["push"] == {"tags": ["v*.*.*"]}
+
+    jobs = doc["jobs"]
+    assert jobs["build"]["needs"] == "ci"
+    for name, job in jobs.items():
+        has_id_token = job.get("permissions", {}).get("id-token") == "write"
+        assert has_id_token == (name == "build"), name
+
+    build = jobs["build"]
+    assert build["permissions"]["id-token"] == "write"
+    assert build["permissions"]["attestations"] == "write"
+
+    steps = build["steps"]
+    run_texts = [s.get("run", "") for s in steps]
+    uses_list = [s.get("uses", "") for s in steps]
+
+    build_idx = next((i for i, r in enumerate(run_texts) if r.strip() == "uv build"), None)
+    tag_verify_idx = next(
+        (i for i, r in enumerate(run_texts) if "verification.verified" in r), None
+    )
+    version_check_idx = next(
+        (i for i, r in enumerate(run_texts) if "does not match project version" in r), None
+    )
+    assert build_idx is not None
+    assert tag_verify_idx is not None
+    assert version_check_idx is not None
+    assert tag_verify_idx < build_idx
+    assert version_check_idx < build_idx
+
+    provenance_idx = next(
+        (i for i, u in enumerate(uses_list) if "attest-build-provenance@" in u), None
+    )
+    sbom_attest_idx = next((i for i, u in enumerate(uses_list) if "attest-sbom@" in u), None)
+    assert provenance_idx is not None
+    assert sbom_attest_idx is not None
+    subject_path = steps[provenance_idx]["with"]["subject-path"]
+    assert "dist/*.whl" in subject_path
+    assert "dist/*.tar.gz" in subject_path
