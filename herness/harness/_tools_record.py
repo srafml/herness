@@ -38,7 +38,10 @@ BATCH_ROWS: Final = 10_000
 SAMPLE_ROWS: Final = 50
 ERROR_CHARS: Final = 500
 _PARAM_KEY_RE: Final = re.compile(r"[a-z][a-z0-9_]{0,31}")
-_QUOTED_RE: Final = re.compile(r"'(?:[^']|'')*'")
+# Greedy per line: DuckDB does not escape quotes inside echoed values, so everything from
+# the first to the last quote of a kind is masked (identifiers inside are lost; accepted).
+_SINGLE_QUOTED_RE: Final = re.compile(r"'.*'")
+_DOUBLE_QUOTED_RE: Final = re.compile(r'".*"')
 _TIMEOUT_HINT: Final = "filter by period or use get_metric"
 _DUCKDB_HINT: Final = "check table and column names with describe_table"
 _SIZE_HINT: Final = "aggregate first or add filters"
@@ -194,18 +197,21 @@ def run_query(ctx: ToolContext, sql: str, params: Mapping[str, JsonValue]) -> Ex
 
 def _engine_error(exc: Exception, *, fired: bool, timeout_s: float) -> QueryError:
     """Step 5 mapping; an interrupt may surface from DuckDB or, mid-stream, from pyarrow."""
-    text = str(exc)
-    if fired or isinstance(exc, duckdb.InterruptException) or "INTERRUPT" in text:
+    # Our timer is the only source of interrupts; `fired` says whether it ran (review R1-M1).
+    if fired or isinstance(exc, duckdb.InterruptException):
         return timeout_error(timeout_s)
-    return QueryError(safe_error_text(text), hint=_DUCKDB_HINT)
+    return QueryError(safe_error_text(str(exc)), hint=_DUCKDB_HINT)
 
 
 def safe_error_text(text: str) -> str:
-    """DuckDB error text without quoted values, redacted, first 500 chars (ENG §3.4 ruling).
+    """First line of a DuckDB error, quotes masked, redacted, cut to 500 (ENG §3.4 ruling).
 
-    Conversion errors quote the offending cell, which may be redact-on-read ticket text.
+    Later lines echo the value or the SQL (`LINE 1: ...`); conversion errors quote the
+    offending cell, which may be redact-on-read ticket text.
     """
-    redacted = redact_text(_QUOTED_RE.sub("'<value>'", text))
+    first = text.splitlines()[0] if text else ""
+    masked = _DOUBLE_QUOTED_RE.sub('"<value>"', _SINGLE_QUOTED_RE.sub("'<value>'", first))
+    redacted = redact_text(masked)
     return (redacted if redacted is not None else "query failed")[:ERROR_CHARS]
 
 

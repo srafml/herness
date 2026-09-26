@@ -7,6 +7,7 @@ UT05-61-UT05-64 and UT05-124 on the stand-in build of `tests.support.tools_stand
 from __future__ import annotations
 
 import ast
+import threading
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, time, timedelta, timezone
@@ -33,6 +34,7 @@ from herness.store.ops.evidence import get_evidence
 
 pytestmark = pytest.mark.unit
 
+SELECT_BIG = "SELECT n FROM core.big"
 DAILY_SQL = "SELECT n, amount, day, ts, ratio, team FROM metrics.daily"
 
 
@@ -217,30 +219,45 @@ def test_ut05_63_timeout_while_streaming(wh: DuckWarehouse) -> None:
 
 
 @pytest.mark.parametrize(
-    ("error", "message", "hint"),
+    ("error", "fired", "message", "hint"),
     [
-        (OSError("INTERRUPT Error: Interrupted!"), "timeout after 30.0s", "get_metric"),
-        (OSError("IO Error: disk 'x' full"), "IO Error: disk '<value>' full", "describe_table"),
-        (pa.ArrowInvalid("bad batch"), "bad batch", "describe_table"),
+        (OSError("INTERRUPT Error: Interrupted!"), True, "timeout after 0.05s", "get_metric"),
+        (
+            OSError("INTERRUPT Error: Interrupted!"),
+            False,
+            "INTERRUPT Error: Interrupted!",
+            "describe_table",
+        ),
+        (
+            OSError("IO Error: disk 'x' full"),
+            False,
+            "IO Error: disk '<value>' full",
+            "describe_table",
+        ),
+        (pa.ArrowInvalid("bad batch"), False, "bad batch", "describe_table"),
     ],
-    ids=["interrupt", "other_os_error", "arrow_error"],
+    ids=["interrupt_timer_fired", "interrupt_text_only", "other_os_error", "arrow_error"],
 )
 def test_ut05_63_reader_errors_mapped(
     wh: DuckWarehouse,
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
+    fired: bool,
     message: str,
     hint: str,
 ) -> None:
-    """UT05-63 errors raised by the Arrow reader: interrupt -> timeout, others -> DuckDB hint."""
+    """UT05-63 reader errors: timeout only when our timer fired, others get the DuckDB hint."""
 
     def failing(batches: object) -> Iterator[tuple[object, ...]]:
         del batches
+        if fired:
+            threading.Event().wait(0.5)  # the 0.05 s timer fires meanwhile
         raise error
 
     monkeypatch.setattr(rec, "iter_batch_rows", failing)
+    limits = SqlLimits(timeout_s=0.05 if fired else 30.0)
     with pytest.raises(QueryError) as info:
-        tools.execute_recorded(sd.make_ctx(wh, FakeOps()), "SELECT n FROM core.big", {})
+        tools.execute_recorded(sd.make_ctx(wh, FakeOps(), limits=limits), SELECT_BIG, {})
     assert info.value.message == message
     assert hint in (info.value.hint or "")
 
@@ -400,21 +417,36 @@ def test_ut05_61_blocked_columns_from_config(monkeypatch: pytest.MonkeyPatch) ->
     assert list(rec._blocked_columns()) == ["core.work_item.summary"]
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT CAST(summary AS INTEGER) AS x FROM core.work_item",
+        "SELECT strptime(summary, '%Y-%m-%d') AS x FROM core.work_item",
+        "SELECT CAST(summary AS DATE) AS x FROM core.work_item",
+        "SELECT CAST(summary AS JSON) AS x FROM core.work_item",
+    ],
+    ids=["int_cast", "strptime", "date_cast", "json_cast"],
+)
 def test_ut05_61_duckdb_error_never_echoes_cell_values(
-    wh: DuckWarehouse, redacted: list[str]
+    wh: DuckWarehouse, redacted: list[str], sql: str
 ) -> None:
-    """UT05-61 ruling: quoted values in DuckDB errors are replaced, then the text is redacted."""
+    """UT05-61 ruling: first line only, quotes masked, redacted; no cell text in the error.
+
+    DuckDB 1.5.5 puts the value on the first line in quotes (masked) and, for strptime, again
+    on the second line with the SQL `LINE 1:` echo after it (both dropped).
+    """
     ops = FakeOps()
     with pytest.raises(QueryError) as info:
-        tools.execute_recorded(
-            sd.make_ctx(wh, ops), "SELECT CAST(summary AS INTEGER) AS x FROM core.work_item", {}
-        )
+        tools.execute_recorded(sd.make_ctx(wh, ops), sql, {})
     message = info.value.message
-    assert "Conversion Error" in message
-    assert "'<value>'" in message
+    assert "Error" in message
+    assert "<value>" in message
+    assert "\n" not in message
+    assert "LINE 1" not in message
+    assert info.value.hint == "check table and column names with describe_table"
     for summary in sd.SUMMARIES:
         assert summary not in message
-        assert all(summary not in text for text in redacted)
+        assert all(summary not in text for text in redacted)  # masked before redaction
     assert redacted[-1] == message  # the sanitized text went through redact_text
     assert ops.evidence == {}
 
@@ -422,7 +454,10 @@ def test_ut05_61_duckdb_error_never_echoes_cell_values(
 def test_ut05_61_safe_error_text_rules(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT05-61 doubled quotes stay inside one literal; a failed redaction withholds the text."""
     monkeypatch.setattr(rec, "redact_text", lambda text: text)
-    assert rec.safe_error_text("x 'it''s' y 'b'") == "x '<value>' y '<value>'"
+    assert rec.safe_error_text("x 'it''s' y 'b'") == "x '<value>'"
+    assert rec.safe_error_text("a 'it's' b") == "a '<value>' b"  # unescaped inner quote
+    assert rec.safe_error_text('p "say "hi"" q\nsecond line') == 'p "<value>" q'
+    assert rec.safe_error_text("") == ""
     assert len(rec.safe_error_text("e" * 900)) == 500
     monkeypatch.setattr(rec, "redact_text", lambda text: None)
     assert rec.safe_error_text("boom 'v'") == "query failed"
