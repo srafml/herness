@@ -1,4 +1,4 @@
-"""Resolve stage: set-based resolution frame and escalation queue (impl 03 §3.12).
+"""Resolve stage: resolution frame, escalation queue, `enrich.decision` (impl 03 §3.12).
 
 T03-19 adds `resolve_frame` (U03-79), which registers the inputs of
 ``sql/resolve_decisions.sql`` (U03-78) and runs it into the temp table ``enrich_resolved``,
@@ -8,30 +8,43 @@ and `escalation_queue` (U03-80). The ops database is never attached to DuckDB: p
 Deviation from the literal U03-79 signature (recorded in the T03-19 report): `chain_after`
 (U03-71) needs `DecidersSettings` since the R-76 settings split, so `resolve_frame` takes a
 keyword-only `deciders: DecidersSettings` as well.
+
+T03-20 adds `select_spot_checks` (U03-81), `decision_wide_sql` (U03-82) and the stage entry
+`run_resolve` (U03-83). Logs, metrics and review payloads carry counts, hashes and ids only
+(TH03-03).
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib import resources
-from typing import Final
+from itertools import groupby
+from typing import Final, Protocol
 
 import duckdb
 import pyarrow as pa
 
+from herness.core import time as clock
 from herness.core.errors import ConfigError, SchemaViolation
+from herness.core.logging import get_logger
+from herness.core.resilience.metrics import record_gauge
 from herness.core.types import Question, QuestionSet
+from herness.enrich._spot_checks import select_spot_checks
 from herness.enrich.cache import DecisionCache
 from herness.enrich.calibrate import CalibrationStore
 from herness.enrich.decide import chain_after
-from herness.enrich.labels import LabelStore
+from herness.enrich.labels import LabelStore, sync_label_checks
 from herness.enrich.questions import PAIR_QUESTIONS, question_fingerprint
-from herness.enrich.review_items import iter_review_items
+from herness.enrich.review_items import create_if_absent, iter_review_items, open_label_counts
 from herness.enrich.settings import DecidersSettings, DecisionsConfig
 
-__all__ = ["QueueItem", "escalation_queue", "resolve_frame"]
+__all__ = [
+    "QueueItem", "decision_wide_sql", "escalation_queue", "resolve_frame", "run_resolve",
+    "select_spot_checks",
+]  # fmt: skip
 
 _SQL_FILE: Final = "sql/resolve_decisions.sql"
 _SCHEMA_ERRORS: Final = (duckdb.CatalogException, duckdb.BinderException)
@@ -64,6 +77,36 @@ _EXCLUDE_SQL: Final = """ AND NOT EXISTS (
         SELECT 1 FROM enrich_cand AS c
         WHERE c.content_hash = r.content_hash AND c.question = r.question
             AND list_contains(CAST($exclude AS VARCHAR[]), c.decider))"""
+
+_log = get_logger("enrich.resolve")
+_QID_RE: Final = re.compile(r"[a-z][a-z0-9_]{1,40}")  # U03-02 pattern, re-checked (TH03-19)
+# U03-83 names ("purpose", "question_set_version", "question", "content_hash") plus scope
+# {question_set_version}; `create_if_absent` (U03-148) appends scope keys to match_keys without
+# deduplication, which impl 02 rejects, so the version is matched through `scope` only.
+_SPOT_KEYS: Final = ("purpose", "question", "content_hash")
+_INSERT_SQL: Final = """
+INSERT INTO enrich.decision (record_id, question, answer, probability, agreement, decider,
+    decider_version, question_set_version, content_hash, decided_at, escalated, review_status)
+SELECT record_id, question, answer, probability, agreement, decider, decider_version, $qsv,
+    content_hash, decided_at, escalated, review_status
+FROM enrich_resolved WHERE status = 'final'
+"""
+_STATS_SQL: Final = """
+SELECT entity, count(*) FILTER (WHERE status = 'final'),
+    count(*) FILTER (WHERE status = 'final' AND escalated),
+    count(*) FILTER (WHERE status <> 'out_of_scope')
+FROM enrich_resolved GROUP BY entity ORDER BY entity
+"""
+
+
+class _Report(Protocol):
+    """Counters the stage mutates.
+
+    T03-xx pipeline: retype to StageReport (U03-142, herness.enrich.pipeline).
+    """
+
+    decided: int
+    escalated: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,3 +248,102 @@ def escalation_queue(
     except duckdb.Error as exc:
         raise _duck_error(exc, where="escalation_queue") from exc
     return [QueueItem(rid, entity, ch, text, tuple(qids)) for rid, entity, ch, text, qids in rows]
+
+
+def decision_wide_sql(qs: QuestionSet) -> str:
+    """DDL of the ``enrich.decision_wide`` view over the non-pair questions (U03-82).
+
+    Each id is re-checked against the U03-02 pattern before it is interpolated, as a quoted
+    identifier and a quoted literal (TH03-19). Raises ConfigError for an id that fails it.
+    """
+    cols = ["record_id"]
+    for q in qs.questions:
+        if q.id in PAIR_QUESTIONS:
+            continue
+        if _QID_RE.fullmatch(q.id) is None:
+            msg = "decision_wide_sql: a question id fails the id pattern"
+            raise ConfigError(msg, question_set_version=qs.version)
+        cols.append(
+            f"MAX(answer) FILTER (WHERE question = '{q.id}') AS \"{q.id}\", "
+            f"MAX(probability) FILTER (WHERE question = '{q.id}') AS \"{q.id}_p\""
+        )
+    return (
+        f"CREATE OR REPLACE VIEW enrich.decision_wide AS SELECT {', '.join(cols)} "  # noqa: S608 - ids allowlisted above
+        "FROM enrich.decision GROUP BY record_id"
+    )
+
+
+def _create_spot_checks(
+    wh: duckdb.DuckDBPyConnection, *, qs: QuestionSet, cfg: DecisionsConfig, build_id: str,
+    since: datetime,
+) -> None:  # fmt: skip
+    """U03-83 step 5: select spot-checks and create the missing ``label_check`` items."""
+    open_counts = open_label_counts(qsv=qs.version, purposes=frozenset({"spot_check"}))
+    payloads = select_spot_checks(
+        wh, qs=qs, cfg=cfg, build_id=build_id, since=since, open_counts=open_counts
+    )
+    for question, group in groupby(payloads, key=lambda p: p["question"]):
+        created, _ = create_if_absent(
+            "label_check",
+            list(group),
+            match_keys=_SPOT_KEYS,
+            blocking_statuses=("pending", "approved", "rejected"),
+            scope={"question_set_version": qs.version},
+            now=clock.now(),
+        )
+        _log.info("enrich.spot_check.created", question=question, count=created,
+                  purpose="spot_check")  # fmt: skip
+
+
+def _report_resolve(stats: list[tuple[str, int, int, int]], report: _Report) -> None:
+    """U03-83 step 6: counters, coverage and escalation-share gauges, completion log."""
+    decided = sum(row[1] for row in stats)
+    escalated = sum(row[2] for row in stats)
+    coverage = {entity: final / in_scope for entity, final, _, in_scope in stats if in_scope}
+    for entity, ratio in coverage.items():
+        record_gauge("herness_enrich_coverage_ratio", ratio, component="enrich",
+                     labels={"entity": entity})  # fmt: skip
+    if decided:
+        record_gauge("herness_enrich_escalation_share_ratio", escalated / decided,
+                     component="enrich")  # fmt: skip
+    report.decided += decided
+    report.escalated += escalated
+    _log.info("enrich.resolve.completed", decided=decided, escalated=escalated,
+              coverage={entity: round(ratio, 4) for entity, ratio in coverage.items()})  # fmt: skip
+
+
+def run_resolve(  # noqa: PLR0913 - U03-83: stage arguments plus resolve_frame's (binding)
+    wh: duckdb.DuckDBPyConnection,
+    *,
+    qs: QuestionSet,
+    cfg: DecisionsConfig,
+    build_id: str,
+    run_started_at: datetime,
+    report: _Report,
+    deciders: DecidersSettings,
+    cache: DecisionCache,
+    labels: LabelStore,
+    calibration: CalibrationStore,
+    primaries: Mapping[str, str],
+    versions: Mapping[str, str],
+    now: datetime,
+) -> None:
+    """Stage ``resolve``: ``enrich.decision``, ``decision_wide`` and spot-checks (U03-83).
+
+    Spot-checks sample rows decided at or after ``run_started_at``. Raises ConfigError for a
+    bad question id or set, SchemaViolation on a DuckDB error; ops errors propagate.
+    """
+    wide = decision_wide_sql(qs)  # checked before any write
+    sync_label_checks(labels, qs=qs)
+    resolve_frame(
+        wh, qs=qs, cfg=cfg, deciders=deciders, cache=cache, labels=labels,
+        calibration=calibration, primaries=primaries, versions=versions, now=now,
+    )  # fmt: skip
+    try:
+        wh.execute(_INSERT_SQL, {"qsv": qs.version})
+        wh.execute(wide)
+        stats: list[tuple[str, int, int, int]] = wh.execute(_STATS_SQL).fetchall()
+    except duckdb.Error as exc:
+        raise _duck_error(exc, where="run_resolve") from exc
+    _create_spot_checks(wh, qs=qs, cfg=cfg, build_id=build_id, since=run_started_at)
+    _report_resolve(stats, report)
