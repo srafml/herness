@@ -105,7 +105,9 @@ def test_ut02_32_fresh_store_gets_the_43_table_set(ops_store: Path) -> None:
         "006_metric_sample",
     )
     assert report.version == schema_version() == 6
-    rows = core.read_all("SELECT version, name, checksum, applied_at FROM schema_migration")
+    rows = core.read_all(
+        "SELECT version, name, checksum, applied_at FROM schema_migration ORDER BY version"
+    )
     assert [(r["version"], r["name"]) for r in rows] == [
         (1, "ingestion_health"),
         (2, "jobs"),
@@ -233,9 +235,9 @@ def test_ut02_36_memory_fts_follows_insert_update_delete(migrated: Path) -> None
     ("sql", "params"),
     [
         # bad enum
-        (_RUN.replace("'standard'", "'shallow'"), ("r1", _TS)),
+        (_RUN.replace("'standard'", "'shallow'"), ("r2", _TS)),
         (_MEMORY.replace("'semantic'", "'dream'"), ("m1", "k", "c", _TS)),
-        (_REVIEW, ("i1", "{}", "maybe", _TS, None, None, None)),
+        (_REVIEW, ("i1", "{}", "maybe", _TS, "alice", None, _TS)),  # decided: only the enum
         (_MESSAGE.replace("'user'", "'bot'"), ("x1", "s1", _TS)),
         (_METRIC, (_TS, "herness_jobs_total", "summary", "{}")),
         # bad JSON
@@ -243,17 +245,17 @@ def test_ut02_36_memory_fts_follows_insert_update_delete(migrated: Path) -> None
         (_REVIEW, ("i1", "[1]", "pending", _TS, None, None, None)),
         (_METRIC, (_TS, "herness_jobs_total", "counter", '["a"]')),
         # bad timestamp
-        (_RUN, ("r1", "2026-09-26T10:00:00Z")),
+        (_RUN, ("r2", "2026-09-26T10:00:00Z")),
         (_MEMORY, ("m1", "k", "c", "2026-09-26")),
         (_EVIDENCE, ("q_0123456789abcdef", "2026-09-26 10:00:00.000000Z")),
         # other design checks
         (_EVIDENCE, ("q_A123456789abcdef", _TS)),
         (_EVIDENCE, ("q_0123", _TS)),
         (_METRIC, (_TS, "jobs_total", "counter", "{}")),
-        (_SESSION, ("s1", "short", _TS, _TS)),
+        (_SESSION, ("s2", "short", _TS, _TS)),
         (_REVIEW, ("i1", "{}", "approved", _TS, None, None, None)),
         (_REVIEW, ("i1", "{}", "pending", _TS, "alice", None, None)),
-        (_REVIEW, ("i1", "{}", "pending", _TS, None, None, _TS)),
+        (_REVIEW, ("i1", "{}", "pending", _TS, "alice", None, _TS)),
         # TH02-07 caps: payload > 65536, note > 2000, labels > 1024
         (_REVIEW, ("i1", '{"v":"' + "x" * 65_530 + '"}', "pending", _TS, None, None, None)),
         (_REVIEW, ("i1", "{}", "approved", _TS, "alice", "n" * 2001, _TS)),
@@ -263,10 +265,11 @@ def test_ut02_36_memory_fts_follows_insert_update_delete(migrated: Path) -> None
 def test_ut02_37_003_006_reject_bad_values(
     migrated: Path, sql: str, params: tuple[object, ...]
 ) -> None:
-    """UT02-37 (003-006 part) bad enum, JSON, timestamp, pattern, pairing or size is rejected."""
-    _write(_RUN, ("r1", _TS))
+    """UT02-37 (003-006 part) bad enum, JSON, timestamp, pattern, pairing or size is rejected
+    by a CHECK (fresh primary keys, so no PK conflict can stand in for the CHECK)."""
+    _write(_RUN, ("r1", _TS))  # parent rows for the task / message cases
     _write(_SESSION, ("s1", _USER, _TS, _TS))
-    with pytest.raises(SchemaViolation):
+    with pytest.raises(SchemaViolation, match="CHECK constraint failed"):
         _write(sql, params)
 
 
