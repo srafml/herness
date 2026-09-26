@@ -1,0 +1,3 @@
+incident_id,change_id,method,score
+I2,CH1,time_window,0.5
+I3,CH1,time_window,0.8

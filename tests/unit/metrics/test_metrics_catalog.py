@@ -510,10 +510,9 @@ def test_st04_04_text_column_through_alias_rejected(select: str) -> None:
 def test_st04_04_shipped_templates_select_no_text_column() -> None:
     """ST04-04 schema scan: no shipped metric, fact or score template names a text column."""
     templates = sorted(SQL_DIR.glob("*.sql.j2"))
-    # T04-06: adds herness/model/sql/400_facts.sql; the scan picks it up once it exists.
     facts = ROOT / "herness" / "model" / "sql" / "400_facts.sql"
-    templates += [facts] if facts.is_file() else []
-    assert templates
+    assert facts.is_file()
+    templates.append(facts)
     for path in templates:
         # Only the text-column rule applies here: macros, checks and the facts stage carry
         # `;`, `--` or `/*` legitimately (they are not catalog templates).

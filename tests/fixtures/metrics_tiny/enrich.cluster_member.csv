@@ -1,0 +1,5 @@
+record_id,cluster_id,membership_prob
+I1,C1,0.9
+I2,C1,0.8
+I3,C1,0.7
+I4,C1,0.9
