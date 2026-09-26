@@ -25,6 +25,7 @@ RUNTIME = {
     "structlog": ">=24",
     "rich": "",
     "httpx": ">=0.27",
+    "httpx2": ">=2.13",  # R-06 egress clients for the httpx2-based SDKs (T10-17 ruling)
     "tenacity": ">=9",
     "tzdata": "",
     "psutil": "",

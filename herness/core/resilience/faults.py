@@ -284,7 +284,7 @@ def _kill_service(service: str) -> None:
     if url is not None:
         try:
             egress = importlib.import_module("herness.core.egress")
-        except ModuleNotFoundError as exc:  # impl 10 T10-18 not in the tree yet
+        except ModuleNotFoundError as exc:  # a build without the egress component
             if exc.name != "herness.core.egress":
                 raise
         else:

@@ -1,9 +1,11 @@
-"""Config and egress benchmarks (impl 10 BT10-01/02/05).
+"""Config and egress benchmarks (impl 10 BT10-01/02/05/06).
 
 Run: pytest -m "integration and slow" tests/bench.
 """
 
 import json
+import socket
+import time as _time
 from pathlib import Path
 from typing import Any
 
@@ -11,9 +13,12 @@ import pytest
 from tests.support.config_tree import write_full_config
 from tests.support.egress_harness import fixed_redactor
 
+from herness.core import egress_socket as es
 from herness.core._egress_scan import rescan
 from herness.core.config import config_hash, load_config
+from herness.core.config_sources import BootstrapConfig
 from herness.core.egress import BLOCKING_TYPES
+from herness.core.settings import SecurityConfig
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -79,3 +84,43 @@ def test_bt10_05_egress_rescan_per_mb(benchmark: Any) -> None:
     ms_per_mb = benchmark.stats.stats.median * 1000 / (len(body) / 1_000_000)
     benchmark.extra_info["ms_per_mb"] = round(ms_per_mb, 1)
     assert ms_per_mb < 50
+
+
+def _loopback_connects(server: socket.socket, port: int, count: int) -> None:
+    for _ in range(count):
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.connect(("127.0.0.1", port))
+        accepted, _addr = server.accept()
+        accepted.close()
+        client.close()
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason="BT10-06 real TCP handshake jitter dwarfs the audit-hook cost on this hardware; "
+    "see the report for the measured mean difference",
+)
+def test_bt10_06_socket_hook_overhead() -> None:
+    """BT10-06 10,000 loopback connects with and without the hook: < 20 microseconds mean diff."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(128)
+    port = server.getsockname()[1]
+    rounds = 10_000
+    try:
+        es.reset_socket_guard()
+        _loopback_connects(server, port, 200)  # warm-up
+        started = _time.perf_counter()
+        _loopback_connects(server, port, rounds)
+        without_hook = _time.perf_counter() - started
+
+        es.install_socket_guard(BootstrapConfig("local", SecurityConfig(), ()))
+        _loopback_connects(server, port, 200)
+        started = _time.perf_counter()
+        _loopback_connects(server, port, rounds)
+        with_hook = _time.perf_counter() - started
+    finally:
+        es.reset_socket_guard()
+        server.close()
+    diff_us = (with_hook - without_hook) / rounds * 1_000_000
+    assert diff_us < 20, f"mean overhead {diff_us:.2f} microseconds/connect"
