@@ -7,7 +7,7 @@ context, every runtime value a `CAST($name AS <type>)` placeholder (U04-33 … U
 import dataclasses
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, Final, NoReturn, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, NoReturn, cast, get_args
 
 import jinja2
 import sqlglot
@@ -16,7 +16,7 @@ from jinja2.sandbox import ImmutableSandboxedEnvironment
 from sqlglot import exp
 
 from herness.core.errors import ConfigError
-from herness.metrics._binds import BIND_TYPES, CatalogView, default_binds, weight_binds
+from herness.metrics._binds import BIND_TYPES, default_binds, weight_binds
 from herness.metrics.settings import (
     EntityType,
     FilterKey,
@@ -28,9 +28,11 @@ from herness.metrics.settings import (
 )
 from herness.metrics.windows import Window
 
+if TYPE_CHECKING:  # catalog imports this module
+    from herness.metrics.catalog import MetricCatalog
+
 __all__ = [
     "BIND_TYPES",
-    "CatalogView",
     "RenderState",
     "RenderedQuery",
     "default_binds",
@@ -205,7 +207,7 @@ def render_metric_query(  # noqa: PLR0913 - keyword-only signature fixed by U04-
     window: Window,
     filters: Mapping[FilterKey, list[object]],
     entity_ids: Sequence[str] | None,
-    catalog: CatalogView,
+    catalog: "MetricCatalog",
     weights: WeightsConfig,
 ) -> RenderedQuery:
     """Render one metric for one grain, period and window into the wrapped SELECT (U04-38)."""
