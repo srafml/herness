@@ -141,7 +141,8 @@ LIST: Final = (
     "SELECT * FROM job WHERE (:status IS NULL OR status = :status)"
     " AND (:kind IS NULL OR kind = :kind) ORDER BY created_at DESC, job_id DESC LIMIT :limit"
 )
-# Due jobs first in claim order, then the earliest job not yet due.
+# Highest-priority due queued job (priority DESC, scheduled_for, created_at), else the earliest
+# job not yet due. Class, slot and exclusive-kind eligibility are not applied.
 NEXT_JOB: Final = (
     "SELECT job_id, kind, priority, scheduled_for FROM job WHERE status = 'queued'"
     " ORDER BY scheduled_for > :now, CASE WHEN scheduled_for <= :now THEN -priority END,"

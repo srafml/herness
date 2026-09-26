@@ -158,7 +158,7 @@ class SchedCheck(NamedTuple):
 
 
 class NextJob(NamedTuple):
-    """The queued job the next claim would take, or the earliest one not yet due (U08-91)."""
+    """Highest-priority due queued job, else the earliest not yet due; no eligibility (U08-91)."""
 
     job_id: str
     kind: JobKind

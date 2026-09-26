@@ -332,14 +332,18 @@ def test_ut08_32_auto_flush_defers_inside_an_open_write(
         del conn
         with structlog.testing.capture_logs() as logs:
             m.record_counter("herness_jobs_enqueued_total", component="jobs")
+            m.record_gauge("herness_jobs_gpu_vram_used_mb", 512.0, component="jobs")
+            m.record_histogram("herness_jobs_run_seconds", 1.5, component="jobs")
         assert logs == []
         assert SqliteResilienceBackend().write_open()
 
     run_write(inside, op="test_write")
     assert _rows() == []
     assert not SqliteResilienceBackend().write_open()
-    m.record_counter("herness_jobs_enqueued_total", component="jobs")
-    assert [r["value"] for r in _rows("counter")] == [3.0]
+    m.record_gauge("herness_jobs_gpu_vram_used_mb", 640.0, component="jobs")  # flushes all
+    assert [r["value"] for r in _rows("counter")] == [2.0]
+    assert [r["value"] for r in _rows("gauge")] == [640.0]
+    assert [r["value"] for r in _rows("histogram")] == [1.5]
 
 
 def test_ut08_32_auto_flush_flushes_when_the_store_check_fails(

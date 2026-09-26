@@ -551,7 +551,7 @@ def test_ut08_63_rekey_on_window(backend: SqliteJobsBackend) -> None:
 
 
 def test_ut08_63_queue_stats(backend: SqliteJobsBackend) -> None:
-    """UT08-63 `queue_stats`: queued count, next job in claim order, failed since, dead letters."""
+    """UT08-63 `queue_stats`: queued count, next due job, failed since, dead letters."""
     empty = backend.queue_stats(T0, T0 - timedelta(hours=24))
     assert empty == QueueStats(queued=0, next_job=None, failed_24h=0, dead_letters=0)
     _add(backend, _new("job_future", priority=99, at=T0 + timedelta(hours=1)))

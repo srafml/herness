@@ -437,7 +437,7 @@ Returns `None`.
 | `sched_fired` | `(schedule, fire_at_ts) -> bool` | any job, any status, with `payload.schedule`/`payload.fire_at` |
 | `recent_scheduled` | `(since) -> list[JobRow]` | done or failed jobs with `payload.schedule`, finished since |
 | `rekey_on` | `(start, end) -> JobRow \| None` | `maintenance` job with `payload.action = 'rekey'`, status queued, running or done, `scheduled_for` in `[start, end)` |
-| `queue_stats` | `(now, since) -> QueueStats` | counts for status; `QueueStats` (T08-11 spec note) = frozen `NamedTuple` `(queued: int, next_job: NextJob \| None, failed_24h: int, dead_letters: int)` with `NextJob = (job_id, kind, priority, scheduled_for)` (due jobs first in claim order, else the earliest not yet due); `failed_24h` counts `failed` jobs with `finished_at >= since`, `dead_letters` every `failed` job (U08-91 `queue`, `failed_24h`, `dead_letters`) |
+| `queue_stats` | `(now, since) -> QueueStats` | counts for status; `QueueStats` (T08-11 spec note) = frozen `NamedTuple` `(queued: int, next_job: NextJob \| None, failed_24h: int, dead_letters: int)` with `NextJob = (job_id, kind, priority, scheduled_for)` (the highest-priority due queued job by priority DESC, scheduled_for, created_at, else the earliest not yet due; class, slot and exclusive-kind eligibility are not applied); `failed_24h` counts `failed` jobs with `finished_at >= since`, `dead_letters` every `failed` job (U08-91 `queue`, `failed_24h`, `dead_letters`) |
 | `upsert_worker` / `update_worker` / `list_workers` | worker row writes and reads | U08-96 |
 | `run_row` | `(run_id) -> tuple[str, str] \| None` | `(kind, status)` of `run` |
 | task methods | see U08-97 | |
