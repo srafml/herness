@@ -462,6 +462,40 @@ def _stage(monkeypatch: pytest.MonkeyPatch, third: str) -> None:
     monkeypatch.setattr(facts, "_stage_text", lambda: text)
 
 
+class _RollbackFails:
+    """Connection proxy whose ROLLBACK raises, as after a lost or closed transaction."""
+
+    def __init__(self, con: duckdb.DuckDBPyConnection) -> None:
+        self._con = con
+        self.rollbacks = 0
+
+    def execute(self, sql: str, *args: object) -> object:
+        if sql == "ROLLBACK":
+            self.rollbacks += 1
+            msg = "rollback failed"
+            raise duckdb.TransactionException(msg)
+        return self._con.execute(sql, *args)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._con, name)
+
+
+def test_ut04_35_rollback_error_keeps_original(
+    con: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT04-35 when ROLLBACK itself fails, the mapped SchemaViolation of the failed statement
+    still surfaces (the rollback error does not mask it)."""
+    _stage(monkeypatch, "SELECT CAST('x' AS INTEGER) AS n FROM core.incident")
+    proxy = _RollbackFails(con)
+    with (
+        freeze_time(NOW),
+        pytest.raises(SchemaViolation, match=r"^400_facts\.sql statement metrics\.incident_fact"),
+    ):
+        materialize_facts(proxy, BUILD_ID)  # type: ignore[arg-type]
+    assert proxy.rollbacks == 1
+    con.execute("ROLLBACK")
+
+
 def test_ut04_35_failed_statement_rolls_back(
     con: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
 ) -> None:

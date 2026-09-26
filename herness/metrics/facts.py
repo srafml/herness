@@ -3,6 +3,7 @@
 The spec 02 build runner calls `materialize_facts`; each statement runs through
 `run_recorded(producer="facts")`, so every fact row carries a `meta.evidence` query_id."""
 
+import contextlib
 import importlib.resources
 import re
 import time
@@ -18,8 +19,7 @@ from herness.metrics.catalog import catalog_from_config
 from herness.metrics.evidence import IntoSpec, run_recorded
 from herness.metrics.render import RenderState, default_binds, make_environment, weight_binds
 
-# U04-47 step 6 renders "as U04-39": the same guard, macro module and bind pick as render_named.
-from herness.metrics.render import _guard, _macros, _pick  # isort: skip
+from herness.metrics.render import _guard, _macros, _pick  # isort: skip - render as U04-39
 
 __all__ = ["FACT_TABLES", "materialize_facts", "split_statements"]
 
@@ -27,9 +27,8 @@ FACT_TABLES: Final[tuple[str, ...]] = (
     *("metrics.org_closure", "metrics.work_item_closure", "metrics.incident_fact"),
     *("metrics.change_fact", "metrics.work_item_fact"),
 )
-# T04-07: switch to FACT_TABLES once change_fact and work_item_fact are in 400_facts.sql.
+# T04-07: switch to FACT_TABLES and add the U04-44/U04-45 inputs to _INPUT_TABLES.
 _SHIPPED_TABLES: Final[tuple[str, ...]] = FACT_TABLES[:3]
-# Inputs of U04-41 ... U04-43 plus the evidence tables; T04-07 adds those of U04-44/U04-45.
 _INPUT_TABLES: Final[tuple[str, ...]] = (
     *("core.org", "core.work_item", "core.incident", "core.team", "core.service"),
     *("enrich.cluster_member", "enrich.incident_change_link", "meta.build", "meta.evidence"),
@@ -144,7 +143,8 @@ def materialize_facts(con: duckdb.DuckDBPyConnection, build_id: str, /) -> list[
     try:
         query_ids = [_materialize(con, t, body, candidates, build_id) for t, body in segments]
     except BaseException:
-        con.execute("ROLLBACK")
+        with contextlib.suppress(duckdb.Error):  # keep the original error, not the rollback's
+            con.execute("ROLLBACK")
         raise
     con.execute("COMMIT")
     return query_ids
