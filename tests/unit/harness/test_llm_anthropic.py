@@ -532,6 +532,19 @@ def test_ut05_35_status_529_translated(
     assert isinstance(info.value.__cause__, anthropic.APIStatusError)
 
 
+def test_ut05_35_bad_request_logged(
+    client: ac.AnthropicClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT05-35 a 400 → ConfigError and ERROR harness.llm.bad_request with client and status."""
+    body = {"type": "error", "error": {"type": "invalid_request_error", "message": "prompt-x"}}
+    _install(monkeypatch, lambda request: httpx2.Response(400, json=body))
+    with capture_logs() as logs, pytest.raises(ConfigError):
+        asyncio.run(client.acomplete(_req()))
+    [entry] = [e for e in logs if e["event"] == "harness.llm.bad_request"]
+    assert (entry["log_level"], entry["client"], entry["status"]) == ("error", "claude-opus", 400)
+    assert "prompt-x" not in json.dumps(entry)
+
+
 # --- UT05-36 -----------------------------------------------------------------------------
 
 
@@ -726,9 +739,15 @@ def test_st05_13_egress_blocked_inside_transport(
         raise blocked
 
     guard = _install(monkeypatch, refuse)
-    with pytest.raises(EgressBlocked) as info:
+    with capture_logs() as logs, pytest.raises(EgressBlocked) as info:
         asyncio.run(client.acomplete(_req()))
     assert info.value is blocked
+    [entry] = [e for e in logs if e["event"] == "harness.llm.egress_blocked"]
+    assert (entry["log_level"], entry["client"], entry["task_id"]) == (
+        "warning",
+        "claude-opus",
+        "task_1",
+    )
     assert len(guard.requests) == 1
 
     async def stream() -> None:

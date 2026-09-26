@@ -294,9 +294,20 @@ class AnthropicClient:
                         raw: anthropic.types.Message = await stream.get_final_message()
                 else:
                     raw = await client.messages.create(**params)
-        except anthropic.AnthropicError as exc:
-            _raise_translated(exc)
+        except (anthropic.AnthropicError, EgressBlocked) as exc:
+            self._fail(exc, req)
         return self._map_message(raw, req, _elapsed_ms(start), batch=False)
+
+    def _fail(self, exc: anthropic.AnthropicError | EgressBlocked, req: LLMRequest) -> NoReturn:
+        """Translate per U05-30 and log the §8 adapter events (no body, prompt or key)."""
+        err = exc if isinstance(exc, EgressBlocked) else translate_anthropic_error(exc)
+        if isinstance(err, EgressBlocked):
+            task_id = req.metadata.task_id
+            _log.warning("harness.llm.egress_blocked", client=self.name, task_id=task_id)
+            raise err from None  # the guard's own exception; chaining ``exc`` would form a cycle
+        if isinstance(err, ConfigError) and isinstance(exc, anthropic.APIStatusError):
+            _log.error("harness.llm.bad_request", client=self.name, status=exc.status_code)
+        raise err from exc
 
     def complete(self, req: LLMRequest) -> LLMResponse:
         """Blocking wrapper of ``acomplete``; refused inside a running event loop (U05-25)."""
@@ -318,20 +329,13 @@ class AnthropicClient:
                     elif event.type == "input_json" and tool is not None and event.partial_json:
                         yield ToolCallDelta(tool[0], tool[1], event.partial_json)
                 raw = await stream.get_final_message()
-        except anthropic.AnthropicError as exc:
-            _raise_translated(exc)
+        except (anthropic.AnthropicError, EgressBlocked) as exc:
+            self._fail(exc, req)
         yield Done(self._map_message(raw, req, _elapsed_ms(start), batch=False))
 
 
 def _elapsed_ms(start: float) -> int:
     return int((clock.monotonic() - start) * 1000)
-
-
-def _raise_translated(exc: anthropic.AnthropicError) -> NoReturn:
-    err = translate_anthropic_error(exc)
-    if isinstance(err, EgressBlocked):
-        raise err from None  # the guard's own exception; chaining ``exc`` would form a cycle
-    raise err from exc
 
 
 def _run_sync(coro: Coroutine[Any, Any, LLMResponse]) -> LLMResponse:
