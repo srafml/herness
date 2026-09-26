@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import weakref
-from collections import deque
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -21,6 +19,7 @@ import httpx2
 
 from herness.core import egress_clients as ec
 from herness.core import time as clock
+from herness.core._egress_streams import PENDING, drain
 from herness.core.egress_log import LINE_KEYS
 from herness.core.errors import EgressBlocked
 from herness.core.logging import get_logger
@@ -31,10 +30,9 @@ if TYPE_CHECKING:
 __all__ = ["MAX_RESPONSE_BYTES", "USAGE_MAX_BYTES", "AsyncGuardedTransport", "GuardedTransport"]
 __all__ += ["TransportOpts"]
 
-MAX_RESPONSE_BYTES: Final = 52_428_800  # 50 MiB (U10-50)
+MAX_RESPONSE_BYTES: Final = ec.MAX_RESPONSE_BYTES  # 50 MiB (U10-50)
 USAGE_MAX_BYTES: Final = 10_485_760  # JSON bodies up to 10 MiB are read for token counts
 _log = get_logger("core.egress")
-_PENDING: Final[deque[Callable[[], None]]] = deque()  # not_closed lines queued by gc
 
 
 @dataclass(frozen=True)
@@ -60,6 +58,7 @@ class _Call:
         self._guard, self._request, self._opts, self._ticket = guard, request, opts, ticket
         request.headers["Accept-Encoding"] = "identity"  # every hop, whatever the caller set
         self._done = False
+        self._unclosed: weakref.finalize[Any, Any] | None = None
 
     def _error(self, reason: str) -> EgressBlocked:
         msg = f"egress blocked ({self._ticket.egress_id}): {reason}"
@@ -67,26 +66,19 @@ class _Call:
 
     def counter(self, response: httpx2.Response) -> ec.StreamCounter | None:
         """A decoding, capped counter for the body (None: already read); JSON is kept."""
-        headers, status = response.headers, response.status_code
-        is_json = headers.get("content-type", "").startswith("application/json")
-        error = partial(self._error, "response_too_large")
-        counter = ec.StreamCounter(MAX_RESPONSE_BYTES, USAGE_MAX_BYTES if is_json else 0, error)
-        if response.is_closed:  # e.g. a mock transport: the decoded body is already there
-            try:
-                counter.add(response.content)
-            finally:
-                self.closed(response, counter)
+        is_json = response.headers.get("content-type", "").startswith("application/json")
+        keep, status = USAGE_MAX_BYTES if is_json else 0, response.status_code
+        try:
+            counter, read = ec.open_body(response, MAX_RESPONSE_BYTES, keep, self._error)
+        except EgressBlocked as exc:  # too large by content-length, or an unsupported encoding
+            self.complete(status, None, exc.reason)
+            raise
+        if read:  # e.g. a mock transport: the body is already there
+            self.closed(response, counter)
             return None
-        encoding = headers.get("content-encoding", "").strip().lower()
-        if encoding not in ec.DECODABLE:  # br, zstd, stacked codings: refused unread
-            reason = "unsupported_encoding"
-            self.complete(status, None, reason)
-            raise self._error(reason)
-        for name in ("content-encoding", "content-length") if encoding else ():
-            headers.pop(name, None)  # decoded here: the client must not decode again
-        counter = ec.StreamCounter(MAX_RESPONSE_BYTES, counter.keep, error, encoding)
         late = partial(self.complete, status, counter, "not_closed")  # queued, never written in gc
-        weakref.finalize(response, _PENDING.append, late).atexit = False  # type: ignore[misc]
+        self._unclosed = weakref.finalize(response, PENDING.append, late)
+        self._unclosed.atexit = False  # type: ignore[misc]  # typeshed lacks the slot
         return counter
 
     def closed(self, response: httpx2.Response, counter: ec.StreamCounter) -> None:
@@ -101,6 +93,8 @@ class _Call:
         if self._done:
             return
         self._done = True
+        if self._unclosed is not None:
+            self._unclosed.detach()  # closed in time: nothing is queued at collection
         ticket, url = self._ticket, self._request.url
         tokens_in, tokens_out = ec.provider_usage(counter.body if counter else None)
         bytes_in = counter.bytes_in if counter else 0
@@ -119,18 +113,8 @@ class _Call:
         # T08-05: herness_egress_latency_seconds.observe(latency_ms / 1000)
 
 
-def _drain() -> None:
-    """Write the ``not_closed`` lines gc queued: at a safe point, never inside gc."""
-    while True:
-        try:
-            job = _PENDING.popleft()  # atomic: several threads may drain at once
-        except IndexError:
-            return
-        job()
-
-
 def _drained_admit(guard: EgressGuard, req: httpx2.Request, opts: TransportOpts) -> EgressTicket:
-    _drain()
+    drain()
     return guard._admit(req, opts)
 
 
@@ -171,8 +155,10 @@ class GuardedTransport(httpx2.BaseTransport):
 
     def close(self) -> None:
         """Close the inner transport; flush queued ``not_closed`` lines."""
-        _drain()
-        self._inner.close()
+        try:
+            drain()
+        finally:
+            self._inner.close()
 
 
 class AsyncGuardedTransport(httpx2.AsyncBaseTransport):
@@ -216,5 +202,7 @@ class AsyncGuardedTransport(httpx2.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         """Close the inner transport; flush queued ``not_closed`` lines."""
-        await asyncio.to_thread(_drain)
-        await self._inner.aclose()
+        try:
+            await asyncio.to_thread(drain)
+        finally:
+            await self._inner.aclose()

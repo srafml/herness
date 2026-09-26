@@ -343,6 +343,7 @@ forbidden_modules = [
     "herness.core._egress_scan",
     "herness.core.egress_clients",
     "herness.core._egress_transport",
+    "herness.core._egress_streams",
     "herness.core.secrets",
     "herness.core.settings",
     "herness.core.resilience",
