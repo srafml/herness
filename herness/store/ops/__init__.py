@@ -92,6 +92,26 @@ from .runs import (
 )
 
 # isort: split
+# 09 chat
+from .chat import (
+    ChatMessageRow,
+    ChatSessionRow,
+    append_chat_message,
+    count_user_turns,
+    create_chat_session,
+    find_assistant_message,
+    get_chat_message,
+    get_chat_session,
+    latest_user_message,
+    list_chat_messages,
+    list_chat_sessions,
+    purge_chat,
+    set_chat_summary,
+    update_chat_message,
+    upsert_assistant_placeholder,
+)
+
+# isort: split
 # 10 privacy
 from .privacy import (
     DeletionRequest,
@@ -165,6 +185,22 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "ready_tasks",
     "count_open",
     "count_tasks",
+    # 09 chat
+    "create_chat_session",
+    "append_chat_message",
+    "update_chat_message",
+    "upsert_assistant_placeholder",
+    "latest_user_message",
+    "get_chat_session",
+    "list_chat_sessions",
+    "list_chat_messages",
+    "get_chat_message",
+    "find_assistant_message",
+    "count_user_turns",
+    "set_chat_summary",
+    "purge_chat",
+    "ChatSessionRow",
+    "ChatMessageRow",
     # 10 privacy
     "DeletionRequest",
     "create_deletion_request",

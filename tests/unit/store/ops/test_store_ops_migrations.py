@@ -68,6 +68,8 @@ _INDEXES = {
     "metric_sample_name_ts",
     "metric_sample_ts",
 }
+# Indexes of later owners' migrations (R-11): 090_chat (impl 09 U09-43).
+_LATER_INDEXES = {"chat_message_reply"}
 _TRIGGERS = {"memory_item_ai", "memory_item_ad", "memory_item_au"}
 
 
@@ -92,11 +94,13 @@ def migrated(ops_store: Path) -> Path:
 
 
 def test_ut02_32_fresh_store_gets_the_43_table_set(ops_store: Path) -> None:
-    """UT02-32 a fresh store: table set equals §4.3 plus `schema_migration`; six rows recorded."""
+    """UT02-32 a fresh store: table set equals §4.3 plus `schema_migration`; six rows recorded.
+
+    Later owners' files (R-11: 090_chat) follow the six impl 02 rows and add no table."""
     report = migrate()
     assert isinstance(report, MigrationReport)
     assert report.duration_ms >= 0
-    assert report.applied == (
+    assert report.applied[:6] == (
         "001_ingestion_health",
         "002_jobs",
         "003_runs_evidence",
@@ -104,11 +108,12 @@ def test_ut02_32_fresh_store_gets_the_43_table_set(ops_store: Path) -> None:
         "005_review_chat_privacy",
         "006_metric_sample",
     )
-    assert report.version == schema_version() == 6
+    assert report.version == schema_version() == int(report.applied[-1][:3])
+    assert all(int(name[:3]) >= 10 for name in report.applied[6:])
     rows = core.read_all(
         "SELECT version, name, checksum, applied_at FROM schema_migration ORDER BY version"
     )
-    assert [(r["version"], r["name"]) for r in rows] == [
+    assert [(r["version"], r["name"]) for r in rows][:6] == [
         (1, "ingestion_health"),
         (2, "jobs"),
         (3, "runs_evidence"),
@@ -123,7 +128,7 @@ def test_ut02_32_fresh_store_gets_the_43_table_set(ops_store: Path) -> None:
     )
     assert {str(r["name"]) for r in listed} == _TABLES_43 | {"schema_migration"}
     assert {str(r["name"]) for r in listed if r["type"] == "virtual"} == {"memory_fts"}
-    assert _schema("index") == _INDEXES
+    assert _schema("index") == _INDEXES | _LATER_INDEXES
     assert _schema("trigger") == _TRIGGERS
 
 
