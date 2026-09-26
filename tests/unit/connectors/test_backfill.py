@@ -36,7 +36,7 @@ from herness.connectors.base import split_range
 from herness.connectors.runner import SyncRunner
 from herness.connectors.settings import FilesSettings
 from herness.core import time as clock
-from herness.core.errors import AuthError, ConfigError, SourceUnavailable
+from herness.core.errors import AuthError, ConfigError, SourceUnavailable, StoreBusy
 from herness.store.ops import ensure_slices, mark_slice_running, set_watermark
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("guard")]
@@ -262,6 +262,30 @@ def test_ut01_38_failed_slice_others_done_error_raised(
     assert failed[0]["attempts"] == 1
     assert failed[0]["slice_start"] == clock.format_utc(_WINDOWS[3][0])
     assert not [e for e in logs if e["event"] == "connectors.sync.completed"]
+
+
+def test_ut01_38_failing_bookkeeping_does_not_mask_slice_error(
+    ops_store: OpsStoreHandle, lake: FakeLake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-38 when mark_slice_failed itself raises, the slice's original error still
+    propagates, carrying a note naming the bookkeeping failure, and slice_failed is logged."""
+    err = SourceUnavailable("source down")
+
+    def broken(*_args: object, **_kw: object) -> None:
+        msg = "ops store busy"
+        raise StoreBusy(msg)
+
+    monkeypatch.setattr(backfill_module, "mark_slice_failed", broken)
+    runner = _parallel(ops_store, lake, Source(plan=_failing({4: err})))
+
+    with capture_logs() as logs, pytest.raises(SourceUnavailable) as info:
+        runner.run_backfill(_ENT, _START, NOW)
+
+    assert info.value is err
+    assert err.__notes__ == ["mark_slice_failed also failed: StoreBusy"]
+    failed = [e for e in logs if e["event"] == "connectors.backfill.slice_failed"]
+    assert [e["error_class"] for e in failed] == ["SourceUnavailable"]
+    assert watermark(_SRC, _ENT) is None
 
 
 def test_ut01_38_first_fatal_error_wins(ops_store: OpsStoreHandle, lake: FakeLake) -> None:

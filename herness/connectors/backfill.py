@@ -101,7 +101,10 @@ class _Slices:
             out = self._write(row)
         except BaseException as exc:
             error = f"{type(exc).__name__}: {exc}"
-            mark_slice_failed(key, entity, row.slice_start, error=error, now=runner.clock())
+            try:
+                mark_slice_failed(key, entity, row.slice_start, error=error, now=runner.clock())
+            except Exception as mark_exc:  # noqa: BLE001 - must not mask the slice error
+                exc.add_note(f"mark_slice_failed also failed: {type(mark_exc).__name__}")
             _log.warning(
                 "connectors.backfill.slice_failed",
                 **self._ids(row),
