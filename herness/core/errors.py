@@ -11,7 +11,7 @@ import datetime
 import math
 import re
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import ClassVar, Final, Literal
 
 MAX_MESSAGE_CHARS: Final = 1000
@@ -26,6 +26,7 @@ _ELLIPSIS: Final = "…"
 
 type Scalar = str | int | float | bool | None
 type ErrorKind = Literal["retryable", "recoverable", "fatal", "unknown"]
+type _Kw = str | Mapping[str, str] | None  # EgressBlocked hint or details (impl 10 U10-108)
 
 
 def _bound(text: str, limit: int) -> str:
@@ -255,7 +256,22 @@ class NotFound(RecoverableError):
 
 
 class ConfigError(FatalError):
-    """Configuration is invalid or incomplete."""
+    """Configuration is invalid or incomplete; ``issues`` holds impl 10 ``ConfigIssue``s (R-19)."""
+
+    _extra_attrs: ClassVar[tuple[str, ...]] = ("issues",)
+
+    def __init__(
+        self,
+        message: str,
+        /,
+        *,
+        issues: Sequence[object] = (),
+        hint: str | None = None,
+        details: Mapping[str, str] | None = None,
+        **context: Scalar,
+    ) -> None:
+        super().__init__(message, hint=hint, details=details, **context)
+        self.issues: tuple[object, ...] = tuple(issues)[:1000]
 
 
 class AuthError(FatalError):
@@ -275,7 +291,17 @@ class PermissionDenied(FatalError):
 
 
 class EgressBlocked(FatalError):
-    """The egress guard refused an off-network call."""
+    """The egress guard refused an off-network call; masked ``egress_id``, ``reason`` (R-19)."""
+
+    _extra_attrs: ClassVar[tuple[str, ...]] = ("egress_id", "reason")
+
+    def __init__(
+        self, message: str, *, egress_id: str | None = None, reason: str | None = None, **kw: _Kw
+    ) -> None:
+        super().__init__(message, **kw)  # type: ignore[arg-type]  # kw holds only hint and details
+        self.egress_id = egress_id if isinstance(egress_id, str) else None  # egr_<ulid> or None
+        ok = reason is None or re.fullmatch(r"[a-z_]{1,40}", str(reason)) is not None
+        self.reason = reason if ok else "invalid"  # a malformed code is never stored or logged
 
 
 # --- 08 (resilience and jobs) ---

@@ -3,24 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
-import importlib
 import itertools
 from pathlib import Path
-from typing import Protocol
 
-_CONFIG_MODULE = "herness.core.config"
-
-
-class _PathsSection(Protocol):
-    @property
-    def data(self) -> Path | str: ...
-
-
-class _ConfigWithPaths(Protocol):
-    """Structural view of ``T10-03 (herness.core.config.HernessConfig)``: ``paths.data``."""
-
-    @property
-    def paths(self) -> _PathsSection: ...
+from herness.core.config import HernessConfig, get_config
 
 
 def _has_synth_pair(parts: tuple[str, ...]) -> bool:
@@ -53,16 +39,8 @@ class DataLayout:
         )
 
 
-def _loaded_config() -> _ConfigWithPaths:
-    # The config loader (impl 10, T10-03) is looked up at call time; ConfigError propagates.
-    module = importlib.import_module(_CONFIG_MODULE)
-    config: _ConfigWithPaths = module.get_config()
-    return config
-
-
-def data_layout(*, cfg: _ConfigWithPaths | None = None, root: Path | None = None) -> DataLayout:
-    """Turn ``root``, else ``cfg.paths.data`` (default: the loaded config), into a layout."""
+def data_layout(*, cfg: HernessConfig | None = None, root: Path | None = None) -> DataLayout:
+    """Turn ``root``, else ``cfg.paths.data`` (default: ``get_config()``), into a layout."""
     if root is None:
-        source = cfg if cfg is not None else _loaded_config()
-        root = Path(source.paths.data)
+        root = (cfg if cfg is not None else get_config()).paths.data  # ConfigError propagates
     return DataLayout.from_root(Path(root))
