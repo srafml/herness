@@ -18,9 +18,12 @@ _EXPORTS: Final[dict[str, str]] = {
     "HealthRow": "ports",
     "ProcessState": "_state",
     "ResilienceBackend": "ports",
+    "RetryPolicy": "policies",
     "TracerLike": "ports",
     "bind_chain_registry": "_state",
     "bind_ops_backend": "_state",
+    "classify": "classify",
+    "policy": "policies",
     "process_state": "_state",
     "reset_process_state": "_state",
 }
@@ -37,6 +40,8 @@ if TYPE_CHECKING:
         process_state as process_state,
         reset_process_state as reset_process_state,
     )
+    from herness.core.resilience.classify import classify as classify
+    from herness.core.resilience.policies import RetryPolicy as RetryPolicy, policy as policy
     from herness.core.resilience.ports import (
         AsyncCompleter as AsyncCompleter,
         ChainRegistry as ChainRegistry,
@@ -57,6 +62,9 @@ def __getattr__(name: str) -> object:
     if submodule is None:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
-    value: object = getattr(importlib.import_module(f"{__name__}.{submodule}"), name)
+    module = importlib.import_module(f"{__name__}.{submodule}")
+    # `classify` names its (callable) submodule too: always hand out the module, never
+    # the function, so `import herness.core.resilience.classify as m` works in any order.
+    value: object = module if name == submodule else getattr(module, name)
     globals()[name] = value
     return value

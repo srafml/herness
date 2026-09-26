@@ -346,6 +346,7 @@ def test_ut10_19_c06_missing_secret(
 ) -> None:
     """UT10-19 C06 (online): each referenced secret missing from the store is an error."""
     monkeypatch.setattr(cv, "_wsl_available", lambda: False)
+    monkeypatch.setattr(c, "_KEY_ID_PROVIDER", None)  # redact loaded: no key load
     cfg = c.load_config("local", config_dir=cfg_dir)
     names = cv.secrets.referenced_secret_names(cfg)
     for name in names:
@@ -624,6 +625,7 @@ def test_ut10_19_c06_uses_backend_of_validated_config(
 ) -> None:
     """UT10-19 C06: with backend dotenv the validated config's .env is read, not the keyring."""
     monkeypatch.setattr(cv, "_wsl_available", lambda: False)
+    monkeypatch.setattr(c, "_KEY_ID_PROVIDER", None)  # redact loaded: no key load
     monkeypatch.setenv("HERNESS_ENV", "dev")
     _replace(cfg_dir, "security:\n", "security:\n  secrets: {backend: dotenv}\n")
     names = cv.secrets.referenced_secret_names(c.load_config("local", config_dir=cfg_dir))

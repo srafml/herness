@@ -21,13 +21,13 @@ from herness.core.logging import get_logger
 
 if TYPE_CHECKING:
     from herness.core.jobs.ports import JobContext, JobsBackend
+    from herness.core.resilience.policies import RetryPolicy
     from herness.core.resilience.ports import ChainRegistry, ResilienceBackend
     from herness.core.types import JobKind, JobOutcome
 
 # Placeholders for 08 classes of later cards; each becomes a TYPE_CHECKING import then.
 type CircuitBreaker = Any  # U08-24, T08-06 (herness.core.resilience.breaker.CircuitBreaker)
 type FaultPlan = Any  # U08-33, T08-08 (herness.core.resilience.faults.FaultPlan)
-type RetryPolicy = Any  # U08-11, T08-04 (herness.core.resilience.policies.RetryPolicy)
 
 OPS_UNBOUND: Final = (
     "resilience backend not bound; call herness.store.ops.resilience.bind_core_backends()"
@@ -62,7 +62,7 @@ class ProcessState:
     asleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     kill_service_hook: Callable[[str], None] | None = None
     policies_cache: dict[str, RetryPolicy] = field(default_factory=dict)
-    policies_hash: str | None = None
+    policies_hash: str | None = None  # the config_hash policies_cache was built for (U08-12)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
