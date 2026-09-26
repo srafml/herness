@@ -1,0 +1,181 @@
+# Hosted CI (U00-59): ENG §7 merge gates plus the nightly dependency audit.
+# Rules (impl 00 §3.8): third-party actions pinned by commit SHA, read-only default token,
+# checkout without persisted credentials, untrusted values only through env, hosted runners only.
+# Required status checks on main: lint, types, test (ubuntu-latest), test (windows-latest), audit.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1"
+  PYTHONUTF8: "1"
+  HERNESS_ENV: test
+  # osv-scanner release binary, recorded at T00-14 from the release's osv-scanner_SHA256SUMS.
+  OSV_SCANNER_VERSION: "2.6.0"
+  OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  # pragma: allowlist secret
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1  # pragma: allowlist secret
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0  # pragma: allowlist secret
+        with:
+          version: "0.11.8"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras
+      - run: uv run ruff check --output-format=github .
+      - run: uv run ruff format --check .
+      - run: uv run lint-imports
+      - name: detect-secrets (U00-54 hook 6 excludes)
+        run: |
+          git ls-files -z \
+            | grep -zvE '^(uv\.lock|\.secrets\.baseline|tests/fixtures/pii_corpus\.jsonl)$' \
+            | xargs -0 uv run detect-secrets-hook --baseline .secrets.baseline
+      - run: uv run python -m tools.check_module_size
+      - run: uv run python -m tools.check_type_ownership
+      - run: uv run python -m tools.check_traceability
+
+  types:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1  # pragma: allowlist secret
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0  # pragma: allowlist secret
+        with:
+          version: "0.11.8"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras
+      - run: uv run mypy
+
+  test:
+    if: github.event_name != 'schedule'
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            selection: (unit or integration or fault) and not gpu and not slow
+            coverage: --cov --cov-report=xml --cov-report=json
+          - os: windows-latest
+            selection: unit and not gpu
+            coverage: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1  # pragma: allowlist secret
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0  # pragma: allowlist secret
+        with:
+          version: "0.11.8"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras
+      - name: pytest
+        env:
+          SELECTION: ${{ matrix.selection }}
+          COVERAGE: ${{ matrix.coverage }}
+        # COVERAGE is deliberately unquoted: it holds zero or more pytest options.
+        run: uv run pytest -m "$SELECTION" -p no:cacheprovider $COVERAGE
+      - name: eval (mock LLM, T11-30)
+        if: matrix.os == 'ubuntu-latest' && hashFiles('tests/eval/mock_scripts/**') != ''
+        run: uv run herness eval --mock-llm tests/eval/mock_scripts
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1  # pragma: allowlist secret
+        # Only the Ubuntu leg writes these files; artifact names are unique per run.
+        if: always() && matrix.os == 'ubuntu-latest'
+        with:
+          name: ci-reports
+          path: |
+            coverage.xml
+            coverage.json
+            data/reports/eval/**/report.md
+          retention-days: 14
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1  # pragma: allowlist secret
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0  # pragma: allowlist secret
+        with:
+          version: "0.11.8"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-extras
+      - run: |
+          mkdir -p build
+          uv export --all-extras --no-emit-project --format requirements-txt -o build/requirements.lock.txt
+      - name: pip-audit (exit 0 or 1 accepted; the gate decides)
+        run: |
+          status=0
+          uv run pip-audit -r build/requirements.lock.txt --disable-pip --require-hashes \
+            --format json -o build/pip-audit.json || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+      - name: install osv-scanner (SHA-256 verified)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+      - name: osv-scanner (exit 0 or 1 accepted; open item O-02)
+        run: |
+          status=0
+          "$RUNNER_TEMP/osv-scanner" scan source -L "requirements.txt:build/requirements.lock.txt" \
+            --format json --output-file build/osv.json || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+      - run: >-
+          uv run python -m tools.check_audit --pip-audit build/pip-audit.json
+          --osv build/osv.json --summary build/audit-summary.md
+      - name: audit summary
+        if: always()
+        run: if [ -f build/audit-summary.md ]; then cat build/audit-summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: runtime environment for the SBOM
+        env:
+          UV_PROJECT_ENVIRONMENT: build/runtime-venv
+        run: uv sync --no-dev --all-extras --no-install-project
+      - run: uv run cyclonedx-py environment build/runtime-venv --output-reproducible --of JSON -o build/sbom.cdx.json
+      - run: uv run python -m tools.check_licences --sbom build/sbom.cdx.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1  # pragma: allowlist secret
+        if: always()
+        with:
+          name: audit
+          path: |
+            build/*.json
+            build/audit-summary.md
+          retention-days: 30

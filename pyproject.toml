@@ -98,7 +98,18 @@ overrides = { "herness/harness/loop.py" = { limit = 220, reason = "design 05 §5
 
 [tool.herness.licences]
 allowed = ["MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "PSF-2.0", "Python-2.0", "ISC", "MPL-2.0"]
-approved = []
+approved = [
+    { package = "cffi", licence = "MIT-0", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "MIT No Attribution: permissive, fewer conditions than MIT" },
+    { package = "numpy", licence = "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "all parts permissive; 0BSD, Zlib and CC0-1.0 cover bundled code" },
+    { package = "pillow", licence = "MIT-CMU", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "MIT-CMU (HPND family) is a permissive notice licence" },
+    { package = "protobuf", licence = "UNKNOWN", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "SBOM carries no licence; PyPI metadata says 3-Clause BSD License" },
+    { package = "pyahocorasick", licence = "UNKNOWN", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "SBOM carries no licence; PyPI metadata says BSD-3-Clause and Public-Domain" },
+    { package = "pydeck", licence = "UNKNOWN", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "SBOM carries no licence; PyPI metadata says Apache License 2.0" },
+    { package = "pyphen", licence = "MPL-1.1", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "tri-licensed GPL-2.0+/LGPL-2.1+/MPL-1.1; MPL-1.1 elected, used unmodified via weasyprint" },
+    { package = "regex", licence = "Apache-2.0 AND CNRI-Python", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "CNRI-Python is a permissive licence for code derived from CPython" },
+    { package = "transformers", licence = "UNKNOWN", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "SBOM carries no licence; PyPI metadata says Apache 2.0 License" },
+    { package = "cuda-toolkit", licence = "UNKNOWN", approved_by = "provisional: T00-14 build (owner sign-off pending, O-03)", approved_on = 2026-09-25, reason = "Linux-only NVIDIA CUDA metapackage without licence metadata; NVIDIA EULA like nvidia-*" },
+]
 report_only = ["nvidia-*"]  # open item O-03
 
 [tool.herness.licences.aliases]
