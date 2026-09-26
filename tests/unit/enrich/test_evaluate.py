@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -274,3 +275,15 @@ def test_ut03_125_missing_teacher_rows(tmp_path: Path) -> None:
     assert rc["passed"]["max_gap_to_teacher"] is False
     assert rc["system"]["accuracy"] == pytest.approx(0.99)
     assert not CalibrationStore(f.paths).load("llm", "local/qwen3", fx.QSV)
+
+
+def test_ut03_125_no_cache_rows_never_proposed(tmp_path: Path) -> None:
+    """UT03-125 no cache at all: questions present with n = 0 metrics, never proposed."""
+    f = fx.build(tmp_path)
+    shutil.rmtree(f.paths.cache_dir(fx.QSV))
+    doc = _run(f)
+    for entry in doc["questions"].values():  # type: ignore[attr-defined]
+        assert entry["laya"]["accuracy"] == 0.0
+        assert entry["system"]["accuracy"] == 0.0
+        assert entry["accepted_proposed"] is False
+    assert CalibrationStore(f.paths).load("laya", fx.VERSION, fx.QSV)["root_cause"].uncalibrated
