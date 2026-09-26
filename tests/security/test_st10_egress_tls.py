@@ -12,7 +12,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 import structlog
 from pydantic import SecretStr
@@ -40,14 +40,14 @@ def tls_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> eg.EgressGuard
     """A hybrid guard whose check always admits (the TLS layer is under test)."""
     guard = make_guard(load(tmp_path, "hybrid"))
 
-    def admit(_request: httpx.Request, _opts: object) -> eg.EgressTicket:
+    def admit(_request: httpx2.Request, _opts: object) -> eg.EgressTicket:
         return eg.EgressTicket("egr_tls_test", 1, clock.monotonic())
 
     monkeypatch.setattr(guard, "_admit", admit)
     return guard
 
 
-def _get(guard: eg.EgressGuard, url: str) -> httpx.Response:
+def _get(guard: eg.EgressGuard, url: str) -> httpx2.Response:
     with guard.http_client("reasoning_final", "aggregated_evidence", timeout=10.0) as client:
         return client.get(url)
 
@@ -57,7 +57,7 @@ def test_st10_39_self_signed_certificate_is_refused(
 ) -> None:
     """ST10-39 a self-signed certificate not in the CA set: certificate verification error."""
     cert, key = self_signed(tmp_path)
-    with tls_server(cert, key) as port, pytest.raises(httpx.ConnectError, match="CERTIFICATE"):
+    with tls_server(cert, key) as port, pytest.raises(httpx2.ConnectError, match="CERTIFICATE"):
         _get(tls_guard, f"https://127.0.0.1:{port}/")
 
 
@@ -80,7 +80,10 @@ def test_st10_39_tls_1_0_handshake_fails(
     """ST10-39 a server offering only TLS 1.0 (trusted certificate): handshake failure."""
     cert, key = self_signed(tmp_path)
     monkeypatch.setattr(ec.certifi, "where", lambda: str(cert))
-    with tls_server(cert, key, tls10_only=True) as port, pytest.raises(httpx.ConnectError):
+    with (
+        tls_server(cert, key, tls10_only=True) as port,
+        pytest.raises(httpx2.ConnectError, match=r"(?i)ssl|tls|protocol|handshake|version"),
+    ):
         _get(tls_guard, f"https://127.0.0.1:{port}/")
 
 

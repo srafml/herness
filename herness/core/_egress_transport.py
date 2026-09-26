@@ -1,24 +1,25 @@
 """Guarded transports of the egress component (impl 10 U10-54; design 10 §4.5, §5.4).
 
-Size-forced private sibling of ``herness.core.egress`` (T10-17), which re-exports
-``GuardedTransport`` and ``AsyncGuardedTransport``. Each request is decided by the guard
-before the inner transport (and so the connection pool) sees it; the response stream is
-counted and capped, and exactly one ``completed`` line is written when it closes or the
-send fails. The transports build no client or transport of their own (ST10-25).
+Size-forced private sibling of ``herness.core.egress`` (T10-17), which re-exports the
+transports. The guard decides each request before the pool sees it; the body is decoded,
+counted and capped; one ``completed`` line is written on close, on a failed or cancelled
+send, or when an unclosed response is collected (``not_closed``: callers must close streamed
+responses). Nothing here builds a client or transport (ST10-25).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import weakref
 from dataclasses import asdict, dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import httpx
+import httpx2
 
+from herness.core import egress_clients as ec
 from herness.core import time as clock
-from herness.core.egress_clients import AsyncCountingStream, CountingStream, StreamCounter
 from herness.core.egress_log import LINE_KEYS
 from herness.core.errors import EgressBlocked
 from herness.core.logging import get_logger
@@ -71,33 +72,46 @@ class _Call:
     """One admitted request: its completion is written at most once (U10-54 steps 4-6)."""
 
     def __init__(
-        self, guard: EgressGuard, request: httpx.Request, opts: TransportOpts, ticket: EgressTicket
+        self, guard: EgressGuard, request: httpx2.Request, opts: TransportOpts, ticket: EgressTicket
     ) -> None:
         self._guard, self._request, self._opts, self._ticket = guard, request, opts, ticket
+        request.headers["Accept-Encoding"] = "identity"  # every hop, whatever the caller set
         self._done = False
 
-    def counter(self, response: httpx.Response) -> StreamCounter:
-        """A capped counter for ``response``; a JSON body is kept for its token counts."""
-        egress_id = self._ticket.egress_id
-        is_json = response.headers.get("content-type", "").startswith("application/json")
-        msg = f"egress blocked ({egress_id}): response_too_large"
-        error = partial(EgressBlocked, msg, egress_id=egress_id, reason="response_too_large")
-        return StreamCounter(MAX_RESPONSE_BYTES, USAGE_MAX_BYTES if is_json else 0, error)
+    def _error(self, reason: str) -> EgressBlocked:
+        msg = f"egress blocked ({self._ticket.egress_id}): {reason}"
+        return EgressBlocked(msg, egress_id=self._ticket.egress_id, reason=reason)
 
-    def closed(self, response: httpx.Response, counter: StreamCounter) -> None:
+    def counter(self, response: httpx2.Response) -> ec.StreamCounter | None:
+        """A decoding, capped counter for the body (None: already read); JSON is kept."""
+        headers, status = response.headers, response.status_code
+        is_json = headers.get("content-type", "").startswith("application/json")
+        error = partial(self._error, "response_too_large")
+        counter = ec.StreamCounter(MAX_RESPONSE_BYTES, USAGE_MAX_BYTES if is_json else 0, error)
+        if response.is_closed:  # e.g. a mock transport: the decoded body is already there
+            try:
+                counter.add(response.content)
+            finally:
+                self.closed(response, counter)
+            return None
+        encoding = headers.get("content-encoding", "").strip().lower()
+        if encoding not in ec.DECODABLE:  # br, zstd, stacked codings: refused unread
+            reason = "unsupported_encoding"
+            self.complete(status, None, reason)
+            raise self._error(reason)
+        for name in ("content-encoding", "content-length") if encoding else ():
+            headers.pop(name, None)  # decoded here: the client must not decode again
+        counter = ec.StreamCounter(MAX_RESPONSE_BYTES, counter.keep, error, encoding)
+        weakref.finalize(response, self.complete, status, counter, "not_closed").atexit = False  # type: ignore[misc]  # typeshed lacks the attribute
+        return counter
+
+    def closed(self, response: httpx2.Response, counter: ec.StreamCounter) -> None:
         """The response stream closed: one ``completed`` line with the provider figures."""
         reason = "response_too_large" if counter.overflowed else None
         self.complete(response.status_code, counter, reason)
 
-    def settle(self, response: httpx.Response, counter: StreamCounter) -> None:
-        """An inner transport returned a body already read: count it and complete now."""
-        try:
-            counter.add(response.content)
-        finally:
-            self.closed(response, counter)
-
     def complete(
-        self, status: int | None, counter: StreamCounter | None, reason: str | None
+        self, status: int | None, counter: ec.StreamCounter | None, reason: str | None
     ) -> None:
         """Write the ``completed`` line; on a failed send ``status_code`` is null."""
         if self._done:
@@ -114,24 +128,19 @@ class _Call:
         line |= {"latency_ms": latency_ms, "tokens_out": tokens_out}
         line["tokens_in"] = ticket.tokens_in if tokens_in is None else tokens_in
         self._guard._write_completed(line)
-        _log.info(
-            "egress.call.completed",
-            egress_id=ticket.egress_id,
-            status_code=status,
-            latency_ms=latency_ms,
-            bytes_in=bytes_in,
-        )
+        fields = {"status_code": status, "latency_ms": latency_ms, "bytes_in": bytes_in}
+        _log.info("egress.call.completed", egress_id=ticket.egress_id, **fields)
         # T08-05: herness_egress_bytes_total{direction="in"} += bytes_in
         # T08-05: herness_egress_tokens_total{direction="out", destination} += tokens_out
         # T08-05: herness_egress_latency_seconds.observe(latency_ms / 1000)
 
 
-class GuardedTransport(httpx.BaseTransport):
+class GuardedTransport(httpx2.BaseTransport):
     """Run the guard's check before the inner transport; log completion (U10-54)."""
 
     def __init__(
         self,
-        inner: httpx.BaseTransport,
+        inner: httpx2.BaseTransport,
         *,
         guard: EgressGuard,
         purpose: Purpose,
@@ -142,20 +151,22 @@ class GuardedTransport(httpx.BaseTransport):
         self._inner, self._guard = inner, guard
         self._opts = TransportOpts(purpose, payload_class, run_id, task_id)
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         """Admit ``request`` (``EgressBlocked`` on refusal), send it, count the response."""
         call = _Call(self._guard, request, self._opts, self._guard._admit(request, self._opts))
         try:
             response = self._inner.handle_request(request)
-        except Exception as exc:
+        except BaseException as exc:  # KeyboardInterrupt too: the line is still written
             call.complete(None, None, type(exc).__name__)
             raise
-        counter = call.counter(response)
-        if response.is_closed:  # e.g. a mock transport: nothing left to stream
-            call.settle(response, counter)
-            return response
-        stream = cast(httpx.SyncByteStream, response.stream)
-        response.stream = CountingStream(stream, counter, partial(call.closed, response))
+        try:
+            counter = call.counter(response)
+        except EgressBlocked:
+            response.close()
+            raise
+        if counter is not None:
+            stream = cast(httpx2.SyncByteStream, response.stream)
+            response.stream = ec.CountingStream(stream, counter, partial(call.closed, response))
         return response
 
     def close(self) -> None:
@@ -163,12 +174,12 @@ class GuardedTransport(httpx.BaseTransport):
         self._inner.close()
 
 
-class AsyncGuardedTransport(httpx.AsyncBaseTransport):
-    """Async twin of ``GuardedTransport``; the check and log writes run in a thread (U10-54)."""
+class AsyncGuardedTransport(httpx2.AsyncBaseTransport):
+    """Async twin of ``GuardedTransport``; the check runs in a worker thread (U10-54)."""
 
     def __init__(
         self,
-        inner: httpx.AsyncBaseTransport,
+        inner: httpx2.AsyncBaseTransport,
         *,
         guard: EgressGuard,
         purpose: Purpose,
@@ -179,25 +190,27 @@ class AsyncGuardedTransport(httpx.AsyncBaseTransport):
         self._inner, self._guard = inner, guard
         self._opts = TransportOpts(purpose, payload_class, run_id, task_id)
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """Admit ``request`` (``EgressBlocked`` on refusal), send it, count the response."""
         ticket = await asyncio.to_thread(self._guard._admit, request, self._opts)
         call = _Call(self._guard, request, self._opts, ticket)
         try:
             response = await self._inner.handle_async_request(request)
-        except Exception as exc:
-            await asyncio.to_thread(call.complete, None, None, type(exc).__name__)
+        except BaseException as exc:  # CancelledError too: written synchronously, not awaited
+            call.complete(None, None, type(exc).__name__)
             raise
-        counter = call.counter(response)
-        if response.is_closed:  # e.g. a mock transport: nothing left to stream
-            await asyncio.to_thread(call.settle, response, counter)
-            return response
+        try:
+            counter = call.counter(response)
+        except EgressBlocked:
+            await response.aclose()
+            raise
+        if counter is not None:
 
-        async def closed(counter: StreamCounter) -> None:
-            await asyncio.to_thread(call.closed, response, counter)
+            async def closed(counter: ec.StreamCounter) -> None:
+                await asyncio.to_thread(call.closed, response, counter)
 
-        stream = cast(httpx.AsyncByteStream, response.stream)
-        response.stream = AsyncCountingStream(stream, counter, closed)
+            stream = cast(httpx2.AsyncByteStream, response.stream)
+            response.stream = ec.AsyncCountingStream(stream, counter, closed)
         return response
 
     async def aclose(self) -> None:

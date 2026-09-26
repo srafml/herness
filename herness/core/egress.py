@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Final, Literal, NoReturn, get_args
 
 import httpx
+import httpx2
 
 from herness.core import audit as _audit
 from herness.core import config as _config
@@ -72,7 +73,8 @@ _PURPOSES: Final = frozenset(get_args(Purpose))
 _CLASSES: Final = frozenset(get_args(PayloadClass))
 _log = get_logger("core.egress")
 type _Ids = tuple[str | None, str | None]
-_WINDOW: Final[ContextVar[bool]] = ContextVar("egress_download_window", default=False)
+_WINDOW: Final[ContextVar[object | None]] = ContextVar("egress_download_window", default=None)
+_OPEN_WINDOWS: Final[set[object]] = set()  # a task context copied inside a window goes stale
 
 
 @dataclass(frozen=True)
@@ -110,7 +112,7 @@ class EgressGuard:
 
     def _window_open(self) -> bool:
         """Is a U10-55 download window open on this thread (or task)?"""
-        return _WINDOW.get()
+        return _WINDOW.get() in _OPEN_WINDOWS
 
     def _policy(self, purpose: str, payload_class: str) -> str | None:
         """Steps 1-2: profile gate, purpose, payload class and the R-38 chat rule."""
@@ -252,7 +254,7 @@ class EgressGuard:
 
     def _client_parts(
         self, purpose: Purpose, payload_class: PayloadClass, timeout: float, ids: _Ids
-    ) -> tuple[ssl.SSLContext, str | None, TransportOpts, httpx.Timeout]:
+    ) -> tuple[ssl.SSLContext, str | None, TransportOpts, httpx2.Timeout]:
         """U10-52 preconditions, then the TLS context, proxy, transport options and timeout."""
         if purpose == "model_download":
             msg = "model_download only inside deploy pull"
@@ -260,7 +262,7 @@ class EgressGuard:
         check_timeout(timeout, "timeout")
         opts = TransportOpts(purpose, payload_class, *ids)
         proxy = self._cfg.security.network.http_proxy  # never from the environment
-        return tls_context(), proxy, opts, httpx.Timeout(timeout, connect=10.0)
+        return tls_context(), proxy, opts, httpx2.Timeout(timeout, connect=10.0)
 
     def http_client(
         self,
@@ -270,14 +272,14 @@ class EgressGuard:
         run_id: str | None = None,
         task_id: str | None = None,
         timeout: float = 120.0,
-    ) -> httpx.Client:
+    ) -> httpx2.Client:
         """The only synchronous client for a non-local endpoint (U10-52)."""
         ctx, proxy, opts, limit = self._client_parts(
             purpose, payload_class, timeout, (run_id, task_id)
         )
-        inner = httpx.HTTPTransport(verify=ctx, proxy=proxy, retries=0)
+        inner = httpx2.HTTPTransport(verify=ctx, proxy=proxy, retries=0)
         transport = GuardedTransport(inner, guard=self, **opts.fields())
-        return httpx.Client(
+        return httpx2.Client(
             transport=transport, follow_redirects=False, trust_env=False, timeout=limit
         )
 
@@ -289,14 +291,14 @@ class EgressGuard:
         run_id: str | None = None,
         task_id: str | None = None,
         timeout: float = 120.0,
-    ) -> httpx.AsyncClient:
+    ) -> httpx2.AsyncClient:
         """Async twin of ``http_client`` (U10-53)."""
         ctx, proxy, opts, limit = self._client_parts(
             purpose, payload_class, timeout, (run_id, task_id)
         )
-        inner = httpx.AsyncHTTPTransport(verify=ctx, proxy=proxy, retries=0)
+        inner = httpx2.AsyncHTTPTransport(verify=ctx, proxy=proxy, retries=0)
         transport = AsyncGuardedTransport(inner, guard=self, **opts.fields())
-        return httpx.AsyncClient(
+        return httpx2.AsyncClient(
             transport=transport, follow_redirects=False, trust_env=False, timeout=limit
         )
 
@@ -304,8 +306,8 @@ class EgressGuard:
     def download_window(self, *, allow_download: bool, actor: str) -> Iterator[None]:
         """Admit ``model_download`` for ``deploy pull --allow-download`` (U10-55).
 
-        The flag is a context variable: local to this thread (and asyncio task), and carried
-        into ``asyncio.to_thread`` where the async transport runs the check.
+        A per-window mark in a context variable (local to this thread or task) counts only
+        while it is in ``_OPEN_WINDOWS``: task contexts copied inside the window go stale.
         """
         refusal = None
         if not allow_download:
@@ -316,20 +318,23 @@ class EgressGuard:
             refusal = "model_download is refused inside jobs"
         if refusal is not None:
             raise EgressBlocked(refusal)
-        token = _WINDOW.set(True)
+        mark = object()
+        _OPEN_WINDOWS.add(mark)
+        token = _WINDOW.set(mark)
         try:
             _log.info("egress.download_window.opened", actor=actor)
             _audit.audit("admin_action", actor, action="deploy_pull", target="download_window")
             yield
         finally:
+            _OPEN_WINDOWS.discard(mark)
             _WINDOW.reset(token)
             _log.info("egress.download_window.closed", actor=actor)
 
-    def _admit(self, request: httpx.Request, opts: TransportOpts) -> EgressTicket:
+    def _admit(self, request: httpx2.Request, opts: TransportOpts) -> EgressTicket:
         """U10-54 steps 1-2: decide ``request``; a streaming body is refused."""
         try:
             body: bytes | None = request.content
-        except httpx.RequestNotRead:
+        except httpx2.RequestNotRead:
             body = None
         kw: dict[str, Any] = {"method": request.method}
         kw |= {"run_id": opts.run_id, "task_id": opts.task_id}

@@ -29,6 +29,7 @@ dependencies = [
     "structlog>=24",
     "rich",
     "httpx>=0.27",
+    "httpx2>=2.13",
     "tenacity>=9",
     "tzdata",
     "psutil",
@@ -191,6 +192,20 @@ known-first-party = ["herness", "app", "tools"]
 "httpx.delete".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
 "httpx.head".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
 "httpx.options".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.Client".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.AsyncClient".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.HTTPTransport".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.AsyncHTTPTransport".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.request".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.stream".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.get".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.post".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.put".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.patch".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.delete".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.head".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.options".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
+"httpx2.query".msg = "HTTP clients and transports only via herness.core.egress (R-06; loopback model servers via egress.loopback_http_client)"
 "datetime.datetime.utcnow".msg = "naive datetime; use herness.core.time"
 "datetime.datetime.utcfromtimestamp".msg = "naive datetime; use herness.core.time"
 

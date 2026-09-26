@@ -37,6 +37,8 @@ def record_connects(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     real_connect = socket.socket.connect
 
     def connect(sock: socket.socket, address: object) -> None:
+        # CPython 3.12.13 (Windows): socket.socketpair falls back to _fallback_socketpair,
+        # which connects over loopback; re-check this frame name on a Python upgrade.
         if sys._getframe(1).f_code.co_name == "_fallback_socketpair":
             real_connect(sock, address)  # type: ignore[arg-type]
             return

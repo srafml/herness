@@ -1,7 +1,7 @@
 """Integration tests of the guarded egress clients (impl 10 IT10-03, IT10-04; card T10-17).
 
 Also checks T08-08's ``kill_service`` fault action against the real loopback client.
-No real network: ``respx`` answers cloud routes and a stub server listens on 127.0.0.1.
+No real network: ``MockNet`` answers cloud routes and a stub server listens on 127.0.0.1.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import respx
 from tests.support.egress_harness import API, egress_lines, load
+from tests.support.egress_mock import MockNet
 from tests.support.egress_servers import loopback_stub, record_connects
 from tests.support.fake_keyring import MemoryKeyring
 
@@ -49,7 +49,7 @@ def _messages_body() -> bytes:
 
 
 def test_it10_03_hybrid_adapter_call_logs_without_payload(
-    tmp_path: Path, fake_keyring: MemoryKeyring
+    tmp_path: Path, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """IT10-03 hybrid with the gate: allowed and completed lines; no payload text in any log."""
     fake_keyring.store[("herness", "redact.hmac_key")] = bytes(range(32)).hex()
@@ -68,9 +68,9 @@ def test_it10_03_hybrid_adapter_call_logs_without_payload(
 
     configure_logging("DEBUG", log_dir=logs, scrubber=lambda _l, _m, event: event)
     try:
-        with respx.mock(assert_all_called=True) as mock:
-            mock.post(API).respond(200, json=reply)
-            assert asyncio.run(adapter_call()) == 200
+        route = MockNet().install(monkeypatch).route("api.anthropic.com", json=reply)
+        assert asyncio.run(adapter_call()) == 200
+        assert route.call_count == 1
     finally:
         reset_logging()
     allowed, completed = egress_lines(logs)
@@ -102,14 +102,11 @@ def test_it10_04_local_profile_blocks_every_request(
         async with guard.async_http_client(purpose, payload) as client:
             await client.request(method, API, content=b"{}")
 
-    with respx.mock(assert_all_called=False) as mock:
-        route = mock.route(host="api.anthropic.com").respond(200)
-        for purpose, payload in kinds:
-            with guard.http_client(purpose, payload) as client, pytest.raises(EgressBlocked):
-                client.request(method, API, content=b"{}")
-            with pytest.raises(EgressBlocked):
-                asyncio.run(async_send(purpose, payload))
-    assert route.call_count == 0
+    for purpose, payload in kinds:  # real httpx2 pools underneath: any send would connect
+        with guard.http_client(purpose, payload) as client, pytest.raises(EgressBlocked):
+            client.request(method, API, content=b"{}")
+        with pytest.raises(EgressBlocked):
+            asyncio.run(async_send(purpose, payload))
     assert connects == []
     reasons = {line["reason"] for line in egress_lines(guard._cfg.paths.logs)}
     assert reasons == {"profile_forbids_egress"}

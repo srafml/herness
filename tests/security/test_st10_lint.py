@@ -1,11 +1,19 @@
 """ST10-25: only the egress component builds HTTP clients and transports (impl 10, R-06).
 
-An AST scan of ``herness/``, ``app/`` and ``tools/`` flags ``httpx.Client(``,
-``httpx.AsyncClient(``, ``httpx.HTTPTransport(``, ``httpx.AsyncHTTPTransport(``, any use of
-``requests`` or ``urllib.request``, and ``anthropic.Anthropic(`` / ``AsyncAnthropic(`` without
-``http_client=``, outside ``herness/core/egress.py`` and ``herness/core/egress_clients.py``.
-There is no connector allowance (R-06). Vendor SDK constructors (Snowflake, ``pymongo``,
-``msal``) are not flagged; ST10-55 holds their hosts. Import aliases are resolved.
+An AST scan of ``herness/``, ``app/`` and ``tools/`` flags, outside
+``herness/core/egress.py`` and ``herness/core/egress_clients.py`` (no connector allowance):
+
+- any reference that resolves to an ``httpx`` or ``httpx2`` client or pool transport class
+  (``Client``, ``AsyncClient``, ``HTTPTransport``, ``AsyncHTTPTransport``) or module-level
+  request function (``request``, ``stream``, ``get``, ...): a call, an assignment
+  (``C = httpx.Client``), a base class, a ``partial`` argument or a from-import;
+- any use of the private modules ``httpx._*`` / ``httpx2._*``;
+- any use of ``requests`` or ``urllib.request``;
+- ``anthropic.Anthropic(`` / ``AsyncAnthropic(`` without ``http_client=``.
+
+Import aliases are resolved. ``getattr``/``importlib`` tricks are out of scope (the socket
+guard, U10-58, holds those). Vendor SDK constructors (Snowflake, ``pymongo``, ``msal``) are
+not flagged; ST10-55 holds their hosts.
 """
 
 from __future__ import annotations
@@ -21,14 +29,20 @@ pytestmark = pytest.mark.unit
 REPO = Path(__file__).resolve().parents[2]
 ROOTS = ("herness", "app", "tools")
 ALLOWED = frozenset({"herness/core/egress.py", "herness/core/egress_clients.py"})
+HTTP_PACKAGES = ("httpx", "httpx2")
+_BUILDER_NAMES = ("Client", "AsyncClient", "HTTPTransport", "AsyncHTTPTransport")
+_FUNCTIONS = ("request", "stream", "get", "post", "put", "patch", "delete", "head", "options")
 BUILDERS = frozenset(
-    {"httpx.Client", "httpx.AsyncClient", "httpx.HTTPTransport", "httpx.AsyncHTTPTransport"}
+    f"{pkg}.{name}" for pkg in HTTP_PACKAGES for name in (*_BUILDER_NAMES, *_FUNCTIONS, "query")
 )
 ANTHROPIC = frozenset({"anthropic.Anthropic", "anthropic.AsyncAnthropic"})
 BANNED_MODULES = ("requests", "urllib.request")
 
 
-def _banned_module(name: str) -> bool:
+def _forbidden(name: str) -> bool:
+    """A builder, a private ``httpx``/``httpx2`` module or a banned module (or inside one)."""
+    if name in BUILDERS or any(name.startswith(f"{pkg}._") for pkg in HTTP_PACKAGES):
+        return True
     return any(name == mod or name.startswith(mod + ".") for mod in BANNED_MODULES)
 
 
@@ -41,7 +55,7 @@ class _Scanner(ast.NodeVisitor):
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
-            if _banned_module(alias.name):
+            if _forbidden(alias.name):
                 self.findings.append((node.lineno, f"import {alias.name}"))
             if alias.asname:
                 self.aliases[alias.asname] = alias.name
@@ -53,7 +67,7 @@ class _Scanner(ast.NodeVisitor):
         module = node.module or ""
         for alias in node.names:
             full = f"{module}.{alias.name}" if module else alias.name
-            if node.level == 0 and (_banned_module(module) or _banned_module(full)):
+            if node.level == 0 and (_forbidden(module) or _forbidden(full)):
                 self.findings.append((node.lineno, f"from {module} import {alias.name}"))
             self.aliases[alias.asname or alias.name] = full
 
@@ -65,18 +79,21 @@ class _Scanner(ast.NodeVisitor):
             return None if base is None else f"{base}.{node.attr}"
         return None
 
+    def visit_Name(self, node: ast.Name) -> None:
+        name = self._dotted(node)
+        if name is not None and _forbidden(name):
+            self.findings.append((node.lineno, name))
+
     def visit_Attribute(self, node: ast.Attribute) -> None:
         name = self._dotted(node)
-        if name is not None and _banned_module(name):
+        if name is not None and _forbidden(name):
             self.findings.append((node.lineno, name))
             return  # one finding per chain
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         name = self._dotted(node.func)
-        if name in BUILDERS:
-            self.findings.append((node.lineno, f"{name}("))
-        elif name in ANTHROPIC and not any(kw.arg == "http_client" for kw in node.keywords):
+        if name in ANTHROPIC and not any(kw.arg == "http_client" for kw in node.keywords):
             self.findings.append((node.lineno, f"{name}( without http_client="))
         self.generic_visit(node)
 
@@ -115,14 +132,27 @@ def test_st10_25_egress_component_is_the_builder() -> None:
     """ST10-25 the scan does see the egress component's own clients (the rule is live)."""
     for rel in sorted(ALLOWED):
         found = {what for _line, what in scan_source((REPO / rel).read_text(encoding="utf-8"))}
-        assert found & {f"{name}(" for name in BUILDERS}, rel
+        assert found & BUILDERS, rel
 
 
 PLANTED = {
-    "import httpx\nhttpx.Client()\n": "httpx.Client(",
-    "import httpx as hx\nhx.AsyncClient(timeout=1)\n": "httpx.AsyncClient(",
-    "from httpx import HTTPTransport\nHTTPTransport()\n": "httpx.HTTPTransport(",
-    "from httpx import AsyncHTTPTransport as T\nT(retries=0)\n": "httpx.AsyncHTTPTransport(",
+    "import httpx\nhttpx.Client()\n": "httpx.Client",
+    "import httpx as hx\nhx.AsyncClient(timeout=1)\n": "httpx.AsyncClient",
+    "import httpx as h\nC = h.Client\n": "httpx.Client",
+    "from httpx import HTTPTransport\n": "from httpx import HTTPTransport",
+    "from httpx import AsyncHTTPTransport as T\nT(retries=0)\n": "httpx.AsyncHTTPTransport",
+    "import httpx\nC = httpx.Client\nC()\n": "httpx.Client",
+    "import httpx\nclass X(httpx.Client):\n    pass\n": "httpx.Client",
+    "import functools\nimport httpx\nf = functools.partial(httpx.Client)\n": "httpx.Client",
+    "import httpx\nhttpx._client.Client()\n": "httpx._client.Client",
+    "from httpx._client import Client\n": "from httpx._client import Client",
+    "import httpx._transports.default\n": "import httpx._transports.default",
+    "import httpx\nhttpx.get('https://x')\n": "httpx.get",
+    "import httpx2\nhttpx2.AsyncClient()\n": "httpx2.AsyncClient",
+    "import httpx2 as h2\nclass Y(h2.HTTPTransport):\n    pass\n": "httpx2.HTTPTransport",
+    "from httpx2 import Client as C2\nC2()\n": "from httpx2 import Client",
+    "import httpx2\nhttpx2.stream('GET', 'https://x')\n": "httpx2.stream",
+    "import httpx2\nhttpx2._config.create_ssl_context()\n": "httpx2._config.create_ssl_context",
     "import requests\n": "import requests",
     "from requests import Session\n": "from requests import Session",
     "import urllib.request\n": "import urllib.request",
@@ -155,6 +185,8 @@ def test_st10_25_planted_violation_fails(tmp_path: Path, source: str, expected: 
         "import pymongo\npymongo.MongoClient('mongodb://h')\n",
         "import msal\nmsal.ConfidentialClientApplication('id')\n",
         "import httpx\nhttpx.URL('https://x')\nhttpx.Timeout(1.0)\n",
+        "import httpx2\nclass T(httpx2.BaseTransport):\n    pass\nhttpx2.MockTransport\n",
+        "import httpx\ntry:\n    pass\nexcept httpx.ConnectError:\n    pass\n",
         "from herness.core.egress import loopback_http_client as lc\nlc('x', timeout_s=1)\n",
         "Client()\n",
     ],
@@ -171,4 +203,4 @@ def test_st10_25_egress_files_are_the_only_exemption(tmp_path: Path) -> None:
         path = tmp_path / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-    assert scan_tree(tmp_path) == ["app/ui.py:2: httpx.Client("]
+    assert scan_tree(tmp_path) == ["app/ui.py:2: httpx.Client"]
