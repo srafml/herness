@@ -5,9 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
-import sys
 import tempfile
-import types
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,6 +19,7 @@ from tests.support.config_tree import write_full_config
 
 from herness.core import audit as a
 from herness.core import config as c
+from herness.core import secrets
 from herness.core.errors import ConfigError, FatalError, SchemaViolation, StoreBusy
 from herness.core.ids import canonical_json, sha256_hex
 
@@ -219,22 +218,9 @@ def test_ut10_58_known_secret_and_credential_refused(
 
 
 def test_ut10_58_known_values_import_rules(monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT10-58 _known_values uses secrets.known_values, empty only while secrets is absent."""
-    monkeypatch.delitem(sys.modules, "herness.core.secrets", raising=False)
-    fake = types.ModuleType("herness.core.secrets")
-    fake.known_values = lambda: frozenset({"abc"})  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "herness.core.secrets", fake)
+    """UT10-58 _known_values returns herness.core.secrets.known_values() (late static import)."""
+    monkeypatch.setattr(secrets, "known_values", lambda: frozenset({"abc"}))
     assert a._known_values() == frozenset({"abc"})
-    monkeypatch.setitem(sys.modules, "herness.core.secrets", None)  # import -> ModuleNotFound
-    assert a._known_values() == frozenset()
-
-    def broken(name: str) -> object:
-        msg = "No module named 'keyring'"
-        raise ModuleNotFoundError(msg, name="keyring")
-
-    monkeypatch.setattr(a.importlib, "import_module", broken)
-    with pytest.raises(ModuleNotFoundError):
-        a._known_values()
 
 
 def test_ut10_58_store_busy_becomes_fatal(

@@ -319,6 +319,7 @@ forbidden_modules = [
     "herness.core.redact",
     "herness.core.redact_patterns",
     "herness.core.redact_directory",
+    "herness.core.secrets",
     "herness.core.settings",
     "herness.core.resilience",
     "herness.core.jobs",

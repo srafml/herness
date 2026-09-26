@@ -7,7 +7,6 @@ bounded lock wait, not a retry (delta D10-08).
 from __future__ import annotations
 
 import hmac
-import importlib
 import json
 import os
 import re
@@ -159,12 +158,9 @@ def append_jsonl_locked(
 
 def _known_values() -> frozenset[str]:
     """Secret values known to this process (U10-32), imported late to avoid a cycle."""
-    try:
-        return frozenset(importlib.import_module("herness.core.secrets").known_values())
-    except ModuleNotFoundError as exc:
-        if exc.name != "herness.core.secrets":
-            raise
-        return frozenset()  # T10-06: herness.core.secrets is not on the branch yet.
+    from herness.core import secrets  # noqa: PLC0415 - cycle: secrets imports audit
+
+    return secrets.known_values()
 
 
 def _is_secret(value: str, known: frozenset[str]) -> bool:
