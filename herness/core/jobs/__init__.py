@@ -11,18 +11,24 @@ import importlib
 from typing import TYPE_CHECKING, Final
 
 _EXPORTS: Final[dict[str, str]] = {
+    "ActiveWindow": "windows",
+    "ArbiterDecision": "arbiter",
     "CronExpr": "cron",
     "JobContext": "ports",
     "JobRow": "ports",
     "JobsBackend": "ports",
     "NewJob": "ports",
     "SchedCheck": "ports",
+    "arbiter_decide": "arbiter",
     "ServiceControl": "ports",
     "WorkerRow": "ports",
     "bind_jobs_backend": "ports",
+    "next_window_allowing": "windows",
+    "preempt_deadline": "windows",
     "resolve_local": "cron",
     "validate_resilience_config": "validate",
     "validate_windows": "validate",
+    "window_at": "windows",
 }
 
 __all__: tuple[str, ...] = tuple(sorted(_EXPORTS))
@@ -30,6 +36,10 @@ __all__: tuple[str, ...] = tuple(sorted(_EXPORTS))
 # Explicit `X as X` re-exports, one statement per submodule.
 # isort: off
 if TYPE_CHECKING:
+    from herness.core.jobs.arbiter import (
+        ArbiterDecision as ArbiterDecision,
+        arbiter_decide as arbiter_decide,
+    )
     from herness.core.jobs.cron import CronExpr as CronExpr, resolve_local as resolve_local
     from herness.core.jobs.ports import (
         JobContext as JobContext,
@@ -44,6 +54,12 @@ if TYPE_CHECKING:
     from herness.core.jobs.validate import (
         validate_resilience_config as validate_resilience_config,
         validate_windows as validate_windows,
+    )
+    from herness.core.jobs.windows import (
+        ActiveWindow as ActiveWindow,
+        next_window_allowing as next_window_allowing,
+        preempt_deadline as preempt_deadline,
+        window_at as window_at,
     )
 # isort: on
 
