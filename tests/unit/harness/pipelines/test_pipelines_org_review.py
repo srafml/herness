@@ -340,6 +340,20 @@ def test_ut06_52_dq_warnings_match_entity_or_table(reader: _Reader) -> None:
     assert _by(tasks, "o2", "org").inputs.dq_warnings == ["incident_nulls", "o2_note"]
 
 
+def test_ut06_52_dq_warnings_match_non_ascii_team_id() -> None:
+    """UT06-52 a non-ASCII team id in the DQ details JSON still matches (no ASCII escaping)."""
+    results = iter([
+        _Result(_q(1), ["entity_id", "rank"], [("équipe-ü", 1)], 1),
+        _Result(_q(2), ["entity_id", "metric", "delta_usd", "query_ids"], [], 0),
+        _Result(_q(3), ["org_id", "n", "team_ids"], [], 0),
+    ])  # fmt: skip
+    warning = {"check_name": "accent_gap", "severity": "warn", "value": 1, "threshold": 0,
+               "details": {"entity_id": "équipe-ü"}, "query_id": _q(900)}  # fmt: skip
+    pipe = OrgReviewPipeline(lambda sql, params: next(results), window_end=_END)
+    tasks = pipe.deterministic_tasks(_ctx(dq_warnings=[warning]))
+    assert _by(tasks, "équipe-ü", "ops").inputs.dq_warnings == ["accent_gap"]
+
+
 # --- UT06-53 OrgReviewPipeline, get_pipeline -----------------------------------------------------
 
 

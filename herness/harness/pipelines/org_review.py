@@ -147,7 +147,7 @@ def _dq_matches(ctx: PlanContext, needles: Sequence[str]) -> list[str]:
     names = [
         w["check_name"]
         for w in ctx.dq_warnings
-        if any(n in json.dumps(w["details"]) for n in needles)
+        if any(n in json.dumps(w["details"], ensure_ascii=False) for n in needles)
     ]
     return _unique(names)
 
@@ -178,7 +178,7 @@ class OrgReviewPipeline:
 
     def __init__(self, reader: RecordedReader, *, window_end: date) -> None:
         self._reader = reader
-        self.window_end = window_end
+        self.window_end = window_end  # kept for the U06-73 signature; org reads no window
         self._teams: list[tuple[str, int]] | None = None
         self._teams_qid = ""
         self._must_ranks: list[tuple[str, int]] = []
