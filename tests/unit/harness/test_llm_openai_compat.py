@@ -866,3 +866,35 @@ def test_ut05_25_off_network_accepts_legacy_httpx_client(monkeypatch: pytest.Mon
     monkeypatch.setattr(openai_compat, "get_guard", _LegacyGuard)
     resp = asyncio.run(OpenAICompatClient(_off_network_cfg()).acomplete(_request()))
     assert resp.text == "legacy"
+
+
+def test_ut05_25_byte_cap_counts_streamed_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-25 a chunked body without Content-Length stops at the chunk that passes the cap."""
+    sent: list[int] = []
+
+    class _Chunks(httpx2.AsyncByteStream):
+        async def __aiter__(self) -> Any:
+            for _ in range(10):
+                sent.append(1)
+                yield b"x" * 100
+
+    async def handle(_transport: object, request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, stream=_Chunks(), request=request)
+
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", handle)
+    monkeypatch.setattr(openai_compat, "MAX_RESPONSE_BYTES", 250)
+    with pytest.raises(OutputValidationError, match=r"^response body exceeds limit$"):
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+    assert len(sent) == 3
+
+
+def test_ut05_25_capped_client_closes_its_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-25 closing the byte-capped client closes the wrapped loopback transport."""
+    closed: list[bool] = []
+
+    async def aclose(_transport: object) -> None:
+        closed.append(True)
+
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "aclose", aclose)
+    asyncio.run(openai_compat._capped_http_client().aclose())
+    assert closed == [True]
