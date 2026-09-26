@@ -74,23 +74,33 @@ def open_writer(raw: Path, source: str, entity: str, rows: Sequence[Row]) -> Lak
     return writer
 
 
-def build(
+def build(  # noqa: PLR0913 - test helper mirrors RefData/RenderContext fields, one per kwarg
     harness: BuildHarness,
     *,
     enums: Mapping[str, Mapping[str, str]] | None = None,
     custom_fields: Mapping[str, Mapping[str, str]] | None = None,
     deleted_ids: Iterable[str] = (),
+    extra_entities: Mapping[str, Sequence[str]] | None = None,
     lo: int = 0,
     hi: int = 199,
 ) -> list[str]:
-    """Scan the harness lake and run files lo..hi with the given reference data."""
-    inventory = scan_lake(harness.layout)
+    """Scan the harness lake and run files lo..hi with the given reference data.
+
+    `extra_entities` (impl 02 T02-14, U02-112…U02-114) is a source -> entity-names map,
+    e.g. `{"files": ["service_costs"]}`; it drives both the lake scan and the render
+    context so the configured-entity staging files see the matching inventory.
+    """
+    pairs = [
+        (source, entity) for source, names in (extra_entities or {}).items() for entity in names
+    ]
+    inventory = scan_lake(harness.layout, extra_entities=pairs)
     fields = CustomFieldsConfig.model_validate(dict(custom_fields or {}))
     refdata = RefData(
         mappings=MappingsConfig.model_validate({"enums": dict(enums or {})}),
         deleted_ids=list(deleted_ids),
     )
-    context = harness.context(inventory, custom_fields=fields)
+    context_entities = {source: tuple(names) for source, names in (extra_entities or {}).items()}
+    context = harness.context(inventory, custom_fields=fields, extra_entities=context_entities)
     return harness.run(lo, hi, refdata=refdata, context=context)
 
 
