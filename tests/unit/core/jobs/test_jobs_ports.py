@@ -1,5 +1,6 @@
 """Tests for herness.core.jobs.ports: row models and jobs backend binding (T08-03)."""
 
+import importlib
 import json
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
@@ -181,7 +182,8 @@ def test_ut08_63_jobs_backend_binding(reset_process_state: ProcessState) -> None
 def test_ut08_63_lazy_exports_resolve() -> None:
     """UT08-63 herness.core.jobs re-exports its names lazily; unknown names raise."""
     assert jobs.__all__ == tuple(sorted(jobs._EXPORTS))
-    for name in jobs.__all__:
-        assert getattr(jobs, name) is getattr(ports, name)
+    for name, submodule in jobs._EXPORTS.items():
+        owner = importlib.import_module(f"herness.core.jobs.{submodule}")
+        assert getattr(jobs, name) is getattr(owner, name)
     with pytest.raises(AttributeError):
         _ = jobs.not_a_name
