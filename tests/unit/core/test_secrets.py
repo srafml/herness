@@ -17,6 +17,7 @@ from herness.core import config as c
 from herness.core import config_sources as cs
 from herness.core import secrets as s
 from herness.core.errors import ConfigError, FatalError
+from herness.core.logging import configure_logging, get_logger, reset_logging
 
 pytestmark = pytest.mark.unit
 
@@ -372,3 +373,65 @@ def test_ut10_31_dotenv_root_fallbacks(tmp_path: Path, monkeypatch: pytest.Monke
     assert s._dotenv_root() == Path.cwd()
     with cs.load_context("synth", tmp_path / "other" / "config", {}):
         assert s._dotenv_root() == (tmp_path / "other").resolve()
+
+
+# --- U10-32 scrub_secrets --------------------------------------------------------------------
+
+
+def test_ut10_34_nested_known_value_masked(fake_keyring: MemoryKeyring) -> None:
+    """UT10-34 a resolved sentinel is replaced by *** wherever it sits, nested or not."""
+    fake_keyring.store[(SVC, "svc.key")] = VALUE
+    s.resolve("svc.key")
+    event: dict[str, Any] = {
+        "event": "core.test.value",
+        "nested": {"list": [{"inner": f"prefix {VALUE} suffix"}, (VALUE, "kept")]},
+        "top": VALUE,
+    }
+    out = s.scrub_secrets(None, "info", event)
+    dumped = json.dumps(out)
+    assert VALUE not in dumped
+    assert "***" in dumped
+    assert out["top"] == "***"
+
+
+def test_ut10_35_credential_and_url_token_masked() -> None:
+    """UT10-35 a password= field and a SAS URL query value both become [SECRET]."""
+    event = {
+        "event": "core.test.creds",
+        "line": "auth failed: password=abc123xyz please retry",
+        "url": "https://acct.blob.core.windows.net/c/f?sv=2021&se=2026&sig=AbCdEfGh12345%3D",
+    }
+    out = s.scrub_secrets(None, "info", event)
+    assert "[SECRET]" in out["line"]
+    assert "abc123xyz" not in out["line"]
+    assert "[SECRET]" in out["url"]
+    assert "AbCdEfGh12345" not in out["url"]
+
+
+def test_ut10_35_scrub_secrets_is_idempotent() -> None:
+    """UT10-35 running scrub_secrets again on its own output changes nothing further."""
+    event = {"event": "core.test.creds", "line": "password=abc123xyz"}
+    once = s.scrub_secrets(None, "info", event)
+    twice = s.scrub_secrets(None, "info", dict(once))
+    assert once == twice
+
+
+def test_st10_15_exception_with_secret_is_scrubbed(
+    fake_keyring: MemoryKeyring, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ST10-15 a resolved secret inside a logged exception's message never reaches stderr."""
+    fake_keyring.store[(SVC, "exc.secret")] = VALUE
+    s.resolve("exc.secret")
+    configure_logging("INFO", scrubber=s.scrub_secrets)
+    try:
+        log = get_logger("core.test")
+        try:
+            msg = f"boom: {VALUE}"
+            raise ValueError(msg)  # noqa: TRY301 - needs a real traceback frame
+        except ValueError:
+            log.exception("core.test.exc")
+        err = capsys.readouterr().err
+        assert VALUE not in err
+        assert "***" in err
+    finally:
+        reset_logging()

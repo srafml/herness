@@ -11,7 +11,7 @@ import json
 import os
 import re
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from pathlib import Path
 from typing import Annotated, Any, Final, Protocol
 
@@ -30,10 +30,12 @@ from herness.core.config_sources import (
 )
 from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
+from herness.core.redact_patterns import build_detectors
+from herness.core.settings import RedactionConfig
 
 __all__ = ["SECRET_NAME", "SecretNameStr", "SecretRef", "SecretRefStr", "delete_secret"]
 __all__ += ["exists", "known_values", "referenced_secret_names", "resolve", "resolve_json"]
-__all__ += ["set_secret"]
+__all__ += ["scrub_secrets", "set_secret"]
 
 SECRET_NAME: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")
 _PREFIX: Final = "secret:"
@@ -50,6 +52,13 @@ _log = get_logger("core.secrets")
 
 _KNOWN: set[str] = set()  # secret values resolved by this process (U10-32, X-1)
 _KNOWN_LOCK: Final = threading.Lock()
+_KNOWN_VERSION = 0  # bumped under _KNOWN_LOCK whenever _KNOWN actually changes
+_SCRUB_MAX_CHARS, _SCRUB_MAX_DEPTH = 64 * 1024, 6  # 64 KiB (U10-32)
+_SCRUB_MASK, _SCRUB_SECRET = "***", "[SECRET]"
+_SCRUB_TYPES: Final = frozenset({"CREDENTIAL", "URL_TOKEN"})
+_SCRUB_DETECTORS = tuple(d for d in build_detectors(RedactionConfig()) if d.type in _SCRUB_TYPES)
+_scrub_pattern: re.Pattern[str] | None = None
+_scrub_version = -1
 
 
 class SecretRef(str):
@@ -93,8 +102,57 @@ def known_values() -> frozenset[str]:
 
 
 def _remember(*values: str) -> None:
+    global _KNOWN_VERSION  # noqa: PLW0603 - known-values version (ENG §2.3)
     with _KNOWN_LOCK:
+        before = len(_KNOWN)
         _KNOWN.update(v for v in values if v)
+        if len(_KNOWN) != before:
+            _KNOWN_VERSION += 1
+
+
+def _scrub_value(value: object, pattern: re.Pattern[str] | None, depth: int) -> object:
+    if isinstance(value, str):
+        text = value[:_SCRUB_MAX_CHARS]
+        if pattern is not None:
+            text = pattern.sub(_SCRUB_MASK, text)
+        for detector in _SCRUB_DETECTORS:
+            if detector.prefilter(text):
+                pieces, pos = [], 0
+                for start, end, _v in sorted(detector.find(text)):
+                    if start >= pos:
+                        pieces += [text[pos:start], _SCRUB_SECRET]
+                        pos = end
+                text = "".join([*pieces, text[pos:]])
+        return text
+    if depth > _SCRUB_MAX_DEPTH:
+        return value
+    if isinstance(value, dict):
+        return {k: _scrub_value(v, pattern, depth + 1) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        items = [_scrub_value(v, pattern, depth + 1) for v in value]
+        return tuple(items) if isinstance(value, tuple) else items
+    return value
+
+
+def scrub_secrets(
+    logger: Any,  # noqa: ANN401 - structlog processor signature
+    method_name: str,
+    event_dict: MutableMapping[str, Any],
+) -> MutableMapping[str, Any]:
+    """Idempotent structlog processor: mask known values, then CREDENTIAL/URL_TOKEN spans;
+    a failure returns a fixed replacement event (U10-32, TH10-07)."""
+    global _scrub_pattern, _scrub_version  # noqa: PLW0603 - scrub cache state (ENG §2.3)
+    try:
+        with _KNOWN_LOCK:
+            if _scrub_version != _KNOWN_VERSION:
+                ordered = sorted(_KNOWN, key=len, reverse=True)
+                alt = "|".join(re.escape(v) for v in ordered)
+                _scrub_pattern = re.compile(alt) if alt else None
+                _scrub_version = _KNOWN_VERSION
+            pattern = _scrub_pattern
+        return {key: _scrub_value(value, pattern, 1) for key, value in event_dict.items()}
+    except Exception:  # noqa: BLE001 - last line of defence (TH10-07): never raise, never echo
+        return {"event": "log.scrub.failed"}
 
 
 class _SecretBackend(Protocol):
@@ -214,8 +272,11 @@ def _backend() -> _SecretBackend:
 
 
 def _reset() -> None:
+    global _KNOWN_VERSION  # noqa: PLW0603 - known-values version (ENG §2.3)
     with _KNOWN_LOCK:
-        _KNOWN.clear()
+        if _KNOWN:
+            _KNOWN.clear()
+            _KNOWN_VERSION += 1
     _dotenv_values.cache_clear()
 
 
