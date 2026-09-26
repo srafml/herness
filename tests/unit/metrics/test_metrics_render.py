@@ -541,6 +541,20 @@ def test_ut04_26_render_error_paths() -> None:
         render_named("org_score", {"top": 3, "strict": True}, {})
 
 
+def test_ut04_26_non_jinja_render_errors_become_config_error() -> None:
+    """UT04-26 sandbox errors other than TemplateError (OverflowError, ...) are ConfigError."""
+    with pytest.raises(ConfigError) as info:
+        _render(metric=metric(sql="SELECT {{ range(10**6) }} AS entity_id"))
+    assert isinstance(info.value.__cause__, OverflowError)
+
+
+def test_ut04_26_template_filters_are_sorted_not_deduped() -> None:
+    """UT04-26 template.filters keeps duplicates (sorted); f_<k> binds stay sorted-unique."""
+    q = _render(filters={"priority": [2, 1, 2]})
+    assert q.template["filters"] == {"priority": [1, 2, 2]}
+    assert q.bind["f_priority"] == [1, 2]
+
+
 def test_ut04_26_render_rejects_bad_request_identifiers() -> None:
     """UT04-26 entity types, periods and filter keys outside the literals are refused."""
     with pytest.raises(ConfigError):

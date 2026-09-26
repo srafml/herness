@@ -127,10 +127,21 @@ def make_environment() -> ImmutableSandboxedEnvironment:
     return env
 
 
+_RENDER_EXCEPTIONS: Final = (
+    jinja2.TemplateError,
+    ArithmeticError,
+    TypeError,
+    ValueError,
+    LookupError,
+)
+
+
 def _guard[T](step: Callable[[], T]) -> T:
     try:
         return step()
-    except jinja2.TemplateError as exc:
+    except ConfigError:
+        raise
+    except _RENDER_EXCEPTIONS as exc:
         msg = f"template render failed: {type(exc).__name__}: {exc}"
         raise ConfigError(msg) from exc
 
@@ -153,13 +164,17 @@ def _output_columns(inner: str) -> list[str]:
     return [col for col in _OPTIONAL_COLUMNS if col in names]
 
 
-def _sorted_unique(values: Sequence[object]) -> list[object]:
-    unique: list[Any] = list(dict.fromkeys(values))
+def _sorted(values: Sequence[object]) -> list[object]:
+    items: list[Any] = list(values)
     try:
-        return sorted(unique)
+        return sorted(items)
     except TypeError as exc:
         msg = "filter values must share one type"
         raise ConfigError(msg) from exc
+
+
+def _sorted_unique(values: Sequence[object]) -> list[object]:
+    return _sorted(list(dict.fromkeys(values)))
 
 
 def _pick(used: set[str], candidates: Mapping[str, object]) -> dict[str, object]:
@@ -213,7 +228,8 @@ def render_metric_query(  # noqa: PLR0913 - keyword-only signature fixed by U04-
         (["estimate"] if metric.estimate else [])
         + (["unconfirmed_weights"] if unconfirmed_blocks(weights, metric.uses_weights) else [])
     )
-    values = {key: _sorted_unique(filters[key]) for key in sorted(filters)}
+    unique_values = {key: _sorted_unique(filters[key]) for key in sorted(filters)}
+    sorted_values = {key: _sorted(filters[key]) for key in sorted(filters)}
     candidates: dict[str, object] = {
         **window.binds(),
         **default_binds(catalog),
@@ -225,13 +241,13 @@ def render_metric_query(  # noqa: PLR0913 - keyword-only signature fixed by U04-
         "entity_type": entity_type,
         "period": window.period,
         "unit": metric.unit,
-        **{f"f_{key}": vals for key, vals in values.items()},
+        **{f"f_{key}": vals for key, vals in unique_values.items()},
     }
     template: dict[str, object] = {
         "name": metric.name,
         "entity_type": entity_type,
         "period": window.period,
-        "filters": values,
+        "filters": sorted_values,
     }
     return RenderedQuery(sql, _pick(rs.used, candidates), template, frozenset(rs.sources))
 

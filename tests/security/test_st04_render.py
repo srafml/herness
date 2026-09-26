@@ -77,6 +77,8 @@ def test_st04_01_injection_in_entity_ids_only() -> None:
         "{{ ''.__class__.__mro__[1].__subclasses__() }}",
         "{{ rs.__class__ }}",
         "{{ rs._used }}",
+        "{{ rs.used.add('x') }}",
+        "{{ rs.sources.clear() }}",
         "{{ p.__globals__ }}",
         "{{ lipsum.__globals__ }}",
         "{{ self.__init__ }}",
