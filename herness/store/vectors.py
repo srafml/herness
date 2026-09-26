@@ -76,6 +76,8 @@ _ID_RE: Final = re.compile(r"[A-Za-z0-9_:.|-]{1,256}")
 _MAX_IDS: Final = 100_000
 _DELETE_CHUNK: Final = 500
 _LANCE_ERRORS: Final = (OSError, RuntimeError, ValueError)
+# LanceDB 0.39.0 raises no typed conflict error; retryable failures are told by message.
+_BUSY_MARKERS: Final = ("conflict", "busy", "lock")
 
 _log = get_logger("store.vectors")
 
@@ -109,10 +111,11 @@ def _in_filters(column: str, keys: list[str]) -> list[str]:
 
 
 def _store_error(exc: BaseException, name: str, action: str) -> HernessError:
-    """Map a LanceDB failure: commit conflicts are retryable, the rest are fatal."""
+    """Map a LanceDB failure: commit conflicts and busy locks are retryable, the rest fatal."""
     error_type = type(exc).__name__
-    if "conflict" in str(exc).lower():
-        msg = f"vector table {name} commit conflict during {action}"
+    text = str(exc).lower()
+    if any(marker in text for marker in _BUSY_MARKERS):
+        msg = f"vector table {name} busy (commit conflict or lock) during {action}"
         return StoreBusy(msg, table=name, error_type=error_type)
     msg = f"vector {action} failed on {name}"
     return SchemaViolation(msg, table=name, error_type=error_type)
@@ -179,11 +182,11 @@ class VectorStore:
     def _open(self, name: str) -> Table:
         try:
             return self._db.open_table(name)
-        except ValueError as exc:
-            if "not found" not in str(exc).lower():
-                raise _store_error(exc, name, "open") from exc
-            msg = f"vector table {name} does not exist"
-            raise NotFoundError(msg, kind="vector_table", key=name) from exc
+        except _LANCE_ERRORS as exc:
+            if isinstance(exc, ValueError) and "not found" in str(exc).lower():
+                msg = f"vector table {name} does not exist"
+                raise NotFoundError(msg, kind="vector_table", key=name) from exc
+            raise _store_error(exc, name, "open") from exc
 
     def delete_ids(self, name: TableName, column: str, ids: Collection[str]) -> int:
         """Delete rows whose allowlisted ``column`` is in ``ids``; return rows deleted (U02-67)."""
@@ -218,7 +221,11 @@ class VectorStore:
     def count(self, name: TableName) -> int:
         """Row count of a table; NotFoundError if absent (U02-69)."""
         _check_name(name)
-        return self._open(name).count_rows()
+        table = self._open(name)
+        try:
+            return table.count_rows()
+        except _LANCE_ERRORS as exc:
+            raise _store_error(exc, name, "count") from exc
 
     def health(self) -> HealthResult:
         """Health for ``herness doctor``: down, degraded (a table missing) or ok (U02-70)."""

@@ -16,6 +16,7 @@ from herness.store.vectors import (
     EMBEDDING_DIM,
     MEMORY_EMBEDDING_SCHEMA,
     TICKET_EMBEDDING_SCHEMA,
+    TableName,
     VectorStore,
 )
 
@@ -85,10 +86,11 @@ def test_ut02_49_ensure_twice_table_and_count(tmp_path: Path) -> None:
     assert (tmp_path / "vectors").is_dir()
     vs.ensure_tables()
     vs.ensure_tables()
-    for name, schema in (
+    cases: tuple[tuple[TableName, pa.Schema], ...] = (
         ("ticket_embedding", TICKET_EMBEDDING_SCHEMA),
         ("memory_embedding", MEMORY_EMBEDDING_SCHEMA),
-    ):
+    )
+    for name, schema in cases:
         table = vs.table(name)
         assert table.schema.names == schema.names
         assert [f.type for f in table.schema] == [f.type for f in schema]
@@ -361,3 +363,55 @@ def test_ut02_49_open_failure_other_than_missing(
     monkeypatch.setattr(store._db, "open_table", corrupt)
     with pytest.raises(SchemaViolation, match="vector open failed on ticket_embedding"):
         store.table("ticket_embedding")
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (OSError("file is locked by another process"), StoreBusy),
+        (RuntimeError("commit conflict"), StoreBusy),
+        (OSError("io failure"), SchemaViolation),
+        (RuntimeError("panic in reader"), SchemaViolation),
+    ],
+)
+def test_ut02_49_open_os_and_runtime_errors_mapped(
+    store: VectorStore,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    expected: type[Exception],
+) -> None:
+    """UT02-49 OSError and RuntimeError from open_table map to StoreBusy or SchemaViolation."""
+
+    def failing(_name: str) -> None:
+        raise error
+
+    monkeypatch.setattr(store._db, "open_table", failing)
+    with pytest.raises(expected):
+        store.table("ticket_embedding")
+    with pytest.raises(expected):
+        store.count("memory_embedding")
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (OSError("resource busy"), StoreBusy),
+        (RuntimeError("corrupt fragment"), SchemaViolation),
+        (ValueError("bad state"), SchemaViolation),
+    ],
+)
+def test_ut02_49_count_errors_mapped(
+    store: VectorStore,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    expected: type[Exception],
+) -> None:
+    """UT02-49 count_rows failures map to StoreBusy or SchemaViolation, never raw."""
+
+    class Failing:
+        def count_rows(self) -> int:
+            raise error
+
+    monkeypatch.setattr(store._db, "open_table", lambda _n: Failing())
+    with pytest.raises(expected, match="vector"):
+        store.count("ticket_embedding")
