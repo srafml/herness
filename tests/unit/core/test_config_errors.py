@@ -31,7 +31,7 @@ def test_ut10_80_egress_blocked_attributes() -> None:
 
 
 def test_ut10_80_malformed_reason_reads_invalid() -> None:
-    """UT10-80 a reason outside [a-z_]{1,40} reads as 'invalid'; a non-str egress_id as None."""
+    """UT10-80 a non-str reason or one outside [a-z0-9_]{1,40} reads invalid; bad egress_id None."""
     assert e.EgressBlocked("x", reason="Host Not Allowed").reason == "invalid"
     assert e.EgressBlocked("x", reason="a" * 41).reason == "invalid"
     assert e.EgressBlocked("x", reason=3).reason == "invalid"  # type: ignore[arg-type]

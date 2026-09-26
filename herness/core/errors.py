@@ -300,8 +300,8 @@ class EgressBlocked(FatalError):
     ) -> None:
         super().__init__(message, **kw)  # type: ignore[arg-type]  # kw holds only hint and details
         self.egress_id = egress_id if isinstance(egress_id, str) else None  # egr_<ulid> or None
-        ok = reason is None or re.fullmatch(r"[a-z_]{1,40}", str(reason)) is not None
-        self.reason = reason if ok else "invalid"  # a malformed code is never stored or logged
+        ok = reason is None or re.fullmatch(r"[a-z0-9_]{1,40}", str(reason)) is not None
+        self.reason = reason if ok and isinstance(reason, str | None) else "invalid"  # masked
 
 
 # --- 08 (resilience and jobs) ---
