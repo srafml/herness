@@ -1,19 +1,18 @@
 """`260_event.sql` (U02-121) and `270_metric_daily.sql` (U02-122), impl 02 T02-17.
 
 IT02-16: event service resolution through `stg.service_name_lookup` (alias, unique name,
-ambiguous name), incident resolution on `incident_ref`, and the duration rule. File 230
-(T02-16) is not run: `core.incident` is a minimal (`record_id`, `number`) table created
-before 260 (controller ruling for T02-17). IT02-17: one metric row per key (latest), and
-the unmapped count in `stg.build_counts`.
+ambiguous name), incident resolution on `incident_ref`, and the duration rule, against the
+real `core.incident` built by file 230 (T02-16); the empty case runs the whole 000-299
+build. IT02-17: one metric row per key (latest), and the unmapped count in
+`stg.build_counts`.
 """
 
 from __future__ import annotations
 
 import datetime
 
-import duckdb
 import pytest
-from tests.integration.model._core_build import SVC
+from tests.integration.model._core_build import SVC, build_core
 from tests.integration.model._core_late import build_late, rerun
 from tests.integration.model._stg_lake import UTC, Row, at, commit
 from tests.support.build_harness import BuildHarness
@@ -39,11 +38,13 @@ def _services(harness: BuildHarness) -> None:
     )
 
 
-def _incidents(con: duckdb.DuckDBPyConnection) -> None:
-    con.execute("CREATE OR REPLACE TABLE core.incident (record_id VARCHAR, number VARCHAR)")
-    con.execute(
-        "INSERT INTO core.incident VALUES (?, 'INC0001'), (?, 'INC0002'), (?, 'INC0002')",
-        [INC + "i1", INC + "i2", INC + "i3"],
+def _incidents(harness: BuildHarness) -> None:
+    numbers = [("i1", "INC0001"), ("i2", "INC0002"), ("i3", "INC0002")]
+    commit(
+        harness.layout.raw,
+        "servicenow",
+        "incident",
+        [Row(k, at(0), {"number": number}) for k, number in numbers],
     )
 
 
@@ -103,7 +104,8 @@ def test_it02_16_event_service_incident_duration(build_harness: BuildHarness) ->
         _event("e5", "Payments", "bad ts", "2024-03-01 14:00:00", "inc0001"),
     ]
     commit(build_harness.layout.raw, MON, "event", events)
-    build_late(build_harness, [260], mappings=MAPPINGS, setup=_incidents)
+    _incidents(build_harness)
+    build_late(build_harness, [230, 260], mappings=MAPPINGS)
     sql = (
         "SELECT event_id, source_tool, ts, service_id, host, severity, alert_name, status,"
         " dedup_key, duration_s, incident_id FROM core.event ORDER BY event_id"
@@ -121,8 +123,9 @@ def test_it02_16_event_service_incident_duration(build_harness: BuildHarness) ->
 
 
 def test_it02_16_event_empty_typed(build_harness: BuildHarness) -> None:
-    """IT02-16 no event files: `core.event` exists, empty, with the U02-121 types."""
-    build_late(build_harness, [260], setup=_incidents)
+    """IT02-16 no event files: the whole 000-299 build runs and `core.event` exists,
+    empty, with the U02-121 types."""
+    build_core(build_harness, hi=299)
     assert build_harness.query("SELECT count(*) FROM core.event") == [(0,)]
     rows = build_harness.query(
         "SELECT column_name, data_type FROM information_schema.columns"

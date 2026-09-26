@@ -1,7 +1,7 @@
 """Monitoring staging `130_stg_monitoring.sql` (impl 02 U02-111, T02-14).
 
 The spec's own test rows for this file (IT02-16, IT02-17) were reassigned to the core
-`260`/`270` staging of a later card (T02-16); this card's Tests row names only IT02-33
+`260`/`270` files of a later card (T02-17); this card's Tests row names only IT02-33
 (`docs/impl/02-data-model.impl.md` line ~3903), so every function below is filed under
 IT02-33 with this note, per the T02-14 brief.
 

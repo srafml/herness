@@ -2,8 +2,8 @@
 
 `build_late` runs files 000..220 (staging, org/team/service, service map) with reference
 data from a `mappings.yaml`-shaped dict and the given custom fields, calls `setup` on the
-build connection, then runs each requested later file on its own. Files 230-250 (T02-16)
-are never run: a test that needs `core.incident` creates a minimal one in `setup`.
+build connection, then runs each requested later file on its own. A test that needs
+`core.incident` lists 230 (T02-16) among `files`.
 """
 
 from __future__ import annotations
