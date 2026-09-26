@@ -4,35 +4,41 @@ Design 05 §5.1.1. The instance holds no SDK client: every call opens one inside
 so the adapter works across separate ``asyncio.run`` calls. The API key lives only on the
 instance as ``SecretStr`` and reaches the wire only in the SDK's ``Authorization`` header
 (TH05-15). Off-network clients send only through the egress guard's HTTP client; without it the
-call fails closed (TH05-13). On-network responses are byte-capped while read, every call has a
-whole-call deadline, and responses are bounded and checked before they reach the loop
-(TH05-20). Mapping helpers live in the private sibling ``_openai_map``.
+call fails closed (TH05-13). On-network clients send through ``egress.aloopback_http_client``,
+which caps the body while it is read, refuses redirects and sets the per-phase timeouts; its
+``response_too_large`` / ``unsupported_encoding`` refusals surface here as
+``OutputValidationError``. Every call has a whole-call deadline, and responses are bounded and
+checked before they reach the loop (TH05-20). Mapping helpers live in the private sibling
+``_openai_map``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
-import httpx2
 import openai
 from pydantic import SecretStr, ValidationError
 
 from herness.core import time as clock
 from herness.core.config import get_config
-from herness.core.egress import MAX_RESPONSE_BYTES, get_guard
-from herness.core.errors import ConfigError, ModelUnavailable, OutputValidationError
+from herness.core.egress import MAX_RESPONSE_BYTES, aloopback_http_client, get_guard
+from herness.core.errors import (
+    ConfigError,
+    EgressBlocked,
+    ModelUnavailable,
+    OutputValidationError,
+)
 from herness.core.registry import register
 from herness.core.secrets import resolve
 from herness.core.types import LLMRequest, LLMResponse
 from herness.harness.llm import _openai_map
 from herness.harness.llm.base import egress_purpose_for
-from herness.harness.llm.errors import translate_openai_error
+from herness.harness.llm.errors import find_egress_block, translate_openai_error
 
 if TYPE_CHECKING:
-    import httpx
+    import httpx2
     from openai.types.chat import ChatCompletion
 
     from herness.harness.llm.settings import ClientConfig
@@ -42,13 +48,11 @@ __all__ = ["OpenAICompatClient"]
 _Server = Literal["vllm", "ollama", "llamacpp", "openai"]
 _NO_KEY: Final = "EMPTY"
 _PAYLOAD_CLASS: Final = "aggregated_evidence"
-_IDENTITY: Final = "identity"
+# Loopback refusals of the body itself (U10-59); reported as before T10-17 (TH05-20).
+_BODY_REFUSALS: Final = frozenset({"response_too_large", "unsupported_encoding"})
+_TOO_LARGE_MSG: Final = "response body exceeds limit"
 # Same message translate_openai_error gives an openai.APITimeoutError (U05-30).
 _DEADLINE_MSG: Final = "openai call failed: APITimeoutError"
-
-
-# openai 3.x accepts a legacy httpx client too (T10-17 may return one); typing only.
-type _HttpClient = httpx.AsyncClient | httpx2.AsyncClient  # noqa: TID251 - type alias only
 
 
 class _GuardWithHttpClient(Protocol):
@@ -56,61 +60,7 @@ class _GuardWithHttpClient(Protocol):
 
     def async_http_client(
         self, purpose: str, payload_class: str, *, run_id: str, task_id: str | None
-    ) -> _HttpClient: ...
-
-
-def _too_large() -> OutputValidationError:
-    return OutputValidationError("response body exceeds limit")
-
-
-class _CappedStream(httpx2.AsyncByteStream):
-    """Counts body bytes while they are read; raises once they pass ``MAX_RESPONSE_BYTES``."""
-
-    def __init__(self, inner: httpx2.AsyncByteStream, headers: httpx2.Headers) -> None:
-        self._inner = inner
-        self._headers = headers
-
-    async def __aiter__(self) -> AsyncIterator[bytes]:
-        length = self._headers.get("content-length", "")
-        if length.isdigit() and int(length) > MAX_RESPONSE_BYTES:
-            raise _too_large()  # rejected before any byte is read
-        if self._headers.get("content-encoding", _IDENTITY).lower() != _IDENTITY:
-            raise _too_large()  # identity was requested: a compressed body cannot be bounded
-        total = 0
-        async for chunk in self._inner:
-            total += len(chunk)
-            if total > MAX_RESPONSE_BYTES:
-                raise _too_large()
-            yield chunk
-
-    async def aclose(self) -> None:
-        await self._inner.aclose()
-
-
-class _CappedTransport(httpx2.AsyncBaseTransport):
-    """Loopback transport whose responses are byte-capped (TH05-20)."""
-
-    def __init__(self) -> None:
-        self._inner = httpx2.AsyncHTTPTransport()
-
-    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
-        response = await self._inner.handle_async_request(request)
-        stream = _CappedStream(cast("httpx2.AsyncByteStream", response.stream), response.headers)
-        return httpx2.Response(
-            response.status_code,
-            headers=response.headers,
-            stream=stream,
-            extensions=response.extensions,
-            request=request,
-        )
-
-    async def aclose(self) -> None:
-        await self._inner.aclose()
-
-
-def _capped_http_client() -> httpx2.AsyncClient:
-    """The HTTP client of on-network calls: uncompressed, byte-capped responses."""
-    return httpx2.AsyncClient(transport=_CappedTransport(), headers={"Accept-Encoding": _IDENTITY})
+    ) -> httpx2.AsyncClient: ...
 
 
 @register("llm_client", "openai_compat")
@@ -214,10 +164,16 @@ class OpenAICompatClient:
             msg = "malformed response"
             raise OutputValidationError(msg, client=self.name) from None
 
-    def _http_client(self, req: LLMRequest) -> _HttpClient:
-        """The guard's client off-network (fails closed without it); else a byte-capped one."""
+    def _http_client(self, req: LLMRequest) -> httpx2.AsyncClient:
+        """The guard's client off-network (fails closed without it); else the loopback one."""
         if not self.cfg.off_network:
-            return _capped_http_client()
+            # The SDK sends the key in its own Authorization header (TH05-15): no bearer here.
+            return aloopback_http_client(
+                cast("str", self.cfg.base_url),  # required for openai_compat (settings)
+                timeout_s=req.timeout_s,
+                bearer=None,
+                max_response_bytes=MAX_RESPONSE_BYTES,
+            )
         guard = get_guard()
         if not hasattr(guard, "async_http_client"):
             msg = f"client {self.name} is off-network but the egress guard has no HTTP client"
@@ -230,6 +186,12 @@ class OpenAICompatClient:
             task_id=meta.task_id,
         )
 
+    def _raise_body_refusal(self, exc: BaseException) -> None:
+        """``OutputValidationError`` when ``exc`` is, or wraps, a loopback body refusal."""
+        blocked = find_egress_block(exc)
+        if blocked is not None and blocked.reason in _BODY_REFUSALS:
+            raise OutputValidationError(_TOO_LARGE_MSG, client=self.name) from exc
+
     async def _send(self, req: LLMRequest, params: dict[str, Any]) -> tuple[ChatCompletion, int]:
         async with contextlib.AsyncExitStack() as stack:
             http_client = self._http_client(req)
@@ -240,8 +202,7 @@ class OpenAICompatClient:
                     api_key=self._api_key.get_secret_value(),
                     timeout=req.timeout_s,
                     max_retries=0,
-                    # openai 3.x accepts a legacy httpx client too; it is typed httpx2 only.
-                    http_client=cast("httpx2.AsyncClient", http_client),
+                    http_client=http_client,
                 )
             )
             t0 = clock.monotonic()
@@ -259,7 +220,11 @@ class OpenAICompatClient:
             raw, latency_ms = await self._send(req, params)
         except TimeoutError:
             raise ModelUnavailable(_DEADLINE_MSG, client=self.name) from None
+        except EgressBlocked as exc:
+            self._raise_body_refusal(exc)
+            raise
         except openai.OpenAIError as exc:
+            self._raise_body_refusal(exc)
             raise translate_openai_error(exc) from exc
         return self._map_response(raw, req, latency_ms)
 

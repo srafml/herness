@@ -1,13 +1,15 @@
 """Tests for herness.harness.llm.openai_compat.OpenAICompatClient (U05-24, U05-25).
 
-The ``openai`` SDK sends through ``httpx2``, which ``respx`` does not patch, so the HTTP fake
-here replaces ``httpx2.AsyncHTTPTransport.handle_async_request`` (T11-23 ``respx_router`` is not
-on the base; see the T05-06 report).
+The ``openai`` SDK sends through ``httpx2``, which ``respx`` does not patch. On-network calls
+use the real ``egress.aloopback_http_client`` (T05-06b); the HTTP fake swaps the pool transport
+that client builds for an ``httpx2.MockTransport`` over the test's handler (``_serve``), so the
+loopback byte cap, encoding checks and redirect refusal all run for real.
 """
 
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib
 import json
 from collections.abc import Iterator
@@ -24,7 +26,7 @@ from tests.support.config_tree import write_full_config
 from tests.support.fake_keyring import MemoryKeyring
 
 from herness.core import config as c
-from herness.core import registry
+from herness.core import egress_clients, registry
 from herness.core.errors import (
     AuthError,
     ConfigError,
@@ -191,14 +193,26 @@ class _FakeServer:
         return httpx2.Response(status, json=body, headers=headers, request=request)
 
 
+def _serve(monkeypatch: pytest.MonkeyPatch, handler: Any) -> list[dict[str, Any]]:
+    """Answer the loopback client's requests with ``handler`` (sync or async) via MockTransport.
+
+    Replaces the pool-transport name ``egress_clients`` builds; the loopback transport that
+    wraps it (host check, identity encoding, byte cap) stays real. Returns the build kwargs.
+    """
+    built: list[dict[str, Any]] = []
+
+    def transport(**kwargs: Any) -> httpx2.MockTransport:
+        built.append(kwargs)
+        return httpx2.MockTransport(handler)
+
+    monkeypatch.setattr(egress_clients.httpx2, "AsyncHTTPTransport", transport)
+    return built
+
+
 @pytest.fixture
 def server(monkeypatch: pytest.MonkeyPatch) -> _FakeServer:
     fake = _FakeServer()
-
-    async def handle(_transport: object, request: httpx2.Request) -> httpx2.Response:
-        return await fake.handle(request)
-
-    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", handle)
+    _serve(monkeypatch, fake.handle)
     return fake
 
 
@@ -609,11 +623,11 @@ def test_ut05_28_acomplete_translates_errors_without_retry(
 def test_ut05_28_connection_error_is_model_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT05-28 a transport failure maps to ModelUnavailable."""
 
-    async def fail(_transport: object, request: httpx2.Request) -> httpx2.Response:
+    def fail(request: httpx2.Request) -> httpx2.Response:
         msg = "refused"
         raise httpx2.ConnectError(msg, request=request)
 
-    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", fail)
+    _serve(monkeypatch, fail)
     with pytest.raises(ModelUnavailable):
         asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
 
@@ -765,15 +779,20 @@ def test_ut05_26_tool_arguments_size_bound() -> None:
         _map(over)
 
 
-def _spy_clients(monkeypatch: pytest.MonkeyPatch) -> list[httpx2.AsyncClient]:
+def _spy_clients(
+    monkeypatch: pytest.MonkeyPatch, calls: list[tuple[Any, ...]] | None = None
+) -> list[httpx2.AsyncClient]:
+    """Record every client ``egress.aloopback_http_client`` builds for the adapter."""
     made: list[httpx2.AsyncClient] = []
-    real = openai_compat._capped_http_client
+    real = openai_compat.aloopback_http_client
 
-    def spy() -> httpx2.AsyncClient:
-        made.append(real())
+    def spy(base_url: str, **kwargs: Any) -> httpx2.AsyncClient:
+        if calls is not None:
+            calls.append((base_url, kwargs))
+        made.append(real(base_url, **kwargs))
         return made[-1]
 
-    monkeypatch.setattr(openai_compat, "_capped_http_client", spy)
+    monkeypatch.setattr(openai_compat, "aloopback_http_client", spy)
     return made
 
 
@@ -798,12 +817,12 @@ def test_ut05_25_byte_cap_while_reading(
 
 @pytest.mark.parametrize(
     "headers",
-    [{"content-length": str(52_428_800 + 1)}, {"content-encoding": "gzip"}],
+    [{"content-length": str(52_428_800 + 1)}, {"content-encoding": "br"}],
 )
 def test_ut05_25_byte_cap_rejects_headers_up_front(
     monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]
 ) -> None:
-    """UT05-25 an over-cap Content-Length or a compressed body is refused before reading."""
+    """UT05-25 an over-cap Content-Length or an unsupported encoding is refused unread."""
     read: list[bytes] = []
 
     class _Body(httpx2.AsyncByteStream):
@@ -811,24 +830,26 @@ def test_ut05_25_byte_cap_rejects_headers_up_front(
             read.append(b"chunk")
             yield b"{}"
 
-    async def handle(_transport: object, request: httpx2.Request) -> httpx2.Response:
+    def handle(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, headers=headers, stream=_Body(), request=request)
 
-    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", handle)
+    _serve(monkeypatch, handle)
     assert openai_compat.MAX_RESPONSE_BYTES == 52_428_800
-    with pytest.raises(OutputValidationError, match=r"^response body exceeds limit$"):
+    with pytest.raises(OutputValidationError, match=r"^response body exceeds limit$") as info:
         asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
     assert read == []
+    # The SDK lets the loopback refusal through unwrapped (not an httpx2.RequestError).
+    assert type(info.value.__cause__) is EgressBlocked
 
 
 def test_ut05_25_whole_call_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT05-25 a server slower than timeout_s ends in ModelUnavailable like APITimeoutError."""
 
-    async def slow(_transport: object, request: httpx2.Request) -> httpx2.Response:
+    async def slow(request: httpx2.Request) -> httpx2.Response:
         await asyncio.sleep(5)
         return httpx2.Response(200, json=_completion(content="late"), request=request)
 
-    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", slow)
+    _serve(monkeypatch, slow)
     with pytest.raises(ModelUnavailable) as info:
         asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request(timeout_s=0.05)))
     assert info.value.message == "openai call failed: APITimeoutError"
@@ -878,23 +899,111 @@ def test_ut05_25_byte_cap_counts_streamed_chunks(monkeypatch: pytest.MonkeyPatch
                 sent.append(1)
                 yield b"x" * 100
 
-    async def handle(_transport: object, request: httpx2.Request) -> httpx2.Response:
+    def handle(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, stream=_Chunks(), request=request)
 
-    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", handle)
+    _serve(monkeypatch, handle)
     monkeypatch.setattr(openai_compat, "MAX_RESPONSE_BYTES", 250)
     with pytest.raises(OutputValidationError, match=r"^response body exceeds limit$"):
         asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
     assert len(sent) == 3
 
 
-def test_ut05_25_capped_client_closes_its_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT05-25 closing the byte-capped client closes the wrapped loopback transport."""
-    closed: list[bool] = []
+def test_ut05_35_on_network_uses_egress_loopback_client(
+    server: _FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT05-35 on-network calls use egress.aloopback_http_client: base URL, deadline, no bearer.
 
-    async def aclose(_transport: object) -> None:
-        closed.append(True)
+    The pool transport is built with retries=0, the SDK's Authorization header carries the key
+    (TH05-15) and the client is closed after the call.
+    """
+    calls: list[tuple[Any, ...]] = []
+    made = _spy_clients(monkeypatch, calls)
+    built = _serve(monkeypatch, server.handle)
+    server.respond(200, _completion(content="ok"))
+    cfg = _cfg()
+    assert asyncio.run(OpenAICompatClient(cfg).acomplete(_request(timeout_s=7.5))).text == "ok"
+    assert calls == [
+        (cfg.base_url, {"timeout_s": 7.5, "bearer": None, "max_response_bytes": 52_428_800})
+    ]
+    assert built == [{"retries": 0}]
+    assert server.requests[0].headers["authorization"] == "Bearer EMPTY"
+    assert server.requests[0].headers["accept-encoding"] == "identity"
+    assert made[0].is_closed
 
-    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "aclose", aclose)
-    asyncio.run(openai_compat._capped_http_client().aclose())
-    assert closed == [True]
+
+def test_ut05_35_redirect_not_followed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-35 a redirect from the model server is not followed: one request, then an error."""
+    seen: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        headers = {"location": "http://127.0.0.1:8000/v1/elsewhere"}
+        return httpx2.Response(307, headers=headers, json={}, request=request)
+
+    _serve(monkeypatch, handle)
+    with pytest.raises(ModelUnavailable):
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+    assert [str(r.url) for r in seen] == ["http://127.0.0.1:8000/v1/chat/completions"]
+
+
+class _Streamed(httpx2.AsyncByteStream):
+    """A streamed (not pre-read) body, so the loopback transport counts it while it is read."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def __aiter__(self) -> Any:
+        yield self._body
+
+
+def test_ut05_35_gzip_body_counted_after_decoding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-35 a gzip body is decoded by the loopback client and its decoded bytes are capped."""
+    raw = json.dumps(_completion(content="z" * 2_000)).encode()
+    packed = gzip.compress(raw)
+    assert len(packed) < 500 < len(raw)
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        headers = {"content-encoding": "gzip"}
+        return httpx2.Response(200, headers=headers, stream=_Streamed(packed), request=request)
+
+    _serve(monkeypatch, handle)
+    assert len(asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request())).text) == 2_000
+    monkeypatch.setattr(openai_compat, "MAX_RESPONSE_BYTES", 500)
+    with pytest.raises(OutputValidationError, match=r"^response body exceeds limit$"):
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+
+
+@pytest.mark.parametrize("reason", ["response_too_large", "unsupported_encoding"])
+def test_ut05_35_wrapped_body_refusal_is_output_validation_error(
+    monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    """UT05-35 a body refusal the SDK wraps (APIConnectionError cause) still maps the same."""
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        msg = "wrapped"
+        raise httpx2.ReadError(msg, request=request) from EgressBlocked("refused", reason=reason)
+
+    _serve(monkeypatch, handle)
+    with pytest.raises(OutputValidationError, match=r"^response body exceeds limit$") as info:
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+    assert info.value.context["client"] == "local-30b"
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_ut05_35_other_egress_block_propagates(
+    monkeypatch: pytest.MonkeyPatch, *, wrapped: bool
+) -> None:
+    """UT05-35 an EgressBlocked with another reason surfaces unchanged, direct or wrapped."""
+    blocked = EgressBlocked("refused", reason="not_loopback")
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if wrapped:
+            msg = "wrapped"
+            raise httpx2.ReadError(msg, request=request) from blocked
+        raise blocked
+
+    _serve(monkeypatch, handle)
+    with pytest.raises(EgressBlocked) as info:
+        asyncio.run(OpenAICompatClient(_cfg()).acomplete(_request()))
+    assert info.value is blocked
