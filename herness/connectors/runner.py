@@ -4,8 +4,9 @@ Design 01 §3.2, §5.1, §5.2 and §5.6. One `SyncRunner` serves one source in o
 Every stream goes through `_write_stream` (loop state in the private `_write_loop` module),
 which filters deleted records before each write (TH01-11), splits lake files on schema
 drift, checkpoints by rows or writer age, and moves the watermark only after
-`LakeWriter.commit()` returned (design 01 §2). Backfill slices (T01-07), reconciliation
-(T01-08) and the files path (T01-10) extend this module.
+`LakeWriter.commit()` returned (design 01 §2). Backfill slices run in the `backfill`
+module (U01-43), reconciliation in the `reconcile` module (U01-44); the files path (T01-10)
+extends this module.
 """
 
 from __future__ import annotations
@@ -16,15 +17,21 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, cast
 
 import pyarrow as pa
 
 from herness.connectors._write_loop import StreamOutcome, StreamSpec, WriteLoop
 from herness.connectors._write_loop import metric as _metric
-from herness.connectors.base import UNORDERED_SOURCES, Connector, SupportsToolStreams
+from herness.connectors.base import (
+    UNORDERED_SOURCES,
+    Connector,
+    SupportsKeyListing,
+    SupportsToolStreams,
+)
 from herness.connectors.deletion import DeletionFilter
 from herness.connectors.lakefiles import cleanup_orphan_temp_files
+from herness.connectors.settings import MonitoringSettings
 from herness.connectors.settings_base import SourceSettings
 from herness.core import time as clock
 from herness.core.config import get_config
@@ -32,15 +39,23 @@ from herness.core.errors import CircuitOpen, ConfigError, FatalError, HernessErr
 from herness.core.logging import get_logger
 from herness.core.resilience import guard
 from herness.store.lake import LakeWriter
-from herness.store.ops import get_watermark, record_metric_samples, set_watermark
+from herness.store.ops import get_watermark, record_metric_samples
 
 __all__ = ["SyncResult", "SyncRunner"]
 
 type Mode = Literal["incremental", "backfill", "reconcile"]
 type Fetch = Callable[[str, datetime | None, datetime], Iterator[pa.RecordBatch]]
-type _StreamRun = Callable[..., SyncResult]  # (entity, *, key, fetch) -> SyncResult
+type FetchOf = Callable[[Connector], Fetch]  # connector instance -> its fetch function
 
 _log = get_logger("connectors.sync")
+
+
+class _StreamRun(Protocol):
+    """One stream's flow: `_incremental_stream`, or `_backfill_stream` bound to a range."""
+
+    def __call__(self, entity: str, *, key: str, fetch_of: FetchOf, workers: int) -> SyncResult:
+        """Run stream `key` of `entity`; `workers` bounds the backfill slice threads."""
+        ...
 
 
 def _utc(value: datetime | None) -> str | None:
@@ -108,6 +123,14 @@ def _default_writer(source: str, entity: str) -> LakeWriter:
     return LakeWriter(source, entity)
 
 
+def _own_sync(conn: Connector) -> Fetch:
+    return conn.sync
+
+
+def _tool_sync(tool: str, conn: Connector) -> Fetch:
+    return partial(cast("SupportsToolStreams", conn).sync_tool, tool)
+
+
 class SyncRunner:
     """Runs incremental, backfill and reconcile flows for one source (U01-37).
 
@@ -165,7 +188,50 @@ class SyncRunner:
         conn = self.connector
         if isinstance(conn, SupportsToolStreams):
             return self._over_tools(entity, conn, "incremental", self._incremental_stream)
-        return self._incremental_stream(entity, key=conn.name, fetch=conn.sync)
+        workers = self.cfg.max_concurrency
+        return self._incremental_stream(entity, key=conn.name, fetch_of=_own_sync, workers=workers)
+
+    def run_backfill(self, entity: str, start: datetime, end: datetime) -> SyncResult:
+        """Job kind `sync` with `--backfill` over `[start, end)` (U01-41, design 01 §5.5).
+
+        Needs aware `start < end <= now` and a connector other than `files`, else
+        `ConfigError`. Raises as U01-43; tool streams as U01-38 step 3.
+        """
+        conn = self.connector
+        if conn.name == "files":
+            msg = "files does not backfill"
+            raise ConfigError(msg, source=conn.name)
+        if any(v.tzinfo is None or v.utcoffset() is None for v in (start, end)):
+            msg = "backfill range needs timezone-aware datetimes"
+            raise ConfigError(msg, source=conn.name)
+        if not start < end <= self.clock():
+            msg = "backfill range must satisfy start < end <= now"
+            raise ConfigError(msg, source=conn.name)
+        self._prepare(entity)
+        run = partial(self._backfill_stream, start=start, end=end)
+        if isinstance(conn, SupportsToolStreams):
+            return self._over_tools(entity, conn, "backfill", run)
+        return run(entity, key=conn.name, fetch_of=_own_sync, workers=self.cfg.max_concurrency)
+
+    def run_reconcile(self, entity: str) -> SyncResult:
+        """Job kind `reconcile` (U01-42, design 01 §5.4); the watermark never changes.
+
+        Needs a `SupportsKeyListing` connector other than `monitoring`, else `ConfigError`.
+        Raises as U01-44."""
+        from herness.connectors.reconcile import reconcile_entity  # noqa: PLC0415 - it imports us
+
+        name = self.connector.name
+        if name == "monitoring" or not isinstance(self.connector, SupportsKeyListing):
+            msg = f"{name} is not reconciled"
+            raise ConfigError(msg, source=name)
+        self._prepare(entity)
+        return reconcile_entity(self, entity)
+
+    def _tool_workers(self, tool: str) -> int:
+        """The adapter's `max_concurrency` of a monitoring tool, else the source's."""
+        cfg = self.cfg
+        adapters = cfg.adapters.items() if isinstance(cfg, MonitoringSettings) else ()
+        return next((a.max_concurrency for t, a in adapters if t == tool), cfg.max_concurrency)
 
     def _over_tools(
         self, entity: str, conn: SupportsToolStreams, mode: Mode, run: _StreamRun
@@ -179,7 +245,8 @@ class SyncRunner:
         for tool in conn.tools():
             key = conn.stream_key(tool)
             try:
-                results.append(run(entity, key=key, fetch=partial(conn.sync_tool, tool)))
+                fetch_of, workers = partial(_tool_sync, tool), self._tool_workers(tool)
+                results.append(run(entity, key=key, fetch_of=fetch_of, workers=workers))
             except CircuitOpen as exc:
                 skipped.append(exc)
                 self.skipped_open = (*self.skipped_open, key)
@@ -199,36 +266,42 @@ class SyncRunner:
             raise first
         return _aggregate(source, entity, results)
 
-    def _incremental_stream(self, entity: str, *, key: str, fetch: Fetch) -> SyncResult:
+    def _incremental_stream(
+        self, entity: str, *, key: str, fetch_of: FetchOf, workers: int
+    ) -> SyncResult:
         """Incremental flow for one stream (U01-39); the watermark never moves back."""
         guard(key)
         wm = get_watermark(key, entity)
         now = self.clock()
         if wm is None:
             start = self.cfg.backfill_for(entity).resolve_start(now)
-            return self._backfill_stream(entity, key=key, fetch=fetch, start=start, end=now)
+            run = partial(self._backfill_stream, start=start, end=now)
+            return run(entity, key=key, fetch_of=fetch_of, workers=workers)
         since = wm.value - self.cfg.overlap_for(entity)
         until = now - timedelta(seconds=self.cfg.settle_seconds)
         before = clock.format_utc(wm.value)
         if since >= until:
             name = self.connector.name
             return SyncResult(name, entity, "incremental", 0, 0, 0, (), before, before)
-        out = self._stream(entity, key, fetch, (since, until), "incremental")
+        out = self._stream(entity, key, fetch_of(self.connector), (since, until), "incremental")
         return self._finish(entity, key, "incremental", out, (before, now))
 
     def _backfill_stream(
-        self, entity: str, *, key: str, fetch: Fetch, start: datetime, end: datetime
+        self,
+        entity: str,
+        *,
+        key: str,
+        fetch_of: FetchOf,
+        workers: int,
+        start: datetime,
+        end: datetime,
     ) -> SyncResult:
-        """First sync of a stream: `[start, end)` as one slice; the watermark is set once to
-        `min(max committed, end)`, and only when rows were committed."""
-        # T01-07: replaced by sliced U01-43 (resumable parallel slices over `sync_slice`).
-        started = self.clock()
-        before = _utc(None if (wm := get_watermark(key, entity)) is None else wm.value)
-        out = self._stream(entity, key, fetch, (start, end), "backfill")
-        if out.max_committed is not None:
-            field = self.connector.watermark_field(entity)
-            set_watermark(key, entity, field, min(out.max_committed, end), now=self.clock())
-        return self._finish(entity, key, "backfill", out, (before, started))
+        """Backfill of one stream over `[start, end)` in resumable parallel slices (U01-43)."""
+        from herness.connectors.backfill import run_backfill  # noqa: PLC0415 - it imports us
+
+        return run_backfill(
+            self, entity, start, end, key=key, fetch_of=fetch_of, max_workers=workers
+        )
 
     def _stream(
         self, entity: str, key: str, fetch: Fetch, window: tuple[datetime, datetime], mode: Mode

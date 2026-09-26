@@ -55,6 +55,12 @@ class DeletionFilter:
         return filtered, batch.num_rows - filtered.num_rows
 
     @property
+    def ids(self) -> pa.StringArray:
+        """The loaded deletion set (reconciliation excludes it, U01-44); empty before `reload`."""
+        with self._lock:
+            return pa.array([], pa.string()) if self._ids is None else self._ids
+
+    @property
     def size(self) -> int:
         """Current deletion-set size; 0 before the first `reload`."""
         with self._lock:

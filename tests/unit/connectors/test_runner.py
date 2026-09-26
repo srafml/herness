@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime
 import json
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ import pytest
 from structlog.testing import capture_logs
 from tests.support.fake_lake import FakeLake
 from tests.support.ops_store import OpsStoreHandle
+from tests.unit.connectors._backfill_data import Source, WindowConnector
 from tests.unit.connectors._runner_data import (
     NOW,
     UNTIL,
@@ -25,6 +27,7 @@ from tests.unit.connectors._runner_data import (
 )
 
 import herness.connectors.runner as runner_module
+from herness.connectors.base import split_range
 from herness.connectors.runner import SyncResult, SyncRunner
 from herness.core import time as clock
 from herness.core.errors import CircuitOpen, ConfigError
@@ -195,42 +198,51 @@ def test_ut01_32_no_watermark_calls_backfill_path(
     ops_store: OpsStoreHandle, lake: FakeLake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT01-32 without a watermark the backfill path is called with backfill.start
-    (resolved) and now; the result mode is backfill."""
+    (resolved), now, the stream key and max_concurrency; the result mode is backfill."""
     cfg = servicenow_cfg()
-    seen: list[tuple[str, str, datetime.datetime, datetime.datetime]] = []
+    seen: list[tuple[str, str, int, datetime.datetime, datetime.datetime]] = []
+    fetches: list[object] = []
 
-    def spy(
+    def spy(  # noqa: PLR0913 - mirrors SyncRunner._backfill_stream
         self: SyncRunner,
         entity: str,
         *,
         key: str,
-        fetch: object,
+        fetch_of: Callable[[object], object],
+        workers: int,
         start: datetime.datetime,
         end: datetime.datetime,
     ) -> SyncResult:
-        seen.append((entity, key, start, end))
+        seen.append((entity, key, workers, start, end))
+        fetches.append(fetch_of(self.connector))
         return SyncResult(_SRC, entity, "backfill", 0, 0, 0, (), None, None)
 
     monkeypatch.setattr(SyncRunner, "_backfill_stream", spy)
     conn = FakeConnector()
     result = make_runner(conn, cfg, lake, ops_store.data_root).run_incremental(_ENT)
 
-    assert seen == [(_ENT, _SRC, cfg.backfill_for(_ENT).resolve_start(NOW), NOW)]
+    start = cfg.backfill_for(_ENT).resolve_start(NOW)
+    assert seen == [(_ENT, _SRC, cfg.max_concurrency, start, NOW)]
+    assert fetches == [conn.sync]
     assert result.mode == "backfill"
 
 
-def test_ut01_32_interim_backfill_sets_watermark_once(
+def test_ut01_32_sliced_backfill_sets_watermark_once(
     ops_store: OpsStoreHandle, lake: FakeLake
 ) -> None:
-    """UT01-32 the interim single-slice backfill fetches [backfill.start, now), commits
+    """UT01-32 the first sync backfills [backfill.start, now) in slice_days slices, commits
     without moving the watermark per checkpoint and sets it once to min(max, now)."""
     cfg = servicenow_cfg()
     start = cfg.backfill_for(_ENT).resolve_start(NOW)
-    conn = FakeConnector(steps=[batch(_SRC, _ENT, ["a", "b"], T)])
 
-    result = make_runner(conn, cfg, lake, ops_store.data_root).run_incremental(_ENT)
+    def plan(name: str, since: datetime.datetime, until: datetime.datetime) -> list[object]:
+        return [batch(_SRC, _ENT, ["a", "b"], T)] if since <= T < until else []
 
-    assert conn.calls == [(_ENT, start, NOW)]
+    source = Source(plan=plan)
+    runner = make_runner(WindowConnector(source), cfg, lake, ops_store.data_root)
+    result = runner.run_incremental(_ENT)
+
+    assert source.windows() == split_range(start, NOW, datetime.timedelta(days=7))
     assert result.mode == "backfill"
     assert result.rows == 2
     assert result.watermark_before is None
@@ -238,16 +250,17 @@ def test_ut01_32_interim_backfill_sets_watermark_once(
     assert _wm() == T + datetime.timedelta(seconds=1)
 
 
-def test_ut01_32_interim_backfill_without_rows_leaves_no_watermark(
+def test_ut01_32_backfill_without_rows_sets_watermark_to_end(
     ops_store: OpsStoreHandle, lake: FakeLake
 ) -> None:
-    """UT01-32 an interim backfill that commits no rows sets no watermark."""
+    """UT01-32 a first-sync backfill that commits no rows sets the watermark to `end` (now),
+    so the next run is incremental instead of backfilling again."""
     conn = FakeConnector()
     result = make_runner(conn, servicenow_cfg(), lake, ops_store.data_root).run_incremental(_ENT)
     assert result.mode == "backfill"
     assert result.rows == 0
-    assert result.watermark_after is None
-    assert _wm() is None
+    assert result.watermark_after == clock.format_utc(NOW)
+    assert _wm() == NOW
 
 
 # --- UT01-35: guard and constructor -------------------------------------------------------
