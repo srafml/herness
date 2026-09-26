@@ -7,14 +7,14 @@ is `tools.synth.servicenow.gen_incidents`. Step numbers refer to the U11-07 algo
 import dataclasses
 import math
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
 import numpy as np
 import numpy.typing as npt
 
-from tools.synth.catalog_rows import Catalog, ServiceRow, TeamRow
+from tools.synth.catalog_rows import Catalog, CiRow, ServiceRow, TeamRow
 from tools.synth.params import SynthParams
 from tools.synth.pii import inject_pii
 from tools.synth.servicenow_common import (
@@ -26,6 +26,7 @@ from tools.synth.servicenow_common import (
     new_sys_id,
     number,
     pair,
+    parse_ts,
     ref,
     service_index,
     span_end,
@@ -124,9 +125,12 @@ def _state(t: _Times) -> Pair:
     return pair("7", "Closed") if t.closed is not None else pair("6", "Resolved")
 
 
-def _impact(params: SynthParams, rng: np.random.Generator, priority: int, t: _Times) -> Pair:
-    """Step 8: customer impact minutes on `impact.share` of P1/P2, empty otherwise."""
-    if priority not in _HIGH_PRIORITIES or rng.random() >= params.impact.share:
+def _impact(
+    params: SynthParams, rng: np.random.Generator, priority: int, t: _Times, *, force: bool
+) -> Pair:
+    """Step 8: customer impact minutes on `impact.share` of P1/P2 (on every incident when
+    `force`, for plant clusters), empty otherwise."""
+    if not force and (priority not in _HIGH_PRIORITIES or rng.random() >= params.impact.share):
         return pair("")
     factor = float(rng.uniform(params.impact.min_factor, params.impact.max_factor))
     return pair(str(round(t.duration.total_seconds() / 60.0 * factor)))
@@ -142,6 +146,7 @@ class _Draw:
     times: _Times
     member: bool
     text: RenderedText
+    impact: bool = False  # customer impact on every incident (T2/T2c plant clusters)
 
 
 def _record(
@@ -181,16 +186,16 @@ def _record(
         "caused_by": pair(""),
         "made_sla": pair("false" if t.duration > limit else "true"),
         "business_duration": _duration_pair(t),
-        "u_customer_impact_minutes": _impact(params, rng, d.priority, t),
+        "u_customer_impact_minutes": _impact(params, rng, d.priority, t, force=d.impact),
         "sys_updated_on": updated_on(rng, (t.opened, t.ack, t.resolved, t.closed), end),
     }
 
 
-def _labels(record_id: str, d: _Draw) -> list[dict[str, str]]:
-    """Step 11: one truth label row per question."""
+def _labels(record_id: str, d: _Draw, *, change_caused: bool = False) -> list[dict[str, str]]:
+    """Step 11: one truth label row per question; only T3 plant incidents are change-caused."""
     answers = (
         d.text.root_cause,
-        "false",  # background text is never change-flavored; T3 plants add those
+        "true" if change_caused else "false",
         "true" if d.member else "false",
         str(_IMPACT_LEVEL[d.priority]),
         d.team.sys_id,
@@ -263,4 +268,100 @@ def generate(
     return records, labels, pii
 
 
-__all__ = ["generate", "priority_probs"]
+@dataclasses.dataclass(frozen=True, slots=True)
+class IncidentSpec:
+    """A plant incident's fixed values: service, open time, sequence number, optional CI
+    (else drawn from the service's CIs), change-flavored text (T3), and for plant
+    clusters (T2, T2c) a fixed priority, template family and slot set, repeat-flavored
+    text and customer impact on every incident."""
+
+    service: ServiceRow
+    opened: datetime
+    seq: int
+    ci: CiRow | None = None
+    change_flavored: bool = False
+    priority: int | None = None  # None: drawn from the service's priority mix
+    family: str | None = None
+    slots: Mapping[str, str] | None = None
+    repeat: bool = False
+    customer_impact: bool = False
+
+
+def make_incident(
+    params: SynthParams,
+    rng: np.random.Generator,
+    bank: TemplateBank,
+    index: ServiceIndex,
+    spec: IncidentSpec,
+) -> tuple[Record, list[dict[str, str]]]:
+    """One plant incident drawn like a background one (priority mix, MTTR model of the
+    service's support team, text), with no problem cluster and no PII, unless `spec` fixes
+    them; returns the record and its label rows (`change_caused` true for change-flavored
+    incidents, `repeat_issue` true for `spec.repeat`)."""
+    service, priority = spec.service, spec.priority
+    if priority is None:
+        priority = int(rng.choice(5, p=priority_probs(params, service.criticality))) + 1
+    team = index.support(service)
+    rendered = render_incident_text(
+        bank,
+        rng,
+        family=spec.family,
+        slots=spec.slots,
+        change_flavored=spec.change_flavored,
+        repeat_flavored=spec.repeat,
+        impact_level=_IMPACT_LEVEL[priority],
+        component=service.name,
+        text=params.text,
+    )
+    times = _times(params, rng, priority, team, spec.opened, span_end(params))
+    draw = _Draw(service, team, priority, times, spec.repeat, rendered, spec.customer_impact)
+    record = _record(params, rng, index, draw, spec.seq, rendered.description)
+    if spec.ci is not None:
+        record["cmdb_ci"] = ref(spec.ci.sys_id, spec.ci.name)
+    record_id = f"servicenow:incident:{record['sys_id']['value']}"
+    return record, _labels(record_id, draw, change_caused=spec.change_flavored)
+
+
+def retime(
+    record: Record,
+    params: SynthParams,
+    rng: np.random.Generator,
+    *,
+    opened: datetime,
+    mttr: timedelta | None,
+) -> None:
+    """Move an incident to `opened` and resolve it after `mttr` (`None` keeps it open),
+    keeping its acknowledgement offset and close lag. Recomputes state, `made_sla`,
+    `business_duration`, impact minutes (same factor of the duration), close fields and
+    `sys_updated_on` (one `rng` draw); a resolution after the span end leaves it open."""
+    end = span_end(params)
+    old_opened = parse_ts(record["opened_at"]) or opened
+    ack, resolved, closed = (
+        parse_ts(record[f]) for f in ("u_acknowledged_at", "resolved_at", "closed_at")
+    )
+    old_duration = ((resolved or end) - old_opened).total_seconds()
+    new_resolved = opened + mttr if mttr is not None and opened + mttr <= end else None
+    new_closed = None
+    if new_resolved is not None and resolved is not None and closed is not None:
+        new_closed = new_resolved + (closed - resolved)
+        new_closed = new_closed if new_closed <= end else None
+    new_ack = None if ack is None else opened + (ack - old_opened)
+    if new_ack is not None and new_resolved is not None:
+        new_ack = min(new_ack, new_resolved)
+    new_ack = new_ack if new_ack is not None and new_ack <= end else None
+    t = _Times(opened, new_ack, new_resolved, new_closed, (new_resolved or end) - opened)
+    limit = timedelta(hours=params.sla.limit_hours[int(record["priority"]["value"])])
+    record["opened_at"], record["u_acknowledged_at"] = ts_pair(opened), ts_pair(new_ack)
+    record["resolved_at"], record["closed_at"] = ts_pair(new_resolved), ts_pair(new_closed)
+    record["state"], record["business_duration"] = _state(t), _duration_pair(t)
+    record["made_sla"] = pair("false" if t.duration > limit else "true")
+    if new_resolved is None:
+        record["close_notes"], record["close_code"] = pair(""), pair("")
+    impact = record["u_customer_impact_minutes"]["value"]
+    if impact and old_duration > 0:
+        scaled = int(impact) * t.duration.total_seconds() / old_duration
+        record["u_customer_impact_minutes"] = pair(str(round(scaled)))
+    record["sys_updated_on"] = updated_on(rng, (opened, new_ack, new_resolved, new_closed), end)
+
+
+__all__ = ["IncidentSpec", "generate", "make_incident", "priority_probs", "retime"]

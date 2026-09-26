@@ -226,6 +226,13 @@ def _mention_params(params: SynthParams) -> SynthParams:
     return params.model_copy(update=update)
 
 
+def _planned(cat: Catalog, entity: str) -> int:
+    """Planned ServiceNow records of `entity`: preset background plus plant records."""
+    return sum(
+        n for (src, ent, _), n in cat.month_counts.items() if (src, ent) == ("servicenow", entity)
+    )
+
+
 def test_ut11_11_mentions_from_same_service_index(
     cat: Catalog, params: SynthParams, bank: TemplateBank, names: tuple[tuple[str, str], ...]
 ) -> None:
@@ -245,7 +252,7 @@ def test_ut11_11_mentions_from_same_service_index(
         where["remote" if issue["remotelinks"] else "text"] += 1
         kind, seq = found[0]
         if kind == "CHG":
-            assert 1 <= seq <= 250
+            assert 1 <= seq <= _planned(cat, "change_request")
             continue
         k, j = divmod(seq - 8_000_000, 1000)
         assert k == position[issue["fields"]["components"][0]["name"]]
@@ -268,8 +275,8 @@ def test_ut11_11_mentions_without_index_use_planned_ranges(
     found = [t for i in out.records for t in _tickets(i)]
     assert {k for k, _ in found} == {"INC", "CHG"}
     assert len(found) > 250
-    assert all(1 <= s <= 1200 for k, s in found if k == "INC")
-    assert all(1 <= s <= 250 for k, s in found if k == "CHG")
+    assert all(1 <= s <= _planned(cat, "incident") for k, s in found if k == "INC")
+    assert all(1 <= s <= _planned(cat, "change_request") for k, s in found if k == "CHG")
 
 
 def test_ut11_11_mention_rate_default(batch: IssueBatch) -> None:

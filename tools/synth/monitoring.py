@@ -18,7 +18,7 @@ import numpy.typing as npt
 
 from tools.synth.catalog_rows import Catalog, ServiceRow
 from tools.synth.params import SynthParams, SynthUsageError
-from tools.synth.servicenow_common import _day_weight, _shard_days, arrival_times, span_end
+from tools.synth.servicenow_common import arrival_times, day_weight, shard_days, span_end
 from tools.synth.shards import IncidentTimeIndex, Shard
 from tools.synth.text_vocab import SYMPTOMS
 
@@ -26,7 +26,7 @@ Row = dict[str, object]
 
 SOURCE: Final = "monitoring"
 TOOLS: Final = ("prometheus", "datadog", "splunk")
-_EVENT_KEY_FORMATS: Final = {"prometheus": "{:016x}", "datadog": "{}", "splunk": "evt-{:010d}"}
+EVENT_KEY_FORMATS: Final = {"prometheus": "{:016x}", "datadog": "{}", "splunk": "evt-{:010d}"}
 _NEAR_S: Final = 30 * 60  # near-incident window: +/- 30 min
 _DURATION_MEDIAN_MIN: Final = 20.0
 _DURATION_SIGMA: Final = 0.8  # the spec gives only the median
@@ -51,11 +51,19 @@ def _check_shard(shard: Shard, entity: str) -> None:
         raise SynthUsageError(msg, key="shard")
 
 
-def _iso(at: datetime) -> str:
+def iso_ts(at: datetime) -> str:
     return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _hosts(cat: Catalog) -> dict[str, tuple[str, ...]]:
+def event_end(rng: np.random.Generator, at: datetime, end: datetime) -> tuple[str, str | None]:
+    """(`status`, `end_ts`): the event lasts log-normal(median 20 min); one ending after the
+    span `end` is still firing."""
+    minutes = float(rng.lognormal(math.log(_DURATION_MEDIAN_MIN), _DURATION_SIGMA))
+    stop = at + timedelta(minutes=minutes)
+    return ("resolved", iso_ts(stop)) if stop <= end else ("firing", None)
+
+
+def service_hosts(cat: Catalog) -> dict[str, tuple[str, ...]]:
     """Server CI names per service sys_id; a service without servers uses its own name."""
     out: dict[str, list[str]] = {s.sys_id: [] for s in cat.services}
     for ci in cat.cis:
@@ -107,24 +115,22 @@ def _event(
     ref = None
     if severity != "info":
         at, ref = _placement(params, rng, index, service, at)
-    minutes = float(rng.lognormal(math.log(_DURATION_MEDIAN_MIN), _DURATION_SIGMA))
-    stop = at + timedelta(minutes=minutes)
-    resolved = stop <= end
+    status, end_ts = event_end(rng, at, end)
     symptom = SYMPTOMS[int(rng.integers(len(SYMPTOMS)))]
     title = f"{symptom[:1].upper()}{symptom[1:]} on {service.name}"
     dedup = hashlib.sha256(f"{tool}\x1f{service.name}\x1f{title}".encode()).hexdigest()[:16]
-    event_key = _EVENT_KEY_FORMATS[tool].format(seq)
+    event_key = EVENT_KEY_FORMATS[tool].format(seq)
     return {
         "source_tool": tool,
         "event_key": event_key,
-        "ts": _iso(at),
+        "ts": iso_ts(at),
         "service": service.name,
         "host": hosts[int(rng.integers(len(hosts)))],
         "severity_raw": severity,
         "title": title,
-        "status": "resolved" if resolved else "firing",
+        "status": status,
         "dedup_key": dedup,
-        "end_ts": _iso(stop) if resolved else None,
+        "end_ts": end_ts,
         "incident_ref": ref,
         "_source_key": f"{tool}:{event_key}",
     }
@@ -156,7 +162,7 @@ def gen_events(
     tools = rng.integers(len(TOOLS), size=n)
     levels = sorted(params.event.severities)
     severities = rng.choice(len(levels), size=n, p=[params.event.severities[s] for s in levels])
-    hosts, end = _hosts(cat), span_end(params)
+    hosts, end = service_hosts(cat), span_end(params)
     rows = []
     for i, at in enumerate(times):
         service = services[int(picks[i])]
@@ -178,7 +184,7 @@ def _day_values(
         "error_rate": float(rng.uniform(*_ERROR_RATE)),
         "p95_latency_ms": float(rng.lognormal(math.log(_P95_MEDIAN_MS), _P95_SIGMA)),
         "request_count": float(
-            round(_REQUESTS_BASE * share * _day_weight(params.arrival, day) * jitter)
+            round(_REQUESTS_BASE * share * day_weight(params.arrival, day) * jitter)
         ),
     }
 
@@ -202,7 +208,7 @@ def gen_metric_daily(
     for k, service in enumerate(cat.services[: params.preset.metric_services]):
         tool = TOOLS[k % len(TOOLS)]
         share = service.event_weight / total if total > 0 else 0.0
-        for day in _shard_days(params, shard.month):
+        for day in shard_days(params, shard.month):
             p1 = (service.sys_id, day) in p1_days
             for name, value in _day_values(params, rng, share, day, p1).items():
                 rows.append({
@@ -217,4 +223,12 @@ def gen_metric_daily(
     return rows
 
 
-__all__ = ["TOOLS", "gen_events", "gen_metric_daily"]
+__all__ = [
+    "EVENT_KEY_FORMATS",
+    "TOOLS",
+    "event_end",
+    "gen_events",
+    "gen_metric_daily",
+    "iso_ts",
+    "service_hosts",
+]

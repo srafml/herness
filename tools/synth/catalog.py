@@ -29,6 +29,13 @@ from tools.synth.catalog_rows import (
     TeamRow,
 )
 from tools.synth.params import SynthParams, SynthUsageError
+from tools.synth.plants_delivery import planned_counts_t2, planned_counts_t2c, planned_counts_t6
+from tools.synth.plants_ops import (
+    planned_counts_t1,
+    planned_counts_t3,
+    planned_counts_t4,
+    planned_counts_t5,
+)
 from tools.synth.rng import STREAM_CATALOG, STREAM_PLANTS, stream_rng
 
 Floats = npt.NDArray[np.float64]
@@ -41,6 +48,7 @@ _SHARE_TOLERANCE: Final = 0.02  # top-5 % share accepted in target +/- this
 _T6_SHARE: Final = {"full": 0.015, "small": 0.05, "tiny": 0.05}
 _T6_MIN_PEERS: Final = 5
 _T3_CHANGES: Final = 40  # emergency and, again, normal (control) changes on C3
+_T3_CAUSED_SHARE: Final = 0.3  # follow-up incidents whose caused_by names the change
 
 
 @dataclasses.dataclass(slots=True)
@@ -301,12 +309,20 @@ def _change_schedule(seed: int, params: SynthParams) -> tuple[ChangeSlot, ...]:
             at = first + timedelta(seconds=int(offset))
             slots.append((at, _hex_id(rng), emergency, int(k)))
     slots.sort()
-    return tuple(ChangeSlot(sid, i, at, em, k) for i, (at, sid, em, k) in enumerate(slots))
+    total = sum(k for *_, k in slots)  # the caused_by subset, drawn once by index (U11-12)
+    flags = np.zeros(total, dtype=bool)
+    flags[rng.choice(total, size=round(_T3_CAUSED_SHARE * total), replace=False)] = True
+    ends = np.cumsum([k for *_, k in slots])
+    return tuple(
+        ChangeSlot(sid, i, at, em, k, tuple(bool(f) for f in flags[stop - k : stop]))
+        for i, ((at, sid, em, k), stop) in enumerate(zip(slots, ends, strict=True))
+    )
 
 
 def default_planners() -> tuple[Planner, ...]:
-    """`planned_counts` of the plant units U11-10..U11-15; they land with T11-10..T11-15."""
-    return ()
+    """`planned_counts` of the plant units U11-10..U11-15, in plant-numbering order."""
+    ops = (planned_counts_t1, planned_counts_t3, planned_counts_t4, planned_counts_t5)
+    return (*ops, planned_counts_t2, planned_counts_t2c, planned_counts_t6)
 
 
 def build_catalog(

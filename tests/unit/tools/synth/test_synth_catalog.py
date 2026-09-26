@@ -12,8 +12,10 @@ import pytest
 import yaml
 
 from tools.synth.catalog import Catalog, build_catalog
+from tools.synth.catalog_plan import background_count, planner_id
 from tools.synth.catalog_rows import MonthKey, ServiceRow
 from tools.synth.params import SynthParams, SynthUsageError, load_params
+from tools.synth.plants_delivery import planned_counts_t6
 
 pytestmark = pytest.mark.unit
 
@@ -260,8 +262,10 @@ def test_ut11_05_change_schedule_has_the_t3_changes(small: Catalog) -> None:
     assert all(first <= s.work_end <= datetime(2026, 8, 31, 22, tzinfo=UTC) for s in slots)
 
 
-def test_ut11_05_month_counts_split_preset_totals(small: Catalog, tiny: Catalog) -> None:
+def test_ut11_05_month_counts_split_preset_totals() -> None:
     """UT11-05 month counts split each preset total by days; seq_start is the prefix sum."""
+    small = build_catalog(42, _load("small"), planners=())  # background plan only
+    tiny = build_catalog(42, _load("tiny"), planners=())
     totals: dict[tuple[str, str], int] = {}
     for (source, entity, month), count in small.month_counts.items():
         assert month.day == 1
@@ -282,6 +286,31 @@ def test_ut11_05_month_counts_split_preset_totals(small: Catalog, tiny: Catalog)
     assert july == 1 + tiny.month_counts["servicenow", "incident", date(2026, 6, 1)]
 
 
+def test_ut11_05_default_planners_add_plant_records(small: Catalog) -> None:
+    """UT11-05 the default plan adds the T3 changes and follow-ups, 7 % S4 events, the
+    T5 peak-day incidents, the T2/T2c clusters and four epics (E2, E2d, E6p, E6u) to the
+    background totals and removes 40 % of S6p's expected post-effect incidents (T6);
+    plant ranges close each month."""
+    totals: dict[tuple[str, str], int] = {}
+    for (source, entity, _), count in small.month_counts.items():
+        totals[source, entity] = totals.get((source, entity), 0) + count
+    follow_ups = sum(s.follow_up_incidents for s in small.change_schedule)
+    assert totals["servicenow", "change_request"] == 10_000 + 80
+    assert totals["monitoring", "event"] == 40_000 + 2_800
+    clusters = round(0.03 * 100_000) + round(10 * ((_END - _START).days + 1) / 30)
+    params = _load("small")
+    thinned = planned_counts_t6(build_catalog(42, params, planners=()), params)
+    t6 = sum(n for key, n in thinned.items() if key[1] == "incident")
+    assert -0.4 * 100_000 < t6 < 0  # 40 % of S6p's expected post-effect incidents
+    t5 = totals["servicenow", "incident"] - 100_000 - follow_ups - clusters - t6
+    assert 0 < t5 < 100_000  # three peak windows of S5 extras
+    assert totals["jira", "issue"] == 4_000 + 4
+    for (pid, key), (first, n) in small.plant_seq.items():
+        assert pid.startswith(("tools.synth.plants_ops", "tools.synth.plants_delivery"))
+        assert small.seq_start[key] <= first
+        assert first + n <= small.seq_start[key] + small.month_counts[key]
+
+
 def test_ut11_05_month_counts_follow_selected_sources() -> None:
     """UT11-05 only selected sources get a month plan."""
     cat = build_catalog(42, _load("tiny", sources=("jira",)))
@@ -291,7 +320,7 @@ def test_ut11_05_month_counts_follow_selected_sources() -> None:
 def test_ut11_05_planned_plant_counts_are_added() -> None:
     """UT11-05 planners (U11-10..U11-15 `planned_counts`) add records before seq_start."""
     params = _load("tiny")
-    base = build_catalog(42, params)
+    base = build_catalog(42, params, planners=())
     june = date(2026, 6, 1)
 
     def planner(stub: Catalog, p: SynthParams) -> Mapping[MonthKey, int]:
@@ -305,6 +334,9 @@ def test_ut11_05_planned_plant_counts_are_added() -> None:
     assert cat.month_counts["monitoring", "unknown", june] == 3
     july = ("servicenow", "incident", date(2026, 7, 1))
     assert cat.seq_start[july] == base.seq_start[july] + 5
+    after_background = base.seq_start[key] + base.month_counts[key]
+    assert cat.plant_seq[planner_id(planner), key] == (after_background, 5)
+    assert background_count(cat, key) == base.month_counts[key]
 
     def negative(stub: Catalog, p: SynthParams) -> Mapping[MonthKey, int]:
         return {key: -10_000}

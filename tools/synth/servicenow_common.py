@@ -47,6 +47,12 @@ def ts_pair(at: datetime | None) -> Pair:
     return pair("" if at is None else at.astimezone(UTC).strftime(_TS_FORMAT))
 
 
+def parse_ts(value: Pair) -> datetime | None:
+    """Inverse of `ts_pair`: the UTC time of a timestamp pair, `None` when empty."""
+    text = value["value"]
+    return datetime.strptime(text, _TS_FORMAT).replace(tzinfo=UTC) if text else None
+
+
 def stable_id(kind: str, name: str) -> str:
     """32-hex reference id for a record this generator does not write (user, rel type)."""
     return hashlib.sha256(f"{kind}:{name}".encode()).hexdigest()[:32]
@@ -83,13 +89,13 @@ def updated_on(rng: np.random.Generator, stamps: Sequence[datetime | None], end:
     return ts_pair(latest + timedelta(seconds=float(rng.uniform(0.0, _UPDATE_LAG_S))))
 
 
-def _shard_days(params: SynthParams, month: date) -> list[date]:
+def shard_days(params: SynthParams, month: date) -> list[date]:
     last = month.replace(day=calendar.monthrange(month.year, month.month)[1])
     first, last = max(month, params.start), min(last, params.end)
     return [first + timedelta(days=k) for k in range((last - first).days + 1)]
 
 
-def _day_weight(arrival: ArrivalParams, day: date) -> float:
+def day_weight(arrival: ArrivalParams, day: date) -> float:
     weekday = day.weekday()
     weight = {_SATURDAY: arrival.saturday_factor, _SUNDAY: arrival.sunday_factor}.get(weekday, 1.0)
     if day.strftime("%m-%d") in arrival.holidays:
@@ -101,20 +107,26 @@ def _day_weight(arrival: ArrivalParams, day: date) -> float:
 
 
 def arrival_times(
-    params: SynthParams, shard: Shard, rng: np.random.Generator, n: int
+    params: SynthParams,
+    shard: Shard,
+    rng: np.random.Generator,
+    n: int,
+    *,
+    days: Sequence[date] | None = None,
 ) -> list[datetime]:
     """`n` sorted UTC times: weighted day of the shard month, hour curve in
     `business_timezone`, then uniform minute, second and microsecond (U11-07 step 1).
 
     Every time lies in the shard's UTC days (shard month within the span), so no record
-    opens after the span end and durations are never negative."""
-    days = _shard_days(params, shard.month)
+    opens after the span end and durations are never negative. `days` (contiguous, inside
+    the shard month) restricts the candidate days, for example to T5 peak days."""
+    days = shard_days(params, shard.month) if days is None else list(days)
     if n and not days:
         msg = "shard month lies outside the generated span"
         raise SynthUsageError(msg, key="shard")
     if not n:
         return []
-    weights = np.array([_day_weight(params.arrival, d) for d in days])
+    weights = np.array([day_weight(params.arrival, d) for d in days])
     curve = np.array(params.arrival.hour_curve)
     picks = rng.choice(len(days), size=n, p=weights / weights.sum())
     hours = rng.choice(24, size=n, p=curve / curve.sum())
@@ -208,11 +220,14 @@ __all__ = [
     "arrival_times",
     "check_shard",
     "cluster",
+    "day_weight",
     "new_sys_id",
     "number",
     "pair",
+    "parse_ts",
     "ref",
     "service_index",
+    "shard_days",
     "span_end",
     "span_start",
     "stable_id",
