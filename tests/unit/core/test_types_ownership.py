@@ -92,6 +92,17 @@ EXPECTED = {
         "ReportDraft",
         "ChatAnswer",
         "ChatEvent",
+        # U06-21 ChatEvent members and adapter, appended by T06-02 (U00-45 invariant)
+        "ModeEvent",
+        "TokenEvent",
+        "ToolEvent",
+        "EvidenceEvent",
+        "VerificationEvent",
+        "EscalatedEvent",
+        "FinalEvent",
+        "ErrorEvent",
+        "CorrectionCapturedEvent",
+        "CHAT_EVENT_ADAPTER",
     },
     "07": {
         "Layer",
