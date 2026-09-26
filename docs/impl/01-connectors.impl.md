@@ -72,6 +72,7 @@ Default layer imports per ENG §2.1: L2 may import L0 (`herness.core.*`) and L1 
 | `herness/connectors/deletion.py` | In-memory deletion set and batch filter | `DeletionFilter` | L2 | `pyarrow` | 90 |
 | `herness/connectors/lakefiles.py` | Orphan temp cleanup and per-writer schema tracking | `cleanup_orphan_temp_files`, `SchemaTracker`, `SchemaDrift` | L2 | `pyarrow` | 160 |
 | `herness/connectors/runner.py` | `SyncRunner` and `SyncResult`; incremental flow and the shared write loop | `SyncRunner`, `SyncResult` | L2 | `pyarrow` | 390 |
+| `herness/connectors/_write_loop.py` | Private sibling of `runner.py` holding the U01-40 write-loop state (`WriteLoop`, `StreamSpec`, `StreamOutcome`, `metric`); `SyncRunner._write_stream` is its only caller. Build note T01-06: split out so `runner.py` stays inside 390 lines with room for T01-07, T01-08 and T01-10 | — (private; `StreamOutcome` re-exported by `runner.py`) | L2 | `pyarrow` | 200 |
 | `herness/connectors/backfill.py` | Slice planning and parallel slice execution | `run_backfill` | L2 | — | 260 |
 | `herness/connectors/reconcile.py` | Key reconciliation with DuckDB anti-join and safety valve | `reconcile_entity`, `find_missing_keys` | L2 | `duckdb`, `pyarrow` | 260 |
 | `herness/connectors/files.py` | Files connector: inbox listing, fingerprint, DuckDB readers | `FilesConnector`, `InboxFile`, `InboxFileChanged`, `fingerprint_file`, `MAX_INBOX_FILE_BYTES` | L2 | `duckdb`, `pyarrow` | 360 |
