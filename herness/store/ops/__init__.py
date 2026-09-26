@@ -9,7 +9,7 @@ connection.
 """
 
 # 02 core
-from .core import (
+from .core import (  # noqa: I001 - block order of impl 02 §2.3 rule 5, not alphabetical
     OPS_JSON_MAX_BYTES,
     connection,
     dump_json,
@@ -30,6 +30,15 @@ from .migrate import (
     schema_version,
 )
 
+# 05 evidence
+from .evidence import (
+    finding_statuses,
+    get_evidence,
+    record_evidence,
+    record_evidence_use,
+    scrub_record_from_evidence,
+)
+
 __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     # 02 core
     "connection",
@@ -47,4 +56,10 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "schema_version",
     "ops_health",
     "MigrationReport",
+    # 05 evidence
+    "record_evidence",
+    "record_evidence_use",
+    "get_evidence",
+    "finding_statuses",
+    "scrub_record_from_evidence",
 ]
