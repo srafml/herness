@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Final, NamedTuple, TypedDict
+from typing import Any, Final, NamedTuple, NotRequired, TypedDict
 
 import duckdb
 from pydantic import TypeAdapter, ValidationError
@@ -162,8 +162,7 @@ class Ctx:
         return self.cell(format_value(number(value), fmt), query_ids, title)
 
 
-def plain(value: object) -> Cell:
-    """An unlinked text cell."""
+def plain(value: object) -> Cell:  # an unlinked text cell
     return Cell("" if value is None else str(value), None, "")
 
 
@@ -275,25 +274,36 @@ def org_table(ctx: Ctx, entity_type: str) -> Table:
 # fmt: off
 _Row = TypedDict("_Row", {  # noqa: UP013 - unknown extra keys are ignored
     "candidate_id": str, "selected": bool, "order_rank": int | None,
-    "expected_impact_usd": Decimal, "query_ids": list[str]})
+    "expected_impact_usd": Decimal, "query_ids": NotRequired[list[str]]})
 _Named = TypedDict("_Named", {"name": str})  # noqa: UP013 - scenario given as an object
-_Custom = TypedDict("_Custom", {  # noqa: UP013 - one draft portfolio_custom entry
-    "scenario": str | _Named, "budget_usd": Decimal, "solver_status": str, "rows": list[_Row]})
+_Custom = TypedDict("_Custom", {  # noqa: UP013 - an impl 04 PortfolioResult (JSON)
+    "scenario": str | _Named, "budget_usd": Decimal, "solver_status": str, "rows": list[_Row],
+    "query_ids": NotRequired[list[str]]})
 # fmt: on
 _CUSTOM: Final = TypeAdapter(_Custom)
 
 
-def _custom(index: int, raw: Mapping[str, object]) -> _Custom:
-    """Validate ``portfolio_custom[index]``; the first bad key → ReportContractError."""
+def _bad(index: int, path: str) -> ReportContractError:
+    where = f"portfolio_custom[{index}]{path}"
+    msg = f"{where} is missing or invalid"
+    return ReportContractError(msg, details={"code": "draft_invalid", "where": where})
+
+
+def _custom(index: int, raw: Mapping[str, object]) -> tuple[_Custom, list[tuple[_Row, list[str]]]]:
+    """Entry ``index`` and its rows by order_rank, each with its ids (own, else the entry's)."""
     try:
-        return _CUSTOM.validate_python(raw)
+        spec = _CUSTOM.validate_python(raw)
     except ValidationError as exc:
         loc = exc.errors()[0]["loc"]
         loc = loc[:1] if loc[0] == "scenario" else loc  # drop the union branch name
         path = "".join(f"[{p}]" if isinstance(p, int) else f".{p}" for p in loc)
-        where = f"portfolio_custom[{index}]{path}"
-        msg = f"{where} is missing or invalid"
-        raise ReportContractError(msg, details={"code": "draft_invalid", "where": where}) from None
+        raise _bad(index, path) from None
+    entry = spec.get("query_ids", [])
+    rows = sorted(spec["rows"], key=lambda r: (r["order_rank"] is None, r["order_rank"] or 0))
+    pairs = [(row, row.get("query_ids") or entry) for row in rows]
+    if not (entry or (pairs and all(ids for _, ids in pairs))):
+        raise _bad(index, ".query_ids")
+    return spec, pairs
 
 
 def _block(ctx: Ctx, head: tuple[str, object, str, bool], rows: Sequence[Row]) -> PortfolioBlock:
@@ -317,16 +327,16 @@ def portfolio_blocks(ctx: Ctx, customs: Sequence[Mapping[str, object]]) -> list[
     """Draft custom scenarios first (every row query id registered), then ``score.portfolio``."""
     blocks: list[PortfolioBlock] = []
     for index, raw in enumerate(customs):
-        spec = _custom(index, raw)
-        chosen = sorted((r for r in spec["rows"] if r["selected"]), key=_custom_order)
-        ids = [r["candidate_id"] for r in chosen]
+        spec, pairs = _custom(index, raw)
+        chosen = [pair for pair in pairs if pair[0]["selected"]]
+        ids = [r["candidate_id"] for r, _ in chosen]
         effort = {str(c): e for c, e in ctx.rows(_EFFORT_SQL, {"ids": ids})} if ids else {}
-        rows = [(r["candidate_id"], r["order_rank"], r["expected_impact_usd"], r["query_ids"],
-                 effort.get(r["candidate_id"])) for r in chosen]  # fmt: skip
+        rows = [(r["candidate_id"], r["order_rank"], r["expected_impact_usd"], qids,
+                 effort.get(r["candidate_id"])) for r, qids in chosen]  # fmt: skip
         name = spec["scenario"] if isinstance(spec["scenario"], str) else spec["scenario"]["name"]
         blocks.append(_block(ctx, (name, spec["budget_usd"], spec["solver_status"], True), rows))
-        for qid in (q for r in chosen for q in r["query_ids"][1:]):
-            ctx.collector.use(qid, ctx.place)
+        for qid in (*spec.get("query_ids", []), *(q for _, qids in pairs for q in qids)):
+            ctx.collector.use(qid, ctx.place)  # every id of the entry and of every row
     selected = ctx.rows(_SELECTED_SQL)
     for scenario, budget, status in ctx.rows(_SCENARIOS_SQL):
         rows = [row[1:] for row in selected if row[0] == scenario]
@@ -334,12 +344,7 @@ def portfolio_blocks(ctx: Ctx, customs: Sequence[Mapping[str, object]]) -> list[
     return blocks
 
 
-def _custom_order(row: _Row) -> tuple[bool, int, str]:
-    return (row["order_rank"] is None, row["order_rank"] or 0, row["candidate_id"])
-
-
 def top_teams(ctx: Ctx) -> list[tuple[str, str]]:
-    """The top ``top_n`` teams of ``score.org`` by rank."""
     return [("team", str(row[0])) for row in ctx.rows(_TOP_TEAMS_SQL, {"n": ctx.top_n})]
 
 

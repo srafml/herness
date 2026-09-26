@@ -283,8 +283,9 @@ def _outcome_row(ctx: Ctx, row: ops.UiOutcomeRow) -> list[Cell]:
 def _caveats(ctx: Ctx, draft: ReportDraft, dq: Table, unconfirmed: Sequence[str]) -> Caveats:
     ctx.place = "risks_and_caveats"
     blocks = [ctx.block(f"caveats[{c}]", text) for c, text in enumerate(draft.caveats)]
-    dead = [(t["role"], t["objective"], slots.redacted((t["last_error"] or "").split("\n")[0][
-        :_ERROR_MAX])) for t in draft.dead_tasks]  # fmt: skip
+    firsts = [next(iter((t["last_error"] or "").splitlines()), "") for t in draft.dead_tasks]
+    dead = [(t["role"], t["objective"], slots.redacted(first[:_ERROR_MAX]))
+            for t, first in zip(draft.dead_tasks, firsts, strict=True)]  # fmt: skip
     removed = [(item["where"], item["reason"]) for item in draft.removed]
     return Caveats(dq, slots.unmapped_share(ctx), list(unconfirmed), dead, list(draft.contested),
                    removed, dict(draft.flags), blocks)  # fmt: skip

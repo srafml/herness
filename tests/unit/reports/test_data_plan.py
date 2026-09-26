@@ -252,7 +252,7 @@ def _full_draft(**overrides: Any) -> Any:
             "task_id": "tsk_9",
             "role": "analyst",
             "objective": "dig",
-            "last_error": f"boom for {_EMAIL}\nsecond line",
+            "last_error": f"boom for {_EMAIL}\r\nsecond line",
         },
         {"task_id": "tsk_8", "role": "skeptic", "objective": "check", "last_error": None},
     ]
@@ -282,7 +282,9 @@ def test_ut09_79_collector_order(ops_store: object, wh: duckdb.DuckDBPyConnectio
         QC,  # slot 3 text block
         QD, QE, QF,  # card rec-1: headline, summary, then score.funding extras
         QG,  # funding table (epic-1 uses QF again, epic-2 QG)
-        QH, QI, QJ,  # slot 4: custom block rows (all ids), then score.portfolio
+        QH, QI,  # slot 4: custom block cells (selected rows' first ids) ...
+        _q(0xD1),  # ... then every id of every row, unselected epic-3 included
+        QJ,  # score.portfolio
         QK, _q(0xE1),  # slot 5: top teams t1, t2 (no scorecard entity in ranked_entities)
         QL,  # slot 6 levers
         _q(0xC1), QM,  # slot 7: prior rec summary number, outcome row
@@ -290,7 +292,13 @@ def test_ut09_79_collector_order(ops_store: object, wh: duckdb.DuckDBPyConnectio
     ]  # fmt: skip
     assert collector.used_by(QF) == ["rec-1", "funding_table"]
     assert collector.used_by(QN) == ["query_ids[1]"]
-    assert data.numbers_total == len(data.number_query_ids)
+    # linked numbers: slot 2 (1), slot 3 text (1; the uncited-free "99" is not a number),
+    # card text (2) + extras (4), funding table (epic-1: 4; epic-2: wsjf, effort = 2; its None
+    # priority/confidence show "—" unlinked), custom block (2), score.portfolio (1),
+    # scorecards (t1 composite: size, composite, rank = 3; t1 mttr 6; t2 mttr 6), lever (1),
+    # retro (summary number 1 + baseline, actual, delta 3)
+    assert data.numbers_total == 37
+    assert len(data.number_query_ids) == 37
     assert set(data.number_query_ids) <= set(collector.ordered_ids())
 
 
@@ -308,6 +316,7 @@ def test_ut09_79_titles_and_last_error_redacted(ops_store: object, wh: duckdb.Du
     assert _EMAIL not in error
     assert error.startswith("boom for ")
     assert "second line" not in error
+    assert not error.endswith("\r")  # CRLF errors: first line without the carriage return
     assert data.caveats.dead_tasks[1] == ("skeptic", "check", "")
 
 
@@ -502,8 +511,11 @@ def test_ut09_79_bad_prior_summary_stays_text(ops_store: object, wh: duckdb.Duck
         ({"budget_usd": None}, "portfolio_custom[0].budget_usd"),
         ({"scenario": 5}, "portfolio_custom[0].scenario"),
         ({"rows": [{"candidate_id": "c"}]}, "portfolio_custom[0].rows[0].selected"),
+        ({"rows": [{"candidate_id": "c", "selected": True, "order_rank": 1,
+                    "expected_impact_usd": "1"}]}, "portfolio_custom[0].query_ids"),
+        ({"rows": []}, "portfolio_custom[0].query_ids"),
     ],
-)
+)  # fmt: skip
 def test_ut09_79_malformed_portfolio_custom(ops_store: object, wh: duckdb.DuckDBPyConnection,
                                             redactor: r.Redactor, custom: dict[str, Any],
                                             where: str) -> None:  # fmt: skip
@@ -512,6 +524,31 @@ def test_ut09_79_malformed_portfolio_custom(ops_store: object, wh: duckdb.DuckDB
     with pytest.raises(ReportContractError) as info:
         _load(_seed_ops(), _full_draft(portfolio_custom=[raw]), wh)
     assert info.value.details["where"] == where
+
+
+def test_ut09_79_portfolio_result_shaped_custom(ops_store: object, wh: duckdb.DuckDBPyConnection,
+                                                redactor: r.Redactor) -> None:  # fmt: skip
+    """UT09-79 a PortfolioResult-shaped entry (impl 04 U04-77: ids on the result, none on the
+    rows) links its cells to the entry's first id and registers every entry id."""
+    result = {
+        "scenario": "budget 900", "budget_usd": "900", "solver_status": "FEASIBLE",
+        "rows": [
+            {"candidate_id": "epic-1", "selected": True, "order_rank": 1,
+             "expected_impact_usd": "700", "flags": []},
+            {"candidate_id": "epic-2", "selected": False, "order_rank": None,
+             "expected_impact_usd": "50", "flags": ["over_budget"]},
+        ],
+        "selected": ["epic-1"], "total_effort_usd": "1000", "total_expected_impact_usd": "700",
+        "binding_constraints": ["budget"], "query_ids": [QH, QI], "flags": [],
+    }  # fmt: skip
+    data, collector = _load(_seed_ops(), _full_draft(portfolio_custom=[result]), wh)
+    block = data.portfolio_blocks[0]
+    assert (block.scenario, block.custom, block.solver_status) == ("budget 900", True, "FEASIBLE")
+    assert [[c.text for c in row[:2]] for row in block.table.rows] == [["1", "epic-1"]]
+    assert block.table.rows[0][2].query_id == QH
+    ids = collector.ordered_ids()
+    assert ids.index(QH) < ids.index(QI) < ids.index(QJ)
+    assert collector.used_by(QI) == ["portfolio: budget 900"]
 
 
 def test_ut09_79_duckdb_error_is_query_error(ops_store: object, redactor: r.Redactor) -> None:
