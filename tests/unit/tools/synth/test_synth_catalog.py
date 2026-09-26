@@ -92,9 +92,10 @@ def test_ut11_05_top_five_percent_share_is_calibrated(
 def test_ut11_05_small_and_full_catalogs_equal(small: Catalog, full: Catalog) -> None:
     """UT11-05 small and full catalogs are equal apart from volume-dependent fields.
 
-    The only differences allowed are the month plan (preset totals differ) and the S6p/S6u
-    incident weights, which carry 5 % of background incidents at small and 1.5 % at full
-    (U11-04 step 9); the calibration exponent follows from those overrides.
+    Allowed differences: the month plan (preset totals differ) and incident weights. S6p and
+    S6u carry 5 % of background incidents at small and 1.5 % at full (U11-04 step 9), and the
+    calibration exponent follows from that; every other weight is the same base weight raised
+    to that exponent (T1 weights are then clamped to the median band).
     """
     for name in ("orgs", "teams", "cis", "rels", "projects", "change_schedule", "plants"):
         assert getattr(small, name) == getattr(full, name), name
@@ -102,6 +103,56 @@ def test_ut11_05_small_and_full_catalogs_equal(small: Catalog, full: Catalog) ->
     assert [dataclasses.replace(s, **strip) for s in small.services] == [
         dataclasses.replace(s, **strip) for s in full.services
     ]
+    skip = {small.plants.s6p, small.plants.s6u, *small.plants.t1_services}
+    pairs = [
+        (a.incident_weight, b.incident_weight)
+        for a, b in zip(small.services, full.services, strict=True)
+        if a.sys_id not in skip
+    ]
+    ratios = np.log([b for _, b in pairs]) / np.log([a for a, _ in pairs])
+    assert np.allclose(ratios, ratios[0], rtol=1e-9)
+
+
+def _team_roles(cat: Catalog) -> dict[str, set[str]]:
+    """Map each plant service to its owner and support team sys_ids."""
+    by_id = {s.sys_id: s for s in cat.services}
+    return {
+        sid: {by_id[sid].owner_team_sys_id, by_id[sid].support_team_sys_id}
+        for sid in cat.plants.services
+    }
+
+
+@pytest.mark.parametrize(("scale", "seeds"), [("small", range(40)), ("tiny", range(120))])
+def test_ut11_05_plant_teams_are_disjoint_over_seeds(scale: str, seeds: range) -> None:
+    """UT11-05 plant teams are disjoint from other plants' services (design §5.1.5).
+
+    T1 and T5 hold no role on any plant service except T1 supporting its three services and
+    T5 supporting S5; S3's and S4's owner and support teams avoid T1, T5 and each other.
+    """
+    params = _load(scale)
+    for seed in seeds:
+        cat = build_catalog(seed, params)
+        plants, roles = cat.plants, _team_roles(cat)
+        by_id = {s.sys_id: s for s in cat.services}
+        own = {plants.t1_team: set(plants.t1_services), plants.t5_team: {plants.s5}}
+        for team, services in own.items():
+            tied = {sid for sid, teams in roles.items() if team in teams}
+            assert tied == services, (seed, team)
+            assert all(by_id[sid].support_team_sys_id == team for sid in services)
+            assert not any(by_id[sid].owner_team_sys_id == team for sid in services)
+        s3_teams, s4_teams = roles[plants.s3], roles[plants.s4]
+        assert not s3_teams & s4_teams, seed
+        assert not (s3_teams | s4_teams) & set(plants.teams), seed
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_ut11_05_team_counts_per_org(seed: int) -> None:
+    """UT11-05 standard: per-org team counts stay in [6, 20] and total 150; tiny: 4 per org."""
+    for scale, low, high, total in (("small", 6, 20, 150), ("tiny", 4, 4, 12)):
+        cat = build_catalog(seed, _load(scale))
+        per_org = [sum(t.org_sys_id == o.sys_id for t in cat.teams) for o in cat.orgs]
+        assert sum(per_org) == total
+        assert all(low <= n <= high for n in per_org), (scale, per_org)
 
 
 def test_ut11_05_effective_at_and_peak_window(small: Catalog, tiny: Catalog) -> None:

@@ -7,7 +7,6 @@ costs come from `tools.synth.catalog_pools`; plant names are drawn like every ot
 """
 
 import dataclasses
-import math
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Final, NoReturn
@@ -16,11 +15,11 @@ import numpy as np
 import numpy.typing as npt
 
 from tools.synth import catalog_pools as pools
+from tools.synth.catalog_plan import apply_planners, month_counts, split_counts
 from tools.synth.catalog_rows import (
     Catalog,
     ChangeSlot,
     CiRow,
-    MonthKey,
     OrgRow,
     Planner,
     PlantTargets,
@@ -42,7 +41,6 @@ _SHARE_TOLERANCE: Final = 0.02  # top-5 % share accepted in target +/- this
 _T6_SHARE: Final = {"full": 0.015, "small": 0.05, "tiny": 0.05}
 _T6_MIN_PEERS: Final = 5
 _T3_CHANGES: Final = 40  # emergency and, again, normal (control) changes on C3
-_METRICS_PER_SERVICE: Final = 4
 
 
 @dataclasses.dataclass(slots=True)
@@ -70,24 +68,17 @@ def _fail(what: str) -> NoReturn:
     raise SynthUsageError(msg, key="preset")
 
 
-def _split(total: int, weights: Sequence[float]) -> list[int]:
-    """Split `total` proportionally to `weights` with largest-remainder rounding."""
-    quotas = [total * w / math.fsum(weights) for w in weights]
-    counts = [math.floor(q + 1e-9) for q in quotas]
-    order = sorted(range(len(quotas)), key=lambda i: (counts[i] - quotas[i], i))
-    for i in order[: total - sum(counts)]:
-        counts[i] += 1
-    return counts
-
-
 def _team_counts(rng: np.random.Generator, params: SynthParams) -> list[int]:
     preset, org = params.preset, params.org
     if preset.catalog_class == "tiny":
-        return _split(preset.teams, [1.0] * preset.orgs)
+        return split_counts(preset.teams, [1.0] * preset.orgs)
     counts = rng.poisson(org.teams_per_org_mean, preset.orgs)
     counts = np.clip(counts, org.teams_per_org_min, org.teams_per_org_max)
-    while (gap := preset.teams - int(counts.sum())) != 0:
-        counts[int(np.argmax(counts))] += 1 if gap > 0 else -1
+    while (gap := preset.teams - int(counts.sum())) != 0:  # keeps every org in the clip range
+        room = counts < org.teams_per_org_max if gap > 0 else counts > org.teams_per_org_min
+        if not room.any():
+            _fail("teams (per-org range cannot reach the team total)")
+        counts[int(np.argmax(np.where(room, counts, -1)))] += 1 if gap > 0 else -1
     return [int(c) for c in counts]
 
 
@@ -117,7 +108,7 @@ def _services(rng: np.random.Generator, params: SynthParams, n_teams: int) -> _D
         f"{pools.ADJECTIVES[c // len(pools.NOUNS)]} {pools.NOUNS[c % len(pools.NOUNS)]}"
         for c in combos
     ]
-    quota = _split(n, [params.org.criticality[c] for c in levels])  # exact mix, shuffled
+    quota = split_counts(n, [params.org.criticality[c] for c in levels])  # exact mix, shuffled
     crit = rng.permutation(np.repeat(np.array(levels, dtype=np.int64), quota))
     team_w = rng.pareto(1.5, n_teams) + 1.0
     team_p = team_w / team_w.sum()
@@ -222,16 +213,35 @@ class _Picker:
         return chosen
 
 
-def _assign_plant_teams(rng: np.random.Generator, d: _Draft, plan: dict[int, list[int]]) -> None:
-    """Make each plant team the only support team of exactly its services."""
+def _draw_team(rng: np.random.Generator, d: _Draft, avoid: set[int], must_avoid: set[int]) -> int:
+    """Weighted team outside `avoid`, else outside `must_avoid` (a subset of `avoid`)."""
+    for banned in (avoid, must_avoid):
+        pool = np.array([t for t in range(len(d.team_p)) if t not in banned], dtype=np.int64)
+        if len(pool):
+            return int(pool[int(rng.choice(len(pool), p=d.team_p[pool] / d.team_p[pool].sum()))])
+    _fail("teams (too few teams to keep plant teams apart)")
+
+
+def _plant_teams(rng: np.random.Generator, d: _Draft, plan: dict[int, list[int]], s34: list[int],
+                 all_plants: list[int]) -> None:  # fmt: skip
+    """Plant teams (T1, T5) support exactly their services and no other role on a plant service;
+    S3's and S4's owner and support teams avoid T1/T5 and each other (and, where the pool
+    allows, every other plant service's teams)."""
     served = {s for services in plan.values() for s in services}
-    others = np.array([t for t in range(len(d.team_p)) if t not in plan], dtype=np.int64)
-    p = d.team_p[others] / d.team_p[others].sum()
     for i in range(len(d.ids)):
-        if i not in served and int(d.support[i]) in plan:
-            d.support[i] = others[int(rng.choice(len(others), p=p))]
+        if int(d.owner[i]) in plan and i in all_plants:
+            d.owner[i] = _draw_team(rng, d, set(plan), set(plan))
+        if int(d.support[i]) in plan and i not in served:
+            d.support[i] = _draw_team(rng, d, set(plan), set(plan))
     for team, services in plan.items():
         d.support[services] = team
+    for i in s34:
+        other = s34[1] if i == s34[0] else s34[0]
+        must = set(plan) | {int(d.owner[other]), int(d.support[other])}
+        ties = must | {int(c[j]) for c in (d.owner, d.support) for j in all_plants if j != i}
+        for column in (d.owner, d.support):
+            if int(column[i]) in ties:
+                column[i] = _draw_team(rng, d, ties, must)
 
 
 def _plants(
@@ -251,9 +261,12 @@ def _plants(
     if not (decoys := pick.free(4)):
         _fail("T2 decoy")
     d.evt[s4] = 0.0
-    t1, t5 = (int(t) for t in rng.choice(len(d.team_p), size=2, replace=False))
-    _assign_plant_teams(rng, d, {t1: t1_services, t5: [s5]})
     e2d = min(decoys, key=lambda i: (float(d.inc[i]), i))
+    plant_services = [*t1_services, s2, s2c, e2d, s3, s4, s5, s6p, s6u]
+    tied = {int(c[i]) for c in (d.owner, d.support) for i in plant_services}
+    t1 = _draw_team(rng, d, tied, set())  # prefer teams with no role on a plant service
+    t5 = _draw_team(rng, d, tied | {t1}, {t1})
+    _plant_teams(rng, d, {t1: t1_services, t5: [s5]}, [s3, s4], plant_services)
     effective_at, peak = _windows(params)
     ids = d.ids
     targets = PlantTargets(
@@ -291,50 +304,6 @@ def _change_schedule(seed: int, params: SynthParams) -> tuple[ChangeSlot, ...]:
     return tuple(ChangeSlot(sid, i, at, em, k) for i, (at, sid, em, k) in enumerate(slots))
 
 
-def _month_counts(params: SynthParams) -> dict[MonthKey, int]:
-    """Background counts per (source, entity, month): preset totals split by days in span."""
-    months: list[date] = []
-    days: list[int] = []
-    for offset in range((params.end - params.start).days + 1):
-        day = params.start + timedelta(days=offset)
-        if not months or day.month != months[-1].month:
-            months.append(day.replace(day=1))
-            days.append(0)
-        days[-1] += 1
-    p = params.preset
-    totals = {("servicenow", "incident"): p.incidents, ("servicenow", "change_request"): p.changes}
-    totals |= {("servicenow", "problem"): p.problems, ("jira", "issue"): p.jira_issues}
-    totals |= {("monitoring", "event"): p.events}
-    counts: dict[MonthKey, int] = {}
-    for (source, entity), total in totals.items():
-        if source in params.sources:
-            split = zip(months, _split(total, days), strict=True)
-            counts |= {(source, entity, m): n for m, n in split}
-    if "monitoring" in params.sources:
-        per_day = p.metric_services * _METRICS_PER_SERVICE
-        pairs = zip(months, days, strict=True)
-        counts |= {("monitoring", "metric_daily", m): per_day * n for m, n in pairs}
-    return counts
-
-
-def _plan(stub: Catalog, params: SynthParams, planners: Sequence[Planner]) -> Catalog:
-    counts = dict(stub.month_counts)
-    for planner in planners:
-        for key, extra in planner(stub, params).items():
-            if key[0] in params.sources:
-                counts[key] = counts.get(key, 0) + extra
-    if any(n < 0 for n in counts.values()):
-        msg = "planned plant counts make a month count negative"
-        raise SynthUsageError(msg, key="preset")
-    ordered = {key: counts[key] for key in sorted(counts)}
-    seq: dict[MonthKey, int] = {}
-    running: dict[tuple[str, str], int] = {}
-    for (source, entity, month), n in ordered.items():
-        seq[source, entity, month] = running.get((source, entity), 1)
-        running[source, entity] = seq[source, entity, month] + n
-    return dataclasses.replace(stub, month_counts=ordered, seq_start=seq)
-
-
 def default_planners() -> tuple[Planner, ...]:
     """`planned_counts` of the plant units U11-10..U11-15; they land with T11-10..T11-15."""
     return ()
@@ -370,9 +339,9 @@ def build_catalog(
         ))  # fmt: skip
     stub = Catalog(
         tuple(orgs), tuple(teams), tuple(services), tuple(cis), tuple(rels), tuple(projects),
-        _change_schedule(seed, params), plants, _month_counts(params), {},
+        _change_schedule(seed, params), plants, month_counts(params), {},
     )  # fmt: skip
-    return _plan(stub, params, default_planners() if planners is None else planners)
+    return apply_planners(stub, params, default_planners() if planners is None else planners)
 
 
 __all__ = ["Catalog", "Planner", "build_catalog", "default_planners"]
