@@ -369,7 +369,10 @@ def test_ut04_26_bind_types_cover_spec_names() -> None:
         assert BIND_TYPES[name] == sql_type
     catalog = FakeCatalog()
     candidates = {**default_binds(catalog), **weight_binds(weights())}
-    assert {n for n in BIND_TYPES if n[:2] in {"d_", "s_", "w_"}} == set(candidates)
+    # s_count_metrics and s_unconfirmed_models are step binds computed by
+    # herness.metrics.context.StepContext.binds() (T04-12), not by default_binds.
+    step_binds = {"s_count_metrics", "s_unconfirmed_models"}
+    assert {n for n in BIND_TYPES if n[:2] in {"d_", "s_", "w_"}} - step_binds == set(candidates)
 
 
 def test_ut04_26_default_binds_values() -> None:

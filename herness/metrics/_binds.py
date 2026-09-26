@@ -25,7 +25,7 @@ _TYPED: Final[Mapping[str, str]] = {
         "d_exclude_close_codes d_noise_severities d_failure_outcomes s_org_metrics "
         "s_lower_better s_lever_models_k s_lever_models_v s_templates_k s_templates_v "
         "s_metric_units_k s_metric_units_v w_sw_portfolio_k w_sw_org_k "
-        "w_er_override_k w_capacity_k portfolio_team_k"
+        "w_er_override_k w_capacity_k portfolio_team_k s_count_metrics s_unconfirmed_models"
     ),
     "INTEGER": (
         "d_max_resolve_days d_repeat_window_days s_min_direct_links s_window_days "
