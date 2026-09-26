@@ -50,6 +50,7 @@ BLOCKED = [
 
 def _raw() -> dict[str, Any]:
     data: dict[str, Any] = yaml.safe_load(MODELS_YAML.read_text(encoding="utf-8"))
+    assert data.pop("version") == 1  # root file key, stripped by the spec 10 loader (U10-16)
     return data
 
 

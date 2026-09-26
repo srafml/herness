@@ -1,5 +1,6 @@
 # Memory configuration (design 07 §7; impl 07 §9, U07-18, U07-19). Sensitivity: internal.
 # Loaded once per process by spec 10; changes need a restart. outcome.window_weeks = 10 (R-34).
+version: 1
 compaction:
   soft_ratio: 0.70
   hard_ratio: 0.85

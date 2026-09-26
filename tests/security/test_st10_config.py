@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from tests.support.config_tree import write_full_config
+from tests.support.config_tree import register_checked_names, write_full_config, write_repo_config
 
 from herness.core import config as config_module
-from herness.core import config_view
+from herness.core import config_view, registry
 from herness.core.config import config_hash, effective_dict, load_config, reset_config
 from herness.core.errors import ConfigError
 from herness.core.settings import RedactionConfig
@@ -128,3 +128,68 @@ def test_st10_16_effective_dict_and_hash_hold_no_resolved_secret(
     assert captured
     assert all(sentinel not in text for text in captured)
     assert "secret:redact.hmac_key" in shown
+
+
+# --- end to end on the repository config tree (T10-03b) ---------------------------------------
+
+_OWNER_STEMS = (
+    "sources",
+    "mappings",
+    "decisions",
+    "metrics",
+    "weights",
+    "models",
+    "pipelines",
+    "memory",
+    "resilience",
+    "app",
+    "eval",
+)
+
+
+@pytest.fixture
+def repo_dir(tmp_path: Path) -> Iterator[Path]:
+    register_checked_names()
+    yield write_repo_config(tmp_path)
+    reset_config()
+    registry.reset_registry()
+
+
+def _set_version(path: Path, line: str | None) -> None:
+    kept = [
+        x for x in path.read_text(encoding="utf-8").splitlines() if not x.startswith("version:")
+    ]
+    path.write_text("\n".join(([line] if line else []) + kept) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("stem", _OWNER_STEMS)
+@pytest.mark.parametrize("line", ["version: 2", "version: '1'", "version: true", None])
+def test_st10_37_owner_file_version_must_be_1_end_to_end(
+    repo_dir: Path, stem: str, line: str | None
+) -> None:
+    """ST10-37 a wrong or missing top-level `version` in any owner file: ConfigError naming it."""
+    _set_version(repo_dir / f"{stem}.yaml", line)
+    with pytest.raises(ConfigError, match=rf"^{stem}\.yaml: version must be 1$"):
+        load_config("local", config_dir=repo_dir, env={})
+
+
+def test_st10_37_redos_pattern_in_repo_herness_yaml_fails_load(repo_dir: Path) -> None:
+    """ST10-37 a ReDoS custom pattern added to the shipped herness.yaml fails load_config."""
+    path = repo_dir / "herness.yaml"
+    text = path.read_text(encoding="utf-8")
+    assert "    custom_patterns: {}\n" in text
+    bad = f'    custom_patterns: {{bad: "{REDOS}"}}\n'
+    path.write_text(text.replace("    custom_patterns: {}\n", bad), "utf-8")
+    with pytest.raises(ConfigError) as info:
+        load_config("synth", config_dir=repo_dir, env={})
+    assert [i.path for i in info.value.issues] == ["security.redaction.custom_patterns.bad"]  # type: ignore[attr-defined]
+    assert REDOS not in str(info.value)
+
+
+def test_st10_37_long_injection_pattern_fails_load_without_echo(repo_dir: Path) -> None:
+    """ST10-37 a 600-char memory injection pattern fails load_config naming its line only."""
+    path = repo_dir / "injection_patterns.txt"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text("\n".join([*lines, LONG]) + "\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match=rf"^injection_patterns line {len(lines) + 1}: "):
+        load_config("local", config_dir=repo_dir, env={})

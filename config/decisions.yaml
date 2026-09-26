@@ -3,6 +3,7 @@
 # `deciders` section of config/models.yaml (R-76), never a key here.
 # Any change to a question's fields requires a new question_set_version.
 
+version: 1
 question_set_version: qs-2026-10-01.1
 primary_decider: laya            # per-question override allowed
 escalation_chain: [openjev, llm] # jev replaces openjev when the profile enables hosted Jev

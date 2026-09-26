@@ -90,6 +90,7 @@ DESIGN_07_S7: dict[str, Any] = {
 def _raw() -> dict[str, Any]:
     data = yaml.safe_load((ROOT / "config" / "memory.yaml").read_text(encoding="utf-8"))
     assert isinstance(data, dict)
+    assert data.pop("version") == 1  # root file key, stripped by the spec 10 loader (U10-16)
     return copy.deepcopy(data)
 
 
