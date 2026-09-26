@@ -7,6 +7,7 @@ No I/O and no clock. Numeral scanning and marker parsing are the single implemen
 import re
 import statistics
 import unicodedata
+from collections import Counter
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, NoReturn
@@ -15,7 +16,7 @@ from pydantic import JsonValue
 
 from herness.core import ids
 from herness.core import numbers as core_numbers
-from herness.core.errors import PolicyViolation
+from herness.core.errors import PolicyViolation, SchemaViolation
 from herness.core.numbers import NumeralHit
 from herness.core.types import Kind, NumberRef, Provenance, Status
 from herness.harness.memory.settings import WriteConfig
@@ -110,7 +111,8 @@ def _distinct(values: Sequence[str]) -> list[str]:
 def check_markers(text: str, numbers: Sequence[NumberRef]) -> MarkerReport:
     """Compare the `[[nK]]` markers in `text` with the ids of `numbers`."""
     ref_ids = [n.id for n in numbers]
-    duplicates = _distinct([i for i in ref_ids if ref_ids.count(i) > 1])
+    counts = Counter(ref_ids)
+    duplicates = _distinct([i for i in ref_ids if counts[i] > 1])
     scan = core_numbers.parse_markers(text)
     invalid = [m.text for m in scan.malformed]
     known = set(ref_ids)
@@ -224,6 +226,14 @@ def _check_required(kind: Kind, data: Mapping[str, JsonValue]) -> None:
         _fail("data.required:" + "|".join(_OWNER_FIELDS))
 
 
+def _data_bytes(data: Mapping[str, JsonValue]) -> int:
+    """UTF-8 length of canonical_json(data); unencodable data (NaN, Infinity) is a size.data."""
+    try:
+        return len(ids.canonical_json(dict(data)).encode("utf-8"))
+    except SchemaViolation:
+        _fail("size.data")
+
+
 def check_limits(
     kind: Kind,
     content: str,
@@ -240,7 +250,7 @@ def check_limits(
             _fail("size.sql", cfg.max_sql_chars)
     if _depth_exceeds(data, MAX_DATA_DEPTH):
         _fail("data.depth", MAX_DATA_DEPTH)
-    if len(ids.canonical_json(dict(data)).encode("utf-8")) > cfg.max_data_bytes:
+    if _data_bytes(data) > cfg.max_data_bytes:
         _fail("size.data", cfg.max_data_bytes)
     if len(numbers) > cfg.max_numbers:
         _fail("size.numbers", cfg.max_numbers)
