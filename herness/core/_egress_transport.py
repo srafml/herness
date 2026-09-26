@@ -53,7 +53,7 @@ def _tokens(value: object) -> int | None:
     return cast(int, value) if ok else None
 
 
-def provider_usage(body: bytes | None) -> tuple[int | None, int | None]:
+def _provider_usage(body: bytes | None) -> tuple[int | None, int | None]:
     """``(tokens_in, tokens_out)`` from ``usage``: Anthropic names, else OpenAI-compatible."""
     try:
         data = json.loads(body) if body else None
@@ -89,6 +89,13 @@ class _Call:
         reason = "response_too_large" if counter.overflowed else None
         self.complete(response.status_code, counter, reason)
 
+    def settle(self, response: httpx.Response, counter: StreamCounter) -> None:
+        """An inner transport returned a body already read: count it and complete now."""
+        try:
+            counter.add(response.content)
+        finally:
+            self.closed(response, counter)
+
     def complete(
         self, status: int | None, counter: StreamCounter | None, reason: str | None
     ) -> None:
@@ -97,7 +104,7 @@ class _Call:
             return
         self._done = True
         ticket, url = self._ticket, self._request.url
-        tokens_in, tokens_out = provider_usage(counter.body if counter else None)
+        tokens_in, tokens_out = _provider_usage(counter.body if counter else None)
         bytes_in = counter.bytes_in if counter else 0
         latency_ms = round((clock.monotonic() - ticket.started_monotonic) * 1000)
         line: dict[str, Any] = dict.fromkeys(LINE_KEYS) | self._opts.fields()
@@ -144,6 +151,9 @@ class GuardedTransport(httpx.BaseTransport):
             call.complete(None, None, type(exc).__name__)
             raise
         counter = call.counter(response)
+        if response.is_closed:  # e.g. a mock transport: nothing left to stream
+            call.settle(response, counter)
+            return response
         stream = cast(httpx.SyncByteStream, response.stream)
         response.stream = CountingStream(stream, counter, partial(call.closed, response))
         return response
@@ -179,6 +189,9 @@ class AsyncGuardedTransport(httpx.AsyncBaseTransport):
             await asyncio.to_thread(call.complete, None, None, type(exc).__name__)
             raise
         counter = call.counter(response)
+        if response.is_closed:  # e.g. a mock transport: nothing left to stream
+            await asyncio.to_thread(call.settle, response, counter)
+            return response
 
         async def closed(counter: StreamCounter) -> None:
             await asyncio.to_thread(call.closed, response, counter)

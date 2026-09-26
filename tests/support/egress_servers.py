@@ -5,15 +5,18 @@ Everything listens on 127.0.0.1 only; nothing here reaches a real network.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import http.server
 import socket
 import ssl
+import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from cryptography import x509
@@ -23,15 +26,28 @@ from cryptography.x509.oid import NameOID
 
 
 def record_connects(monkeypatch: pytest.MonkeyPatch) -> list[object]:
-    """Patch ``socket.socket.connect`` to record each address and refuse the connection."""
-    calls: list[object] = []
+    """Record and refuse every outbound connect, sync (``socket.connect``) and asyncio.
 
-    def connect(_sock: socket.socket, address: object) -> None:
+    The only connect let through is the event loop's own self-pipe (``socket.socketpair``
+    falls back to a loopback connect on Windows); it is not recorded.
+    """
+    calls: list[object] = []
+    real_connect = socket.socket.connect
+
+    def connect(sock: socket.socket, address: object) -> None:
+        if sys._getframe(1).f_code.co_name == "_fallback_socketpair":
+            real_connect(sock, address)  # type: ignore[arg-type]
+            return
         calls.append(address)
         raise ConnectionRefusedError(address)
 
+    async def create_connection(_loop: object, *args: object, **_kw: object) -> NoReturn:
+        calls.append(args[1:3])
+        raise ConnectionRefusedError(args[1:3])
+
     monkeypatch.setattr(socket.socket, "connect", connect)
     monkeypatch.setattr(socket.socket, "connect_ex", connect)
+    monkeypatch.setattr(asyncio.BaseEventLoop, "create_connection", create_connection)
     return calls
 
 
