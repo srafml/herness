@@ -7,6 +7,7 @@ through 090_chat; rows are written through the chat functions or raw SQL for set
 from __future__ import annotations
 
 import datetime
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -216,6 +217,37 @@ def test_ut09_38_meta_merge_keeps_reply_to() -> None:
     assert row["query_ids"] == []
 
 
+def test_ut09_38_meta_merge_survives_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT09-38 a busy COMMIT makes run_write re-run the callback; meta still merges once."""
+    session_id = chat.create_chat_session(_USER, now=_T0)
+    _raw_message("msg_retry", session_id, "assistant", meta='{"reply_to": "msg_u"}')
+    real_connection = core.connection
+    commits: list[str] = []
+
+    class _BusyFirstCommit:
+        def __init__(self, conn: sqlite3.Connection) -> None:
+            self._conn = conn
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._conn, name)
+
+        def execute(self, sql: str, params: object = ()) -> sqlite3.Cursor:
+            if sql == "COMMIT" and not commits:
+                commits.append(sql)
+                msg = "database is locked"
+                raise sqlite3.OperationalError(msg)
+            return self._conn.execute(sql, params)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(core, "connection", lambda: _BusyFirstCommit(real_connection()))
+    assert chat.update_chat_message("msg_retry", status="done", meta={"mode": "live"})
+    monkeypatch.undo()
+    assert commits == ["COMMIT"]
+    row = chat.get_chat_message("msg_retry")
+    assert row is not None
+    assert row["meta"] == {"reply_to": "msg_u", "mode": "live"}
+    assert row["status"] == "done"
+
+
 def test_ut09_38_missing_row_returns_false() -> None:
     """UT09-38 updating an unknown message returns False, with or without meta."""
     assert chat.update_chat_message("msg_missing", status="done") is False
@@ -285,14 +317,15 @@ def test_ut09_39_twice_same_reply_to_gives_one_row() -> None:
     assert len(rows) == 1
 
 
-def test_ut09_39_default_now_is_the_clock() -> None:
+def test_ut09_39_default_now_is_the_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT09-39 `now=None` stamps the row with the current clock."""
     session_id = chat.create_chat_session(_USER, now=_T0)
     user_id = _user_message(session_id)
-    before = datetime.datetime.now(datetime.UTC)
+    stamp = datetime.datetime(2026, 9, 26, 11, 22, 33, 123456, tzinfo=datetime.UTC)
+    monkeypatch.setattr(clock, "now", lambda: stamp)
     row = chat.upsert_assistant_placeholder(session_id, reply_to=user_id)
     assert row is not None
-    assert row["created_at"] >= before.replace(microsecond=0)
+    assert row["created_at"] == stamp
 
 
 def test_ut09_39_reply_to_must_be_user_row_of_session() -> None:
@@ -435,12 +468,9 @@ def test_ut09_42_purge_deletes_inactive_sessions_and_messages() -> None:
     assert chat.get_chat_session(inactive) is None
     assert chat.get_chat_session(active) is not None
     assert len(chat.list_chat_messages(active)) == 2
-    assert (
-        core.read_one("SELECT count(*) AS n FROM chat_message WHERE session_id = ?", (inactive,))[
-            "n"
-        ]
-        == 0
-    )  # type: ignore[index]
+    left = core.read_one("SELECT count(*) AS n FROM chat_message WHERE session_id = ?", (inactive,))
+    assert left is not None
+    assert left["n"] == 0
     assert _events(logs, "store.chat.purged") == [
         {
             "event": "store.chat.purged",

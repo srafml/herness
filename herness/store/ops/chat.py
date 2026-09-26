@@ -60,7 +60,6 @@ _BY_ID: Final = f"{_MESSAGE_SQL} WHERE message_id = ?"
 
 _log = get_logger("store.ops")
 
-
 _Unset = enum.Enum("_Unset", "UNSET")  # sentinel type of update_chat_message defaults
 _UNSET: Final = _Unset.UNSET
 
@@ -207,18 +206,19 @@ def update_chat_message(  # noqa: PLR0913 - signature fixed by U09-46
         values["query_ids"] = core.dump_json(values["query_ids"], field="query_ids")
 
     def write(conn: sqlite3.Connection) -> bool:
+        row_values = dict(values)  # a local copy: run_write re-runs this callback on retry
         if "meta" in values:
             row = conn.execute(_BY_ID, (message_id,)).fetchone()
             if row is None:
                 return False
             old = _json_value(row["meta"], dict, field="meta", message_id=message_id)
             new = cast("dict[str, object]", values["meta"])
-            values["meta"] = core.dump_json({**old, **new}, field="meta")
-        columns = [col for col in _UPDATABLE if col in values]
+            row_values["meta"] = core.dump_json({**old, **new}, field="meta")
+        columns = [col for col in _UPDATABLE if col in row_values]
         assignments = ", ".join(f"{col} = ?" for col in columns)
         cursor = conn.execute(
             f"UPDATE chat_message SET {assignments} WHERE message_id = ?",  # noqa: S608 - allowlisted columns
-            [*(values[col] for col in columns), message_id],
+            [*(row_values[col] for col in columns), message_id],
         )
         return cursor.rowcount == 1
 
