@@ -58,34 +58,17 @@ _log = get_logger("harness.llm")
 
 
 class _GuardedClientFactory(Protocol):
-    """The U10-53 part of ``EgressGuard`` this adapter needs (T10-17 carry-over)."""
+    """U10-53 ``EgressGuard.async_http_client``; not on the base yet (T10-17 carry-over)."""
 
     def async_http_client(
-        self,
-        purpose: Literal["reasoning", "reasoning_final"],
-        payload_class: Literal["aggregated_evidence"],
-        *,
-        run_id: str | None = None,
-        task_id: str | None = None,
-        timeout: float = 120.0,
+        self, purpose: str, payload_class: str, *, run_id: str | None, task_id: str | None
     ) -> httpx2.AsyncClient: ...
 
 
-def _user_blocks(message: Message) -> list[dict[str, object]]:
-    if message.role == "tool":
-        return [
-            {
-                "type": "tool_result",
-                "tool_use_id": part.tool_call_id,
-                "content": part.content,
-                "is_error": part.is_error,
-            }
-            for part in message.parts
-            if isinstance(part, ToolResultPart)
-        ]
-    return [
-        {"type": "text", "text": part.text} for part in message.parts if isinstance(part, TextPart)
-    ]
+def _user_block(part: TextPart | ToolResultPart) -> dict[str, object]:
+    if isinstance(part, ToolResultPart):
+        return part.model_dump(exclude={"tool_call_id"}) | {"tool_use_id": part.tool_call_id}
+    return part.model_dump()
 
 
 def _assistant_blocks(message: Message) -> list[dict[str, object]]:
@@ -93,10 +76,10 @@ def _assistant_blocks(message: Message) -> list[dict[str, object]]:
     for part in message.parts:
         if isinstance(part, ReasoningPart):
             if part.provider == "anthropic" and part.opaque is not None:
-                blocks.append(dict(part.opaque))
+                blocks.append(dict(part.opaque))  # TH05-14: only back to its provider
         elif isinstance(part, TextPart):
             if part.text:
-                blocks.append({"type": "text", "text": part.text})
+                blocks.append(part.model_dump())
         elif isinstance(part, ToolCallPart):
             call = part.call
             blocks.append(
@@ -147,6 +130,12 @@ def _tool_call(call_id: str, name: str, arguments: object) -> ToolCall:
         raise OutputValidationError(msg) from None
 
 
+def _reasoning(block: ContentBlock) -> ReasoningPart:
+    text = block.thinking if block.type == "thinking" else ""
+    opaque = cast("dict[str, JsonValue]", block.to_dict())  # replayed unchanged (TH05-14)
+    return ReasoningPart(provider="anthropic", text=text, opaque=opaque)
+
+
 def _usage(raw: anthropic.types.Message) -> Usage:
     u = raw.usage
     return Usage(
@@ -186,11 +175,12 @@ class AnthropicClient:
             if message.role == "assistant":
                 turns.append(("assistant", _assistant_blocks(message)))
                 continue
-            blocks = _user_blocks(message)
-            if turns and turns[-1][0] == "user":
+            blocks = [
+                _user_block(p) for p in message.parts if isinstance(p, TextPart | ToolResultPart)
+            ]
+            if turns and turns[-1][0] == "user":  # stable sort: tool results first
                 merged = turns[-1][1] + blocks
-                results = [b for b in merged if b["type"] == "tool_result"]
-                turns[-1] = ("user", results + [b for b in merged if b["type"] != "tool_result"])
+                turns[-1] = ("user", sorted(merged, key=lambda b: b["type"] != "tool_result"))
             else:
                 turns.append(("user", blocks))
         return [{"role": role, "content": content} for role, content in turns]
@@ -206,21 +196,12 @@ class AnthropicClient:
         }
         if req.system:
             params["system"] = [
-                {"type": "text", "text": b.text, "cache_control": dict(_EPHEMERAL)}
-                if b.cache
-                else {"type": "text", "text": b.text}
+                {"type": "text", "text": b.text}
+                | ({"cache_control": dict(_EPHEMERAL)} if b.cache else {})
                 for b in req.system
             ]
         if req.tools:  # already sorted by name (LLMRequest validator)
-            params["tools"] = [
-                {
-                    "name": s.name,
-                    "description": s.description,
-                    "input_schema": s.input_schema,
-                    "strict": s.strict,
-                }
-                for s in req.tools
-            ]
+            params["tools"] = [spec.model_dump() for spec in req.tools]
             params["tool_choice"] = {"type": req.tool_choice}  # auto or none; never forced
         thinking = _thinking(cfg, req)
         if thinking is not None:
@@ -247,11 +228,11 @@ class AnthropicClient:
         batch: bool,
     ) -> LLMResponse:
         """Normalize one SDK message; limits per the adapter-boundary ruling (U05-27)."""
-        texts: list[str] = []
-        calls: list[ToolCall] = []
-        reasoning: list[ReasoningPart] = []
-        for block in raw.content:
-            self._collect(block, texts, calls, reasoning)
+        texts = [b.text for b in raw.content if b.type == "text"]
+        calls = [_tool_call(b.id, b.name, b.input) for b in raw.content if b.type == "tool_use"]
+        reasoning = [
+            _reasoning(b) for b in raw.content if b.type in {"thinking", "redacted_thinking"}
+        ]
         if len(calls) > _MAX_TOOL_CALLS:
             msg = "response has too many tool calls"
             raise OutputValidationError(msg, count=len(calls))
@@ -279,22 +260,6 @@ class AnthropicClient:
             request_id=getattr(raw, "_request_id", None),
             batch=batch,
         )
-
-    @staticmethod
-    def _collect(
-        block: ContentBlock,
-        texts: list[str],
-        calls: list[ToolCall],
-        reasoning: list[ReasoningPart],
-    ) -> None:
-        if block.type == "text":
-            texts.append(block.text)
-        elif block.type == "tool_use":
-            calls.append(_tool_call(block.id, block.name, block.input))
-        elif block.type in {"thinking", "redacted_thinking"}:
-            text = block.thinking if block.type == "thinking" else ""
-            opaque = cast("dict[str, JsonValue]", block.to_dict())
-            reasoning.append(ReasoningPart(provider="anthropic", text=text, opaque=opaque))
 
     def _http_client(self, req: LLMRequest) -> httpx2.AsyncClient:
         """The guard's client for this request; fails closed without one (R-06, TH05-13)."""
