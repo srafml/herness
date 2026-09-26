@@ -102,8 +102,8 @@ footer { margin-top: 3rem; color: var(--c-muted); font-size: 0.85em; }
 <dl class="meta">
 <div><dt>run</dt><dd><code>{{ h.run_id }}</code></dd></div>
 <div><dt>build</dt><dd><code>{{ h.build_id }}</code></dd></div>
-<div><dt>data as of</dt><dd>{{ h.data_as_of.strftime("%Y-%m-%d %H:%M UTC") if h.data_as_of else "unknown" }}</dd></div>
-<div><dt>rendered</dt><dd>{{ h.rendered_at.strftime("%Y-%m-%d %H:%M UTC") }}</dd></div>
+<div><dt>data as of</dt><dd>{{ h.data_as_of.strftime("%Y-%m-%d %H:%M %Z") if h.data_as_of else "unknown" }}</dd></div>
+<div><dt>rendered</dt><dd>{{ h.rendered_at.strftime("%Y-%m-%d %H:%M %Z") }}</dd></div>
 <div><dt>depth · profile</dt><dd>{{ h.depth }} · <code>{{ h.profile }}</code></dd></div>
 <div><dt>tasks</dt><dd>{{ h.coverage.done_tasks }} of {{ h.coverage.planned_tasks }} done, {{ h.coverage.dead_tasks }} dead</dd></div>
 <div><dt>must-cover</dt><dd>{{ h.coverage.must_cover_done }} of {{ h.coverage.must_cover_total }}</dd></div>
@@ -160,6 +160,6 @@ footer { margin-top: 3rem; color: var(--c-muted); font-size: 0.85em; }
 </dl>
 </section>
 {% endblock %}
-<footer>Template version {{ TEMPLATE_VERSION }} · rendered {{ h.rendered_at.strftime("%Y-%m-%d %H:%M UTC") }}</footer>
+<footer>Template version {{ TEMPLATE_VERSION }} · rendered {{ h.rendered_at.strftime("%Y-%m-%d %H:%M %Z") }}</footer>
 </body>
 </html>
