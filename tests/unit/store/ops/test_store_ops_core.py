@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from structlog.testing import capture_logs
 from tests.support.ops_store import OpsStoreHandle
 
-from herness.core.errors import ConfigError, NotFound, SchemaViolation, StoreBusy
+from herness.core.errors import ConfigError, FatalError, NotFound, SchemaViolation, StoreBusy
 from herness.core.resilience import ProcessState
 from herness.store.ops import _shims, core
 
@@ -183,8 +183,9 @@ def test_ut02_27_callback_raising_commits_nothing(item_table: Path) -> None:
         msg = "boom"
         raise RuntimeError(msg)
 
-    with pytest.raises(RuntimeError, match="boom"):
-        core.run_write(insert_then_fail, op="insert_item")
+    with pytest.raises(FatalError, match="unclassified RuntimeError") as info:
+        core.run_write(insert_then_fail, op="insert_item")  # classified by retry_call (T08-07)
+    assert isinstance(info.value.__cause__, RuntimeError)
     assert _count() == 0
     assert not core.connection().in_transaction
 
@@ -416,7 +417,7 @@ def test_ut02_27_failed_rollback_keeps_original_error(
 
     cases: list[tuple[Callable[[sqlite3.Connection], None], type[Exception], str]] = [
         (dup, SchemaViolation, "ops constraint failed in insert_item"),
-        (fail, RuntimeError, "boom"),
+        (fail, FatalError, "unclassified RuntimeError"),  # classified by retry_call (T08-07)
     ]
     with capture_logs() as logs:
         for i, (fn, exc_type, pattern) in enumerate(cases):

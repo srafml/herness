@@ -695,16 +695,17 @@ def test_ut08_104_register_probe_rejects_unknown_prefix(
 
 
 def test_ut08_104_call_with_timeout_value_and_error() -> None:
-    """UT08-104 the private timeout helper returns the value and re-raises the error."""
-    assert bmod._call_with_timeout(lambda: 42, 5) == 42
+    """UT08-104 the probe timeout (the public `call_with_timeout`, T08-07) returns the value
+    and re-raises the error."""
+    assert resilience.call_with_timeout(lambda: 42, 5) == 42
 
     def fail() -> None:
         msg = "down"
         raise SourceUnavailable(msg)
 
     with pytest.raises(SourceUnavailable):
-        bmod._call_with_timeout(fail, 5)
+        resilience.call_with_timeout(fail, 5)
     names: list[str] = []
-    bmod._call_with_timeout(lambda: names.append(threading.current_thread().name), 5)
+    resilience.call_with_timeout(lambda: names.append(threading.current_thread().name), 5)
     assert names == ["herness-timeout"]
     assert issubclass(SourceUnavailable, HernessError)

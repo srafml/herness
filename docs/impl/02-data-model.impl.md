@@ -65,7 +65,7 @@ This spec builds everything the design spec assigns to `herness/store/` and `her
 | `herness/store/_warehouse_rw.py` | Writable build connection and `CURRENT` writer (import restricted to `herness.model`) | `open_for_build`, `write_current` | L1 | `duckdb` | 120 |
 | `herness/store/ops/__init__.py` | Public `herness.store.ops` namespace: re-exports of every area's public functions (§2.3, R-08); one import block and one `__all__` block per area (17 areas), so the budget is the ENG §2.4 cap | re-exports only (§2.3) | L1 | — | 400 |
 | `herness/store/ops/core.py` | Per-thread SQLite connections, write transactions with retry, JSON helpers (core API names of R-10) | `OPS_JSON_MAX_BYTES`, `connection`, `run_write`, `read_one`, `read_all`, `dump_json`, `load_json`, `reset_connections` | L1 | `sqlite3` | 280 |
-| `herness/store/ops/_shims.py` | Interim stand-in for `T08-07 (herness.core.resilience.retry_call)` (policy `sqlite_write` only); `fault_point` is now a re-export of `herness.core.resilience.fault_point` (T08-08); both called by `core` through module attributes; not an area (§2.3). Deleted when T08-07 lands | `retry_call`, `fault_point` (private module) | L1 | — | 80 |
+| `herness/store/ops/_shims.py` | Module attributes `core` calls for the two impl 08 hooks: `retry_call` is a re-export of `T08-07 (herness.core.resilience.retry_call)` and `fault_point` of `T08-08 (herness.core.resilience.fault_point)`; kept (not deleted) because `core` never changes and tests monkeypatch the hooks here; not an area (§2.3) | `retry_call`, `fault_point` (private module) | L1 | — | 80 |
 | `herness/store/ops/_review_common.py` | Private helper module of `shared` (T02-24): pure `review_item` SQL text and match-key/field validation with no state, no connection and no import of `shared`; not an area (§2.3). Keeps `shared.py` within its module-map budget | `keys_ok`, `is_count`, `is_json_object`, `check_decision`, SQL text constants (private module) | L1 | — | 100 |
 | `herness/store/ops/migrate.py` | Forward-only migration runner over all owner ranges (R-11) and ops health | `MIGRATION_RANGES`, `MigrationReport`, `migrate`, `pending_migrations`, `schema_version`, `ops_health` | L1 | `importlib.resources` | 260 |
 | `herness/store/ops/shared.py` | Ops functions owned by spec 02: every `review_item` function (R-08) | `ReviewItem`, `create_review_item`, `create_review_item_if_absent`, `get_review_item`, `list_review_items`, `count_review_items`, `decide_review_item`, `update_review_payload`, `approved_mapping_suggestions` | L1 | — | 390 |
@@ -3745,7 +3745,7 @@ All cards are Phase 1.
 | Goal | Per-thread connections, `run_write` with retry and fault point, JSON helpers, package namespace. |
 | Depends on | T02-01, `T08-07 (herness.core.resilience.retry_call)`, `T08-08 (herness.core.resilience.fault_point)` |
 | Units | U02-36…U02-43, U02-62 (spec 02 blocks and the block layout of §2.3 rule 4) |
-| Files | `herness/store/ops/__init__.py`, `herness/store/ops/core.py`, `herness/store/ops/_shims.py` (interim) |
+| Files | `herness/store/ops/__init__.py`, `herness/store/ops/core.py`, `herness/store/ops/_shims.py` (re-exports of `retry_call` (T08-07) and `fault_point` (T08-08) that `core` calls; kept, see §2) |
 | Tests | UT02-25…UT02-31, UT02-68, FT02-02, ST02-18, BT02-06 |
 | Threats | TH02-07, TH02-18 |
 | Acceptance checks | listed tests pass; `BT02-06` p95 < 10 ms on CI |

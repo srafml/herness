@@ -17,7 +17,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from herness.core import time as clock
-from herness.core.errors import NotFound, SchemaViolation
+from herness.core.errors import FatalError, NotFound, SchemaViolation
 from herness.core.types import TaskSpec
 from herness.store import ops
 from herness.store.ops import core, runs
@@ -226,7 +226,7 @@ def test_ut06_22_non_terminal_keeps_finished_at(store: Path) -> None:
     got = runs.get_run(row.run_id)
     assert got is not None
     assert (got.status, got.finished_at) == ("running", None)
-    with pytest.raises(ValueError, match="allowed_from"):
+    with pytest.raises(FatalError, match="unclassified ValueError"):
         _write(lambda c: runs.set_run_status(c, row.run_id, "done", (), now=_T0))
 
 

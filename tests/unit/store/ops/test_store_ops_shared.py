@@ -20,7 +20,7 @@ from structlog.testing import capture_logs
 from tests.support.config_tree import write_full_config
 
 from herness.core import config as c
-from herness.core.errors import ConfigError, SchemaViolation
+from herness.core.errors import ConfigError, FatalError, SchemaViolation
 from herness.store.errors import NotFoundError, ReviewItemConflict
 from herness.store.ops import core, shared
 from herness.store.ops.migrate import migrate
@@ -130,7 +130,7 @@ def test_ut02_43_create_with_conn_joins_the_callers_transaction(store: Path) -> 
         msg = "caller fails"
         raise RuntimeError(msg)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(FatalError):
         core.run_write(failing, op="test_create")
     assert len(list_review_items()) == 1
 
@@ -428,7 +428,7 @@ def test_ut02_76_memory_write_decisions_need_the_callers_transaction(
         msg = "memory update failed"
         raise RuntimeError(msg)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(FatalError):
         core.run_write(raising, op="memory_approve")
     assert _status(mem) == "pending"
     assert len(audit_calls) == 1  # the raising callback audited once before its rollback
@@ -696,6 +696,6 @@ def test_ut02_74_with_conn_joins_the_callers_transaction(store: Path) -> None:
         msg = "caller fails"
         raise RuntimeError(msg)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(FatalError):
         core.run_write(fn, op="test_update_payload")
     assert dict(get_review_item(item_id).payload) == {"memory_id": "mem_5", "content": "x"}

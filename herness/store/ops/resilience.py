@@ -36,7 +36,8 @@ _UPSERT_HEALTH: Final = (
 )
 _CLAIM_PROBE: Final = (
     "UPDATE source_health SET state = 'half_open', updated_at = :now WHERE source = :key"
-    " AND ((state = 'open' AND :now >= :probe_due)"
+    " AND ((state = 'open' AND :now >= :probe_due"
+    " AND COALESCE(opened_at, updated_at) < :probe_due)"  # a due from a stale row loses
     " OR (state = 'half_open' AND updated_at < :stale_before)) RETURNING source"
 )
 _INSERT_EVENT: Final = (
