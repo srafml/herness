@@ -157,6 +157,9 @@ class SourceHostTransport(httpx2.BaseTransport):
 
     Checked again for every request, including an absolute URL or a response-supplied next
     link: no redirect is auto-followed (the client is built with ``follow_redirects=False``).
+    Every request carries ``Accept-Encoding: identity`` (T10-17 gzip-bomb fix, same as
+    ``LoopbackOnlyTransport``); a source is not bound to honor it, so a response encoded
+    anyway is still refused fail-closed (``EgressBlocked``, reason ``unsupported_encoding``).
     """
 
     def __init__(
@@ -178,6 +181,7 @@ class SourceHostTransport(httpx2.BaseTransport):
         reason = es.source_refusal(request.url, self._source_hosts, self._allowed_hosts)
         if reason is not None:
             raise es.blocked(self._source, host, reason)
+        request.headers["Accept-Encoding"] = "identity"  # every hop, whatever the caller set
         response = self._inner.handle_request(request)
         try:
             counter, read = open_body(response, self._limit, 0, es.body_error)

@@ -149,9 +149,14 @@ def test_ut10_82_verify_cannot_be_disabled(tmp_path: Path, verify: object) -> No
 
 
 def test_ut10_82_verify_missing_ca_bundle_is_config_error(tmp_path: Path) -> None:
-    """UT10-82 an existing-but-not-a-file (missing) CA bundle path is a ConfigError."""
+    """UT10-82 a CA bundle path that does not exist: the same verbatim message as verify=False.
+
+    Fix round 1 (review Important #1): U10-110's Preconditions row is unconditional about the
+    message text for "any other value" than True or an existing file, so a missing path must
+    not get a different wording from ``verify=False``.
+    """
     _load(tmp_path)
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError, match="TLS verification cannot be disabled"):
         ec.source_http_client(
             "servicenow",
             "https://corp.service-now.com",
@@ -183,3 +188,52 @@ def test_ut10_82_response_at_the_limit_is_allowed(tmp_path: Path, net: MockNet) 
     ) as client:
         response = client.get("/api/now/table/incident")
     assert response.read() == b"x" * 10
+
+
+# --- fix round 1 (review): inclusive bounds succeed; Accept-Encoding identity is fail-closed --
+
+
+def test_ut10_82_inclusive_bounds_succeed(tmp_path: Path) -> None:
+    """UT10-82 the inclusive edges of every bound build a client (review Minor #2)."""
+    _load(tmp_path)
+    with ec.source_http_client(
+        "servicenow",
+        "https://corp.service-now.com",
+        timeout_s=600.0,
+        max_connections=64,
+        max_response_bytes=1_073_741_824,
+    ) as client:
+        assert client.timeout == httpx2.Timeout(600.0, connect=10.0)
+    with ec.source_http_client(
+        "servicenow",
+        "https://corp.service-now.com",
+        timeout_s=1.0,
+        max_connections=1,
+        max_response_bytes=1,
+    ) as client:
+        assert isinstance(client, httpx2.Client)
+
+
+def test_ut10_82_request_carries_accept_encoding_identity(tmp_path: Path, net: MockNet) -> None:
+    """UT10-82 every outgoing request forces Accept-Encoding: identity (T10-17 gzip-bomb fix)."""
+    _load(tmp_path)
+    route = net.route("corp.service-now.com", json={})
+    with ec.source_http_client("servicenow", "https://corp.service-now.com", timeout_s=30.0) as (
+        client
+    ):
+        client.get("/api/now/table/incident", headers={"Accept-Encoding": "gzip"})
+    assert route.calls[0].headers["accept-encoding"] == "identity"
+
+
+def test_ut10_82_unsupported_encoding_is_blocked(tmp_path: Path, net: MockNet) -> None:
+    """UT10-82 a response encoded despite Accept-Encoding: identity fails closed."""
+    _load(tmp_path)
+    net.route("corp.service-now.com", content=b"\x8b\x00", headers={"content-encoding": "br"})
+    with (
+        ec.source_http_client(
+            "servicenow", "https://corp.service-now.com", timeout_s=30.0
+        ) as client,
+        pytest.raises(EgressBlocked) as info,
+    ):
+        client.get("/api/now/table/incident")
+    assert info.value.reason == "unsupported_encoding"

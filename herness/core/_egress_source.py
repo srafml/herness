@@ -51,14 +51,16 @@ def check_int(value: object, low: int, high: int, name: str) -> None:
 
 
 def check_verify(verify: object, source: str) -> Path | None:
-    """``True`` -> ``None`` (certifi); an existing file -> itself; else ``ConfigError``."""
+    """``True`` -> ``None`` (certifi); an existing file -> itself; else ``ConfigError``.
+
+    U10-110's Preconditions row is unconditional: any value that is not ``True`` or an
+    existing CA bundle file, including ``False`` and a ``Path`` that does not exist, raises
+    the same verbatim message (fix round 1, review Important #1).
+    """
     if verify is True:
         return None
-    if isinstance(verify, Path):
-        if verify.is_file():
-            return verify
-        msg = f"TLS CA bundle not found for source {source}"
-        raise ConfigError(msg)
+    if isinstance(verify, Path) and verify.is_file():
+        return verify
     msg = f"TLS verification cannot be disabled for source {source}"
     raise ConfigError(msg)
 

@@ -173,9 +173,13 @@ def test_st10_59_verify_false_is_config_error(tmp_path: Path) -> None:
 
 
 def test_st10_59_missing_ca_bundle_is_config_error(tmp_path: Path) -> None:
-    """ST10-59 a CA bundle path that does not exist is a ConfigError."""
+    """ST10-59 a CA bundle path that does not exist: the same verbatim message as verify=False.
+
+    Fix round 1 (review Important #1): "any other value" than True or an existing file gets
+    the same wording, not a distinct one for a missing path.
+    """
     _load(tmp_path)
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError, match="TLS verification cannot be disabled"):
         ec.source_http_client(
             "servicenow",
             "https://corp.service-now.com",
