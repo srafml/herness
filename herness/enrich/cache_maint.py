@@ -25,15 +25,16 @@ from herness.core.logging import get_logger
 from herness.core.types import QuestionSet
 from herness.enrich.cache import (
     CACHE_SCHEMA,
-    _fingerprint,
     io_error,
     replace_atomic,
     write_part,
 )
 from herness.enrich.layout import EnrichPaths
+from herness.enrich.questions import question_fingerprint
 
 _PARTITION_GLOB: Final = "decider=*/decider_version=*"
 _PART_GLOB: Final = "part-*.parquet"
+_STALE_TMP_GLOB: Final = ".part-*.parquet.tmp"
 _KEY: Final = ("content_hash", "question", "question_fingerprint")
 _BATCH_ROWS: Final = 1_000_000
 _HASH_RE: Final = re.compile(r"^[0-9a-f]{32}$")
@@ -130,7 +131,9 @@ def migrate(paths: EnrichPaths, old_qsv: str, new_qs: QuestionSet) -> int:
         done = marker.is_file()
     if done:
         return _read_marker(marker)
-    wanted = pa.array(sorted(f"{q.id}{_SEP}{_fingerprint(q)}" for q in new_qs.questions))
+    wanted = pa.array(
+        sorted(f"{q.id}{_SEP}{q.fingerprint or question_fingerprint(q)}" for q in new_qs.questions)
+    )
 
     def _unchanged(batch: pa.RecordBatch) -> pa.Array:
         pair = pc.binary_join_element_wise(
@@ -149,7 +152,9 @@ def migrate(paths: EnrichPaths, old_qsv: str, new_qs: QuestionSet) -> int:
             write_part(target, rows, decider=decider)
             total += rows.num_rows
     record = json.dumps({"rows": total, "finished_at": clock.format_utc(clock.now())})
-    replace_atomic(marker, lambda tmp: tmp.write_text(record, encoding="utf-8"))
+    replace_atomic(
+        marker, lambda tmp: tmp.write_text(record, encoding="utf-8"), kind="migration marker"
+    )
     _log.info("enrich.cache.migrated", old=old_qsv, new=new_qs.version, rows=total)
     return total
 
@@ -176,7 +181,7 @@ def compact(paths: EnrichPaths, qsv: str, *, small_bytes: int = 64 * 2**20) -> i
             for part in small:
                 part.unlink()
         removed += len(small)
-    _log.info("enrich.cache.compacted", qsv=qsv, parts=removed)
+    _log.info("enrich.cache.compacted", qsv=qsv, parts_removed=removed)
     return removed
 
 
@@ -196,10 +201,20 @@ def _purge_part(part: Path, qsv: str, targets: pa.Array) -> int:
     return int(hits)
 
 
+def _drop_stale_tmp(partition: Path) -> int:
+    """Delete leftover ``.part-*.parquet.tmp`` files, which may hold purged rows (TH03-12)."""
+    with _os_errors(partition.name, _decider(partition)):
+        stale = sorted(partition.glob(_STALE_TMP_GLOB))
+        for tmp in stale:
+            tmp.unlink()
+    return len(stale)
+
+
 def purge_hashes(paths: EnrichPaths, hashes: frozenset[str]) -> int:
     """Remove every cache row whose ``content_hash`` is in ``hashes``, in every version (U03-41).
 
-    Returns the rows deleted; idempotent. A part left empty is deleted (TH03-12).
+    Returns the rows deleted; idempotent. A part left empty is deleted, and so is every stale
+    ``.part-*.parquet.tmp`` file (TH03-12); ``files`` in the log counts both.
     Raises ConfigError for a hash not matching ``^[0-9a-f]{32}$``.
     """
     if any(_HASH_RE.fullmatch(h) is None for h in hashes):
@@ -214,6 +229,7 @@ def purge_hashes(paths: EnrichPaths, hashes: frozenset[str]) -> int:
     rows = files = 0
     for version_dir in versions:
         for partition in _partitions(version_dir):
+            files += _drop_stale_tmp(partition)
             for part in _parts(partition):
                 removed = _purge_part(part, version_dir.name, targets)
                 rows += removed

@@ -11,6 +11,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from structlog.testing import capture_logs
 
 from herness.core.errors import ConfigError, FatalError, SchemaViolation, StoreBusy
 from herness.core.types import Question, QuestionSet
@@ -247,3 +248,47 @@ def test_ut03_38_purge_os_error_mapping(
         purge_hashes(paths, frozenset({H1}))
     assert type(info.value) is expected
     assert part.exists()
+
+
+def test_ut03_38_purge_deletes_stale_tmp_files(paths: EnrichPaths) -> None:
+    """UT03-38 purge deletes stale .part-*.parquet.tmp files that may hold a purged hash."""
+    partition = paths.cache_partition(OLD, "laya", LAYA_V)
+    stale = _write(partition, ".part-01.parquet.tmp", [_row(H1, "q_a", FP_A)])
+    kept = _write(partition, "part-02.parquet", [_row(H2, "q_a", FP_A)])
+    with capture_logs() as logs:
+        assert purge_hashes(paths, frozenset({H1})) == 0
+    assert not stale.exists()
+    assert kept.exists()
+    assert [(e["event"], e["rows"], e["files"]) for e in logs] == [("enrich.cache.purged", 0, 1)]
+
+
+def test_ut03_37_compact_and_migrate_log_catalogue_fields(paths: EnrichPaths) -> None:
+    """UT03-37 compacted logs qsv and parts_removed; migrated logs old, new and rows."""
+    partition = paths.cache_partition(OLD, "laya", LAYA_V)
+    _write(partition, "part-01.parquet", [_row(H1, "q_a", FP_A)])
+    _write(partition, "part-02.parquet", [_row(H2, "q_a", FP_A)])
+    with capture_logs() as logs:
+        compact(paths, OLD)
+        migrate(paths, OLD, NEW_QS)
+    fields = [{k: v for k, v in e.items() if k not in {"log_level", "component"}} for e in logs]
+    assert fields == [
+        {"event": "enrich.cache.compacted", "qsv": OLD, "parts_removed": 2},
+        {"event": "enrich.cache.migrated", "old": OLD, "new": NEW, "rows": 2},
+    ]
+
+
+def test_ut03_36_marker_write_error_names_marker(
+    paths: EnrichPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-36 a failed marker write reports the migration marker by file name only."""
+    real_replace = os.replace
+
+    def _fail_marker(src: str | Path, dst: str | Path) -> None:
+        if Path(dst).suffix == ".json":
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(cache.os, "replace", _fail_marker)
+    with pytest.raises(FatalError) as info:
+        migrate(paths, OLD, NEW_QS)
+    assert info.value.message == f"cannot write migration marker: _migrated_from_{OLD}.json"

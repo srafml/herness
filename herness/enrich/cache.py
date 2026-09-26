@@ -76,11 +76,16 @@ def io_error(exc: OSError, msg: str, *, decider: str | None = None) -> HernessEr
 
 
 def replace_atomic(
-    target: Path, write: Callable[[Path], object], *, decider: str | None = None
+    target: Path,
+    write: Callable[[Path], object],
+    *,
+    kind: str = "cache part",
+    decider: str | None = None,
 ) -> None:
     """Write ``target`` via ``write(tmp)`` on ``.<name>.tmp``, fsync, then ``os.replace``.
 
-    Raises StoreBusy or FatalError (``io_error``) on an OS error, after removing the tmp file.
+    Raises StoreBusy or FatalError (``io_error``) on an OS error, after removing the tmp file;
+    the message names ``kind`` and the file name only.
     """
     tmp = target.with_name(f".{target.name}.tmp")
     try:
@@ -92,7 +97,7 @@ def replace_atomic(
     except OSError as exc:
         with contextlib.suppress(OSError):  # a Windows lock usually blocks the unlink too
             tmp.unlink(missing_ok=True)
-        raise io_error(exc, f"cannot write cache part: {target.name}", decider=decider) from exc
+        raise io_error(exc, f"cannot write {kind}: {target.name}", decider=decider) from exc
 
 
 def write_part(
