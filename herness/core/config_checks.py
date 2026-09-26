@@ -208,7 +208,10 @@ def row_c14(x: CheckContext) -> Iterator[Hit]:
 
 
 def _base_urls(node: object, path: str) -> Iterator[tuple[str, str]]:
-    if isinstance(node, Mapping) and node.get("enabled") is not False:
+    if isinstance(node, list | tuple):  # lists of mappings, at any depth
+        for index, value in enumerate(node):
+            yield from _base_urls(value, f"{path}[{index}]")
+    elif isinstance(node, Mapping) and node.get("enabled") is not False:
         for key, value in node.items():
             if key == "base_url" and isinstance(value, str):
                 yield f"{path}.{key}", value

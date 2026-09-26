@@ -204,6 +204,23 @@ OFFLINE_CASES: list[tuple[str, tuple[tuple[str, object], ...], list[tuple[str, s
         [("C17", "error", "sources.sources.servicenow.base_url")],
     ),
     (
+        "C17",
+        (
+            (
+                "sources.sources.servicenow",
+                {
+                    "enabled": True,
+                    "base_url": "https://sn.example.com",
+                    "mirrors": [
+                        {"base_url": "https://a.example.com"},
+                        {"base_url": "http://b.example.com"},
+                    ],
+                },
+            ),
+        ),
+        [("C17", "error", "sources.sources.servicenow.mirrors[1].base_url")],
+    ),
+    (
         "C20",
         (("sources.sources.snowflake", _snowflake(hosts=[])),),
         [("C20", "error", "sources.sources.snowflake.hosts")],
@@ -528,9 +545,10 @@ def test_ut10_75_altered_port_is_c08a(cfg_dir: Path) -> None:
     [
         ('profiles: ["decider"]', 'profiles: ["reasoning"]', f"{GPU}.decider.services.openjev"),
         ("  openjev:\n", "  openjev-renamed:\n", f"{GPU}.decider.services.openjev"),
-        ("services:\n", "services: 3\nx-unused:\n", f"{GPU}.reasoning.services.vllm-reasoning"),
+        ("services:\n", "services: 3\nx-unused:\n", GPU),
+        ("  openjev:\n", "  openjev: 3\n  openjev-old:\n", f"{GPU}.decider.services.openjev"),
     ],
-    ids=["profile", "missing", "not-a-mapping"],
+    ids=["profile", "missing", "services-not-a-mapping", "service-not-a-mapping"],
 )
 def test_ut10_75_compose_service_rules(cfg_dir: Path, old: str, new: str, path: str) -> None:
     """UT10-75 C08a: a service missing from compose or with the wrong profile is an error."""
@@ -552,3 +570,60 @@ def test_ut10_75_compose_missing_or_unreadable(cfg_dir: Path) -> None:
     assert _shape(list(info.value.issues)) == [  # type: ignore[arg-type]
         ("C08a", "error", "resilience.resilience.gpu.classes")
     ]
+
+
+def test_ut10_75_list_root_is_an_issue(cfg_dir: Path) -> None:
+    """UT10-75 a compose file whose root is a list is one C08a error, never a raise."""
+    (cfg_dir.parent / "docker" / "compose.yaml").write_text("- 1\n- 2\n", encoding="utf-8")
+    cfg = c.load_config("local", config_dir=write_checked_config(cfg_dir.parent / "other"))
+    compose = cfg_dir.parent / "docker" / "compose.yaml"
+    issues = cv.run_cross_checks(cfg, offline=True, include_registry=False, compose_path=compose)
+    assert _shape(issues) == [("C08a", "error", GPU)]
+
+
+def test_ut10_75_missing_compose_still_checks_ports(cfg_dir: Path) -> None:
+    """UT10-75 without a compose file the resilience URL port vs deploy port half still runs."""
+    resilience = cfg_dir / "resilience.yaml"
+    text = resilience.read_text(encoding="utf-8")
+    resilience.write_text(text.replace("127.0.0.1:8100", "127.0.0.1:8101"), encoding="utf-8")
+    (cfg_dir.parent / "docker" / "compose.yaml").unlink()
+    with pytest.raises(c.ConfigError) as info:
+        c.load_config("local", config_dir=cfg_dir)
+    assert _shape(list(info.value.issues)) == [  # type: ignore[arg-type]
+        ("C08a", "error", f"{GPU}.decider.services.openjev.url"),
+        ("C08a", "warn", GPU),
+    ]
+
+
+def test_ut10_19_c03_import_failure_is_an_issue(
+    cfg_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-19 C03: any exception from registry.get is one error naming only its class."""
+
+    def boom(kind: str, name: str) -> object:
+        msg = "secret-ish import text"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(cv.registry, "get", boom)
+    issues = c.validate(cfg_dir, "local", offline=True)
+    assert {s[0] for s in _shape(issues)} == {"C03"}
+    assert all(i.message.endswith(": RuntimeError") for i in issues)
+    assert "secret-ish" not in " ".join(str(i) for i in issues)
+
+
+def test_ut10_19_c06_uses_backend_of_validated_config(
+    cfg_dir: Path, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-19 C06: with backend dotenv the validated config's .env is read, not the keyring."""
+    monkeypatch.setattr(cv, "_wsl_available", lambda: False)
+    monkeypatch.setenv("HERNESS_ENV", "dev")
+    _replace(cfg_dir, "security:\n", "security:\n  secrets: {backend: dotenv}\n")
+    names = cv.secrets.referenced_secret_names(c.load_config("local", config_dir=cfg_dir))
+    for name in names:
+        fake_keyring.store[("herness", name)] = "value-present"  # must not be consulted
+    keys = [n.replace(".", "_").replace("-", "_").upper() for n in names if n != "vllm.api_key"]
+    lines = "".join(f"HERNESS_SECRET__{k}=value-present\n" for k in keys)
+    (cfg_dir.parent / ".env").write_text(lines, encoding="utf-8")
+    assert _online(cfg_dir, "C06") == [("C06", "error", "secret:vllm.api_key")]
+    _replace(cfg_dir, "secrets: {backend: dotenv}", "secrets: {backend: keyring}")
+    assert _online(cfg_dir, "C06") == []

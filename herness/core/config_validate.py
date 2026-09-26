@@ -65,14 +65,26 @@ def _c03(x: CheckContext) -> Iterator[Hit]:
     for kind, name, path in _registry_refs(x):
         try:
             registry.get(kind, name)
-        except ConfigError:
-            yield path, f"no {kind} implementation is registered under this name"
+        except Exception as exc:  # noqa: BLE001 - an import failure too; class name only
+            yield path, f"no {kind} implementation resolves under this name: {type(exc).__name__}"
+
+
+def _backend_get(x: CheckContext) -> Callable[[str], str | None]:
+    """``get`` of the backend ``x.cfg`` configures (not the cached config's, U10-30 rules)."""
+    if x.cfg.security.secrets.backend == "keyring":
+        return secrets._KeyringBackend().get
+    root = x.compose_path.parent.parent  # the config dir's parent, where .env lives
+    return secrets._DotenvBackend(x.cfg.profile, env=x.env, root=root).get
 
 
 def _c06(x: CheckContext) -> Iterator[Hit]:
+    try:
+        lookup = _backend_get(x)
+    except ConfigError:  # dotenv refused outside dev and synth (C12 reports the cause)
+        lookup = None
     for name in secrets.referenced_secret_names(x.cfg):
         try:
-            found = secrets.exists(name)
+            found = lookup is not None and lookup(name) is not None  # value discarded at once
         except ConfigError:
             found = False
         if not found:
@@ -86,8 +98,18 @@ def _compose_services(path: Path) -> Mapping[str, Any] | str:
         return "not checked: compose file missing"
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return "compose file cannot be read or parsed"
-    services = get(doc, "services")
-    return services if isinstance(services, Mapping) else {}
+    services = get(doc, "services")  # None for a non-mapping root
+    return services if isinstance(services, Mapping) else "compose file has no services mapping"
+
+
+def _compose_rule(services: Mapping[str, Any], name: str, gpu_class: str) -> str | None:
+    service = services.get(name)
+    if service is None:
+        return "service is missing from docker/compose.yaml"
+    if not isinstance(service, Mapping):
+        return "compose service is not a mapping"
+    profiles = service.get("profiles")
+    return None if profiles == [gpu_class] else f"compose profiles must be exactly [{gpu_class}]"
 
 
 def _c08a(x: CheckContext) -> Iterator[Hit]:
@@ -95,15 +117,13 @@ def _c08a(x: CheckContext) -> Iterator[Hit]:
     if isinstance(services, str):  # a missing file is a warn until T10-23 ships docker/
         where = f"{_GPU}.classes"
         yield (where, services, "warn") if "missing" in services else (where, services)
-        return
     for gpu_class, spec in items(x.tree, f"{_GPU}.classes"):
         for name, service in items(spec, "services"):
             path = f"{_GPU}.classes.{gpu_class}.services.{name}"
-            if get(services, name) is None:
-                yield path, "service is missing from docker/compose.yaml"
-            elif services[name].get("profiles") != [gpu_class]:
-                yield path, f"compose profiles must be exactly [{gpu_class}]"
-            deploy = _DEPLOY_OF.get(name)
+            rule = None if isinstance(services, str) else _compose_rule(services, name, gpu_class)
+            if rule is not None:
+                yield path, rule
+            deploy = _DEPLOY_OF.get(name)  # the port half needs no compose file
             if deploy and ck.port(get(service, "url")) != get(x.tree, f"deploy.{deploy}.port"):
                 yield f"{path}.url", f"port must equal deploy.{deploy}.port"
 
