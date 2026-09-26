@@ -41,6 +41,8 @@ class OpsStoreHandle:
         return self.db_path / other
 
     def __getattr__(self, name: str) -> Any:
+        if name in {"data_root", "db_path", "migration"} or name.startswith("__"):
+            raise AttributeError(name)  # uninitialised handle or protocol probe: no recursion
         return getattr(self.db_path, name)
 
 

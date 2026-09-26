@@ -35,7 +35,6 @@ def fresh_ops_store(tmp_path: Path) -> Iterator[Path]:
 
 def test_bt02_06_single_row_write_p95(ops_store: OpsStoreHandle) -> None:
     """BT02-06 1,000 run_write inserts into review_item (migration 005): p95 under 10 ms."""
-    migrate()
     payload = core.dump_json({"source": "jira", "value": "team-a"}, field="payload")
     durations: list[float] = []
     for i in range(1_000):
