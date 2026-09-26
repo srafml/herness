@@ -302,6 +302,52 @@ def test_ut05_55_cte_name_only_visible_in_its_scope(guard: sg.SqlGuard) -> None:
     guard.check("SELECT a FROM (WITH t AS (SELECT 1 AS a) SELECT a FROM t) s")
 
 
+_SELF_OR_FORWARD_CTES = (
+    ("WITH t AS (SELECT * FROM t) SELECT * FROM t", "t"),
+    ("WITH a1 AS (SELECT * FROM b), b AS (SELECT 1 AS x) SELECT * FROM a1", "b"),
+    ("WITH b AS (SELECT * FROM b), c AS (SELECT * FROM c) SELECT * FROM b, c", "b"),
+    ("WITH t AS (FROM t) SELECT * FROM t", "t"),
+    ("WITH t AS MATERIALIZED (SELECT * FROM t) SELECT * FROM t", "t"),
+    ("WITH t AS (SELECT * FROM t) SELECT t.* FROM t", "t"),
+    ("WITH t AS (SELECT * FROM t) SELECT * FROM t UNION ALL SELECT 'x'", "t"),
+    ("WITH t AS (SELECT * FROM t) SELECT * FROM t, range(1)", "t"),
+    ("WITH c AS (SELECT * FROM c) SELECT count(*) FROM c", "c"),
+)
+
+
+@pytest.mark.parametrize(("sql", "name"), _SELF_OR_FORWARD_CTES)
+@pytest.mark.parametrize("catalog", [False, True])
+def test_ut05_55_self_and_forward_cte_references_rejected(
+    guard: sg.SqlGuard, sql: str, name: str, *, catalog: bool
+) -> None:
+    """UT05-55 (I2b) a non-recursive self or forward CTE reference fails rule 4."""
+    err = _reject(guard, sql, allow_catalog=catalog)
+    assert err.hint == f"qualify as core.{name}"
+
+
+def test_ut05_55_cte_binding_order(guard: sg.SqlGuard) -> None:
+    """UT05-55 (I2b) earlier siblings, outer CTEs and RECURSIVE self-references still bind."""
+    guard.check("WITH a AS (SELECT 1 AS x), b AS (SELECT x FROM a) SELECT x FROM b")
+    guard.check("WITH o AS (SELECT 1 AS x) SELECT x FROM (WITH i AS (SELECT x FROM o) FROM i)")
+    guard.check(
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) "
+        "SELECT n FROM r"
+    )
+    err = _reject(guard, "WITH RECURSIVE a AS (SELECT x FROM b), b AS (SELECT 1 AS x) FROM a")
+    assert err.hint == "qualify as core.b"
+    err = _reject(guard, "WITH t AS (SELECT * FROM t) SELECT * FROM duckdb_tables(), t",
+                  allow_catalog=True)  # fmt: skip
+    assert err.hint == "qualify as core.t"
+
+
+def test_ut05_55_leftover_star_over_cte_rejected(guard: sg.SqlGuard) -> None:
+    """UT05-55 (I2b backstop) a leftover `*` over a non-table-function source is rejected."""
+    err = _reject(guard, "WITH r AS (SELECT * FROM range(3)) SELECT * FROM r")
+    assert err.hint == "* cannot be expanded here; list the columns by name"
+    guard.check("SELECT * FROM range(3)")
+    guard.check("SELECT * FROM duckdb_columns()", allow_catalog=True)
+
+
 # --- UT05-56 --------------------------------------------------------------------------------
 
 _DENIED_FUNCS = (

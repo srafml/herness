@@ -209,11 +209,16 @@ _TEMPLATES = (
     "SELECT * LIKE '%desc%' FROM {t}",
     "SELECT #3 FROM {t}",
     "SELECT count(*) FROM {t} WHERE #3 IS NOT NULL",
+    "WITH x AS (SELECT {c} FROM x) SELECT * FROM x",
+    "WITH a1 AS (SELECT * FROM b1), b1 AS (SELECT {c} FROM {t}) SELECT * FROM a1",
+    "WITH x AS MATERIALIZED (FROM x) SELECT {c} FROM {t}, x",
 )
 _HINTS = {
     "free text is not available; join enrich.text_redacted on record_id",
     "* cannot be expanded here; list the columns by name",
     "positional columns (#n) are not allowed; name the columns",
+    "qualify as core.x",
+    "qualify as core.b1",
 }
 
 
@@ -337,3 +342,25 @@ def test_st05_05_blocked_column_inside_table_function_args() -> None:
     with pytest.raises(QueryError) as info:
         GUARD.check("SELECT u FROM core.incident, unnest([short_description]) t(u)")
     assert info.value.hint == "free text is not available; join enrich.text_redacted on record_id"
+
+
+_CTE_BYPASSES = (
+    "WITH t AS (SELECT * FROM t) SELECT * FROM t",
+    "WITH a1 AS (SELECT * FROM b), b AS (SELECT 1 AS x) SELECT * FROM a1",
+    "WITH b AS (SELECT * FROM b), c AS (SELECT * FROM c) SELECT * FROM b, c",
+    "WITH t AS (FROM t) SELECT * FROM t",
+    "WITH t AS MATERIALIZED (SELECT * FROM t) SELECT * FROM t",
+    "WITH t AS (SELECT * FROM t) SELECT t.* FROM t",
+    "WITH t AS (SELECT * FROM t) SELECT * FROM t UNION ALL SELECT 'x'",
+    "WITH t AS (SELECT * FROM t) SELECT * FROM t, range(1)",
+    "WITH c AS (SELECT * FROM c) SELECT count(*) FROM c",
+    "WITH t AS (SELECT * FROM t) SELECT * FROM duckdb_tables(), t",
+    "WITH r AS (SELECT * FROM range(3)) SELECT * FROM r",
+)
+
+
+@pytest.mark.parametrize("sql", _CTE_BYPASSES)
+@pytest.mark.parametrize("catalog", [False, True])
+def test_st05_05_self_and_forward_cte_bypass_rejected(sql: str, *, catalog: bool) -> None:
+    """ST05-05 (I2b) self/forward CTE references and leftover stars never reach main.*."""
+    assert _rejected(sql, allow_catalog=catalog)

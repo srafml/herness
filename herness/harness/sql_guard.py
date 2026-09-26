@@ -316,7 +316,7 @@ class SqlGuard:
         """Rule 6, second half: no `#n`, no unexpanded `*`, no blocked column (fail closed)."""
         if sc.has_positional_column(q):
             _fail("column", "positional columns (#n) are not allowed; name the columns")
-        if tables and sc.has_residual_star(q):
+        if sc.has_leaky_star(q, by_expr):
             _fail("column", "* cannot be expanded here; list the columns by name")
         cols = q.find_all(exp.Column)
         refs = set[str]().union(*(self._column_sources(c, by_expr) for c in cols))
