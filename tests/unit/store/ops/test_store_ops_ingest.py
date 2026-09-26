@@ -124,6 +124,9 @@ def test_ut01_22_longer_last_slice_resets(store: Path) -> None:
     rows = ingest.ensure_slices("s", "e", _plan(1, 4), now=later)
     assert rows[1] == SliceRow("s", "e", _day(1), _day(4), "pending", 0, (), 1, None, later)
     assert rows[0].updated_at == NOW
+    ingest.mark_slice_running("s", "e", _day(1), now=later)
+    rows = ingest.ensure_slices("s", "e", _plan(1, 6), now=later)
+    assert rows[1] == SliceRow("s", "e", _day(1), _day(6), "pending", 0, (), 2, None, later)
 
 
 def test_ut01_22_done_with_larger_end_stays_done(store: Path) -> None:
@@ -140,14 +143,23 @@ def test_ut01_22_done_with_larger_end_stays_done(store: Path) -> None:
     assert failed[0] == SliceRow("s", "e", _day(10), _day(12), "pending", 0, (), 0, "boom", later)
 
 
-def test_ut01_22_reads_in_chunks(store: Path) -> None:
-    """UT01-22 more than 500 slice starts are read back in chunks, ordered by start."""
+def test_ut01_22_reads_in_chunks(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT01-22 more than 500 slice starts are read back in chunks of 500, ordered by start."""
+    calls: list[int] = []
+    real_read_all = ingest.read_all
+
+    def counting(sql: str, params: tuple[object, ...], *, max_rows: int) -> list[object]:
+        calls.append(max_rows)
+        return list(real_read_all(sql, params, max_rows=max_rows))
+
+    monkeypatch.setattr(ingest, "read_all", counting)
     plan = [
         (_day(0) + datetime.timedelta(hours=h), _day(0) + datetime.timedelta(hours=h + 1))
         for h in range(1201)
     ]
     rows = ingest.ensure_slices("s", "e", list(reversed(plan)), now=NOW)
     assert [(r.slice_start, r.slice_end) for r in rows] == plan
+    assert calls == [500, 500, 201]
     other = ingest.ensure_slices("s", "e2", plan[:1], now=NOW)
     assert len(other) == 1
 
@@ -156,8 +168,9 @@ def test_ut01_22_corrupt_files_json(store: Path) -> None:
     """UT01-22 a `files` value that is valid JSON but not a list of paths is rejected."""
     ingest.ensure_slices("s", "e", _plan(1), now=NOW)
     _raw("UPDATE sync_slice SET files = '{\"a\": 1}'")
-    with pytest.raises(SchemaViolation, match=r"sync_slice\.files"):
+    with pytest.raises(SchemaViolation, match=r"sync_slice\.files") as info:
         ingest.ensure_slices("s", "e", _plan(1), now=NOW)
+    assert dict(info.value.context) == {"source": "s", "entity": "e"}
 
 
 # --- UT01-23 slice transitions -----------------------------------------------------------
@@ -272,5 +285,19 @@ def test_ut01_95_corrupt_value_in_second_store(store: Path, tmp_path: Path) -> N
 
 def test_ut01_20_reexported_through_package() -> None:
     """UT01-20 the ingest names are the same objects through `herness.store.ops`."""
-    for name in ("Watermark", "get_watermark", "set_watermark", "list_watermarks", "ensure_slices"):
-        assert getattr(ops, name) is getattr(ingest, name)
+    names = (
+        "Watermark",
+        "SliceRow",
+        "FileIngestRow",
+        "get_watermark",
+        "set_watermark",
+        "list_watermarks",
+        "ensure_slices",
+        "mark_slice_running",
+        "mark_slice_done",
+        "mark_slice_failed",
+        "get_file_ingest",
+        "record_file_ingest",
+    )
+    for name in names:
+        assert getattr(ops, name) is getattr(ingest, name), name

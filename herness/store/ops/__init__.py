@@ -20,6 +20,17 @@ from .core import (
     run_write,
 )
 
+# 02 migrate
+from .migrate import (
+    MIGRATION_RANGES,
+    MigrationReport,
+    migrate,
+    ops_health,
+    pending_migrations,
+    schema_version,
+)
+
+# isort: split
 # 01 ingest
 from .ingest import (
     FileIngestRow,
@@ -34,16 +45,6 @@ from .ingest import (
     mark_slice_running,
     record_file_ingest,
     set_watermark,
-)
-
-# 02 migrate
-from .migrate import (
-    MIGRATION_RANGES,
-    MigrationReport,
-    migrate,
-    ops_health,
-    pending_migrations,
-    schema_version,
 )
 
 __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted

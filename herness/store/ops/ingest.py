@@ -134,18 +134,18 @@ def set_watermark(
     return run_write(fn, op="set_watermark")
 
 
-def _paths(text: str, *, field: str) -> tuple[str, ...]:
-    value = load_json(text, field=field)
+def _paths(row: sqlite3.Row, table: str) -> tuple[str, ...]:
+    value = load_json(row["files"], field=f"{table}.files")
     if not isinstance(value, list) or not all(isinstance(p, str) for p in value):
-        msg = f"invalid JSON in {field}"
-        raise SchemaViolation(msg)
+        msg = f"invalid JSON in {table}.files"
+        raise SchemaViolation(msg, source=str(row["source"]), entity=str(row["entity"]))
     return tuple(cast(list[str], value))
 
 
 def _slice(row: sqlite3.Row) -> SliceRow:
     keys = ("slice_start", "slice_end", "updated_at")
     start, end, stamp = (clock.parse_utc(row[k]) for k in keys)
-    files = _paths(row["files"], field="sync_slice.files")
+    files = _paths(row, "sync_slice")
     head = (row["source"], row["entity"], start, end, cast(SliceStatus, row["status"]))
     return SliceRow(*head, row["rows"], files, row["attempts"], row["last_error"], stamp)
 
@@ -238,7 +238,7 @@ def get_file_ingest(fingerprint: str) -> FileIngestRow | None:
     if row is None:
         return None
     mtime, ingested_at = clock.parse_utc(row["mtime"]), clock.parse_utc(row["ingested_at"])
-    files = _paths(row["files"], field="file_ingest.files")
+    files = _paths(row, "file_ingest")
     head = (row["fingerprint"], row["source"], row["entity"], row["path"], row["size_bytes"])
     return FileIngestRow(*head, mtime, row["rows"], files, ingested_at)
 
