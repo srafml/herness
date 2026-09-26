@@ -75,7 +75,7 @@ def test_ut03_50_version_from_pinned_image() -> None:
     assert decider.version == "openjev-0.4.0/openjev-latest"
 
 
-@pytest.mark.parametrize("samples", [0, 2, 4, 7])
+@pytest.mark.parametrize("samples", [0, 2, 4, 7, True])
 def test_ut03_50_samples_must_be_1_3_or_5(samples: int) -> None:
     """UT03-50 samples outside None/1/3/5 are refused at construction."""
     with pytest.raises(ConfigError, match="samples"):

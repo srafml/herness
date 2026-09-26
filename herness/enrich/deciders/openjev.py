@@ -124,7 +124,7 @@ class _JevHttpBackend:
         samples: int | None,
         client_factory: Callable[[], httpx2.Client] | None,
     ) -> None:
-        if samples is not None and samples not in _SAMPLES:
+        if samples is not None and (isinstance(samples, bool) or samples not in _SAMPLES):
             msg = "samples must be None, 1, 3 or 5"
             raise ConfigError(msg)
         self._model = model
