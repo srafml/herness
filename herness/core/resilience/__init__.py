@@ -18,6 +18,7 @@ _EXPORTS: Final[dict[str, str]] = {
     "FaultRule": "faults",
     "GpuStateReader": "ports",
     "HealthRow": "ports",
+    "ModelChain": "chain",
     "NAMED_POINTS": "faults",
     "ProcessState": "_state",
     "ResilienceBackend": "ports",
@@ -29,6 +30,7 @@ _EXPORTS: Final[dict[str, str]] = {
     "breaker": "breaker",
     "call_with_timeout": "retry",
     "classify": "classify",
+    "complete_validated": "chain",
     "fault_point": "faults",
     "guard": "breaker",
     "load_fault_plan": "faults",
@@ -60,6 +62,10 @@ if TYPE_CHECKING:
         guard as guard,
         register_probe as register_probe,
         run_due_probes as run_due_probes,
+    )
+    from herness.core.resilience.chain import (
+        ModelChain as ModelChain,
+        complete_validated as complete_validated,
     )
     from herness.core.resilience.classify import classify as classify
     from herness.core.resilience.faults import (
