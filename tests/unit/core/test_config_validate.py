@@ -55,6 +55,11 @@ def _set(tree: Tree, path: str, value: object) -> None:
 _REAL_TREE = cv._tree
 
 
+def _present(name: str) -> str:
+    """A stored value; redact.hmac_key must be 64 hex once herness.core.redact is imported."""
+    return "ab" * 32 if name == "redact.hmac_key" else "value-present"
+
+
 def _edit(monkeypatch: pytest.MonkeyPatch, *edits: tuple[str, object]) -> None:
     real = _REAL_TREE
 
@@ -344,10 +349,13 @@ def test_ut10_19_c06_missing_secret(
     cfg = c.load_config("local", config_dir=cfg_dir)
     names = cv.secrets.referenced_secret_names(cfg)
     for name in names:
-        fake_keyring.store[("herness", name)] = "value-present"
+        fake_keyring.store[("herness", name)] = _present(name)
     assert _online(cfg_dir, "C06") == []
     del fake_keyring.store[("herness", "openjev_api_key")]
     assert _online(cfg_dir, "C06") == [("C06", "error", "secret:openjev_api_key")]
+    # With herness.core.redact imported, config_hash would resolve the key id first and a
+    # dead store is then one load error (U10-11 falls back only for a missing secret).
+    monkeypatch.setattr(c, "_KEY_ID_PROVIDER", None)
     fake_keyring.error = RuntimeError("store down")
     assert len(_online(cfg_dir, "C06")) == len(names)
     assert c.validate(cfg_dir, "local", offline=True) == []  # offline skips C06
@@ -620,7 +628,7 @@ def test_ut10_19_c06_uses_backend_of_validated_config(
     _replace(cfg_dir, "security:\n", "security:\n  secrets: {backend: dotenv}\n")
     names = cv.secrets.referenced_secret_names(c.load_config("local", config_dir=cfg_dir))
     for name in names:
-        fake_keyring.store[("herness", name)] = "value-present"  # must not be consulted
+        fake_keyring.store[("herness", name)] = _present(name)  # must not be consulted
     keys = [n.replace(".", "_").replace("-", "_").upper() for n in names if n != "vllm.api_key"]
     lines = "".join(f"HERNESS_SECRET__{k}=value-present\n" for k in keys)
     (cfg_dir.parent / ".env").write_text(lines, encoding="utf-8")
