@@ -94,7 +94,11 @@ torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_pla
 
 [tool.herness.module_budgets]
 default = 400
-overrides = { "herness/harness/loop.py" = { limit = 220, reason = "design 05 §5.2" } }
+
+[tool.herness.module_budgets.overrides]
+"herness/harness/loop.py" = { limit = 220, reason = "design 05 §5.2" }
+# Interim T08-07 / T08-08 stand-ins used by herness.store.ops.core (T02-04); deleted by T08-08.
+"herness/store/ops/_shims.py" = { limit = 80, reason = "interim resilience shims (T02-04)" }
 
 [tool.herness.licences]
 allowed = ["MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "PSF-2.0", "Python-2.0", "ISC", "MPL-2.0"]
@@ -404,6 +408,23 @@ type = "forbidden"
 # impl 02 §2.2: herness.store imports nothing from L2 and above; later cards append packages.
 source_modules = ["herness.store"]
 forbidden_modules = ["herness.model", "herness.harness", "herness.enrich"]
+
+[[tool.importlinter.contracts]]
+name = "ops-areas-acyclic"
+type = "forbidden"
+# impl 02 §2.2, §2.3 rule 5: an ops area module imports from the ops package only
+# herness.store.ops.core; it never imports another area or the package herness.store.ops.
+# Only herness/store/ops/__init__.py imports the areas. `_shims` holds the interim T08-07 /
+# T08-08 stand-ins that core calls; the wildcards pick up each area as its card adds it.
+source_modules = ["herness.store.ops.*"]
+forbidden_modules = ["herness.store.ops", "herness.store.ops.*"]
+as_packages = false
+ignore_imports = [
+    "herness.store.ops.* -> herness.store.ops.core",
+    "herness.store.ops.core -> herness.store.ops._shims",
+]
+# The area -> core ignore matches nothing until the first area (T02-05 migrate) exists.
+unmatched_ignore_imports_alerting = "none"
 
 [[tool.importlinter.contracts]]
 name = "herness.core must not import herness.store or herness.harness"
