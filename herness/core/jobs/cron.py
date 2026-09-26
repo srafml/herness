@@ -158,7 +158,8 @@ class CronExpr:
         start = t.astimezone(tz).replace(second=0, microsecond=0, tzinfo=None)
         ceiling = start + _FOLD_MARGIN
         day = start.date()
-        # 367 dates (today and 366 back): a yearly cron such as Feb 29 stays findable.
+        # 367 dates (the start date and 366 back): a yearly cron is found across a leap year,
+        # e.g. `30 23 1 3 *` at 2024-03-01 23:00 finds 2023-03-01, 366 dates back.
         for _ in range(_LATEST_DAYS + 1):
             if self.matches_date(day):
                 for naive in self._times(day, reverse=True):
