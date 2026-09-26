@@ -1,9 +1,8 @@
 """Unit tests for herness.store.ops.migrate and migrations 001-002 (impl 02 U02-44 … U02-50,
-U02-129; UT02-32 … UT02-35, UT02-37, UT02-40 … UT02-42, UT02-70, UT02-71, ST02-15).
+U02-129; UT02-33 … UT02-35, UT02-37, UT02-40 … UT02-42, UT02-70, UT02-71, ST02-15).
 
-UT02-32 and UT02-37 belong to T02-06; the parts here cover only the tables of 001 and 002.
-Tests that need migrations 003-006 run on a temp copy of the package directory in which any
-of 003-006 that has not landed yet is a placeholder table.
+UT02-32 and the 003-006 parts of UT02-37 are in test_store_ops_migrations.py (T02-06). Tests
+that edit or add migration files run on a temp copy of the package directory.
 """
 
 from __future__ import annotations
@@ -24,7 +23,6 @@ from herness.store.errors import MigrationError
 from herness.store.ops import core
 from herness.store.ops.migrate import (
     MIGRATION_RANGES,
-    MigrationReport,
     migrate,
     ops_health,
     pending_migrations,
@@ -45,7 +43,6 @@ _TABLES_001_002 = {
     "worker",
     "resilience_event",
 }
-_INDEXES_002 = {"job_idem_active", "job_claim", "resilience_event_kind_ts", "resilience_event_ts"}
 _TS = "2026-09-26T10:00:00.000000Z"
 
 
@@ -56,15 +53,12 @@ def _package_sql() -> dict[str, bytes]:
 
 @pytest.fixture
 def mig_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ops_store: Path) -> Path:
-    """A temp copy of the migrations package with 003-006 placeholders; the runner reads it."""
+    """A temp copy of the migrations package (001-006); the runner reads it."""
     target = tmp_path / "migrations"
     target.mkdir()
     for name, data in _package_sql().items():
         (target / name).write_bytes(data)
-    for version in range(3, 7):
-        if not list(target.glob(f"{version:03d}_*.sql")):
-            sql = f"CREATE TABLE placeholder_{version:03d} (id INTEGER PRIMARY KEY) STRICT;\n"
-            (target / f"{version:03d}_placeholder.sql").write_text(sql, encoding="utf-8")
+    assert len(list(target.glob("00[1-6]_*.sql"))) == 6
     monkeypatch.setattr(_MOD, "_migrations_root", lambda: target)
     return target
 
@@ -108,25 +102,6 @@ def test_ut02_70_ranges_table() -> None:
     assert _MOD._owner_of(65) is None
     assert _MOD._owner_of(0) is None
     assert _MOD._owner_of(100) is None
-
-
-# --- UT02-32 part: 001-002 on the real package ----------------------------------------------
-
-
-def test_ut02_32_package_migrations_create_001_002_tables(ops_store: Path) -> None:
-    """UT02-32 (001-002 part) a fresh store gets the 001/002 tables, indexes and two rows."""
-    report = migrate()
-    assert isinstance(report, MigrationReport)
-    assert report.applied[:2] == ("001_ingestion_health", "002_jobs")
-    assert _recorded()[:2] == [(1, "ingestion_health"), (2, "jobs")]
-    assert _TABLES_001_002 | {"schema_migration"} <= _names("table")
-    assert {"sync_slice_status"} | _INDEXES_002 <= _names("index")
-    for table in _TABLES_001_002:
-        row = core.read_one("SELECT sql FROM sqlite_schema WHERE name = ?", (table,))
-        assert row is not None
-        assert str(row["sql"]).rstrip().endswith("STRICT"), table
-    assert report.version == schema_version() >= 2
-    assert report.duration_ms >= 0
 
 
 # --- UT02-33 idempotent ---------------------------------------------------------------------
