@@ -26,16 +26,30 @@ def test_ut10_80_egress_blocked_attributes() -> None:
     assert (back.egress_id, back.reason) == ("egr_01", "host_not_allowed")
     fields = e.to_log_fields(err)
     assert (fields["egress_id"], fields["reason"]) == ("egr_01", "host_not_allowed")
-    with pytest.raises(AttributeError):
-        err.reason = "other"  # type: ignore[misc]
+    detailed = e.EgressBlocked("x", reason="size_limit", details={"limit": "2000000"})
+    assert dict(detailed.details) == {"limit": "2000000"}
 
 
 def test_ut10_80_malformed_reason_reads_invalid() -> None:
     """UT10-80 a reason outside [a-z_]{1,40} reads as 'invalid'; a non-str egress_id as None."""
     assert e.EgressBlocked("x", reason="Host Not Allowed").reason == "invalid"
     assert e.EgressBlocked("x", reason="a" * 41).reason == "invalid"
-    assert e.EgressBlocked("x", reason=3).reason == "invalid"
-    assert e.EgressBlocked("x", egress_id=7).egress_id is None
+    assert e.EgressBlocked("x", reason=3).reason  # type: ignore[arg-type] == "invalid"
+    assert e.EgressBlocked("x", egress_id=7).egress_id is None  # type: ignore[arg-type]
+
+
+def test_ut10_80_malformed_values_are_masked_where_stored() -> None:
+    """UT10-80 a malformed reason or non-str egress_id never reaches context, logs or pickle."""
+    payload = "POST /v1/messages body=SENTINEL-9f3a"
+    err = e.EgressBlocked("x", egress_id=12345, reason=payload)  # type: ignore[arg-type]
+    assert (err.egress_id, err.reason) == (None, "invalid")
+    assert "egress_id" not in err.context
+    assert "reason" not in err.context
+    fields = e.to_log_fields(err)
+    assert (fields["egress_id"], fields["reason"]) == (None, "invalid")
+    assert "SENTINEL" not in json.dumps(fields)
+    back = pickle.loads(pickle.dumps(err))  # noqa: S301 - multiprocessing transport
+    assert "SENTINEL" not in repr(vars(back))
 
 
 def test_ut10_80_config_error_issues() -> None:

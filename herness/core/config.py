@@ -284,8 +284,10 @@ def _key_id(cfg: HernessConfig) -> str:
         return "unresolved"
     try:
         return _KEY_ID_PROVIDER(cfg)
-    except ConfigError:  # the key secret is absent
-        return "unresolved"
+    except ConfigError as exc:  # U10-11: only a missing key secret falls back (U10-28 message)
+        if exc.message.startswith("secret not found: "):
+            return "unresolved"
+        raise
 
 
 def config_hash(cfg: HernessConfig, *, key_id: str | None = None) -> str:

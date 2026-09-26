@@ -26,6 +26,7 @@ _ELLIPSIS: Final = "…"
 
 type Scalar = str | int | float | bool | None
 type ErrorKind = Literal["retryable", "recoverable", "fatal", "unknown"]
+type _Kw = str | Mapping[str, str] | None  # EgressBlocked hint or details (impl 10 U10-108)
 
 
 def _bound(text: str, limit: int) -> str:
@@ -290,18 +291,17 @@ class PermissionDenied(FatalError):
 
 
 class EgressBlocked(FatalError):
-    """The egress guard refused an off-network call; ``egress_id``, ``reason`` keywords (R-19)."""
+    """The egress guard refused an off-network call; masked ``egress_id``, ``reason`` (R-19)."""
 
-    @property
-    def egress_id(self) -> str | None:  # egr_<ulid>; None for socket-guard and loopback refusals
-        return value if isinstance(value := self._context.get("egress_id"), str) else None
+    _extra_attrs: ClassVar[tuple[str, ...]] = ("egress_id", "reason")
 
-    @property
-    def reason(self) -> str | None:
-        code = self._context.get("reason")  # U10-51/58/59 code; anything else reads as "invalid"
-        if isinstance(code, str) and re.fullmatch(r"[a-z_]{1,40}", code):
-            return code
-        return None if code is None else "invalid"
+    def __init__(
+        self, message: str, *, egress_id: str | None = None, reason: str | None = None, **kw: _Kw
+    ) -> None:
+        super().__init__(message, **kw)  # type: ignore[arg-type]  # kw holds only hint and details
+        self.egress_id = egress_id if isinstance(egress_id, str) else None  # egr_<ulid> or None
+        ok = reason is None or re.fullmatch(r"[a-z_]{1,40}", str(reason)) is not None
+        self.reason = reason if ok else "invalid"  # a malformed code is never stored or logged
 
 
 # --- 08 (resilience and jobs) ---

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import functools
 import hashlib
 import json
@@ -9,9 +10,11 @@ import re
 import tempfile
 import types
 from collections.abc import Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import pydantic_core
 import pytest
 import structlog
 from hypothesis import given, settings
@@ -180,6 +183,46 @@ def test_ut10_17_missing_key_secret_is_unresolved(
 
     monkeypatch.setattr(c, "_KEY_ID_PROVIDER", missing)
     assert c.config_hash(cfg) == c.config_hash(cfg, key_id="unresolved")
+
+
+def test_ut10_17_other_key_id_failures_propagate(
+    cfg_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-17 only a missing secret falls back; a backend failure propagates (U10-11)."""
+    cfg = _load(cfg_dir)
+
+    def unavailable(_cfg: c.HernessConfig) -> str:
+        msg = "secret backend unavailable: keyring"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(c, "_KEY_ID_PROVIDER", unavailable)
+    with pytest.raises(ConfigError, match=r"^secret backend unavailable: keyring$"):
+        c.config_hash(cfg)
+    assert HASH_RE.fullmatch(c.config_hash(cfg, key_id="kid_given"))  # key_id given: no provider
+
+
+# Fixed input with a Path leaf, Decimal, date, tuple and int dict keys; the value is pinned so a
+# Windows/Linux difference in the effective dict or canonical JSON fails CI (card acceptance).
+PINNED_HASH = "cfg_700ea630db05d0a7"
+
+
+def test_ut10_15_pinned_hash_is_os_independent() -> None:
+    """UT10-15 a fixed config hashes to one pinned value on every OS (POSIX paths, R-14)."""
+    python = {
+        "sources": {"files": {"inbox": Path("data") / "inbox", "patterns": ("*.csv", "*.xlsx")}},
+        "weights": {"by_criticality": {1: Decimal("50000"), 2: Decimal("10000.50")}},
+        "security": {"redaction": {"key": "secret:redact.hmac_key", "directory_file": None}},
+        "decisions": {"as_of": datetime.date(2026, 9, 24), "band": 0.9},
+        "logging": {"level": "DEBUG"},
+    }
+    fake = types.SimpleNamespace(
+        model_dump=lambda mode="python": (
+            json.loads(pydantic_core.to_json(python)) if mode == "json" else python
+        ),
+        security=types.SimpleNamespace(redaction=types.SimpleNamespace(directory_file=None)),
+    )
+    assert c.effective_dict(fake)["sources"]["files"]["inbox"] == "data/inbox"  # type: ignore[arg-type]
+    assert c.config_hash(fake, key_id="kid_pinned") == PINNED_HASH  # type: ignore[arg-type]
 
 
 def _permuted(node: Any) -> Any:
