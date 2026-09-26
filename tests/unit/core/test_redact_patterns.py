@@ -9,6 +9,7 @@ re-pointed at ``Redactor.scan`` when U10-41 lands.
 from __future__ import annotations
 
 import dataclasses
+import time
 from typing import get_args
 
 import pytest
@@ -62,7 +63,7 @@ def _raw(text: str) -> list[tuple[str, int, int, str]]:
 
 def test_ut10_36_entity_types_and_order() -> None:
     """UT10-36 EntityType members, DETECTION_ORDER and the detector order."""
-    members = set(get_args(redact.EntityType.__value__))
+    members = set(get_args(redact.EntityType))
     assert members == {
         "EMAIL", "PHONE", "IP", "PERSON", "EMPLOYEE_ID", "USER_ID", "CREDENTIAL",
         "URL_TOKEN", "CARD", "NATIONAL_ID", "CUSTOM",
@@ -159,6 +160,11 @@ _NEGATIVE: list[tuple[str, str]] = [
     ("12345678901234567890", "CARD"),
     ("123-456-789", "NATIONAL_ID"),
     ("E1234567", "EMPLOYEE_ID"),
+    ("U1234", "USER_ID"),
+    ("XU12345", "USER_ID"),
+    ("U123456", "USER_ID"),
+    ("PRJ-42", "CUSTOM"),
+    ("XPRJ-0042", "CUSTOM"),
     ("INC0012345", "PHONE"),
     ("CHG0012345", "PHONE"),
     ("12345678", "PHONE"),
@@ -236,11 +242,73 @@ def test_ut10_36_url_token_edge_cases() -> None:
     ]
 
 
-def test_ut10_36_malformed_inputs_yield_nothing() -> None:
-    """UT10-36 an unparsable URL and a one-colon IPv6 candidate yield no span."""
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("http://[bad/?sig=SECRETSIG", "SECRETSIG"),
+        ("http://[::1/?code=abc", "abc"),
+        ("http://h]/?key=K1", "K1"),
+        ("see http://h]/p?x=1&access_token=AT9#sig=frag", "AT9"),
+    ],
+)
+def test_ut10_36_url_token_fails_closed_on_malformed_url(text: str, value: str) -> None:
+    """UT10-36 a URL urlsplit rejects still yields its secret query values (fail closed)."""
     by_type = {d.type: d for d in _DETECTORS}
-    assert list(by_type["URL_TOKEN"].find("http://[bad/?token=abc")) == []
+    found = [(text[s:e], v) for s, e, v in by_type["URL_TOKEN"].find(text)]
+    assert found == [(value, value)]
+
+
+def test_ut10_36_malformed_inputs_yield_nothing() -> None:
+    """UT10-36 a malformed URL without a query, or with '#' first, and a one-colon IPv6."""
+    by_type = {d.type: d for d in _DETECTORS}
+    assert list(by_type["URL_TOKEN"].find("http://[bad/p#x?token=abc")) == []
+    assert list(by_type["URL_TOKEN"].find("http://[bad/p")) == []
     assert list(by_type["IP"].find("ab:cd and 1::g")) == []
+
+
+@pytest.mark.parametrize(
+    "ssn",
+    [
+        "".join(chr(0x0660 + int(c)) if c.isdigit() else c for c in "123-45-6789"),
+        "".join(chr(0xFF10 + int(c)) if c.isdigit() else c for c in "123-45-6789"),
+    ],
+    ids=["arabic_indic", "fullwidth"],
+)
+def test_ut10_36_config_patterns_unicode_digits(ssn: str) -> None:
+    """UT10-36 config-pattern prefilter admits Unicode digits that the config regex matches."""
+    text = f"id {ssn} on file"
+    assert ("NATIONAL_ID", ssn) in _detect(text)
+
+
+def test_ut10_36_pem_multiple_blocks_and_unterminated() -> None:
+    """UT10-36 PEM: each BEGIN to the nearest END; a trailing BEGIN without END is ignored."""
+    one = "-----BEGIN PRIVATE KEY-----\nA\n-----END PRIVATE KEY-----"
+    two = "-----BEGIN EC PRIVATE KEY-----\nB\n-----END EC PRIVATE KEY-----"
+    text = f"{one} mid {two} -----BEGIN PRIVATE KEY----- tail"
+    pem = [text[s:e] for s, e, _ in _DETECTORS[0].find(text) if text[s:e].startswith("-----")]
+    assert pem == [one, two]
+
+
+_ADVERSARIAL = {
+    "pem_begin_no_end": "-----BEGIN PRIVATE KEY-----\n" * 20_000,
+    "jwt_runs": "eyJ-" * 100_000,
+    "url_scheme": "a." * 200_000,
+    "url_userinfo": "a://" + "b:" * 100_000,
+    "phone_digits": "1 " * 200_000,
+    "email_dots": "a@" + "b." * 200_000,
+}
+
+
+@pytest.mark.parametrize("name", sorted(_ADVERSARIAL))
+def test_ut10_36_detectors_linear_on_adversarial_input(name: str) -> None:
+    """UT10-36 every detector finishes adversarial 400-540 KB inputs well under a second."""
+    text = _ADVERSARIAL[name]
+    started = time.perf_counter()
+    for det in _DETECTORS:
+        if det.prefilter(text):
+            for _ in det.find(text):
+                pass
+    assert time.perf_counter() - started < 1.0
 
 
 def test_ut10_36_pem_block_wins_over_inner_credentials() -> None:

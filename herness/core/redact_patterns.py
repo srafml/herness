@@ -30,7 +30,7 @@ __all__ = [
     "normalize_value",
 ]
 
-type EntityType = Literal[
+EntityType = Literal[
     "EMAIL",
     "PHONE",
     "IP",
@@ -70,14 +70,13 @@ _PHONE_DIGITS: Final = range(9, 16)  # 9-15 digits
 _MIN_COLONS: Final = 2
 _NANP_DIGITS: Final = 10
 
-# CREDENTIAL (a)-(f), in spec order; the int is the span group (0 = whole match).
+# CREDENTIAL (a): the spec's `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END ...` is
+# quadratic on repeated BEGINs without an END; _find_pem gives the same spans in linear time.
+_PEM_BEGIN: Final = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", _I)
+_PEM_END: Final = re.compile(r"-----END [A-Z ]*PRIVATE KEY-----", _I)
+# CREDENTIAL (b)-(f), in spec order; the int is the span group (0 = whole match). JWT
+# segments are bounded to 4096 and the URL scheme to 32 characters so each is linear.
 _CREDENTIAL: Final[tuple[tuple[re.Pattern[str], int], ...]] = (
-    (
-        re.compile(
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----", _I
-        ),
-        0,
-    ),
     (re.compile(r"\bauthorization\s*:\s*(?:bearer|basic)\s+([A-Za-z0-9._~+/=-]+)", _I), 1),
     (
         re.compile(
@@ -88,9 +87,12 @@ _CREDENTIAL: Final[tuple[tuple[re.Pattern[str], int], ...]] = (
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), 0),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,255}\b"), 0),
     (re.compile(r"\bxox[abpors]-[A-Za-z0-9-]{10,200}\b"), 0),
-    (re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}"), 0),
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_-]{5,4096}+\.[A-Za-z0-9_-]{5,4096}+\.[A-Za-z0-9_-]{5,4096}+"),
+        0,
+    ),
     (re.compile(r"AccountKey=([A-Za-z0-9+/=]{20,})", _I), 1),
-    (re.compile(r"\b[a-z][a-z0-9+.-]*://([^\s/:@]+:[^\s/@]+)@", _I), 1),
+    (re.compile(r"\b[a-z][a-z0-9+.-]{0,31}://([^\s/:@]+:[^\s/@]+)@", _I), 1),
 )
 _CREDENTIAL_HINTS: Final = ("=", ":", "-----", "AKIA", "gh", "xox", "eyJ", "AccountKey")
 
@@ -110,6 +112,7 @@ _IPV4: Final = re.compile(rf"\b{_OCTET}(?:\.{_OCTET}){{3}}\b")
 _IPV6: Final = re.compile(r"(?<![\w:])[0-9A-Fa-f:]{2,39}(?![\w:])")
 _IPV4_LOOSE: Final = re.compile(r"[0-9]{1,3}(?:\.[0-9]{1,3}){3}")
 
+_ANY_DECIMAL: Final = re.compile(r"\d")
 _LAST_FIRST: Final = re.compile(r"^([^,]+),\s*(.+)$")
 _UPPER_IDS: Final = frozenset({"EMPLOYEE_ID", "USER_ID", "NATIONAL_ID", "CARD"})
 
@@ -139,21 +142,48 @@ def _has_digit(text: str) -> bool:
     return any(digit in text for digit in _DIGITS)
 
 
+def _has_decimal(text: str) -> bool:
+    # Config patterns keep Unicode ``\d``; this regex ``\d`` is exactly ``str.isdecimal``
+    # (category Nd) but runs in C instead of a per-character Python loop.
+    return _ANY_DECIMAL.search(text) is not None
+
+
 def _credential_prefilter(text: str) -> bool:
     return any(hint in text for hint in _CREDENTIAL_HINTS)
 
 
+def _find_pem(text: str) -> Found:
+    """Each BEGIN up to the nearest following END; stop at the first BEGIN with no END."""
+    pos = 0
+    while begin := _PEM_BEGIN.search(text, pos):
+        end = _PEM_END.search(text, begin.end())
+        if end is None:
+            return
+        yield begin.start(), end.end(), text[begin.start() : end.end()]
+        pos = end.end()
+
+
 def _find_credentials(text: str) -> Found:
+    yield from _find_pem(text)
     for pattern, group in _CREDENTIAL:
         yield from _spans(pattern, text, group)
 
 
+def _raw_query(url: str) -> str:
+    """The query of ``url``; when urlsplit rejects it, the text between ``?`` and ``#``."""
+    try:
+        return urlsplit(url).query
+    except ValueError:
+        # Fail closed: a malformed host must not hide secret query parameters.
+        start, frag = url.find("?"), url.find("#")
+        if start < 0 or 0 <= frag < start:
+            return ""
+        return url[start + 1 : frag] if frag >= 0 else url[start + 1 :]
+
+
 def _query_values(url: str, offset: int) -> Found:
     """Yield the raw value substring of each secret-named query parameter of ``url``."""
-    try:
-        query = urlsplit(url).query
-    except ValueError:
-        return
+    query = _raw_query(url)
     if not query:
         return
     pos = offset + url.index("?") + 1
@@ -209,7 +239,7 @@ def _pattern_detector(kind: EntityType, sources: Sequence[str], *, needs_digit: 
     patterns = tuple(re.compile(source, _I) for source in sources)
 
     def prefilter(text: str) -> bool:
-        return bool(patterns) and (not needs_digit or _has_digit(text))
+        return bool(patterns) and (not needs_digit or _has_decimal(text))
 
     def find(text: str) -> Found:
         for pattern in patterns:
