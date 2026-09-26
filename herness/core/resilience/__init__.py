@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Final
 
 _EXPORTS: Final[dict[str, str]] = {
     "AsyncCompleter": "ports",
+    "CircuitBreaker": "breaker",
     "ChainRegistry": "ports",
     "ClientInfo": "ports",
     "DeciderLike": "ports",
@@ -23,13 +24,17 @@ _EXPORTS: Final[dict[str, str]] = {
     "RetryPolicy": "policies",
     "TracerLike": "ports",
     "bind_chain_registry": "_state",
+    "breaker": "breaker",
     "bind_ops_backend": "_state",
     "classify": "classify",
     "fault_point": "faults",
+    "guard": "breaker",
     "load_fault_plan": "faults",
     "policy": "policies",
     "process_state": "_state",
+    "register_probe": "breaker",
     "reset_process_state": "_state",
+    "run_due_probes": "breaker",
 }
 
 __all__: tuple[str, ...] = tuple(sorted(_EXPORTS))
@@ -43,6 +48,13 @@ if TYPE_CHECKING:
         bind_ops_backend as bind_ops_backend,
         process_state as process_state,
         reset_process_state as reset_process_state,
+    )
+    from herness.core.resilience.breaker import (
+        CircuitBreaker as CircuitBreaker,
+        breaker as breaker,
+        guard as guard,
+        register_probe as register_probe,
+        run_due_probes as run_due_probes,
     )
     from herness.core.resilience.classify import classify as classify
     from herness.core.resilience.faults import (
@@ -73,8 +85,8 @@ def __getattr__(name: str) -> object:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
     module = importlib.import_module(f"{__name__}.{submodule}")
-    # `classify` names its (callable) submodule too: always hand out the module, never
-    # the function, so `import herness.core.resilience.classify as m` works in any order.
+    # `classify` and `breaker` name their (callable) submodules too: always hand out the
+    # module, never the function, so `import herness.core.resilience.<name> as m` works.
     value: object = module if name == submodule else getattr(module, name)
     globals()[name] = value
     return value
