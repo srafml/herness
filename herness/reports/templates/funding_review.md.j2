@@ -1,0 +1,13 @@
+{#- Funding review, Markdown (impl 09 U09-28): slot 3 renders the `fund` cards, then the
+    score.funding top-N table (rows with unconfirmed weights marked). Other slots: base. -#}
+{% extends "base.md.j2" %}
+{% import "partials/components.md.j2" as c %}
+{% block recommendations %}
+{{ c.section(r, 'recommendations', 'Funding: top-N recommendations') -}}
+{% for card in r.cards %}{{ c.card(card) }}{% endfor %}
+{% if r.funding_table is not none %}
+### Top candidates by priority
+
+{{ c.table(r.funding_table) if r.funding_table.rows else c.empty('No scored candidates.') -}}
+{% endif %}
+{% endblock %}

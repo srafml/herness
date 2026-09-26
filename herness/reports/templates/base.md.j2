@@ -1,0 +1,162 @@
+{#- Markdown report base (impl 09 U09-28, design 5.2): watermark, slots 0-1, the shared slots
+    2 and 4-9, evidence appendix (10) and run appendix (11). Kind templates fill the
+    `recommendations` block (slot 3). Context `r`: the ReportData fields, `r.evidence`
+    (EvidenceEntry list); no manifest field is read. Headings stay within # to ###. -#}
+{% import "partials/components.md.j2" as c %}
+{% if not r.publishable %}
+> **Not for decision**
+
+{% endif %}
+{% block header %}
+{% set h = r.header %}
+{% set cov = h.coverage %}
+# {{ c.segs(h.title, true) }}
+
+| Field | Value |
+| --- | --- |
+| Run | {{ c.one(h.run_id) }} |
+| Kind | {{ c.one(h.kind) }} |
+| Build | {{ c.one(h.build_id) }} |
+| Data as of | {{ c.stamp(h.data_as_of) }} |
+| Depth | {{ c.one(h.depth) }} |
+| Profile | {{ c.one(h.profile) }} |
+| Rendered at | {{ c.stamp(h.rendered_at) }} |
+| Tasks | {{ c.one(cov.done_tasks) }} of {{ c.one(cov.planned_tasks) }} done, {{ c.one(cov.dead_tasks) }} dead |
+| Must-cover | {{ c.one(cov.must_cover_done) }} of {{ c.one(cov.must_cover_total) }} covered |
+| Findings | {{ c.one(cov.verified_findings) }} verified, {{ c.one(cov.rejected_findings) }} rejected |
+| Publishable | {{ 'yes' if cov.publishable else 'no' }} |
+| Number verification (gate 2) | {{ 'passed' if h.gate2_passed else 'failed' }}, {{ c.one(h.gate2_numbers) }} numbers, {{ c.one(h.gate2_failed) }} failed |
+
+{% endblock %}
+{% block banners %}
+{% for b in r.banners %}{{ c.banner(b) }}{% endfor %}
+{% endblock %}
+{% block content %}
+{{ c.section(r, 'executive_summary', 'Executive summary') -}}
+{% block recommendations %}{% endblock %}
+{% block portfolio %}
+{{ c.section(r, 'portfolio', 'Portfolio') -}}
+{% for p in r.portfolio_blocks %}
+### Scenario: {{ c.one(p.scenario) }}{{ ' (custom)' if p.custom }}
+
+- Budget: {{ c.num(p.budget) }}
+- Solver status: {{ c.one(p.solver_status) }}
+
+{{ c.table(p.table) if p.table.rows else c.empty('No candidates selected.') -}}
+{% endfor %}
+{% endblock %}
+{% block org_scorecards %}
+{{ c.section(r, 'org_scorecards', 'Org scorecards') -}}
+{% for sc in r.scorecards %}
+### {{ c.one(sc.entity_type) }}: {{ c.one(sc.entity_id) }}
+
+{{ c.table(sc.table) -}}
+{% endfor %}
+{% endblock %}
+{% block actions %}
+{{ c.section(r, 'actions', 'Recommended actions') -}}
+{% if r.levers %}
+| entity\_type | entity\_id | metric | target\_kind | delta\_usd | rationale | unconfirmed | cards |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+{% for lv in r.levers %}
+| {{ c.one(lv.entity_type) }} | {{ c.one(lv.entity_id) }} | {{ c.one(lv.metric) }} | {{ c.one(lv.target_kind) }} | {{ c.num(lv.delta_usd) }} | {{ c.one(lv.rationale) }} | {{ 'yes' if lv.unconfirmed else 'no' }} | {{ c.one(lv.card_anchors|join(', ')) }} |
+{% endfor %}
+
+{% else %}
+{{ c.empty('No action levers.') -}}
+{% endif %}
+{% endblock %}
+{% block retrospective %}
+{{ c.section(r, 'retrospective', "Did last quarter's recommendations work?") -}}
+{% if r.retro.empty_text is not none %}
+{{ c.empty(r.retro.empty_text) -}}
+{% else %}
+{% for verdict, count in r.retro.verdict_counts.items() %}
+- {{ c.one(verdict) }}: {{ c.one(count) }}
+{% endfor %}
+
+{% endif %}
+{% for item in r.retro.items %}
+### {{ c.one(item.rec_id) }}: {{ c.one(item.target_id) }}
+
+{{ c.segs(item.summary) }}
+
+Decision: {{ c.one('none recorded' if item.decision is none else item.decision) }}
+
+{{ c.table(item.outcomes) if item.outcomes.rows else c.empty('No outcome rows.') -}}
+{% endfor %}
+{% endblock %}
+{% block risks_and_caveats %}
+{% set cv = r.caveats %}
+{{ c.section(r, 'risks_and_caveats', 'Data quality and caveats') -}}
+{% for block in cv.blocks %}{{ c.text(block) }}{% endfor %}
+{% if cv.dq_failed.rows %}
+### Failed data quality checks
+
+{{ c.table(cv.dq_failed) -}}
+{% endif %}
+{% if cv.unmapped_share is not none %}
+Unmapped incident share: {{ c.one(cv.unmapped_share) }}
+
+{% endif %}
+{% if cv.unconfirmed_keys %}
+### Unconfirmed weights
+
+{{ c.bullets(cv.unconfirmed_keys) -}}
+{% endif %}
+{% if cv.dead_tasks %}
+### Dead tasks
+
+{{ c.pairs(('role', 'objective', 'first error line'), cv.dead_tasks) -}}
+{% endif %}
+{% if cv.contested %}
+### Contested findings
+
+{{ c.bullets(cv.contested) -}}
+{% endif %}
+{% if cv.removed %}
+### Removed items
+
+{{ c.pairs(('where', 'reason'), cv.removed) -}}
+{% endif %}
+{% if cv.flags %}
+### Flags
+
+{% for name, values in cv.flags.items() %}
+- {{ c.one(name) }}: {{ c.one(values|join(', ')) }}
+{% endfor %}
+
+{% endif %}
+{% endblock %}
+{% block method %}
+{% set m = r.method %}
+{{ c.section(r, 'method', 'Method') -}}
+- Depth: {{ c.one(m.depth) }}
+- Profile: {{ c.one(m.profile) }}
+- Number verification (gate 2): {{ 'passed' if m.gate2_passed else 'failed' }}, {{ c.one(m.gate2_numbers) }} numbers checked, {{ c.one(m.gate2_failed) }} failed
+
+{% if m.role_calls %}
+{{ c.pairs(('role', 'model calls'), m.role_calls.items()) -}}
+{% endif %}
+{% endblock %}
+{% endblock %}
+{% block evidence_appendix %}
+## Evidence appendix
+
+{% for e in r.evidence %}{{ c.evidence_entry(e) }}{% else %}{{ c.empty('No evidence cited.') }}{% endfor %}
+{% endblock %}
+{% block run_appendix %}
+{% set ra = r.run_appendix %}
+## Run appendix
+
+### Ranked entities
+
+{{ c.pairs(('rank', 'entity_type', 'entity_id'), ra.ranked_entities) -}}
+### Tasks by role and status
+
+{{ c.pairs(('role', 'status', 'count'), ra.task_counts) -}}
+- Tokens: {{ c.one(ra.tokens_input) }} input, {{ c.one(ra.tokens_output) }} output
+- Cost: {{ c.one(ra.cost_usd) }}
+- Config hash: {{ c.one(ra.config_hash) }}
+- Template version: {{ c.one(TEMPLATE_VERSION) }}
+{% endblock %}

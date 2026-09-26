@@ -1,0 +1,128 @@
+{#- Markdown components of the report outline (impl 09 U09-28, design 5.2).
+    Every interpolated value passes the `md` filter (md_escape); the only raw HTML is the
+    evidence anchor, built from a query id checked against q_ + 16 lowercase hex digits.
+    Inline macros (one, ok, ev, num, segs, stamp) emit no newline; block macros end with a
+    blank line. Charts are HTML-only; the data tables carry the evidence links. -#}
+{% macro one(x) %}{{ x|string|replace('\r', ' ')|replace('\n', ' ')|md }}{% endmacro %}
+{% macro ok(q) %}{% if q is string and q|length == 18 and q[:2] == 'q_' and not q[2:].strip('0123456789abcdef') %}y{% endif %}{% endmacro %}
+{% macro ev(text, q) %}{% if ok(q) %}[{{ one(text) }}](#ev-{{ q }}){% else %}{{ one(text) }}{% endif %}{% endmacro %}
+{% macro num(cell) %}{% if cell.query_id is none %}{{ one(cell.text) }}{% else %}{{ ev(cell.text, cell.query_id) }}{% endif %}{% endmacro %}
+{% macro stamp(dt) %}{% if dt is none %}n/a{% else %}{{ one(dt.isoformat()) }}{% endif %}{% endmacro %}
+{#- segments_to_md in template form (U09-18); `inline` folds newlines for headings and cells. -#}
+{% macro segs(segments, inline=false) %}
+{% for s in segments %}
+{% set t = s.text|replace('\r', ' ')|replace('\n', ' ') if inline else s.text %}
+{% if s.kind == 'number' %}
+{% if s.query_id is none %}n/a{% else %}{{ ev(s.text, s.query_id) }}{% endif %}
+{% elif s.kind == 'uncited' %}
+_[uncited]_ {{ t|md -}}
+{% else %}
+{{ t|md -}}
+{% endif %}
+{% endfor %}
+{% endmacro %}
+{% macro text(block) %}
+{{ segs(block.segments) }}
+
+{% endmacro %}
+{% macro empty(message) %}
+_{{ one(message) }}_
+
+{% endmacro %}
+{% macro table(t) %}
+|{% for col in t.columns %} {{ one(col) }} |{% endfor +%}
+|{% for col in t.columns %} --- |{% endfor +%}
+{% for row in t.rows %}
+{% set marked = t.marked[loop.index0] %}
+|{% for cell in row %} {{ num(cell) }}{% if loop.first and marked %} _(unconfirmed)_{% endif %} |{% endfor +%}
+{% endfor %}
+
+{% endmacro %}
+{% macro pairs(head, items) %}
+|{% for col in head %} {{ one(col) }} |{% endfor +%}
+|{% for col in head %} --- |{% endfor +%}
+{% for item in items %}
+|{% for value in item %} {{ one(value) }} |{% endfor +%}
+{% endfor %}
+
+{% endmacro %}
+{% macro bullets(items) %}
+{% for item in items %}
+- {{ one(item) }}
+{% endfor %}
+
+{% endmacro %}
+{% macro banner(b) %}
+> **Note:** {{ one(b.text) }}
+{% for detail in b.details %}
+> - {{ one(detail) }}
+{% endfor %}
+
+{% endmacro %}
+{% macro section(r, sid, default) %}
+## {{ one(r.section_titles.get(sid, default)) }}
+
+{% for block in r.sections[sid] %}{{ text(block) }}{% endfor %}
+{% endmacro %}
+{% macro card(card) %}
+### {{ one(card.rank) }}. {{ segs(card.headline, true) }}
+
+Target: {{ one(card.target_type) }} {{ one(card.target_id) }}
+
+{{ segs(card.summary) }}
+
+{% if card.extras %}
+| Measure | Value |
+| --- | --- |
+{% for name, cell in card.extras %}
+| {{ one(name) }} | {{ num(cell) }} |
+{% endfor %}
+
+{% endif %}
+{% if card.finding_ids %}
+Findings: {% for fid in card.finding_ids %}{{ one(fid) }}{{ ', ' if not loop.last }}{% endfor +%}
+
+{% endif %}
+{% endmacro %}
+{% macro evidence_entry(e) %}
+{% if ok(e.query_id) %}
+<a id="ev-{{ e.query_id }}"></a>
+{% endif %}
+### {{ one(e.query_id) }}
+
+{% if not e.found %}
+Evidence not found for this build.
+
+{% else %}
+{% set ns = namespace(run=0) %}
+{% for n in range(1, e.sql.count('`') + 1) if '`' * n in e.sql %}
+{% set ns.run = n %}
+{% endfor %}
+{% set fence = '`' * ([3, ns.run + 1]|max) %}
+{{ fence }}sql
+{{ e.sql }}
+{{ fence }}
+
+- Build: {{ one(e.build_id) }}
+- Row count: {{ one('n/a' if e.row_count is none else e.row_count) }}
+- Executed at: {{ one('n/a' if e.executed_at is none else e.executed_at) }}
+
+{% if e.params %}
+{{ pairs(('parameter', 'value'), e.params.items()) -}}
+{% endif %}
+{% if e.result_sample is none %}
+{{ empty('Sample not stored for this build') -}}
+{% elif not e.result_sample %}
+{{ empty('The stored sample has no rows.') -}}
+{% else %}
+|{% for col in e.sample_columns %} {{ one(col) }} |{% endfor +%}
+|{% for col in e.sample_columns %} --- |{% endfor +%}
+{% for row in e.result_sample %}
+|{% for col in e.sample_columns %} {{ one(row.get(col, '')) }} |{% endfor +%}
+{% endfor %}
+
+{% endif %}
+{% endif %}
+Used by: {% for place in e.used_by %}{{ one(place) }}{{ ', ' if not loop.last }}{% endfor +%}
+
+{% endmacro %}
