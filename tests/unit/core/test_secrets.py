@@ -419,6 +419,60 @@ def test_ut10_35_scrub_secrets_is_idempotent() -> None:
     assert once == twice
 
 
+def test_ut10_34_scrub_secrets_failure_returns_fixed_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT10-34 any internal failure replaces the whole event with log.scrub.failed (TH10-07)."""
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(s, "_scrub_value", _boom)
+    event = {"event": "core.test.x", "secret": VALUE, "other": "kept"}
+    out = s.scrub_secrets(None, "info", event)
+    assert out == {"event": "log.scrub.failed"}
+
+
+def _nest(depth: int, leaf: object) -> object:
+    return leaf if depth == 0 else {"child": _nest(depth - 1, leaf)}
+
+
+def test_ut10_34_depth_beyond_six_left_unscrubbed(fake_keyring: MemoryKeyring) -> None:
+    """UT10-34 a container first reached past depth 6 is returned unwalked, secrets and all.
+
+    The depth cap only stops recursion *into* a dict/list/tuple; a string is masked regardless
+    of how deep it sits once reached. So a value wrapped in 6 dicts (the leaf string is reached
+    directly, not as a container) is still masked, but wrapped in 7 the innermost dict itself is
+    handed back unwalked at depth 7 and the string inside is never visited.
+    """
+    fake_keyring.store[(SVC, "deep.key")] = VALUE
+    s.resolve("deep.key")
+    shallow = s.scrub_secrets(None, "info", {"event": "x", "top": _nest(6, VALUE)})
+    deep = s.scrub_secrets(None, "info", {"event": "x", "top": _nest(7, VALUE)})
+    assert VALUE not in json.dumps(shallow)
+    assert VALUE in json.dumps(deep)
+
+
+def test_ut10_34_known_value_scrub_is_idempotent(fake_keyring: MemoryKeyring) -> None:
+    """UT10-34 the *** known-value path is idempotent: scrubbing its own output changes nothing."""
+    fake_keyring.store[(SVC, "idem.key")] = VALUE
+    s.resolve("idem.key")
+    event = {"event": "core.test.x", "field": f"prefix {VALUE} suffix"}
+    once = s.scrub_secrets(None, "info", event)
+    twice = s.scrub_secrets(None, "info", dict(once))
+    assert once == twice
+    assert once["field"] == "prefix *** suffix"
+
+
+def test_ut10_35_long_string_truncated_before_scanning() -> None:
+    """UT10-35 a string over 64 KiB is cut to 64 KiB before any pattern is scanned."""
+    long_value = "a" * 70_000 + "TAIL_MARKER_ABC"
+    out = s.scrub_secrets(None, "info", {"event": "x", "field": long_value})
+    assert len(out["field"]) == 64 * 1024
+    assert "TAIL_MARKER_ABC" not in out["field"]
+
+
 def test_st10_15_exception_with_secret_is_scrubbed(
     fake_keyring: MemoryKeyring, capsys: pytest.CaptureFixture[str]
 ) -> None:
