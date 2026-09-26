@@ -55,6 +55,7 @@ class RecordedResult:
 
     `rows` hold the DuckDB cells as fetched (Decimal, date, datetime stay typed) so that
     `format_result` can apply its cell rules; the evidence sample holds the JSON-safe form.
+    Each call returns its own lists (cache hits are copies), so callers may replace or edit them.
     """
 
     query_id: str
