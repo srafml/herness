@@ -696,3 +696,17 @@ def test_ut05_45_scrub_failure_in_cleaning_fails_closed(
     assert "kind" not in line  # field keys that cannot be scrubbed are dropped
     assert "n" not in line
     assert tc._leaf(t.TraceType.budget, str) == "budget"
+
+
+def test_ut05_45_pattern_credential_across_scrub_limit_leaves_no_prefix(tmp_path: Path) -> None:
+    """UT05-45 a pattern-found credential (not a known value) crossing the 64 KiB scrub limit
+    in a field string leaves no prefix: the dropped tail is at least 512 chars."""
+    body = "".join(chr(65 + i) + str(i % 10) for i in range(20))  # built at runtime
+    token = "ghp_" + body
+    tracer = _tracer(tmp_path)
+    tracer.emit("retry", note="x" * (64 * 1024 - 30) + " " + token + " tail")
+    tracer.close()
+    (line,) = _lines(tmp_path)
+    assert "ghp_" not in line["note"]
+    assert set(line["note"]) == {"x"}
+    assert len(line["note"]) == 64 * 1024 - 512

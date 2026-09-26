@@ -27,6 +27,8 @@ type _Text = Callable[[str], str | None]
 _MAX_DEPTH: Final = 64
 # herness.core.secrets scrubs at most the first 64 KiB of a string (U10-32).
 _SCRUB_LIMIT: Final = 64 * 1024
+# Minimum tail dropped past that limit: also covers pattern-found credentials (ghp_, xox...).
+_MIN_CUT_TAIL: Final = 512
 
 
 def _scrub(text: str) -> str | None:
@@ -35,7 +37,7 @@ def _scrub(text: str) -> str | None:
     if not isinstance(out, str):
         return None
     if len(text) > _SCRUB_LIMIT:  # the scrubber saw a prefix: a cut secret can only be the tail
-        tail = max(map(len, known_values()), default=0)
+        tail = max(_MIN_CUT_TAIL, max(map(len, known_values()), default=0))
         return out[: max(0, len(out) - tail)]
     return out
 
@@ -95,7 +97,10 @@ def clean_fields(fields: Mapping[str, object]) -> dict[str, object]:
 
 
 def clean_payload(payload: object, max_chars: int) -> object:
-    """JSON-safe payload: each string redacted and scrubbed whole, then cut to ``max_chars``."""
+    """JSON-safe payload: each string redacted and scrubbed whole, then cut to ``max_chars``.
+
+    The 64 KiB scrub limit thereby caps strings near 64 KiB even if ``max_chars`` is larger.
+    """
 
     def text(value: str) -> str | None:
         redacted = redact_text(value)
