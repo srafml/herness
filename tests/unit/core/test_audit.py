@@ -9,6 +9,7 @@ import sys
 import tempfile
 import types
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -283,7 +284,6 @@ def _chain(cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
         clk.set(DAY2 + datetime.timedelta(seconds=n))
         a.audit("review_decision", USER, **_review(n))
     monkeypatch.setattr(a.clock, "now", lambda: datetime.datetime.now(UTC))  # real mtime ages
-    monkeypatch.setattr(a.clock, "now", lambda: datetime.datetime.now(UTC))  # real mtime ages
     logs = cfg.paths.logs
     return logs / "audit-2026-09-23.jsonl", logs / "audit-2026-09-24.jsonl"
 
@@ -438,3 +438,89 @@ def test_ut10_72_last_secret_set_times(
     assert got == {"a": DAY2, "b": DAY1, "c": None}
     assert a.last_secret_set_times(logs, ["a"]) == {"a": DAY2}
     assert a.last_secret_set_times(logs / "none", ["a"]) == {"a": None}
+
+
+# --- review round 1 regressions --------------------------------------------------------------
+
+
+def test_ut10_57_rf_midnight_writer_appends_to_the_day_of_its_ts(
+    cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-57 (RF) a writer that waits for the lock across midnight chains in the new day file."""
+    clk = _Clock(monkeypatch, DAY1.replace(hour=23, minute=59, second=59))
+    a.audit("egress", "system", egress_id="egr_0", reason="r")
+    real_lock = a.log_lock
+
+    @contextmanager
+    def racing(lock_path: Path, **kw: Any) -> Iterator[None]:
+        with real_lock(lock_path, **kw):
+            if clk.now < DAY2:  # another writer got the lock first, just after midnight
+                clk.set(DAY2.replace(hour=0))
+                other = {"egress_id": "egr_b", "reason": "r"}
+                a._audit_locked(cfg, "egress", "system", other, lock_held=True)
+            yield
+
+    monkeypatch.setattr(a, "log_lock", racing)
+    a.audit("egress", "system", egress_id="egr_a", reason="r")
+    monkeypatch.setattr(a.clock, "now", lambda: datetime.datetime.now(UTC))
+    assert a.verify_chain(cfg.paths.logs) == a.ChainReport(True, 2, 3, None)
+    for path in cfg.paths.logs.glob("audit-*.jsonl"):
+        for line in _lines(path):
+            assert path.name == f"audit-{json.loads(line)['ts'][:10]}.jsonl"
+
+
+def test_ut10_57_rf_thread_and_os_waits_share_one_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-57 (RF) thread-lock wait plus OS-lock wait stay within timeout_s (D10-08)."""
+    now = [0.0]
+
+    class SlowLock:
+        def acquire(self, timeout: float) -> bool:
+            now[0] += 0.6  # the thread lock used 0.6 s of the 1.0 s budget
+            return True
+
+        def release(self) -> None:
+            return None
+
+    def held(_fd: int, *, unlock: bool = False) -> None:
+        raise OSError
+
+    lock = tmp_path / ".l"
+    monkeypatch.setitem(a._THREAD_LOCKS, str(lock.resolve()), SlowLock())
+    monkeypatch.setattr(a, "_os_lock", held)
+    monkeypatch.setattr(a, "_monotonic", lambda: now[0])
+    monkeypatch.setattr(a, "_sleep", lambda s: now.__setitem__(0, now[0] + s))
+    with pytest.raises(StoreBusy, match="lock timeout"):
+        a.log_lock(lock, timeout_s=1.0).__enter__()
+    assert 1.0 <= now[0] < 1.0 + a._POLL_S + 1e-9
+
+
+def test_ut10_58_rf_non_str_actor_and_list_action_rejected(cfg: c.HernessConfig) -> None:
+    """UT10-58 (RF) a None or list actor and a list action raise SchemaViolation, not TypeError."""
+    for actor in (None, [USER]):
+        with pytest.raises(SchemaViolation, match="audit actor invalid"):
+            a.audit("egress", actor, egress_id="e", reason="r")  # type: ignore[arg-type]
+    with pytest.raises(SchemaViolation, match="audit fields invalid"):
+        a.audit("admin_action", USER, action=["purge"], target="t")
+    assert not list(cfg.paths.logs.glob("audit-*.jsonl"))
+
+
+def test_ut10_21_rf_unreadable_audit_file_is_fatal(cfg: c.HernessConfig) -> None:
+    """UT10-21 (RF) an OSError in the LAST fallback scan maps to FatalError, as in U10-60."""
+    (cfg.paths.logs / "audit-2026-09-01.jsonl").mkdir(parents=True)
+    with pytest.raises(FatalError, match=r"^audit write failed: config_change$"):
+        a.record_config_change(cfg)
+
+
+def test_ut10_72_rf_malformed_target_and_ts_are_skipped(tmp_path: Path) -> None:
+    """UT10-72 (RF) a list target or a non-string ts is skipped; nothing is raised."""
+    base = {"event": "admin_action", "fields": {"action": "secret_set", "target": "a"}}
+    lines = [
+        {**base, "ts": "2026-09-24T00:00:00.000000Z"},
+        {**base, "ts": 12},
+        {**base, "ts": None, "fields": {"action": "secret_set", "target": ["a"]}},
+    ]
+    path = tmp_path / "audit-2026-09-24.jsonl"
+    path.write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
+    assert a.last_secret_set_times(tmp_path, ["a"]) == {"a": DAY2.replace(hour=0)}

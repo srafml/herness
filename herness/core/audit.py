@@ -50,6 +50,7 @@ _ACTIONS: Final = frozenset({
     "deploy_pull", "deploy_prune", "deploy_install", "deploy_render", "profile_switch", "purge",
     "backup", "redact_rekey",
 })  # fmt: skip
+_SECRET_ACTIONS: Final = frozenset({"secret_set", "secret_rotate"})
 _ACTOR_RE: Final = re.compile(r"[0-9a-f]{32}")
 _COUNTS_RE: Final = re.compile(r"[A-Za-z0-9_.]+=[^;=]*(?:;[A-Za-z0-9_.]+=[^;=]*)*")
 _LINE_KEYS: Final = frozenset(
@@ -93,8 +94,9 @@ def _busy(path: Path, *, timed_out: bool = False) -> StoreBusy:
 def log_lock(lock_path: Path, *, timeout_s: float = 10.0) -> Iterator[None]:
     """Hold the per-process and the OS lock on ``lock_path``; StoreBusy after ``timeout_s``."""
     local = _THREAD_LOCKS.setdefault(str(lock_path.resolve()), threading.Lock())  # atomic
+    deadline = _monotonic() + timeout_s  # one deadline for both waits (D10-08)
     with ExitStack() as stack:
-        if not local.acquire(timeout=timeout_s):
+        if not local.acquire(timeout=max(0.0, deadline - _monotonic())):
             raise _busy(lock_path, timed_out=True)
         stack.callback(local.release)
         try:
@@ -102,7 +104,6 @@ def log_lock(lock_path: Path, *, timeout_s: float = 10.0) -> Iterator[None]:
         except OSError as exc:
             raise _busy(lock_path) from exc
         stack.callback(os.close, fd)
-        deadline = _monotonic() + timeout_s
         while True:
             try:
                 _os_lock(fd)
@@ -180,8 +181,8 @@ def _valid_value(value: object) -> bool:
     return value is None or isinstance(value, int)
 
 
-def _validate(event: str, actor: str, fields: dict[str, Any]) -> None:
-    if not (actor in {"system", "eval"} or _ACTOR_RE.fullmatch(actor)):
+def _validate(event: str, actor: object, fields: dict[str, Any]) -> None:
+    if not (isinstance(actor, str) and (actor in {"system", "eval"} or _ACTOR_RE.fullmatch(actor))):
         msg = "audit actor invalid"
         raise SchemaViolation(msg)
     required, optional = _FIELDS.get(event, frozenset()), _OPTIONAL.get(event, frozenset())
@@ -190,7 +191,7 @@ def _validate(event: str, actor: str, fields: dict[str, Any]) -> None:
         required
         and required <= fields.keys() <= required | optional
         and all(_valid_value(v) for v in fields.values())
-        and (event != "admin_action" or fields["action"] in _ACTIONS)
+        and (event != "admin_action" or str(fields["action"]) in _ACTIONS)
         and (counts is None or (isinstance(counts, str) and _COUNTS_RE.fullmatch(counts)))
     ):
         msg = "audit fields invalid"  # generic: values and key names are never echoed (ENG §3.4)
@@ -207,13 +208,26 @@ _HASH_MEMO: list[tuple[HernessConfig, str | None]] = []  # config_hash of the la
 
 
 def _cached_hash(cfg: HernessConfig) -> str | None:
-    if not _HASH_MEMO or _HASH_MEMO[0][0] is not cfg:
-        try:
-            value: str | None = config_hash(cfg)
-        except ConfigError:
-            value = None
-        _HASH_MEMO[:] = [(cfg, value)]
-    return _HASH_MEMO[0][1]
+    memo = next(iter(_HASH_MEMO), None)
+    if memo is not None and memo[0] is cfg:
+        return memo[1]
+    try:
+        value: str | None = config_hash(cfg)
+    except ConfigError:
+        value = None
+    _HASH_MEMO[:] = [(cfg, value)]
+    return value
+
+
+@contextmanager
+def _fatal_on_io(event: str) -> Iterator[None]:
+    """U10-60 step 6: StoreBusy or OSError -> ``audit.write.failed`` and FatalError."""
+    try:
+        yield
+    except (StoreBusy, OSError) as exc:
+        _log.error("audit.write.failed", audit_event=event, error_type=type(exc).__name__)
+        msg = f"audit write failed: {event}"
+        raise FatalError(msg) from exc
 
 
 def _audit_locked(
@@ -222,29 +236,21 @@ def _audit_locked(
     """U10-60 body: validate, build the chained line and append it."""
     _validate(event, actor, fields)
     logs = Path(cfg.paths.logs)
-    hash_value = _cached_hash(cfg)
+    lock = logs / _LOCK_NAME
+    record: dict[str, Any] = {"event": event, "actor": actor, "fields": fields}
+    record |= {"audit_id": "aud_" + new_ulid(), "config_hash": _cached_hash(cfg)}
 
     def build(prev: bytes | None) -> bytes:
-        record = {
-            "ts": clock.format_utc(clock.now()),
-            "audit_id": "aud_" + new_ulid(),
-            "event": event,
-            "actor": actor,
-            "fields": fields,
-            "config_hash": hash_value,
-            "prev_hash": "0" * 64 if prev is None else sha256_hex(prev),
-        }
+        record["prev_hash"] = "0" * 64 if prev is None else sha256_hex(prev)
         return (canonical_json(record) + "\n").encode("utf-8")
 
-    try:
+    with _fatal_on_io(event):
         logs.mkdir(parents=True, exist_ok=True)
-        path = logs / f"audit-{clock.utc_day(clock.now())}.jsonl"
-        lock, glob = logs / _LOCK_NAME, _CHAIN_GLOB
-        append_jsonl_locked(path, build, lock_path=lock, chain_glob=glob, lock_held=lock_held)
-    except (StoreBusy, OSError) as exc:
-        _log.error("audit.write.failed", audit_event=event, error_type=type(exc).__name__)
-        msg = f"audit write failed: {event}"
-        raise FatalError(msg) from exc
+        with nullcontext() if lock_held else log_lock(lock):
+            now = clock.now()  # one reading under the lock names the day file and gives ts
+            record["ts"] = clock.format_utc(now)
+            path = logs / f"audit-{clock.utc_day(now)}.jsonl"
+            append_jsonl_locked(path, build, lock_path=lock, chain_glob=_CHAIN_GLOB, lock_held=True)
     # T08-05: herness_audit_lines_total{event} += 1
 
 
@@ -352,7 +358,7 @@ def record_config_change(cfg: HernessConfig, *, actor: str = "system") -> str:
     logs, snaps = Path(cfg.paths.logs), Path(cfg.paths.data) / "config_snapshots"
     for folder in (logs, snaps):
         folder.mkdir(parents=True, exist_ok=True)
-    with log_lock(logs / _LOCK_NAME):
+    with _fatal_on_io("config_change"), log_lock(logs / _LOCK_NAME):
         old = _last_audited_hash(cfg)
         if old == h:
             return h
@@ -379,12 +385,9 @@ def last_secret_set_times(logs_dir: Path, names: Iterable[str]) -> dict[str, dat
         if not missing:
             break
         fields, target = record["fields"], record["fields"].get("target")
-        if record.get("event") != "admin_action" or fields.get("action") not in {
-            "secret_set",
-            "secret_rotate",
-        }:
+        if record.get("event") != "admin_action" or fields.get("action") not in _SECRET_ACTIONS:
             continue
-        if target in missing:
+        if isinstance(target, str) and target in missing:
             with suppress(SchemaViolation):
                 found[target] = clock.parse_utc(record.get("ts"))
                 missing.discard(target)
