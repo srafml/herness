@@ -88,14 +88,13 @@ def project(vectors: np.ndarray, pca: PcaModel, *, device: str, chunk: int = 262
 
     Per chunk `(x - mean) @ components.T` in fp32 on `device`, divided by the row norm
     clipped at 1e-12, so zero rows stay zero. CUDA OOM propagates (caller halves `chunk`).
+    The model arrays are cast to float32, so a float64 model (e.g. reloaded) also works.
     """
-    import torch  # noqa: PLC0415 - lazy: importing this module must never load torch
-
     n = int(vectors.shape[0])
     dims = int(pca.components.shape[0])
     out = np.empty((n, dims), dtype=np.float32)
-    comp_t = torch.from_numpy(pca.components).to(device).T
-    mean = torch.from_numpy(pca.mean).to(device)
+    comp_t = _to_device(pca.components, device).T
+    mean = _to_device(pca.mean, device)
     for start in range(0, n, chunk):
         xc = _to_device(vectors[start : start + chunk], device)
         y = (xc - mean) @ comp_t

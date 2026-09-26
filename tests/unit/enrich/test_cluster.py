@@ -113,6 +113,22 @@ def test_ut03_85_project_empty_input() -> None:
     assert out.shape == (0, 4)
 
 
+def test_ut03_85_project_accepts_float64_pca_model() -> None:
+    """UT03-85 a float64 PcaModel (e.g. reloaded from a snapshot) still projects to float32."""
+    rng = np.random.default_rng(9)
+    model = fit_pca(rng.standard_normal((60, 1024)).astype(np.float32), dims=8, seed=1)
+    wide = PcaModel(
+        components=model.components.astype(np.float64),
+        mean=model.mean.astype(np.float64),
+        fit_id=model.fit_id,
+    )
+    vectors = rng.standard_normal((12, 1024)).astype(np.float32)
+    out = project(vectors, wide, device="cpu", chunk=5)
+    assert out.dtype == np.float32
+    np.testing.assert_allclose(np.linalg.norm(out, axis=1), 1.0, atol=1e-5)
+    np.testing.assert_allclose(out, project(vectors, model, device="cpu"), atol=1e-6)
+
+
 # --- UT03-86: spherical_kmeans --------------------------------------------------------------
 
 
