@@ -80,7 +80,10 @@ _EXCLUDE_SQL: Final = """ AND NOT EXISTS (
 
 _log = get_logger("enrich.resolve")
 _QID_RE: Final = re.compile(r"[a-z][a-z0-9_]{1,40}")  # U03-02 pattern, re-checked (TH03-19)
-_SPOT_KEYS: Final = ("purpose", "question_set_version", "question", "content_hash")
+# U03-83 names ("purpose", "question_set_version", "question", "content_hash") plus scope
+# {question_set_version}; `create_if_absent` (U03-148) appends scope keys to match_keys without
+# deduplication, which impl 02 rejects, so the version is matched through `scope` only.
+_SPOT_KEYS: Final = ("purpose", "question", "content_hash")
 _INSERT_SQL: Final = """
 INSERT INTO enrich.decision
 SELECT record_id, question, answer, probability, agreement, decider, decider_version, $qsv,
