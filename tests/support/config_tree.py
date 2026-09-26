@@ -1,19 +1,11 @@
-"""Full, valid ``config/`` tree for ``load_config`` tests (impl 10 §11 ``tmp_config``).
+"""Full, valid ``config/`` trees for ``load_config`` tests (impl 10 §11 ``tmp_config``).
 
-Copies the repository's shipped owner files (``decisions``, ``eval``, ``metrics``, ``models``,
-``weights``) and adds minimal sections for the files not shipped yet. Two adaptations are
-applied to the copies, both reported as open items of T10-03:
-
-* ``decisions.yaml``, ``eval.yaml`` and ``models.yaml`` ship without the ``version: 1`` line
-  U10-16 requires; it is prepended. T10-13 confirmed this is permanent, not transitional:
-  ``DecisionsConfig``, ``load_eval_config`` and the ``set(_raw()) <= {...}`` assertion of
-  ``test_ut05_125_repository_config_loads`` each reject an extra ``version`` key, so the real
-  files cannot carry it (Ruling R2); ``_versioned`` only ever touches these test copies.
-* ``metrics.yaml`` ships ``metrics: []`` until T04-08; one catalog entry is inserted.
-
-``write_repo_config`` (T10-13, T10-03b) copies the real ``config/`` tree: every shipped file
-verbatim except the two adaptations above (``memory.yaml`` joins the ``version: 1`` one for the
-same reason: UT07-04 validates the raw file with ``MemoryConfig``, which rejects the key).
+``write_full_config`` copies the repository's shipped owner files ``decisions``, ``eval``,
+``models``, ``weights`` and ``resilience`` verbatim and adds minimal ``version: 1`` sections for
+the rest plus its own ``herness.yaml`` and profiles. ``write_repo_config`` (T10-13, T10-03b)
+copies the whole shipped ``config/`` tree verbatim. Both apply one adaptation: ``metrics.yaml``
+ships ``metrics: []`` until T04-08, so one catalog entry is inserted. Every shipped owner file
+carries ``version: 1`` (T10-03b fix round 1), so no copy needs the line added.
 """
 
 from __future__ import annotations
@@ -82,23 +74,19 @@ metrics:
 """
 
 
-def _versioned(text: str) -> str:
-    return text if "\nversion: 1\n" in f"\n{text}" else "version: 1\n" + text
+def _with_metric_entry(cfg: Path) -> None:
+    metrics = (SHIPPED / "metrics.yaml").read_text(encoding="utf-8")
+    assert "\nmetrics: []\n" in metrics, "T04-08 shipped the catalog: drop this stand-in"
+    (cfg / "metrics.yaml").write_text(metrics.replace("metrics: []\n", METRIC_ENTRY), "utf-8")
 
 
 def write_full_config(root: Path) -> Path:
     """Write a loadable ``config/`` tree (and profiles) under ``root``; return the config dir."""
     cfg = root / "config"
     (cfg / "profiles").mkdir(parents=True)
-    for name in ("decisions", "eval", "models", "weights"):
-        text = (SHIPPED / f"{name}.yaml").read_text(encoding="utf-8")
-        (cfg / f"{name}.yaml").write_text(_versioned(text), encoding="utf-8")
-    metrics = (SHIPPED / "metrics.yaml").read_text(encoding="utf-8")
-    assert "\nmetrics: []\n" in metrics
-    (cfg / "metrics.yaml").write_text(metrics.replace("metrics: []\n", METRIC_ENTRY), "utf-8")
-    shutil.copyfile(RESILIENCE_FIXTURE, cfg / "resilience.yaml")
-    resilience = (cfg / "resilience.yaml").read_text(encoding="utf-8")
-    (cfg / "resilience.yaml").write_text(_versioned(resilience), encoding="utf-8")
+    for name in ("decisions", "eval", "models", "weights", "resilience"):
+        shutil.copyfile(SHIPPED / f"{name}.yaml", cfg / f"{name}.yaml")
+    _with_metric_entry(cfg)
     for stem in ("sources", "mappings", "pipelines", "memory", "app"):
         (cfg / f"{stem}.yaml").write_text("version: 1\n", encoding="utf-8")
     (cfg / "herness.yaml").write_text(HERNESS_YAML, encoding="utf-8")
@@ -138,39 +126,35 @@ def write_checked_config(root: Path) -> Path:
     return cfg
 
 
-# Owner files shipped without ``version: 1`` because their owners' direct-load tests reject it
-# (T10-13 Ruling R2); only the test copies get the line (U10-16 requires it).
-_UNVERSIONED_STEMS: tuple[str, ...] = ("decisions", "eval", "models", "memory")
-_VERBATIM_STEMS: tuple[str, ...] = (
+# Every shipped owner file except ``metrics`` (T04-08 stand-in) is copied byte for byte.
+OWNER_STEMS: tuple[str, ...] = (
     "sources",
     "mappings",
+    "decisions",
     "weights",
+    "models",
     "pipelines",
+    "memory",
     "resilience",
     "app",
+    "eval",
 )
 _PROFILES: tuple[str, ...] = ("local", "hybrid", "premium", "synth")
 
 
 def write_repo_config(root: Path) -> Path:
-    """Copy the repository's shipped ``config/`` tree; adapt only what the docstring lists.
+    """Copy the repository's shipped ``config/`` tree; only ``metrics.yaml`` is adapted.
 
-    ``herness.yaml``, ``profiles/*.yaml``, ``injection_patterns.txt`` and the owner files of
-    ``_VERBATIM_STEMS`` are copied byte for byte; ``_UNVERSIONED_STEMS`` get ``version: 1``
-    prepended; ``metrics.yaml`` gets one catalog entry in place of ``metrics: []`` (T04-08).
+    ``herness.yaml``, ``profiles/*.yaml``, ``injection_patterns.txt`` and the ``OWNER_STEMS``
+    files are copied byte for byte; ``metrics.yaml`` gets one catalog entry (T04-08).
     """
     cfg = root / "config"
     (cfg / "profiles").mkdir(parents=True)
     shutil.copyfile(SHIPPED / "herness.yaml", cfg / "herness.yaml")
-    for name in _UNVERSIONED_STEMS:
-        text = (SHIPPED / f"{name}.yaml").read_text(encoding="utf-8")
-        (cfg / f"{name}.yaml").write_text(_versioned(text), encoding="utf-8")
-    for name in _VERBATIM_STEMS:
+    for name in OWNER_STEMS:
         shutil.copyfile(SHIPPED / f"{name}.yaml", cfg / f"{name}.yaml")
     shutil.copyfile(SHIPPED / "injection_patterns.txt", cfg / "injection_patterns.txt")
-    metrics = (SHIPPED / "metrics.yaml").read_text(encoding="utf-8")
-    assert "\nmetrics: []\n" in metrics
-    (cfg / "metrics.yaml").write_text(metrics.replace("metrics: []\n", METRIC_ENTRY), "utf-8")
+    _with_metric_entry(cfg)
     for name in _PROFILES:
         shutil.copyfile(SHIPPED / "profiles" / f"{name}.yaml", cfg / "profiles" / f"{name}.yaml")
     return cfg

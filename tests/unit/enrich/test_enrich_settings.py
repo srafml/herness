@@ -192,6 +192,7 @@ def test_ut03_08_question_config_overrides_and_shared_rules() -> None:
 def test_ut03_08_shipped_config_files_validate(name: str) -> None:
     """UT03-08 the shipped config/decisions.yaml and models.yaml `deciders` validate."""
     data = _load((ROOT / "config" / name).read_text(encoding="utf-8"))
+    assert data.pop("version") == 1  # root file key, stripped by the spec 10 loader (U10-16)
     if name == "models.yaml":
         deciders = s.DecidersSettings.model_validate(data["deciders"])
         assert deciders.openjev.api_key == "secret:OPENJEV_API_KEY"

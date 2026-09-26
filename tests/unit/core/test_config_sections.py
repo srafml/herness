@@ -18,6 +18,7 @@ from tests.support.config_tree import SHIPPED, register_checked_names, write_rep
 
 from herness.core import _config_sections as sections
 from herness.core import config as c
+from herness.core import config_sources as cs
 from herness.core import config_validate as cv
 from herness.core import registry
 from herness.core.errors import ConfigError
@@ -116,3 +117,23 @@ def test_ut10_76_memory_with_patterns_is_inert_outside_a_load() -> None:
     assert sections.memory_with_patterns(None) is None
     assert c.SourcesFileConfig is sections.SourcesFileConfig
     assert c.ModelsFileConfig is sections.ModelsFileConfig
+
+
+def test_ut10_76_file_layer_matches_config_sources_step_4(cfg_dir: Path) -> None:
+    """UT10-76 `_file_layer` equals what `FilesYamlSource` step 4 stores, key included.
+
+    `memory_with_patterns` swaps in the parsed tuple only when the merged list equals
+    `_file_layer(text)`; if step 4 ever changes its filter or key, this fails loudly instead of
+    the owner parser being silently skipped.
+    """
+    text = (
+        "# c\r\n  # indented\r\n\r\n  lead and trail  \r\nx\x0cy\n"
+        + chr(0x2028)
+        + "z\n#no\n\tt\t\n"
+    )
+    (cfg_dir / "injection_patterns.txt").write_text(text, encoding="utf-8", newline="")
+    with cs.load_context("local", cfg_dir, {}):
+        layer = cs.FilesYamlSource(c.HernessConfig)()
+    assert "injection_patterns" in layer["memory"]
+    assert layer["memory"]["injection_patterns"] == sections._file_layer(text)
+    assert sections._file_layer(text) == ["lead and trail", "x", "y", "z", "t"]

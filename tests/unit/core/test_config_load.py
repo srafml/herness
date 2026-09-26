@@ -304,7 +304,7 @@ def test_ut10_84_unknown_top_level_key_names_file_and_key(cfg_dir: Path, stem: s
     assert SENTINEL not in str(info.value)
 
 
-def test_ut10_84_stub_sections_are_closed(cfg_dir: Path) -> None:
+def test_ut10_84_owner_sections_are_closed(cfg_dir: Path) -> None:
     """UT10-84 the pipelines, memory and app owner models (T10-03b) reject unknown keys."""
     for stem in ("pipelines", "memory", "app"):
         _write(cfg_dir / f"{stem}.yaml", "version: 1\nanything: 1\n")

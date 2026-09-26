@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 import yaml
-from tests.support.config_tree import register_checked_names, write_repo_config
+from tests.support.config_tree import OWNER_STEMS, register_checked_names, write_repo_config
 
 from herness.core import config as c
 from herness.core import config_validate as cv
@@ -121,10 +121,21 @@ def test_ut10_76_hybrid_and_premium_overlays_declare_egress() -> None:
 
 
 def test_ut10_76_owner_files_ship_with_version_1() -> None:
-    """UT10-76 sources, mappings, resilience (T10-03b), pipelines and app ship `version: 1`."""
-    for stem in ("sources", "mappings", "resilience", "pipelines", "app"):
+    """UT10-76 every shipped owner file (and metrics.yaml) carries `version: 1` (U10-16)."""
+    for stem in (*OWNER_STEMS, "metrics"):
         data = yaml.safe_load((REPO / "config" / f"{stem}.yaml").read_text(encoding="utf-8"))
         assert data["version"] == 1, stem
+
+
+def test_ut10_76_bare_repo_tree_fails_only_on_the_empty_metric_catalog() -> None:
+    """UT10-76 the bare repo `config/` passes every version check; only T04-08's `metrics: []`
+    still fails (drop this test's expectation when the catalog ships)."""
+    for profile in ("local", "synth"):
+        with pytest.raises(ConfigError) as info:
+            c.load_config(profile, config_dir=REPO / "config", env={})
+        issues = info.value.issues  # type: ignore[attr-defined]
+        assert [(i.path, i.file) for i in issues] == [("metrics.metrics", "metrics.yaml")]
+        assert "version must be 1" not in info.value.message
 
 
 def _approve(cfg_dir: Path) -> None:

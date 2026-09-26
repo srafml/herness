@@ -3,6 +3,7 @@
 # The sibling top-level `deciders` section is owned by impl 03 (R-76); validated by
 # herness.enrich.settings.DecidersSettings (keys and defaults: docs/impl/03-enrichment.impl.md §9).
 # Credentials are `secret:` references only (TH05-15).
+version: 1
 models:
   clients:
     local-30b:

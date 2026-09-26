@@ -3,11 +3,10 @@
 # security.data_policy.premium_approved (+ approved_by, approved_on) recorded in herness.yaml;
 # never set security.data_policy here (TH10-03, U10-17).
 #
-# Design 10 §4.3 also assigns premium a 50-200 parallel swarm cap (impl 06 `pipelines.yaml`).
-# T06-03 (herness.core.pipelines.settings.PipelinesConfig) has not merged yet, so
-# HernessConfig.pipelines is still the closed no-field stand-in (herness.core.config._PipelinesStub)
-# and cannot accept a swarm-cap override; that overlay is a carry-over to T06-03 (Ruling R4,
-# T10-13 report).
+# Design 10 §4.3 also assigns premium a 50-200 parallel swarm cap (impl 06 `pipelines.yaml`,
+# validated as `cfg.pipelines` by herness.harness.pipelines.settings.PipelinesConfig). The
+# overlay block that sets it is a carry-over to T06-03 (Ruling R4, T10-13 report); until then
+# premium uses the shipped pipelines.yaml swarm settings.
 version: 1
 models:
   models:

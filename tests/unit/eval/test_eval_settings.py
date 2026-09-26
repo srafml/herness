@@ -24,7 +24,9 @@ CONFIG_PATH = ROOT / "config" / "eval.yaml"
 
 
 def _raw() -> dict[str, Any]:
-    return yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    data: dict[str, Any] = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    assert data.pop("version") == 1  # root file key, stripped by the spec 10 loader (U10-16)
+    return data
 
 
 def test_ut11_107_config_eval_yaml_matches_design() -> None:
