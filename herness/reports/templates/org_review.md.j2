@@ -1,0 +1,13 @@
+{#- Org review, Markdown (impl 09 U09-28): slot 3 renders the `org_action` cards, then the
+    score.org composite-rank top-N table. Other slots: base. -#}
+{% extends "base.md.j2" %}
+{% import "partials/components.md.j2" as c %}
+{% block recommendations %}
+{{ c.section(r, 'recommendations', 'Org: top-N orgs/teams to improve') -}}
+{% for card in r.cards %}{{ c.card(card) }}{% endfor %}
+{% if r.org_table is not none %}
+### Composite rank
+
+{{ c.table(r.org_table) if r.org_table.rows else c.empty('No scored entities.') -}}
+{% endif %}
+{% endblock %}
