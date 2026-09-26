@@ -39,10 +39,7 @@ BATCH_ROWS: Final = 10_000
 SAMPLE_ROWS: Final = 50
 ERROR_CHARS: Final = 500
 _PARAM_KEY_RE: Final = re.compile(r"[a-z][a-z0-9_]{0,31}")
-# Greedy per line: DuckDB does not escape quotes inside echoed values, so everything from
-# the first to the last quote of a kind is masked (identifiers inside are lost; accepted).
-_SINGLE_QUOTED_RE: Final = re.compile(r"'.*'")
-_DOUBLE_QUOTED_RE: Final = re.compile(r'".*"')
+_LONE_QUOTE_RE: Final = re.compile(r"['\"].*")  # an opening quote left open by the line cut
 _TIMEOUT_HINT: Final = "filter by period or use get_metric"
 _DUCKDB_HINT: Final = "check table and column names with describe_table"
 _SIZE_HINT: Final = "aggregate first or add filters"
@@ -204,15 +201,26 @@ def _engine_error(exc: Exception, *, fired: bool, timeout_s: float) -> QueryErro
     return QueryError(safe_error_text(str(exc)), hint=_DUCKDB_HINT)
 
 
+def _mask_quoted(text: str, quote: str, token: str) -> str:
+    """Mask the first to the last `quote` over the full text (values may hold line breaks and
+    quotes; DuckDB escapes neither). An odd count means a value holds a quote: mask from the
+    first one to the end (fail closed). Identifiers between quotes are lost (accepted)."""
+    if text.count(quote) % 2:
+        return text[: text.index(quote)] + "\x00L"
+    return re.sub(f"{quote}.*{quote}", token, text, flags=re.DOTALL)
+
+
 def safe_error_text(text: str) -> str:
     """First line of a DuckDB error, quotes masked, redacted, cut to 500 (ENG §3.4 ruling).
 
-    Later lines echo the value or the SQL (`LINE 1: ...`); conversion errors quote the
-    offending cell, which may be redact-on-read ticket text.
+    Quoted segments are masked over the full text first (a value may span lines), then only
+    the first line is kept; later lines echo the value or the SQL (`LINE 1: ...`).
     """
-    first = text.splitlines()[0] if text else ""
-    masked = _DOUBLE_QUOTED_RE.sub('"<value>"', _SINGLE_QUOTED_RE.sub("'<value>'", first))
-    redacted = redact_text(masked)
+    paired = _mask_quoted(_mask_quoted(text, "'", "\x00S"), '"', "\x00D")
+    first = paired.splitlines()[0] if paired else ""
+    first = _LONE_QUOTE_RE.sub("\x00L", first)  # fail closed on an unmatched quote
+    masked = first.replace("\x00S", "'<value>'").replace("\x00D", '"<value>"')
+    redacted = redact_text(masked.replace("\x00L", "<value>"))
     return (redacted if redacted is not None else "query failed")[:ERROR_CHARS]
 
 

@@ -451,13 +451,42 @@ def test_ut05_61_duckdb_error_never_echoes_cell_values(
     assert ops.evidence == {}
 
 
+_CASTS = {
+    "int_cast": "CAST(body AS INTEGER)",
+    "strptime": "strptime(body, '%Y-%m-%d')",
+    "date_cast": "CAST(body AS DATE)",
+    "json_cast": "CAST(body AS JSON)",
+}
+
+
+@pytest.mark.parametrize("record_id", ["lf", "crlf"])
+@pytest.mark.parametrize("expr", list(_CASTS.values()), ids=list(_CASTS))
+def test_ut05_61_multiline_cell_never_echoed(
+    wh: DuckWarehouse, redacted: list[str], expr: str, record_id: str
+) -> None:
+    """UT05-61 a value with a line break: masked over the full text, no fragment survives."""
+    sql = f"SELECT {expr} AS x FROM core.note WHERE record_id = $rid"  # noqa: S608 - constants
+    with pytest.raises(QueryError) as info:
+        tools.execute_recorded(sd.make_ctx(wh, FakeOps()), sql, {"rid": record_id})
+    message = info.value.message
+    assert "<value>" in message
+    assert "secret" not in message
+    assert "secret" not in redacted[-1]  # masked before redaction, not by the stub redactor
+    assert "\n" not in message
+    assert "\r" not in message
+
+
 def test_ut05_61_safe_error_text_rules(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT05-61 doubled quotes stay inside one literal; a failed redaction withholds the text."""
     monkeypatch.setattr(rec, "redact_text", lambda text: text)
     assert rec.safe_error_text("x 'it''s' y 'b'") == "x '<value>'"
-    assert rec.safe_error_text("a 'it's' b") == "a '<value>' b"  # unescaped inner quote
+    assert rec.safe_error_text("a 'it's' b") == "a <value>"  # unescaped inner quote: odd count
     assert rec.safe_error_text('p "say "hi"" q\nsecond line') == 'p "<value>" q'
     assert rec.safe_error_text("") == ""
+    assert rec.safe_error_text("x 'open secret\nrest'") == "x '<value>'"
+    assert rec.safe_error_text("x 'a' then 'lone secret") == "x <value>"  # odd count
+    assert rec.safe_error_text('y "lone secret\r\nz') == "y <value>"
+    assert rec.safe_error_text("it's open") == "it<value>"
     assert len(rec.safe_error_text("e" * 900)) == 500
     monkeypatch.setattr(rec, "redact_text", lambda text: None)
     assert rec.safe_error_text("boom 'v'") == "query failed"
