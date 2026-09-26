@@ -33,7 +33,10 @@ _T = TypeVar("_T")
 # Module-level registry state (accepted ENG §2.3 exception, mirrors herness.core.logging._State).
 _REG_LOCK: Final = threading.RLock()
 _REGISTRY: dict[tuple[str, str], object] = {}
-_BUILTINS: dict[tuple[RegistryKind, str], str] = {}
+_BUILTINS: dict[tuple[RegistryKind, str], str] = {
+    ("llm_client", "openai_compat"): "herness.harness.llm.openai_compat:OpenAICompatClient",
+    ("llm_client", "anthropic"): "herness.harness.llm.anthropic_client:AnthropicClient",
+}
 _entry_points_loaded = False
 
 _logger = get_logger("core.registry")
