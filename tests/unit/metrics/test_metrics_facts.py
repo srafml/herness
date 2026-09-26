@@ -2,6 +2,7 @@
 `herness.metrics.facts.split_statements` and `materialize_facts` on `metrics_tiny`."""
 
 import datetime
+import re
 import time
 from collections.abc import Iterator
 from decimal import Decimal
@@ -539,11 +540,17 @@ def test_ut04_35_render_errors_raise_config_error(
     assert evidence == (0,)
 
 
-def test_ut04_35_missing_input_raises(con: duckdb.DuckDBPyConnection) -> None:
-    """UT04-35 a missing input table (here core.org) is SchemaViolation before any write."""
-    con.execute("DROP TABLE core.org")
-    with pytest.raises(SchemaViolation, match=r"^stage 400 input core\.org missing$"):
+@pytest.mark.parametrize(
+    "table", ["core.org", "core.change", "core.work_item_transition", "core.work_item_link"]
+)
+def test_ut04_35_missing_input_raises(con: duckdb.DuckDBPyConnection, table: str) -> None:
+    """UT04-35 a missing input table (core.org and the change/work-item inputs) is
+    SchemaViolation before any write."""
+    con.execute(f"DROP TABLE {table}")
+    with pytest.raises(SchemaViolation, match=rf"^stage 400 input {re.escape(table)} missing$"):
         _materialize(con)
+    evidence = con.execute("SELECT count(*) FROM meta.evidence").fetchone()
+    assert evidence == (0,)
 
 
 # --- ST04-13 parent_key cycle ------------------------------------------------------------------
