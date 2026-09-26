@@ -1,6 +1,6 @@
 """Tests for EgressGuard.check, get_guard and cloud_chat_allowed (impl 10 U10-50/51/56/107).
 
-UT10-52's client-config half (``follow_redirects``/``trust_env``) belongs to T10-17 (U10-52).
+UT10-52's client-config half (U10-52) is in test_egress_clients.py (T10-17).
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Security tests for the egress guard (impl 10 ST10-10 to ST10-13, ST10-33, ST10-56).
 
-ST10-12's streaming-body half needs the guarded transport of T10-17 (U10-54) and moves there.
+ST10-12's streaming-body half (U10-54) is in test_st10_egress_clients.py (T10-17).
 """
 
 from __future__ import annotations
