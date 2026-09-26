@@ -8,10 +8,12 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import http.server
+import ipaddress
 import socket
 import ssl
 import sys
 import threading
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -95,9 +97,10 @@ def loopback_stub() -> Iterator[tuple[str, StubLog]]:
 
 
 def self_signed(tmp_path: Path) -> tuple[Path, Path]:
-    """A self-signed certificate for ``localhost`` and its key, written under ``tmp_path``."""
+    """A self-signed certificate for localhost and 127.0.0.1, and its key, under ``tmp_path``."""
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    alt_names = [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
     now = dt.datetime.now(dt.UTC)
     cert = (
         x509.CertificateBuilder()
@@ -107,7 +110,7 @@ def self_signed(tmp_path: Path) -> tuple[Path, Path]:
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(days=1))
         .not_valid_after(now + dt.timedelta(days=1))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
+        .add_extension(x509.SubjectAlternativeName(alt_names), critical=False)
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(key, hashes.SHA256())
     )
@@ -123,32 +126,35 @@ def self_signed(tmp_path: Path) -> tuple[Path, Path]:
     return cert_path, key_path
 
 
-def _serve_once(listener: socket.socket, ctx: ssl.SSLContext) -> None:
-    try:
-        conn, _ = listener.accept()
-    except OSError:
-        return
-    try:
-        with ctx.wrap_socket(conn, server_side=True) as tls:
-            tls.recv(65536)
-            tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-    except (OSError, ssl.SSLError):
-        conn.close()  # a refused handshake is the expected outcome of some tests
+def _serve(listener: socket.socket, ctx: ssl.SSLContext) -> None:
+    while True:
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            return  # the listener was closed
+        try:
+            with ctx.wrap_socket(conn, server_side=True) as tls:
+                tls.recv(65536)
+                tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        except (OSError, ssl.SSLError):
+            conn.close()  # a refused handshake is the expected outcome of some tests
 
 
 @contextmanager
 def tls_server(cert: Path, key: Path, *, tls10_only: bool = False) -> Iterator[int]:
-    """A one-shot HTTPS server on 127.0.0.1; ``tls10_only`` offers TLS 1.0 and nothing else."""
+    """An HTTPS server on 127.0.0.1; ``tls10_only`` offers TLS 1.0 and nothing else."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(cert, key)
     if tls10_only:
         ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
-        ctx.minimum_version = ssl.TLSVersion.TLSv1
-        ctx.maximum_version = ssl.TLSVersion.TLSv1
+        with warnings.catch_warnings():  # deprecated on purpose: the downgrade under test
+            warnings.simplefilter("ignore", DeprecationWarning)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1
+            ctx.maximum_version = ssl.TLSVersion.TLSv1
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
-    thread = threading.Thread(target=_serve_once, args=(listener, ctx), daemon=True)
+    thread = threading.Thread(target=_serve, args=(listener, ctx), daemon=True)
     thread.start()
     try:
         yield listener.getsockname()[1]
