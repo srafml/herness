@@ -21,8 +21,8 @@ from herness.core import config as _config
 from herness.core import time as clock
 from herness.core._egress_scan import host_reason, rescan
 from herness.core.config import HernessConfig
-from herness.core.egress_log import EgressLog
-from herness.core.errors import EgressBlocked, FatalError, StoreBusy
+from herness.core.egress_log import LINE_KEYS, EgressLog
+from herness.core.errors import ConfigError, EgressBlocked, FatalError, StoreBusy
 from herness.core.ids import new_ulid
 from herness.core.logging import get_logger
 from herness.core.redact import Redactor, get_redactor
@@ -112,11 +112,11 @@ class EgressGuard:
         windowed = line["purpose"] == "model_download" and self._window_open()
         if not windowed and (reason := self._policy(line["purpose"], line["payload_class"])):
             return reason
-        try:
+        try:  # an IDNA or surrogate error is a ValueError (UnicodeError) too
             parsed = httpx.URL(url)
-        except (httpx.InvalidURL, TypeError):
+            line["destination"], line["path"] = parsed.host.lower() or None, parsed.path
+        except (httpx.InvalidURL, ValueError, TypeError):
             return "url_invalid"
-        line["destination"], line["path"] = parsed.host.lower() or None, parsed.path
         egress = self._cfg.security.egress
         hosts = frozenset(egress.destinations)
         if windowed:  # T10-24: add the registry hosts of the pinned deploy.*.image values
@@ -125,7 +125,8 @@ class EgressGuard:
             return reason
         if len(body) > egress.max_request_bytes:
             return "body_too_large"
-        line["tokens_in"] = token_estimate or math.ceil(len(body) / CHARS_PER_TOKEN)
+        usable = token_estimate is not None and token_estimate >= 1  # never lowers the day total
+        line["tokens_in"] = token_estimate if usable else math.ceil(len(body) / CHARS_PER_TOKEN)
         return "tokens_per_request" if line["tokens_in"] > egress.max_tokens_per_request else None
 
     def _redactor_once(self) -> Redactor:
@@ -167,17 +168,14 @@ class EgressGuard:
     ) -> EgressTicket:
         """Steps 1-7: one egress line, then a ticket or ``EgressBlocked``; nothing is sent."""
         started = clock.monotonic()
-        line: dict[str, Any] = {
+        line: dict[str, Any] = dict.fromkeys(LINE_KEYS) | {  # one shape: unknowns stay null
             "egress_id": "egr_" + new_ulid(),
             "purpose": purpose if purpose in _PURPOSES else None,  # never echo a free string
             "payload_class": payload_class if payload_class in _CLASSES else None,
-            "destination": None,
             "method": method,
-            "path": None,
             "run_id": run_id,
             "task_id": task_id,
             "bytes_out": len(body),
-            "tokens_in": None,
         }
         reason, scan = self._steps(url, body, token_estimate, line), None
         hits: dict[str, int] = {}
@@ -243,7 +241,11 @@ def get_guard() -> EgressGuard:
     with _GUARD_LOCK:
         if _State.guard is None:
             cfg = _config.get_config()
-            log = EgressLog(cfg.paths.logs, _config.config_hash(cfg), cfg.profile)
+            try:
+                cfg_hash: str | None = _config.config_hash(cfg)
+            except ConfigError:  # as audit does: an unresolvable key id leaves the hash null
+                cfg_hash = None
+            log = EgressLog(cfg.paths.logs, cfg_hash, cfg.profile)
             _State.guard = EgressGuard(cfg, get_redactor, log)
         return _State.guard
 

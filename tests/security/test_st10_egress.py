@@ -6,6 +6,7 @@ ST10-12's streaming-body half needs the guarded transport of T10-17 (U10-54) and
 from __future__ import annotations
 
 import json
+import multiprocessing
 import socket
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from tests.support.egress_harness import (
     egress_lines,
     load,
     make_guard,
+    race_worker,
     with_egress,
 )
 from tests.support.fake_keyring import MemoryKeyring
@@ -35,13 +37,13 @@ pytestmark = pytest.mark.unit
 REPO = Path(__file__).resolve().parents[2]
 MARKER = "ZQX-UNIQUE-7731"
 ZWSP, ZWJ, WJ, BOM = chr(0x200B), chr(0x200D), chr(0x2060), chr(0xFEFF)
+SHY, MVS, INVISIBLE_TIMES = chr(0x00AD), chr(0x180E), chr(0x2062)
 WRITER = """
 import sys
 from pathlib import Path
-from herness.core.egress_log import EgressLog
-EgressLog(Path(sys.argv[1]), "cfg_other", "hybrid").write(
-    {"egress_id": "egr_other", "decision": "allowed", "tokens_in": int(sys.argv[2])}
-)
+from herness.core.egress_log import LINE_KEYS, EgressLog
+line = {"egress_id": "egr_other", "decision": "allowed", "tokens_in": int(sys.argv[2])}
+EgressLog(Path(sys.argv[1]), "cfg_other", "hybrid").write(dict.fromkeys(LINE_KEYS) | line)
 """
 
 
@@ -78,8 +80,16 @@ def test_st10_10_json_email_and_directory_name(tmp_path: Path) -> None:
         _full_width("john@corp.com"),
         f"john{ZWSP}@{ZWJ}corp.com",
         f"card 4111{ZWSP}1111{WJ}1111{BOM}1111",
+        f"john{SHY}@corp.com",
+        f"john@{INVISIBLE_TIMES}corp{MVS}.com",
     ],
-    ids=["full_width_email", "zero_width_email", "zero_width_card"],
+    ids=[
+        "full_width_email",
+        "zero_width_email",
+        "zero_width_card",
+        "soft_hyphen_email",
+        "invisible_operator_email",
+    ],
 )
 def test_st10_11_normalization_evasions(tmp_path: Path, text: str) -> None:
     """ST10-11 full-width and zero-width evasions are caught after NFKC folding."""
@@ -209,3 +219,23 @@ def test_st10_56_c_chat_approved_without_hybrid_approval_fails_c25(tmp_path: Pat
     assert [
         (i.message.split(" ")[0], i.severity, i.path) for i in issues if i.severity == "error"
     ] == [("C25", "error", "security.data_policy.chat_approved")]
+
+
+def test_st10_12_day_cap_race_between_two_processes(tmp_path: Path) -> None:
+    """ST10-12 two processes race the day cap at a barrier: exactly one 60-token call fits 100."""
+    cfg = load(tmp_path, "hybrid")
+    cfg_dir = tmp_path / "config"
+    ctx = multiprocessing.get_context("spawn")
+    barrier, results = ctx.Barrier(2), ctx.Queue()
+    procs = [
+        ctx.Process(target=race_worker, args=(str(cfg_dir), barrier, results)) for _ in range(2)
+    ]
+    for proc in procs:
+        proc.start()
+    outcomes = sorted(results.get(timeout=120) for _ in procs)
+    for proc in procs:
+        proc.join(timeout=60)
+        assert proc.exitcode == 0
+    assert outcomes == ["allowed", "tokens_per_day"]
+    decisions = sorted((ln["decision"], ln["reason"]) for ln in egress_lines(cfg.paths.logs))
+    assert decisions == [("allowed", None), ("blocked", "tokens_per_day")]

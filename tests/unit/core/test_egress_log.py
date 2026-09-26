@@ -19,17 +19,19 @@ pytestmark = pytest.mark.unit
 TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
 
 
+def _line(**fields: object) -> dict[str, object]:
+    """A full §4.5 line (every key, null where not given)."""
+    return dict.fromkeys(el.LINE_KEYS) | fields
+
+
 def _allowed(egress_id: str, tokens: int) -> dict[str, object]:
-    return {"egress_id": egress_id, "decision": "allowed", "tokens_in": tokens}
+    return _line(egress_id=egress_id, decision="allowed", tokens_in=tokens)
 
 
 def _completed(egress_id: object, tokens_in: int, tokens_out: int | None) -> dict[str, object]:
-    return {
-        "egress_id": egress_id,
-        "decision": "completed",
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
-    }
+    return _line(
+        egress_id=egress_id, decision="completed", tokens_in=tokens_in, tokens_out=tokens_out
+    )
 
 
 @pytest.fixture
@@ -54,12 +56,30 @@ def test_ut10_52_write_adds_ts_profile_and_config_hash(tmp_path: Path, log: Egre
     assert raw == json.dumps(line, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
 
 
-def test_ut10_52_unknown_key_is_schema_violation(tmp_path: Path, log: EgressLog) -> None:
-    """UT10-52 a key outside design 10 §4.5 is refused without echoing it; nothing written."""
+@pytest.mark.parametrize(
+    "line",
+    [
+        _line(decision="allowed", payload="secret-text"),
+        {"egress_id": "egr_1", "decision": "allowed", "tokens_in": 1},
+        _line(decision="sent"),
+    ],
+    ids=["unknown_key", "missing_keys", "unknown_decision"],
+)
+def test_ut10_52_line_shape_is_enforced(
+    tmp_path: Path, log: EgressLog, line: dict[str, object]
+) -> None:
+    """UT10-52 extra, missing keys or an unknown decision: SchemaViolation, nothing echoed."""
     with pytest.raises(SchemaViolation) as info:
-        log.write({"egress_id": "egr_1", "payload": "secret-text"})
+        log.write(line)
     assert "payload" not in str(info.value)
+    assert "secret-text" not in str(info.value)
     assert not _day_file(tmp_path).exists()
+
+
+def test_ut10_52_null_config_hash_is_written(tmp_path: Path) -> None:
+    """UT10-52 a log built without a config hash writes ``config_hash: null``."""
+    EgressLog(tmp_path / "logs", None, "hybrid").write(_allowed("egr_n", 1))
+    assert json.loads(_day_file(tmp_path).read_text("utf-8"))["config_hash"] is None
 
 
 def test_ut10_52_tokens_today_allowed_and_completed(log: EgressLog) -> None:
@@ -67,7 +87,7 @@ def test_ut10_52_tokens_today_allowed_and_completed(log: EgressLog) -> None:
     now = clock.now()
     assert log.tokens_today(now) == 0
     log.write(_allowed("egr_a", 100))
-    log.write({"egress_id": "egr_b", "decision": "blocked", "tokens_in": 5000})
+    log.write(_line(egress_id="egr_b", decision="blocked", tokens_in=5000))
     assert log.tokens_today(now) == 100
     log.write(_completed("egr_a", 120, 30))
     assert log.tokens_today(now) == 150

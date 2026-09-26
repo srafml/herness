@@ -16,12 +16,15 @@ from typing import Final
 
 import httpx
 
-from herness.core.redact import RedactionFailed, Redactor
+from herness.core.redact import Redactor
 
 __all__ = ["MAX_SCAN_CHARS", "host_reason", "rescan"]
 
 MAX_SCAN_CHARS: Final = 1_000_000
-_ZERO_WIDTH: Final = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
+# U+200B-U+200D, U+2060, U+FEFF (spec) plus soft hyphen, Mongolian vowel separator and the
+# invisible math operators U+2061-U+2064 (fail-closed widening, T10-16 fix round 1).
+_INVISIBLE: Final = "\u00ad\u180e\u200b\u200c\u200d\u2060\u2061\u2062\u2063\u2064\ufeff"
+_ZERO_WIDTH: Final = dict.fromkeys(map(ord, _INVISIBLE))
 
 type Hits = dict[str, int]
 
@@ -53,6 +56,8 @@ def _strings(text: str) -> Iterator[str]:
         data = None
     if not isinstance(data, list):  # a scalar or not JSON: scan the text as sent
         yield text
+        if isinstance(data, str):  # a JSON string body: its escapes decoded too
+            yield data
         return
     stack: list[object] = [data]
     while stack:
@@ -83,6 +88,8 @@ def rescan(
     body: bytes, redactor: Callable[[], Redactor], blocking: frozenset[str]
 ) -> tuple[str | None, Hits]:
     """Step 6: ``(reason, hits)``; hits are reported only with ``pii_detected``."""
+    if not body:
+        return None, {}  # nothing to scan: the redactor (and its key) is never fetched
     try:
         text = body.decode("utf-8")
     except UnicodeDecodeError:
@@ -94,7 +101,7 @@ def rescan(
     for value, times in values.items():
         try:
             found = _counts(redactor(), value)
-        except RedactionFailed:
+        except Exception:  # noqa: BLE001 - any scan or key failure is a refusal (fail closed)
             return "scan_failed", {}
         for kind, count in found.items():
             hits[kind] = hits.get(kind, 0) + count * times

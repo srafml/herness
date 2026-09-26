@@ -85,3 +85,24 @@ def audit_fields(logs: Path, event: str = "egress") -> list[dict[str, Any]]:
         for raw in path.read_text(encoding="utf-8").splitlines()
     ]
     return [r["fields"] for r in records if r["event"] == event]
+
+
+def race_worker(cfg_dir: str, barrier: Any, results: Any) -> None:  # pragma: no cover - child
+    """Spawned child for the day-cap race: load the config, wait at the barrier, call check."""
+    import keyring  # noqa: PLC0415 - child process only
+    from tests.support.fake_keyring import MemoryKeyring  # noqa: PLC0415 - child process only
+
+    from herness.core.errors import EgressBlocked  # noqa: PLC0415 - child process only
+
+    keyring.set_keyring(MemoryKeyring())
+    cfg = with_egress(
+        c.init_config("hybrid", config_dir=Path(cfg_dir), env={}), max_tokens_per_day=100
+    )
+    guard = make_guard(cfg)
+    barrier.wait(timeout=60)
+    try:
+        guard.check(API, b"{}", "reasoning_final", "aggregated_evidence", token_estimate=60)
+    except EgressBlocked as exc:
+        results.put(exc.reason)
+    else:
+        results.put("allowed")

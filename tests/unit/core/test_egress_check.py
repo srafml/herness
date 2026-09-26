@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -26,8 +25,8 @@ from tests.support.fake_keyring import MemoryKeyring
 from herness.core import audit as a
 from herness.core import config as c
 from herness.core import egress as eg
-from herness.core.egress_log import EgressLog
-from herness.core.errors import EgressBlocked, FatalError
+from herness.core.egress_log import LINE_KEYS, EgressLog
+from herness.core.errors import ConfigError, EgressBlocked, FatalError
 from herness.core.redact import RedactionFailed, Redactor
 
 pytestmark = pytest.mark.unit
@@ -51,9 +50,7 @@ def _blocked(guard: eg.EgressGuard, url: str = API, body: bytes = EVIDENCE, **kw
     prefix = f"egress blocked ({exc.egress_id}): "
     assert str(exc).startswith(prefix)
     reason = str(exc).removeprefix(prefix)
-    # U10-108 limits the attribute to ^[a-z_]{1,40}$, so U10-51's ``port_not_443`` is stored
-    # as ``invalid`` by herness.core.errors (spec conflict reported for a ruling, T10-16).
-    assert exc.reason == (reason if re.fullmatch(r"[a-z_]{1,40}", reason) else "invalid")
+    assert exc.reason == reason  # U10-108 allows digits (w07-s10 ruling): port_not_443
     return reason
 
 
@@ -167,9 +164,8 @@ def test_ut10_52_day_and_request_caps(tmp_path: Path) -> None:
     """UT10-52 2,999,000 today + 2,000 -> tokens_per_day; oversized estimate -> per request."""
     cfg = load(tmp_path, "hybrid")
     guard = make_guard(cfg)
-    EgressLog(cfg.paths.logs, "cfg_t", "hybrid").write(
-        {"egress_id": "egr_seed", "decision": "allowed", "tokens_in": 2_999_000}
-    )
+    seed = {"egress_id": "egr_seed", "decision": "allowed", "tokens_in": 2_999_000}
+    EgressLog(cfg.paths.logs, "cfg_t", "hybrid").write(dict.fromkeys(LINE_KEYS) | seed)
     assert _blocked(guard, token_estimate=2_000) == "tokens_per_day"
     assert _blocked(guard, token_estimate=200_001) == "tokens_per_request"
     guard.check(API, EVIDENCE, "reasoning_final", "aggregated_evidence", token_estimate=1_000)
@@ -346,3 +342,117 @@ def test_ut10_79_guard_refuses_unapproved_chat(tmp_path: Path) -> None:
         tmp_path / "a", "hybrid", chat_approved=True, purposes=("reasoning_final", "reasoning")
     )
     make_guard(approved).check(API, EVIDENCE, "reasoning", "aggregated_evidence")
+
+
+BS = chr(92)  # a literal backslash, so JSON escapes are built at run time
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f'"Jos{BS}u00e9 Garc{BS}u00eda"'.encode(),
+        f'"john{BS}u0040corp.com"'.encode(),
+    ],
+    ids=["escaped_directory_name", "escaped_email"],
+)
+def test_ut10_53_json_string_body_is_decoded(tmp_path: Path, body: bytes) -> None:
+    """UT10-53 a body that is one JSON string is scanned after decoding its escapes."""
+    assert _blocked(make_guard(load(tmp_path, "hybrid")), body=body) == "pii_detected"
+
+
+def _failing_factory() -> Redactor:
+    msg = "secret not found: redact.hmac_key"
+    raise ConfigError(msg)
+
+
+def test_ut10_53_key_failure_is_scan_failed_with_lines(tmp_path: Path) -> None:
+    """UT10-53 a ConfigError from the redactor factory: scan_failed, egress and audit lines."""
+    cfg = load(tmp_path, "hybrid")
+    guard = eg.EgressGuard(cfg, _failing_factory, EgressLog(cfg.paths.logs, "cfg_t", "hybrid"))
+    assert _blocked(guard) == "scan_failed"
+    (line,) = egress_lines(cfg.paths.logs)
+    assert (line["decision"], line["reason"]) == ("blocked", "scan_failed")
+    assert audit_fields(cfg.paths.logs) == [
+        {"egress_id": line["egress_id"], "reason": "scan_failed"}
+    ]
+
+
+def test_ut10_53_any_scan_exception_is_scan_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-53 an unexpected exception inside the scan is a refusal, never an escape."""
+
+    def boom(_self: Redactor, _text: str, *, ner: bool = False) -> list[object]:
+        msg = "unexpected"
+        raise ValueError(msg)
+
+    monkeypatch.setattr(Redactor, "scan", boom)
+    assert _blocked(make_guard(load(tmp_path, "hybrid"))) == "scan_failed"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [f"https://api.anthropic.com/{chr(0xD800)}", "https://xn--zz.com/"],
+    ids=["lone_surrogate", "bad_idna"],
+)
+def test_ut10_50_unicode_and_idna_errors_are_url_invalid(tmp_path: Path, url: str) -> None:
+    """UT10-50 URL encoding errors (surrogates, IDNA) are refused as url_invalid."""
+    cfg = load(tmp_path, "hybrid")
+    assert _blocked(make_guard(cfg), url=url) == "url_invalid"
+    (line,) = egress_lines(cfg.paths.logs)
+    assert line["destination"] is None
+
+
+@pytest.mark.parametrize("estimate", [0, -5_000])
+def test_ut10_52_non_positive_estimate_uses_body_length(tmp_path: Path, estimate: int) -> None:
+    """UT10-52 an estimate below 1 cannot lower the day total: the body estimate is used."""
+    cfg = with_egress(load(tmp_path, "hybrid"), max_tokens_per_day=100)
+    guard = make_guard(cfg)
+    guard.check(API, b"x" * 35, "reasoning_final", "aggregated_evidence", token_estimate=estimate)
+    assert [ln["tokens_in"] for ln in egress_lines(cfg.paths.logs)] == [10]
+    guard.check(API, b"{}", "reasoning_final", "aggregated_evidence", token_estimate=90)
+    assert _blocked(guard, body=b"{}", token_estimate=estimate) == "tokens_per_day"
+
+
+def test_ut10_53_empty_body_never_fetches_the_redactor(tmp_path: Path) -> None:
+    """UT10-53 an empty body skips the re-scan, so the redaction key is never needed."""
+    cfg = load(tmp_path, "hybrid")
+    guard = eg.EgressGuard(cfg, _failing_factory, EgressLog(cfg.paths.logs, "cfg_t", "hybrid"))
+    guard.check(API, b"", "reasoning_final", "aggregated_evidence")
+    (line,) = egress_lines(cfg.paths.logs)
+    assert (line["decision"], line["tokens_in"]) == ("allowed", 0)
+
+
+def test_ut10_52_every_line_has_the_full_shape(tmp_path: Path) -> None:
+    """UT10-52 allowed and blocked lines carry every §4.5 key; response fields are null."""
+    cfg = load(tmp_path, "hybrid")
+    guard = make_guard(cfg)
+    guard.check(API, EVIDENCE, "reasoning_final", "aggregated_evidence")
+    _blocked(guard, url="https://evil.com")
+    lines = egress_lines(cfg.paths.logs)
+    assert [ln["decision"] for ln in lines] == ["allowed", "blocked"]
+    for line in lines:
+        assert set(line) == LINE_KEYS | {"ts", "profile", "config_hash"}
+        assert [line[k] for k in ("bytes_in", "tokens_out", "status_code", "latency_ms")] == [
+            None
+        ] * 4
+
+
+def test_ut10_48_get_guard_without_config_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-48 get_guard falls back to a null config_hash when config_hash raises ConfigError."""
+    load(tmp_path, "local")
+
+    def no_hash(_cfg: object, **_kw: object) -> str:
+        msg = "keyring unavailable"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(c, "config_hash", no_hash)
+    eg.reset_guard()
+    try:
+        assert _blocked(eg.get_guard()) == "profile_forbids_egress"
+    finally:
+        eg.reset_guard()
+    (line,) = egress_lines(tmp_path / "data" / "logs")
+    assert line["config_hash"] is None

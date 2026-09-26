@@ -28,7 +28,7 @@ LINE_KEYS: Final = frozenset({
     "path", "run_id", "task_id", "bytes_out", "bytes_in", "tokens_in", "tokens_out",
     "payload_sha256", "scan_hits", "status_code", "latency_ms",
 })  # fmt: skip
-_ADDED: Final = frozenset({"ts", "profile", "config_hash"})
+_DECISIONS: Final = frozenset({"allowed", "blocked", "completed"})
 _LOCK_NAME: Final = ".egress.lock"
 MAX_REMEMBERED: Final = 100_000  # allowed-line map entries per day (U10-57 limit)
 
@@ -40,7 +40,7 @@ def _as_int(value: object) -> int:
 class EgressLog:
     """Append egress lines and keep today's token total incrementally (U10-57)."""
 
-    def __init__(self, logs_dir: Path, config_hash: str, profile: str) -> None:
+    def __init__(self, logs_dir: Path, config_hash: str | None, profile: str) -> None:
         logs_dir.mkdir(parents=True, exist_ok=True)
         self._dir = logs_dir
         self._config_hash = config_hash
@@ -70,9 +70,13 @@ class EgressLog:
         return self._dir / f"egress-{day}.jsonl"
 
     def write(self, line: dict[str, Any]) -> None:
-        """Append ``line`` with ``ts``, ``profile`` and ``config_hash``; unknown keys refused."""
-        if not line.keys() <= LINE_KEYS:
-            msg = "egress line has unknown keys"  # key names are never echoed (ENG §3.4)
+        """Append ``line`` with ``ts``, ``profile`` and ``config_hash``; one shape per line.
+
+        Every line carries exactly the §4.5 keys (null where not yet known) and a known
+        ``decision``; anything else is a ``SchemaViolation``.
+        """
+        if line.keys() != LINE_KEYS or line["decision"] not in _DECISIONS:
+            msg = "egress line keys invalid"  # key names are never echoed (ENG §3.4)
             raise SchemaViolation(msg)
         now = clock.now()
         record = dict(line)
