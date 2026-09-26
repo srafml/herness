@@ -5,14 +5,18 @@ from __future__ import annotations
 import datetime
 import errno
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.support.fault_env import FaultEnv
 
 from herness.core.errors import ConfigError, FatalError, SchemaViolation, StoreBusy
+from herness.core.resilience import ProcessState
+from herness.core.resilience.faults import FaultPlan
 from herness.core.types import Answer, DecisionOutput, Question, QuestionSet
 from herness.enrich import cache
 from herness.enrich.cache import CACHE_SCHEMA, CacheWriter, DecisionCache
@@ -43,9 +47,14 @@ def paths(tmp_path: Path) -> EnrichPaths:
 
 
 @pytest.fixture
-def fault_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    calls: list[str] = []
-    monkeypatch.setattr(cache, "_fault_point", calls.append)
+def fault_calls(fault_env: FaultEnv, reset_process_state: ProcessState) -> Callable[[], int]:
+    """Real fault hook with a never-firing `enrich.after_batch_write` rule; returns its counter."""
+    fault_env([{"point": "enrich.after_batch_write", "action": "error:StoreBusy", "nth": 10**6}])
+
+    def calls() -> int:
+        plan = reset_process_state.fault_plan
+        return plan.counters[0] if isinstance(plan, FaultPlan) else 0
+
     return calls
 
 
@@ -166,7 +175,9 @@ def test_ut03_34_only_tmp_means_no_dataset(paths: EnrichPaths) -> None:
     assert DecisionCache(paths, QSV).dataset() is None
 
 
-def test_ut03_35_add_flush_dedupes_and_skips(paths: EnrichPaths, fault_calls: list[str]) -> None:
+def test_ut03_35_add_flush_dedupes_and_skips(
+    paths: EnrichPaths, fault_calls: Callable[[], int]
+) -> None:
     """UT03-35 duplicates, an error output and an unknown qid: one part, fault point called."""
     writer = DecisionCache(paths, QSV).writer("laya", LAYA_V, questions=QS, flush_rows=100)
     outputs = [
@@ -181,7 +192,7 @@ def test_ut03_35_add_flush_dedupes_and_skips(paths: EnrichPaths, fault_calls: li
     assert part is not None
     assert part.name.startswith("part-")
     assert part.suffix == ".parquet"
-    assert fault_calls == ["enrich.after_batch_write"]
+    assert fault_calls() == 1
     assert [p.name for p in part.parent.iterdir()] == [part.name]
     table = pq.read_table(part)
     assert table.schema.equals(CACHE_SCHEMA)
@@ -192,7 +203,7 @@ def test_ut03_35_add_flush_dedupes_and_skips(paths: EnrichPaths, fault_calls: li
     assert rows == [(HASH1, "q_a", FP_A, 0.8), (HASH1, "q_b", FP_B, 0.6), (HASH2, "q_b", FP_B, 0.8)]
     assert set(table.column("samples").to_pylist()) == {3}
     assert writer.flush() is None
-    assert fault_calls == ["enrich.after_batch_write"]
+    assert fault_calls() == 1
     keys = DecisionCache(paths, QSV).existing_keys("laya", LAYA_V, QS)
     assert keys == {(HASH1, "q_a"), (HASH1, "q_b"), (HASH2, "q_b")}
 
@@ -203,7 +214,9 @@ def _add_then_fail(writer: CacheWriter) -> None:
         raise RuntimeError
 
 
-def test_ut03_35_auto_flush_and_context_manager(paths: EnrichPaths, fault_calls: list[str]) -> None:
+def test_ut03_35_auto_flush_and_context_manager(
+    paths: EnrichPaths, fault_calls: Callable[[], int]
+) -> None:
     """UT03-35 add flushes at flush_rows; the context manager flushes on normal exit only."""
     dc = DecisionCache(paths, QSV)
     part_dir = paths.cache_partition(QSV, "laya", LAYA_V)
@@ -212,7 +225,7 @@ def test_ut03_35_auto_flush_and_context_manager(paths: EnrichPaths, fault_calls:
         assert len(_parts(part_dir)) == 1
         writer.add([_output(HASH2, {"q_a": _answer()})], samples=None)
     assert len(_parts(part_dir)) == 2
-    assert fault_calls == ["enrich.after_batch_write"] * 2
+    assert fault_calls() == 2
     failing = dc.writer("laya", LAYA_V, questions=QS, flush_rows=10)
     with pytest.raises(RuntimeError):
         _add_then_fail(failing)
@@ -246,7 +259,7 @@ def test_ut03_33_missing_column_part_rejected(paths: EnrichPaths) -> None:
 
 
 def test_ut03_35_missing_fingerprint_is_computed(
-    paths: EnrichPaths, fault_calls: list[str]
+    paths: EnrichPaths, fault_calls: Callable[[], int]
 ) -> None:
     """UT03-35 a question without a stored fingerprint gets its computed fingerprint."""
     bare = _question("q_a", "")
@@ -265,7 +278,7 @@ def test_ut03_35_missing_fingerprint_is_computed(
 )
 def test_ut03_35_os_error_mapping(
     paths: EnrichPaths,
-    fault_calls: list[str],
+    fault_calls: Callable[[], int],
     monkeypatch: pytest.MonkeyPatch,
     code: int,
     expected: type[Exception],
@@ -282,7 +295,7 @@ def test_ut03_35_os_error_mapping(
         writer.flush()
     assert type(info.value) is expected
     assert list(paths.cache_partition(QSV, "laya", LAYA_V).iterdir()) == []
-    assert fault_calls == []
+    assert fault_calls() == 0
 
 
 @pytest.mark.parametrize(
@@ -291,7 +304,7 @@ def test_ut03_35_os_error_mapping(
 )
 def test_ut03_35_os_error_mapping_when_unlink_fails_too(
     paths: EnrichPaths,
-    fault_calls: list[str],
+    fault_calls: Callable[[], int],
     monkeypatch: pytest.MonkeyPatch,
     code: int,
     expected: type[Exception],
@@ -308,7 +321,7 @@ def test_ut03_35_os_error_mapping_when_unlink_fails_too(
     with pytest.raises(expected) as info:
         writer.flush()
     assert type(info.value) is expected
-    assert fault_calls == []
+    assert fault_calls() == 0
 
 
 @pytest.mark.parametrize("samples", [0, -1, 2**15])
@@ -320,7 +333,9 @@ def test_ut03_35_samples_out_of_int16_range_rejected(paths: EnrichPaths, samples
     assert writer.flush() is None
 
 
-def test_ut03_35_samples_upper_bound_accepted(paths: EnrichPaths, fault_calls: list[str]) -> None:
+def test_ut03_35_samples_upper_bound_accepted(
+    paths: EnrichPaths, fault_calls: Callable[[], int]
+) -> None:
     """UT03-35 samples = 32767 fits the int16 column."""
     writer = DecisionCache(paths, QSV).writer("laya", LAYA_V, questions=QS, flush_rows=10)
     writer.add([_output(HASH1, {"q_a": _answer()})], samples=2**15 - 1)

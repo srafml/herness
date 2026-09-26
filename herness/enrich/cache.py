@@ -30,6 +30,7 @@ from herness.core.errors import (
 )
 from herness.core.ids import new_ulid
 from herness.core.logging import get_logger
+from herness.core.resilience import fault_point
 from herness.core.types import DecisionOutput, Question, QuestionSet
 from herness.enrich.layout import EnrichPaths
 from herness.enrich.questions import question_fingerprint
@@ -56,13 +57,6 @@ _MAX_SAMPLES: Final = 2**15 - 1  # int16 column
 _log = get_logger("enrich.cache")
 
 type CacheKey = tuple[str, str, str]
-
-
-def _fault_point(name: str) -> None:
-    """No-op hook for a named fault point.
-
-    T08-08: replaced by herness.core.resilience.fault_point when that lands (R-40).
-    """
 
 
 def _fingerprint(q: Question) -> str:
@@ -263,7 +257,7 @@ class CacheWriter:
             return None
         table = pa.Table.from_pylist(self._buffer, schema=CACHE_SCHEMA)
         target = write_part(self._partition, table, decider=self._decider)
-        _fault_point("enrich.after_batch_write")
+        fault_point("enrich.after_batch_write")
         _log.debug("enrich.cache.flushed", decider=self._decider, rows=table.num_rows)
         self._buffer.clear()
         return target

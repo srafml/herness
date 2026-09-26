@@ -68,7 +68,7 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/types/__init__.py` (08 import line) | Re-export of the 08 names (impl 00 U00-44) | the names above | L0 | none | +2 |
 | `herness/core/types/_ownership.py` (08 entries) | `TYPE_OWNERS` entries for the 08 helper types (impl 00 U00-45) | none new | L0 | none | +6 |
 | `herness/core/errors.py` (08 section) | 08 taxonomy subclass (R-19) | `JobStateError` | L0 | none | +12 |
-| `herness/core/resilience/__init__.py` | Lazy re-export of the resilience API | all public names of §3.3–§3.8 | L0 | none | 70 |
+| `herness/core/resilience/__init__.py` | Lazy re-export of the resilience API | all public names of §3.3–§3.8 | L0 | none | 120 |
 | `herness/core/resilience/settings.py` | Every model of `config/resilience.yaml` (R-03) | `ResilienceSection` and sub-models, `ScheduleSection`, `WindowSpec`, `ScheduledJob`, `ChainStep`, `ResilienceConfig` | L0 | `pydantic` | 390 |
 | `herness/core/resilience/ports.py` | Protocols the resilience code depends on | `ResilienceBackend`, `HealthRow`, `EventRow`, `ChainRegistry`, `ClientInfo`, `GpuStateReader`, `AsyncCompleter`, `DeciderLike`, `TracerLike` | L0 | none | 190 |
 | `herness/core/resilience/_state.py` | The single process-state holder | `ProcessState`, `process_state`, `reset_process_state`, `bind_ops_backend`, `bind_chain_registry` | L0 | none | 140 |
