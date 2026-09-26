@@ -48,7 +48,7 @@ _OPTIONAL: Final[dict[str, frozenset[str]]] = {"admin_action": frozenset({"count
 _ACTIONS: Final = frozenset({
     "secret_set", "secret_rotate", "privacy_delete", "deploy_up", "deploy_down", "deploy_rollback",
     "deploy_pull", "deploy_prune", "deploy_install", "deploy_render", "profile_switch", "purge",
-    "backup", "redact_rekey",
+    "backup", "redact_rekey", "laya_accept", "laya_rollback",
 })  # fmt: skip
 _SECRET_ACTIONS: Final = frozenset({"secret_set", "secret_rotate"})
 _ACTOR_RE: Final = re.compile(r"[0-9a-f]{32}")

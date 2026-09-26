@@ -1187,7 +1187,7 @@ Allowed fields per event (design 10 §4.6; action list extended by delta D10-07)
 | `auth` | `user_ref`, `role`, `result` |
 | `egress` | `egress_id`, `reason` |
 
-`admin_action.action` values: `secret_set`, `secret_rotate`, `privacy_delete`, `deploy_up`, `deploy_down`, `deploy_rollback`, `deploy_pull`, `deploy_prune`, `deploy_install`, `deploy_render`, `profile_switch`, `purge`, `backup`, `redact_rekey`.
+`admin_action.action` values: `secret_set`, `secret_rotate`, `privacy_delete`, `deploy_up`, `deploy_down`, `deploy_rollback`, `deploy_pull`, `deploy_prune`, `deploy_install`, `deploy_render`, `profile_switch`, `purge`, `backup`, `redact_rekey`, `laya_accept`, `laya_rollback`.
 
 #### U10-61 herness.core.audit.log_lock, append_jsonl_locked
 
