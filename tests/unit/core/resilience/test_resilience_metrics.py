@@ -4,6 +4,7 @@ timed and flush_metrics (impl 08 U08-19 … U08-22, U08-103; T08-05)."""
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any
 
 import pytest
@@ -19,7 +20,7 @@ from herness.core.resilience import ProcessState, bind_ops_backend, process_stat
 from herness.core.resilience import metrics as m
 from herness.core.settings import RedactionConfig
 from herness.core.types import MetricSample
-from herness.store.ops.core import read_all
+from herness.store.ops.core import read_all, run_write
 from herness.store.ops.resilience import SqliteResilienceBackend
 
 pytestmark = pytest.mark.unit
@@ -309,3 +310,46 @@ def test_ut08_32_partial_flush_counts_written_and_discarded(
     assert backend.calls == 2
     assert len(_rows("histogram")) == 500
     assert process_state().metric_buffer.histograms == []
+
+
+class _BrokenStoreBackend(SqliteResilienceBackend):
+    def write_open(self) -> bool:
+        msg = "ops store busy while opening"
+        raise StoreBusy(msg)
+
+
+def test_ut08_32_auto_flush_defers_inside_an_open_write(
+    ops_db: OpsStoreHandle, mono: _Mono
+) -> None:
+    """UT08-32 a due auto-flush inside a `run_write` callback keeps the buffer (no nested-write
+    failure, nothing discarded); the next due record call outside the write flushes it
+    (T08-11, T08-05 m3)."""
+    del ops_db
+    m.record_counter("herness_jobs_enqueued_total", component="jobs")
+    mono.now += 10.0
+
+    def inside(conn: sqlite3.Connection) -> None:
+        del conn
+        with structlog.testing.capture_logs() as logs:
+            m.record_counter("herness_jobs_enqueued_total", component="jobs")
+        assert logs == []
+        assert SqliteResilienceBackend().write_open()
+
+    run_write(inside, op="test_write")
+    assert _rows() == []
+    assert not SqliteResilienceBackend().write_open()
+    m.record_counter("herness_jobs_enqueued_total", component="jobs")
+    assert [r["value"] for r in _rows("counter")] == [3.0]
+
+
+def test_ut08_32_auto_flush_flushes_when_the_store_check_fails(
+    reset_process_state: ProcessState, ops_store: OpsStoreHandle, mono: _Mono
+) -> None:
+    """UT08-32 a store error from the open-write check does not defer: the flush runs."""
+    del ops_store
+    bind_ops_backend(_BrokenStoreBackend())
+    m.record_counter("herness_jobs_enqueued_total", component="jobs")
+    mono.now += 10.0
+    m.record_counter("herness_jobs_enqueued_total", component="jobs")
+    assert [r["value"] for r in _rows("counter")] == [2.0]
+    assert reset_process_state.metric_buffer.counters == {}

@@ -97,6 +97,19 @@ def _interval_due(buffer: MetricBuffer) -> bool:
     return now - buffer.last_flush >= METRIC_FLUSH_INTERVAL_S
 
 
+def _auto_flush() -> None:
+    """Flush on a due trigger unless this thread is inside an open ops write (T08-11): there
+    the flush would hit the nested-`run_write` guard and discard the rows, so the buffer is
+    kept and a later record call outside the write flushes it."""
+    ops = process_state().ops
+    try:
+        deferred = ops is not None and ops.write_open()
+    except HernessError:  # store unusable: the flush logs it and discards, as before
+        deferred = False
+    if not deferred:
+        flush_metrics()
+
+
 def record_counter(
     name: str,
     value: float = 1.0,
@@ -116,7 +129,7 @@ def record_counter(
         buffer.counters[key] = buffer.counters.get(key, 0.0) + amount
         due = _interval_due(buffer)
     if due:
-        flush_metrics()
+        _auto_flush()
 
 
 def record_histogram(
@@ -141,7 +154,7 @@ def record_histogram(
             buffer.histograms.append((key, amount))
         due = len(buffer.histograms) >= HISTOGRAM_FLUSH_AT or _interval_due(buffer)
     if due:
-        flush_metrics()
+        _auto_flush()
 
 
 def record_gauge(
@@ -166,7 +179,7 @@ def record_gauge(
             buffer.gauges[key] = (number, clock.now())
         due = _interval_due(buffer)
     if due:
-        flush_metrics()
+        _auto_flush()
 
 
 @contextmanager
