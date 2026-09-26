@@ -8,6 +8,7 @@ the `decider:openjev` breaker and loads the full config (policy `decider_local`)
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 from typing import Any
 
@@ -40,6 +41,7 @@ from herness.enrich.deciders import openjev as oj
 from herness.enrich.deciders.jev_wire import AdaptiveLimiter
 from herness.enrich.deciders.openjev import OpenJevDecider
 from herness.enrich.settings import OpenJevSettings
+from herness.store.ops.resilience import SqliteResilienceBackend
 
 pytestmark = pytest.mark.unit
 
@@ -130,7 +132,9 @@ def test_ut03_51_three_items_in_order(
     args, kwargs, client = made[0]
     assert args == (_BASE,)
     assert kwargs["timeout_s"] == 30.0
-    assert kwargs["bearer"] is not None
+    bearer = kwargs["bearer"]
+    assert isinstance(bearer, SecretStr)
+    assert bearer.get_secret_value() == "unit-openjev-token"
     assert client.is_closed
 
 
@@ -250,8 +254,9 @@ def test_ut03_52_malformed_once_then_ok(
         (200, json.dumps({"answers": {}}).encode(), JSON),
         (200, json.dumps({"model": "x"}).encode(), JSON),
         (200, json.dumps({"answers": {"is_outage": {"noul": 2}}}).encode(), JSON),
+        (200, json.dumps({"answers": {"is_outage": {"noul": 0.9}}}).encode(), JSON),
     ],
-    ids=["400", "422", "missing-answers", "no-answers", "out-of-range"],
+    ids=["400", "422", "missing-answers", "no-answers", "out-of-range", "partial-answers"],
 )
 def test_ut03_52_invalid_replies_become_item_errors(
     jev_env: ProcessState, monkeypatch: pytest.MonkeyPatch, reply: Reply
@@ -267,11 +272,63 @@ def test_ut03_52_invalid_replies_become_item_errors(
 def test_ut03_52_auth_error_propagates(
     jev_env: ProcessState, monkeypatch: pytest.MonkeyPatch, code: int
 ) -> None:
-    """UT03-52 401/403 -> AuthError, not retried, propagated out of decide."""
+    """UT03-52 401/403 -> AuthError, not retried, propagated out of decide; client closed."""
     net = install(monkeypatch, lambda _body: _status(code))
+    clients: list[httpx2.Client] = []
+
+    def factory() -> httpx2.Client:
+        clients.append(egress.loopback_http_client(_BASE, timeout_s=30))
+        return clients[-1]
+
+    decider = OpenJevDecider(
+        OpenJevSettings(), api_key=_KEY, image_tag="0.4.0", samples=None, client_factory=factory
+    )
     with pytest.raises(AuthError, match=f"openjev: HTTP {code}"):
-        _decider().decide([item(1)], QS)
+        decider.decide([item(1)], QS)
     assert len(net.requests) == 1
+    assert clients[0].is_closed
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["normal", "exception"])
+def test_ut03_51_pool_shut_down_then_client_closed(
+    jev_env: ProcessState, monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    """UT03-51 on every exit: pool.shutdown(wait=True) first, then client.close()."""
+    events: list[tuple[str, bool | None]] = []
+
+    class _Pool(concurrent.futures.ThreadPoolExecutor):
+        def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+            if self._max_workers == 2:  # the decider's pool, not asyncio's default executor
+                events.append(("shutdown", wait))
+            super().shutdown(wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", _Pool)
+
+    def factory() -> httpx2.Client:
+        client = egress.loopback_http_client(_BASE, timeout_s=30)
+        real_close = client.close
+
+        def close() -> None:
+            events.append(("close", None))
+            real_close()
+
+        monkeypatch.setattr(client, "close", close)
+        return client
+
+    install(monkeypatch, lambda body: _status(401) if fail else ok(body))
+    decider = OpenJevDecider(
+        OpenJevSettings(concurrency=2),
+        api_key=_KEY,
+        image_tag="0.4.0",
+        samples=None,
+        client_factory=factory,
+    )
+    if fail:
+        with pytest.raises(AuthError):
+            decider.decide([item(1)], QS)
+    else:
+        assert decider.decide([item(1)], QS)[0].error is None
+    assert events == [("shutdown", True), ("close", None)]
 
 
 def test_ut03_52_auth_error_cancels_the_other_items(
@@ -282,9 +339,11 @@ def test_ut03_52_auth_error_cancels_the_other_items(
     def handler(body: dict[str, Any]) -> Reply:
         return _status(401) if body["state"] == item(2).text else ok(body)
 
-    install(monkeypatch, handler)
+    net = install(monkeypatch, handler)
+    items = [item(i) for i in range(1, 11)]
     with pytest.raises(AuthError):
-        _decider(concurrency=1).decide([item(1), item(2), item(3), item(4)], QS)
+        _decider(concurrency=1).decide(items, QS)
+    assert len(net.requests) <= 3  # the other 7+ items were cancelled before sending
 
 
 @pytest.mark.parametrize("code", [529, 500, 503])
@@ -296,6 +355,9 @@ def test_ut03_52_unavailable_after_policy_retries(
     with pytest.raises(ModelUnavailable, match=f"HTTP {code}"):
         _decider().decide([item(1)], QS)
     assert len(net.requests) == 3
+    row = SqliteResilienceBackend().health_get("decider:openjev")
+    assert row is not None
+    assert row.failures == 3  # every attempt counted on the decider:openjev breaker
 
 
 def test_ut03_52_other_status_classified(

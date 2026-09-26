@@ -10,6 +10,7 @@ import json
 import traceback
 from typing import Any
 
+import httpx
 import pytest
 from pydantic import SecretStr
 from structlog.testing import capture_logs
@@ -17,6 +18,8 @@ from tests.unit.enrich._openjev_support import JSON, QS, Reply, install, item, j
 
 from herness.core.errors import AuthError, HernessError, ModelUnavailable
 from herness.core.resilience import ProcessState
+from herness.core.resilience.classify import classify
+from herness.enrich.deciders import openjev as oj
 from herness.enrich.deciders.openjev import OpenJevDecider
 from herness.enrich.settings import OpenJevSettings
 
@@ -77,3 +80,34 @@ def test_st03_16_key_absent_from_exceptions_and_logs(
     captured = capsys.readouterr()
     assert _SYNTHETIC not in captured.out + captured.err
     assert _SYNTHETIC not in repr(decider) + repr(vars(decider))
+
+
+@pytest.mark.parametrize("code", [429, 500, 529, 404])
+def test_st03_16_classify_mirror_has_no_body_or_request_headers(
+    jev_env: ProcessState, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """ST03-16 the status handed to classify carries no body, no request headers and only
+    the Retry-After headers, so an echoed key cannot reach the error text."""
+    seen: list[BaseException] = []
+    real = classify
+
+    def spy(exc: BaseException, *, family: Any) -> HernessError:
+        seen.append(exc)
+        return real(exc, family=family)
+
+    monkeypatch.setattr(oj, "classify", spy)
+    headers = {**JSON, "retry-after": "120", "x-echo": _SYNTHETIC}
+    install(monkeypatch, lambda _body: (code, _echo(code)[1], headers))
+    decider = OpenJevDecider(
+        OpenJevSettings(), api_key=SecretStr(_SYNTHETIC), image_tag="0.4.0", samples=None
+    )
+    with capture_logs() as logs, pytest.raises(HernessError) as info:
+        decider.decide([item(1)], QS)
+    mirrors = [e for e in seen if isinstance(e, httpx.HTTPStatusError)]
+    assert mirrors
+    for mirror in mirrors:
+        assert mirror.response.content == b""
+        assert dict(mirror.response.headers) == {"retry-after": "120"}
+        assert "authorization" not in mirror.request.headers
+    assert _SYNTHETIC not in _exception_text(info.value)
+    assert _SYNTHETIC not in repr(logs)
