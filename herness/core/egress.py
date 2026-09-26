@@ -39,6 +39,7 @@ from herness.core.egress_clients import (
     aloopback_http_client,
     check_timeout,
     loopback_http_client,
+    source_http_client,
     tls_context,
 )
 from herness.core.egress_log import LINE_KEYS, EgressLog
@@ -53,7 +54,7 @@ __all__ = ["BLOCKING_TYPES", "CHARS_PER_TOKEN", "LOOPBACK_HOSTS", "MAX_RESPONSE_
 __all__ += ["MODEL_DOWNLOAD_HOSTS", "PAYLOAD_CLASSES_BY_PROFILE", "EgressGuard", "EgressTicket"]
 __all__ += ["AsyncGuardedTransport", "GuardedTransport", "PayloadClass", "Purpose"]
 __all__ += ["aloopback_http_client", "cloud_chat_allowed", "get_guard", "install_socket_guard"]
-__all__ += ["loopback_http_client", "reset_guard"]
+__all__ += ["loopback_http_client", "reset_guard", "source_http_client"]
 
 Purpose = Literal["reasoning_final", "reasoning", "bulk_classification", "model_download"]
 PayloadClass = Literal["aggregated_evidence", "redacted_text", "none"]
