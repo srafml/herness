@@ -68,7 +68,7 @@ pairs AS (
 ),
 ranked AS (
     SELECT
-        p.record_id, p.question, c.decider, c.decider_version, c.answer, c.p_cal,
+        p.record_id, p.entity, p.question, c.decider, c.decider_version, c.answer, c.p_cal,
         c.decided_at, c.agreement,
         CASE
             WHEN c.decider = 'ensemble' THEN 1
@@ -82,7 +82,7 @@ ranked AS (
 best AS (
     SELECT * FROM ranked
     WHERE rnk IS NOT NULL
-    QUALIFY row_number() OVER (PARTITION BY record_id, question ORDER BY rnk) = 1
+    QUALIFY row_number() OVER (PARTITION BY record_id, entity, question ORDER BY rnk) = 1
 ),
 joined AS (
     SELECT
@@ -92,7 +92,8 @@ joined AS (
         pi.question IS NOT NULL AS pending_review,
         h.answer IS NOT NULL AND (b.answer IS NULL OR b.answer <> h.answer) AS use_human
     FROM pairs AS p
-    LEFT JOIN best AS b ON b.record_id = p.record_id AND b.question = p.question
+    LEFT JOIN best AS b
+        ON b.record_id = p.record_id AND b.entity = p.entity AND b.question = p.question
     LEFT JOIN human_latest AS h
         ON h.content_hash = p.content_hash AND h.question = p.question
         AND h.question_fingerprint = p.fingerprint

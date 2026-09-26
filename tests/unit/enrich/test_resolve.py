@@ -3,8 +3,8 @@
 PT03-10 checks ``resolve_decisions.sql`` against the reference `resolve_pair` (U03-74) on
 random candidate sets; the calibrated probability of the reference comes from
 `apply_temperature` (U03-42), an independent implementation of the SQL formula.
-UT03-76 covers `escalation_queue`; `resolve_frame` is covered here under IT03-04's ID (its
-spec test) with real stores, as the stage integration test belongs to a later card.
+UT03-76 covers `escalation_queue`; `resolve_frame` (whose spec test IT03-04 belongs to a
+later card) is covered here by review-focus tests (`test_rf_...`) with real stores.
 """
 
 from __future__ import annotations
@@ -24,11 +24,11 @@ from hypothesis import strategies as st
 from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.errors import ConfigError, SchemaViolation
-from herness.core.types import Question, QuestionSet
+from herness.core.types import Question, QuestionSet, QuestionType
 from herness.enrich import resolve
 from herness.enrich.cache import CACHE_SCHEMA, DecisionCache, write_part
 from herness.enrich.calibrate import CalibrationResult, CalibrationStore, apply_temperature
-from herness.enrich.decide import CachedAnswer, resolve_pair
+from herness.enrich.decide import CachedAnswer, Resolution, resolve_pair
 from herness.enrich.labels import HUMAN_SCHEMA, LabelStore
 from herness.enrich.layout import EnrichPaths
 from herness.enrich.settings import DecidersSettings, DecisionsConfig
@@ -52,7 +52,9 @@ _CALIB = pa.schema(
 )
 _DECIDERS = ("laya", "openjev", "jev", "llm", "ensemble")
 _LABELS = {"bool": ["true", "false"], "choice": ["a", "b", "c"], "score": ["0", "1", "2", "3"]}
+_QTYPES: tuple[QuestionType, ...] = ("bool", "choice", "score")
 _FP = "0123456789abcdef"
+_ENTITIES = ("incident", "change")
 _OTHER_FP = "f" * 16  # a stale question fingerprint
 _OUT = (
     "status, answer, probability, decider, decider_version, escalated, decided_at, agreement, "
@@ -69,13 +71,17 @@ def _warehouse() -> duckdb.DuckDBPyConnection:
 
 
 def _add_record(
-    wh: duckdb.DuckDBPyConnection, rid: str, content_hash: str, opened_at: datetime | None
+    wh: duckdb.DuckDBPyConnection,
+    rid: str,
+    content_hash: str,
+    opened_at: datetime | None,
+    entity: str = "incident",
 ) -> None:
     wh.execute(
-        "INSERT INTO enrich.text_redacted VALUES (?, 'incident', ?, ?)",
-        [rid, f"text of {rid}", content_hash],
+        "INSERT INTO enrich.text_redacted VALUES (?, ?, ?, ?)",
+        [rid, entity, f"text of {rid}", content_hash],
     )
-    wh.execute("INSERT INTO core.incident VALUES (?, ?)", [rid, opened_at])
+    wh.execute(f"INSERT INTO core.{entity} VALUES (?, ?)", [rid, opened_at])  # noqa: S608
 
 
 # --- PT03-10 -----------------------------------------------------------------------------------
@@ -84,7 +90,7 @@ def _add_record(
 @dataclass(frozen=True)
 class _Q:
     qid: str
-    qtype: str
+    qtype: QuestionType
     threshold: float
     primary: str
     chain: tuple[str, ...]
@@ -97,15 +103,12 @@ def _questions(draw: st.DrawFn) -> list[_Q]:
     for i in range(draw(st.integers(1, 3))):
         primary = draw(st.sampled_from(["laya", "openjev", "jev", "llm"]))
         others = [d for d in ("openjev", "jev", "llm") if d != primary]
-        chain = draw(
-            st.permutations(others).flatmap(
-                lambda p: st.integers(0, len(p)).map(lambda n, p=p: tuple(p[:n]))
-            )
-        )
+        perm = draw(st.permutations(others))
+        chain = tuple(perm[: draw(st.integers(0, len(perm)))])
         out.append(
             _Q(
                 f"q_{i}",
-                draw(st.sampled_from(["bool", "choice", "score"])),
+                draw(st.sampled_from(_QTYPES)),
                 draw(st.floats(0.5, 0.999)),
                 primary,
                 chain,
@@ -115,14 +118,14 @@ def _questions(draw: st.DrawFn) -> list[_Q]:
     return out
 
 
-def _dist(draw: st.DrawFn, qtype: str) -> dict[str, float]:
+def _dist(draw: st.DrawFn, qtype: QuestionType) -> dict[str, float]:
     if qtype == "bool":
         p = draw(st.floats(0.0, 1.0))
         return {"true": p, "false": 1.0 - p}
     return {k: draw(st.floats(0.0, 1.0)) for k in _LABELS[qtype]}
 
 
-def _p_cal(dist: dict[str, float], answer: str, t: float, qtype: str) -> float:
+def _p_cal(dist: dict[str, float], answer: str, t: float, qtype: QuestionType) -> float:
     keys = _LABELS[qtype]
     cal = apply_temperature(np.array([[dist[k] for k in keys]]), t, qtype)
     return float(cal[0, keys.index(answer)])
@@ -130,13 +133,13 @@ def _p_cal(dist: dict[str, float], answer: str, t: float, qtype: str) -> float:
 
 @dataclass
 class _World:
-    records: list[tuple[str, str, datetime | None]]
+    records: list[tuple[str, str, str, datetime | None]]  # record_id, entity, hash, opened
     questions: list[_Q]
     cache: list[dict[str, Any]]
     calib: list[dict[str, Any]]
     human: list[dict[str, Any]]
     pending: list[dict[str, Any]]
-    expected: dict[tuple[str, str], Any]
+    expected: dict[tuple[str, str, str], Resolution]
 
 
 def _cache_row(ch: str, q: _Q, decider: str, version: str, **kw: Any) -> dict[str, Any]:
@@ -163,11 +166,16 @@ def _draw_pair(
         dist, answer = _dist(draw, q.qtype), draw(st.sampled_from(_LABELS[q.qtype]))
         at = _T0 + timedelta(minutes=draw(st.integers(0, 10_000)))
         conf = draw(st.floats(0.0, 1.0)) if decider == "ensemble" else None
+        other = draw(st.sampled_from([a for a in _LABELS[q.qtype] if a != answer]))
+        newer = {"answer": other, "dist": _dist(draw, q.qtype), "at": at + timedelta(days=1)}
+        # stale rows (other fingerprint, non-current version) are newer, with another answer
+        w.cache.append(_cache_row(ch, q, decider, "v0", **newer))
+        w.cache.append(_cache_row(ch, q, decider, "v1", fp=_OTHER_FP, **newer))
+        if draw(st.booleans()):
+            continue  # only stale rows: the decider has no current row
         w.cache.append(_cache_row(ch, q, decider, "v1", answer=answer, dist=dist, at=at, conf=conf))
-        stale = {"answer": answer, "dist": _dist(draw, q.qtype), "at": at - timedelta(days=1)}
-        w.cache.append(_cache_row(ch, q, decider, "v1", **stale))  # older duplicate: ignored
-        w.cache.append(_cache_row(ch, q, decider, "v0", answer=answer, dist=dist, at=at))
-        w.cache.append(_cache_row(ch, q, decider, "v1", fp=_OTHER_FP, **stale))
+        older = {"answer": other, "dist": _dist(draw, q.qtype), "at": at - timedelta(days=1)}
+        w.cache.append(_cache_row(ch, q, decider, "v1", **older))  # older duplicate: ignored
         p_cal = _p_cal(dist, answer, temps.get((decider, q.qid), 1.0), q.qtype)
         if decider == q.primary:
             assume(abs(p_cal - q.threshold) > 1e-9)  # float noise must not flip the gate
@@ -204,10 +212,15 @@ def _worlds(draw: st.DrawFn) -> _World:
     questions = draw(_questions())
     hashes = [f"{i:032x}" for i in range(draw(st.integers(1, 3)))]
     opened = st.one_of(st.none(), st.integers(-200, 10).map(lambda d: _T0 + timedelta(days=d)))
-    records = [
-        (f"inc_{i}", draw(st.sampled_from(hashes)), draw(opened))
-        for i in range(draw(st.integers(1, 4)))
-    ]
+    keys = draw(  # the same record_id may exist as an incident and as a change
+        st.lists(
+            st.tuples(st.sampled_from(["r_0", "r_1", "r_2"]), st.sampled_from(_ENTITIES)),
+            min_size=1,
+            max_size=4,
+            unique=True,
+        )
+    )
+    records = [(rid, ent, draw(st.sampled_from(hashes)), draw(opened)) for rid, ent in keys]
     temps = {
         (d, q.qid): draw(st.floats(0.05, 10.0))
         for d in _DECIDERS
@@ -220,11 +233,11 @@ def _worlds(draw: st.DrawFn) -> _World:
     ]
     w = _World(records, questions, [], calib, [], [], {})
     per_pair = {(ch, q.qid): _draw_pair(draw, w, ch, q, temps) for ch in hashes for q in questions}
-    for rid, ch, opened_at in records:
+    for rid, ent, ch, opened_at in records:
         for q in questions:
             rows, human, pending = per_pair[(ch, q.qid)]
             in_scope = q.primary == "laya" or (opened_at is not None and opened_at >= _SINCE)
-            w.expected[(rid, q.qid)] = resolve_pair(
+            w.expected[(rid, ent, q.qid)] = resolve_pair(
                 human=human,
                 rows=rows,
                 primary=q.primary,
@@ -247,7 +260,7 @@ def _qmeta(questions: list[_Q]) -> pa.Table:
                 "scoring_use": q.scoring_use,
                 "primary": q.primary,
                 "chain": list(q.chain),
-                "applies_to": ["incident"],
+                "applies_to": list(_ENTITIES),
                 "labels": _LABELS[q.qtype],
             }
             for q in questions
@@ -261,8 +274,8 @@ def _qmeta(questions: list[_Q]) -> pa.Table:
 def test_pt03_10_sql_equals_resolve_pair(w: _World) -> None:
     """PT03-10: on random candidate sets the SQL result equals resolve_pair row by row."""
     wh = _warehouse()
-    for rid, ch, opened_at in w.records:
-        _add_record(wh, rid, ch, opened_at)
+    for rid, ent, ch, opened_at in w.records:
+        _add_record(wh, rid, ch, opened_at, ent)
     wh.register("cache_rows", pa.Table.from_pylist(w.cache, schema=_FULL_CACHE))
     wh.register("human_latest", pa.Table.from_pylist(w.human, schema=HUMAN_SCHEMA))
     wh.register("calib", pa.Table.from_pylist(w.calib, schema=_CALIB))
@@ -271,10 +284,10 @@ def test_pt03_10_sql_equals_resolve_pair(w: _World) -> None:
     wh.register("versions", pa.Table.from_pylist(versions, schema=resolve._VERSIONS_SCHEMA))
     wh.register("pending_items", pa.Table.from_pylist(w.pending, schema=resolve._PENDING_SCHEMA))
     resolve._run_resolve_sql(wh, bootstrap_since=_SINCE)
-    got = wh.execute(f"SELECT record_id, question, {_OUT} FROM enrich_resolved").fetchall()  # noqa: S608
+    got = wh.execute(f"SELECT record_id, entity, question, {_OUT} FROM enrich_resolved").fetchall()  # noqa: S608
     assert len(got) == len(w.expected)
-    for rid, qid, status, answer, prob, decider, version, esc, at, agr, review in got:
-        exp = w.expected[(rid, qid)]
+    for rid, ent, qid, status, answer, prob, decider, version, esc, at, agr, review in got:
+        exp = w.expected[(rid, ent, qid)]
         assert (status, answer, decider, version, esc, at, review) == (
             exp.status,
             exp.answer,
@@ -348,6 +361,26 @@ def test_ut03_76_queue_full_order_nulls_last(resolved_wh: duckdb.DuckDBPyConnect
     got = resolve.escalation_queue(resolved_wh, max_records=100)
     assert [item.record_id for item in got] == ["inc_3", "inc_2", "inc_1", "inc_5"]
     assert resolve.escalation_queue(resolved_wh, max_records=0) == []
+    resolved_wh.execute("DROP TABLE enrich_cand")  # read only when deciders are excluded
+    assert [item.record_id for item in resolve.escalation_queue(resolved_wh, max_records=1)] == [
+        "inc_3"
+    ]
+
+
+def test_ut03_76_record_id_shared_across_entities(
+    resolved_wh: duckdb.DuckDBPyConnection,
+) -> None:
+    """UT03-76: a change and an incident with one record_id are separate items, entity tie-break."""
+    resolved_wh.execute(
+        "INSERT INTO enrich_resolved VALUES ('inc_3', 'change', 'hc', ?, 'q_z', true, 'queue')",
+        [_T0],
+    )
+    resolved_wh.execute("INSERT INTO enrich.text_redacted VALUES ('inc_3', 'change', 'c', 'hc')")
+    got = resolve.escalation_queue(resolved_wh, max_records=2)
+    assert [(i.entity, i.content_hash, i.text, i.question_ids) for i in got] == [
+        ("change", "hc", "c", ("q_z",)),
+        ("incident", "h3", "text of inc_3", ("q_b",)),
+    ]
 
 
 def test_ut03_76_exclude_deciders(resolved_wh: duckdb.DuckDBPyConnection) -> None:
@@ -366,7 +399,7 @@ def test_ut03_76_errors(resolved_wh: duckdb.DuckDBPyConnection) -> None:
         resolve.escalation_queue(_warehouse(), max_records=1)
 
 
-# --- resolve_frame (U03-79; spec test IT03-04) --------------------------------------------------
+# --- resolve_frame (U03-79; review focus) ---------------------------------------------------------
 
 
 def _question(qid: str, qtype: str, **kw: Any) -> Question:
@@ -403,6 +436,7 @@ _PRIMARIES = {
     "change_caused_pair": "openjev",
 }
 _NOW = datetime(2026, 9, 26, tzinfo=UTC)
+_VIEWS = ("cache_rows", "human_latest", "calib", "qmeta", "versions", "pending_items")
 _LAYA_V = "laya-20260901-1"
 
 
@@ -501,8 +535,14 @@ def frame(ops_store: OpsStoreHandle, tmp_path: Path) -> Callable[..., None]:
     return run
 
 
-def test_it03_04_resolve_frame_builds_enrich_resolved(frame: Callable[..., None]) -> None:
-    """IT03-04 (unit part): resolve_frame registers stores, resolves and unregisters views."""
+def _assert_unregistered(wh: duckdb.DuckDBPyConnection) -> None:
+    for view in _VIEWS:
+        with pytest.raises(duckdb.CatalogException):
+            wh.execute(f"SELECT * FROM {view}")  # noqa: S608 - fixed test names
+
+
+def test_rf_resolve_frame_builds_enrich_resolved(frame: Callable[..., None]) -> None:
+    """RF resolve_frame registers stores, resolves and unregisters views."""
     wh = _warehouse()
     _add_record(wh, "inc_1", "h1", _NOW - timedelta(days=10))
     _add_record(wh, "inc_2", "h2", _NOW - timedelta(days=400))
@@ -525,22 +565,20 @@ def test_it03_04_resolve_frame_builds_enrich_resolved(frame: Callable[..., None]
     assert got[("inc_2", "q_score")][:3] == ("final", "2", "openjev")
     assert got[("inc_1", "q_score")][0] == "queue"  # in the bootstrap window
     assert got[("inc_2", "q_choice")][0] == "out_of_scope"  # opened before the window
-    views = {r[0] for r in wh.execute("SELECT view_name FROM duckdb_views()").fetchall()}
-    assert views.isdisjoint({"cache_rows", "human_latest", "calib", "qmeta", "versions"})
+    _assert_unregistered(wh)
 
 
-def test_it03_04_resolve_frame_error_unregisters(frame: Callable[..., None]) -> None:
-    """IT03-04 (unit part): a SQL error is a SchemaViolation and leaves no view registered."""
+def test_rf_resolve_frame_error_unregisters(frame: Callable[..., None]) -> None:
+    """RF a SQL error is a SchemaViolation and leaves no view registered."""
     wh = _warehouse()
     wh.execute("DROP TABLE core.problem")
     with pytest.raises(SchemaViolation, match=r"^resolve_decisions: "):
         frame(wh)
-    with pytest.raises(duckdb.CatalogException):
-        wh.execute("SELECT * FROM qmeta")
+    _assert_unregistered(wh)
 
 
-def test_it03_04_qmeta_needs_every_primary() -> None:
-    """IT03-04 (unit part): a non-pair question without a primary decider is a ConfigError."""
+def test_rf_qmeta_needs_every_primary() -> None:
+    """RF a non-pair question without a primary decider is a ConfigError."""
     with pytest.raises(ConfigError, match="no primary decider"):
         resolve._qmeta_table(_QS, cfg=_CFG, deciders=DecidersSettings(), primaries={})
     meta = resolve._qmeta_table(_QS, cfg=_CFG, deciders=DecidersSettings(), primaries=_PRIMARIES)

@@ -50,19 +50,20 @@ WITH queued AS (
     SELECT r.record_id, r.entity, r.content_hash, list_sort(list(r.question)) AS question_ids,
         bool_or(r.scoring_use) AS max_scoring, max(r.opened_at) AS opened_at
     FROM enrich_resolved AS r
-    WHERE r.status = 'queue' AND NOT EXISTS (
-        SELECT 1 FROM enrich_cand AS c
-        WHERE c.content_hash = r.content_hash AND c.question = r.question
-            AND list_contains(CAST($exclude AS VARCHAR[]), c.decider))
+    WHERE r.status = 'queue'{exclude}
     GROUP BY r.record_id, r.entity, r.content_hash
-    ORDER BY max_scoring DESC, opened_at DESC NULLS LAST, record_id
+    ORDER BY max_scoring DESC, opened_at DESC NULLS LAST, record_id, entity
     LIMIT $max_records
 )
 SELECT q.record_id, q.entity, q.content_hash, t.text, q.question_ids
 FROM queued AS q
 JOIN enrich.text_redacted AS t ON t.record_id = q.record_id AND t.entity = q.entity
-ORDER BY q.max_scoring DESC, q.opened_at DESC NULLS LAST, q.record_id
+ORDER BY q.max_scoring DESC, q.opened_at DESC NULLS LAST, q.record_id, q.entity
 """
+_EXCLUDE_SQL: Final = """ AND NOT EXISTS (
+        SELECT 1 FROM enrich_cand AS c
+        WHERE c.content_hash = r.content_hash AND c.question = r.question
+            AND list_contains(CAST($exclude AS VARCHAR[]), c.decider))"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,9 +196,12 @@ def escalation_queue(
     if max_records < 0:
         msg = "escalation_queue: max_records must be >= 0"
         raise ConfigError(msg)
-    params = {"exclude": sorted(exclude_deciders), "max_records": max_records}
+    params: dict[str, object] = {"max_records": max_records}
+    if exclude_deciders:  # read enrich_cand only when something is excluded
+        params["exclude"] = sorted(exclude_deciders)
+    sql = _QUEUE_SQL.format(exclude=_EXCLUDE_SQL if exclude_deciders else "")
     try:
-        rows = wh.execute(_QUEUE_SQL, params).fetchall()
+        rows = wh.execute(sql, params).fetchall()
     except duckdb.Error as exc:
         raise _duck_error(exc, where="escalation_queue") from exc
     return [QueueItem(rid, entity, ch, text, tuple(qids)) for rid, entity, ch, text, qids in rows]
