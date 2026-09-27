@@ -4,7 +4,8 @@
 opt-in `reset_process_state` fixture (impl 08 §11) and T08-08 the `tests.support.fault_env`
 plugin; T11-40 registers `tests.support.ops_store` (U11-78) in place of the interim
 `tests.support.ops_core_store` (T02-04). T02-12 registers `tests.support.build_harness`
-(`build_harness`, `fake_job_context`; impl 02 §11).
+(`build_harness`, `fake_job_context`; impl 02 §11). T05-16 registers
+`tests.support.harness_state` (autouse `reset_harness_state`: the process tool registry).
 """
 
 import random
@@ -29,6 +30,7 @@ pytest_plugins = [
     "tests.support.fault_env",
     "tests.support.fake_gpu",
     "tests.support.build_harness",
+    "tests.support.harness_state",
 ]
 
 collect_ignore = ["support", "fixtures"]

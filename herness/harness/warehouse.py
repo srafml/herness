@@ -99,6 +99,7 @@ class DuckWarehouse:
         self._sql = sql
         self._local: threading.local = threading.local()
         self._schema: _SchemaMap | None = None
+        self._schema_lock = threading.Lock()
         self._cache: OrderedDict[str, _CacheValue] = OrderedDict()
         self._cache_lock = threading.Lock()
 
@@ -119,10 +120,16 @@ class DuckWarehouse:
         return cur
 
     def schema(self) -> _SchemaMap:
-        """Schema → table → column → DuckDB type (lower-case), loaded once and cached."""
-        if self._schema is None:
-            self._schema = _load_schema(self._con)
-        return self._schema
+        """Schema → table → column → DuckDB type (lower-case), loaded once and cached.
+
+        Loaded once under a lock on its own cursor: `dispatch` runs tools in threads, and a
+        cold load on the shared connection raced into a partial schema (T05-16 finding).
+        """
+        with self._schema_lock:
+            if self._schema is None:
+                with self._con.cursor() as cur:
+                    self._schema = _load_schema(cur)
+            return self._schema
 
     def table_comment(self, qualified: str) -> str:
         """The table's comment from `duckdb_tables()`, or `""` when there is none."""
