@@ -372,9 +372,9 @@ def test_it02_21_payload_errors(env: Env, fake_job_context: Callable[..., FakeJo
     assert isinstance(error, ConfigError)
     assert LITERAL not in str(error)
     assert [e["event"] for e in logs] == ["model.build.payload_invalid"]
-    missing = _run(fake_job_context({"stages": ["build", "enrich"]}))
+    missing = _run(fake_job_context({"stages": ["build", "enrich", "score", "dq"]}))
     assert isinstance(missing, ConfigError)
-    assert "enrich" in str(missing)
+    assert str(missing) == "build stage dq is not available"  # T02-20: dq (U02-102)
     assert warehouse.list_builds(layout=env.layout) == []
 
 

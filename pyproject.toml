@@ -292,6 +292,10 @@ ignore_imports = [
     # settings exception (ENG §2.1, R-03); _config_sections is config.py's private sibling (T10-03b)
     "herness.core.config -> herness.**.settings",
     "herness.core._config_sections -> herness.**.settings",
+    # impl 02 §2.2 exception (design 02 §4.1): the build job calls the spec 03 / 04 stage
+    # hooks in one process; imported lazily inside the enrich and score stage units only.
+    "herness.model._build_stages -> herness.enrich.gpu",
+    "herness.model._build_stages -> herness.metrics.facts",
 ]
 # The settings exception matches nothing until impl 10 creates herness.core.config.
 unmatched_ignore_imports_alerting = "none"
