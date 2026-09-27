@@ -261,10 +261,26 @@ def test_ut07_23_upsert_search_roundtrip(vector_tmp: s.VectorIndex) -> None:
     hits = vector_tmp.search(_unit(3), ["semantic"], ["active"], 3)
     assert hits[0][0] == _mid(3)
     assert hits[0][1] == pytest.approx(0.0, abs=1e-6)
+    assert hits[1][1] == pytest.approx(1.0, abs=1e-6)  # orthogonal: cosine 1.0 (L2 would give 2)
     assert len(hits) == 3
     assert _mid(9) not in {h[0] for h in hits}
     episodic = vector_tmp.search(_unit(9), ["episodic"], ["active", "candidate"], 10)
     assert [h[0] for h in episodic] == [_mid(9)]
+
+
+def test_ut07_23_out_of_float32_range_row_stored_finite(vector_tmp: s.VectorIndex) -> None:
+    """UT07-23 a finite float64 vector beyond float32 range is stored as its finite unit vector."""
+    big = np.zeros(EMBEDDING_DIM)
+    big[[1, 2]] = [1e300, -1e300]
+    row = s.VectorRow(_mid(1), "semantic", "glossary", "active", "h", "m", big)
+    vector_tmp.upsert([row])
+    stored = vector_tmp.vectors([_mid(1)])[_mid(1)]
+    assert np.isfinite(stored).all()
+    assert stored[1] == pytest.approx(2**-0.5)
+    assert stored[2] == pytest.approx(-(2**-0.5))
+    assert float(np.linalg.norm(stored)) == pytest.approx(1.0, abs=1e-6)
+    hits = vector_tmp.search(_unit(1), ["semantic"], ["active"], 1)
+    assert hits[0][1] == pytest.approx(1 - 2**-0.5, abs=1e-5)
 
 
 def test_ut07_23_upsert_merges_on_memory_id(vector_tmp: s.VectorIndex) -> None:

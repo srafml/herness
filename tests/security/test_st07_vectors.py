@@ -24,6 +24,16 @@ ATTACKS = [
     "semantic') OR ('1'='1",
     "active' --",
     "",
+    # Unicode lookalikes, case variants and control characters (not in any allowlist).
+    "mem_" + "\uff10" * 26,  # fullwidth digits
+    "mem_" + "\u0660" * 26,  # Arabic-Indic digits
+    "\u0430ctive",  # Cyrillic a
+    "ACTIVE",
+    "Semantic",
+    "active\n",
+    "active\x00",
+    GOOD[:-1] + "\x00",
+    GOOD + "\x00",
 ]
 
 

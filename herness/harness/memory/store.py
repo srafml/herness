@@ -98,7 +98,7 @@ def _unit_vector(raw: object) -> np.ndarray | None:
 
 @dataclass(frozen=True, slots=True)
 class VectorRow:
-    """One row of ``memory_embedding``; ``vector`` is a (1024,) finite non-zero float array."""
+    """One ``memory_embedding`` row; ``vector``: finite non-zero float (1024,), stored unit-norm."""
 
     memory_id: str
     layer: Layer
@@ -150,7 +150,8 @@ def _rows_table(rows: Sequence[VectorRow]) -> pa.Table:
             raise ToolInputError(msg)
     latest = list({r.memory_id: r for r in rows}.values())  # last row per id wins
     columns = {c: pa.array([getattr(r, c) for r in latest], pa.string()) for c in _ROW_COLUMNS}
-    flat = pa.array(np.concatenate([np.asarray(r.vector, dtype=np.float32) for r in latest]))
+    # Stored as the checked float32 unit vector: finite even when the input exceeds float32 range.
+    flat = pa.array(np.concatenate([cast("np.ndarray", _unit_vector(r.vector)) for r in latest]))
     columns["vector"] = pa.FixedSizeListArray.from_arrays(flat, EMBEDDING_DIM)
     return pa.Table.from_pydict(columns, schema=MEMORY_EMBEDDING_SCHEMA)
 
