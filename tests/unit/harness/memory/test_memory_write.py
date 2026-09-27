@@ -508,6 +508,21 @@ def test_ut07_30_embedder_raises_stores_pending(ops_store: OpsStoreHandle, tmp_p
     assert env.vectors.list_ids("", 10) == []
 
 
+def test_ut07_30_dedupe_embedding_failure_is_final(
+    ops_store: OpsStoreHandle, tmp_path: Path
+) -> None:
+    """UT07-30 step 11(b) sets embedding_pending itself: one embed call, flag in row and review."""
+    env = make_writer(tmp_path, embed=FakeEmbed(fail=True))
+    item = proposal("Escalate after lunch.", kind="business_rule")  # human cli: pending
+    result = env.writer.propose(item, now=NOW)
+    assert len(env.embed.calls) == 1  # step 13 does not embed again
+    assert result.flags == ["embedding_pending"]
+    (row,) = memory_rows()
+    assert (row["data"]["embedding_pending"], row["data"]["flags"]) == (True, ["embedding_pending"])
+    (review,) = review_rows()
+    assert review["payload"]["flags"] == ["embedding_pending"]
+
+
 class _BrokenVectors(VectorIndex):
     def __init__(self, path: Path, *, search_ok: bool) -> None:
         super().__init__(lambda: VectorStore(path))

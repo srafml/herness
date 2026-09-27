@@ -45,7 +45,7 @@ ID_KEYS: Final = frozenset({
     "finding_ids", "top_finding_ids", "rec_ids", "run_ids", "fingerprint", "content_hash",
     "service_id", "team_id", "org_id", "jira_project", "rule_id", "conflicts_with",
 })  # fmt: skip
-_ENTITY_KEEP: Final = ID_KEYS | {"type", "id"}
+_ENTITY_KEEP: Final = frozenset({"type", "id"})
 _FLAGS: Final = frozenset(get_args(Flag.__value__))
 _SYSTEM_TEXT_KINDS: Final = frozenset(
     {"run_summary", "outcome_summary", "decision_note", "mapping"}
@@ -114,10 +114,20 @@ class Draft:
         return self.item.provenance
 
 
+def _is_id_value(value: JsonValue) -> bool:
+    """An identifier value: a string or a list of strings (anything else is redacted)."""
+    return isinstance(value, str) or (
+        isinstance(value, list) and all(isinstance(v, str) for v in value)
+    )
+
+
 def redact_payload(
     redactor: Redactor, item: MemoryProposal
 ) -> tuple[str, dict[str, JsonValue], list[Flag]]:
-    """Step 3: content and every data string except ID_KEYS values and entity type/id."""
+    """Step 3: content, every data string and every data key, through `redactor.redact`.
+
+    Exempt are only a str / list-of-str value under an ID_KEYS key, and the str `type` and
+    `id` of the entries of the top-level `data["entities"]` list (U07-50 step 3)."""
     changed: list[bool] = []
 
     def text(value: str) -> str:
@@ -126,19 +136,32 @@ def redact_payload(
         changed.append(out != value)
         return out
 
-    def obj(value: dict[str, JsonValue], keep: frozenset[str]) -> dict[str, JsonValue]:
-        return {k: v if k in keep else walk(v, entities=k == "entities") for k, v in value.items()}
+    def obj(
+        value: dict[str, JsonValue], keep: frozenset[str] = frozenset()
+    ) -> dict[str, JsonValue]:
+        return {
+            k if k in keep or k in ID_KEYS else text(k): (
+                v if (k in keep and isinstance(v, str)) or (k in ID_KEYS and _is_id_value(v))
+                else walk(v)
+            )
+            for k, v in value.items()
+        }  # fmt: skip
 
-    def walk(value: JsonValue, *, entities: bool = False) -> JsonValue:
+    def walk(value: JsonValue) -> JsonValue:
         if isinstance(value, str):
             return text(value)
         if isinstance(value, list):
-            return [obj(v, _ENTITY_KEEP) if entities and isinstance(v, dict) else walk(v)
-                    for v in value]  # fmt: skip
-        return obj(value, ID_KEYS) if isinstance(value, dict) else value
+            return [walk(v) for v in value]
+        return obj(value) if isinstance(value, dict) else value
 
     content = text(item.content)
-    data = obj(item.data, ID_KEYS)
+    data = obj({k: v for k, v in item.data.items() if k != "entities"})
+    if "entities" in item.data:
+        ents = item.data["entities"]
+        data["entities"] = (
+            [obj(e, _ENTITY_KEEP) if isinstance(e, dict) else walk(e) for e in ents]
+            if isinstance(ents, list) else walk(ents)
+        )  # fmt: skip
     return content, data, ["redacted"] if any(changed) else []
 
 

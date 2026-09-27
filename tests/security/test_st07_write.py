@@ -37,6 +37,7 @@ from tests.unit.harness.memory._write_env import (
 )
 
 from herness.core.errors import PolicyViolation
+from herness.core.redact import Redactor
 from herness.core.types import MemoryProposal, MemoryRunContext, NumberRef, Provenance
 from herness.harness.memory import render
 from herness.harness.memory.settings import MemoryConfig, RateLimits, WriteConfig
@@ -259,6 +260,56 @@ def test_st07_05_planted_personal_data_never_stored(
     assert row["data"]["entities"][0]["type"] == "team"
     assert row["data"]["entities"][0]["id"] == "team_x"
     assert row["data"]["entities"][0]["label"].startswith("[PERSON_")
+
+
+def test_st07_05_only_spec_exemptions_skip_the_redactor(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST07-05 the redactor sees every data string except ID_KEYS values and entity type/id."""
+    seen: list[str] = []
+    real = Redactor.redact
+
+    def spy(self: Redactor, text: str | None) -> Any:
+        seen.append(str(text))
+        return real(self, text)
+
+    monkeypatch.setattr(Redactor, "redact", spy)
+    env = make_writer(tmp_path)
+    data: dict[str, Any] = {
+        "rule_id": "br_owner_id", "applies_to": ["svc_scope_text"],
+        "query_ids": ["q_id_value"], "note": {"contact": "nested_note_text"},
+        "entities": [{"type": "team_type_value", "id": "team_id_value", "label": "label_text"}],
+    }  # fmt: skip
+    env.writer.propose(proposal("Escalation rule text.", kind="business_rule", data=data))
+    for exempt in ("br_owner_id", "q_id_value", "team_type_value", "team_id_value"):
+        assert exempt not in seen
+    for redacted in ("Escalation rule text.", "svc_scope_text", "nested_note_text",
+                     "label_text", "contact", "note"):  # fmt: skip
+        assert redacted in seen
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"x": {"entities": [{"type": "t", "id": PLANTED_EMAIL}]}},
+        {"query_ids": {"n": [PLANTED_EMAIL]}},
+        {PLANTED_EMAIL: "x"},
+        {"template_id": {"owner": PLANTED_EMAIL}},
+    ],
+)
+def test_st07_05_exemptions_do_not_widen(
+    ops_store: OpsStoreHandle, tmp_path: Path, extra: dict[str, Any]
+) -> None:
+    """ST07-05 nested entities, non-string ID values and dict keys are redacted too."""
+    env = make_writer(tmp_path)
+    data: dict[str, Any] = {"rule_id": "br_x", "applies_to": ["service"]} | extra
+    result = env.writer.propose(proposal("Escalation rule.", kind="business_rule", data=data))
+    assert "redacted" in result.flags
+    assert PLANTED_EMAIL not in _dump()
+    assert all(PLANTED_EMAIL not in call for call in env.embed.calls)
+    fts = core.read_all("SELECT content FROM memory_fts")
+    assert all(PLANTED_EMAIL not in r[0] for r in fts)
+    assert core.read_all("SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?", ("jane",)) == []
 
 
 # ---------------------------------------------------------------- ST07-10 TH07-10

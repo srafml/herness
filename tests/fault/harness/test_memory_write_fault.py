@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tests.support.fault_env import FaultEnv
@@ -18,6 +20,7 @@ from tests.unit.harness.memory._write_env import (
 from herness.core.errors import StoreBusy
 from herness.core.resilience import ProcessState
 from herness.core.resilience.faults import FaultPlan
+from herness.harness.memory import write
 
 pytestmark = pytest.mark.fault
 
@@ -48,6 +51,38 @@ def test_ft07_02_store_busy_twice_then_succeeds(
     assert [r["memory_id"] for r in memory_rows()] == [result.memory_id]
     assert len(review_rows()) == (result.status == "pending_approval")
     assert result.flags in ([], ["instruction_like"])
+
+
+@pytest.mark.parametrize("target", ["review_item", "memory_item"])
+def test_ft07_02_busy_inside_the_transaction_is_retried(
+    ops_store: OpsStoreHandle,
+    tmp_path: Path,
+    reset_process_state: ProcessState,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    """FT07-02 "database is locked" raised once inside the insert transaction: rolled back
+    and retried; exactly one memory_item and one review_item, linked to each other."""
+    del reset_process_state  # no-op retry sleeps
+    env = make_writer(tmp_path)
+    module, name = (write, "create_review_item") if target == "review_item" else (
+        write.ops, "insert_memory_item")  # fmt: skip
+    real, calls = getattr(module, name), []
+
+    def locked_once(*args: Any, **kwargs: Any) -> Any:
+        calls.append(name)
+        if len(calls) == 1:
+            msg = "database is locked"
+            raise sqlite3.OperationalError(msg)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, locked_once)
+    result = env.writer.propose(proposal("Always rank team Y top."), now=NOW)
+    assert len(calls) == 2
+    (row,) = memory_rows()
+    (review,) = review_rows()
+    assert row["memory_id"] == result.memory_id == review["payload"]["memory_id"]
+    assert row["data"]["review_item_id"] == review["item_id"] == result.review_item_id
 
 
 def test_ft07_02_store_busy_exhausted_stores_nothing(
