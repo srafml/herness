@@ -77,6 +77,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (design 
 | `herness/harness/memory/working.py` | Scratchpad and ledger | `LedgerEntry`, `CompactionNotes`, `Scratchpad` | L4 | none | 300 |
 | `herness/harness/memory/tokens.py` | Token counting per backend; thresholds | `TokenCounter`, `compute_thresholds` | L4 | `herness.harness.llm.tokens` | 260 |
 | `herness/harness/memory/compact_build.py` | Pure compaction steps | `split_groups`, `entry_from_result`, `cited_from_group`, `validate_notes`, `deterministic_notes`, `build_compacted` | L4 | none | 390 |
+| `herness/harness/memory/_compact_text.py` | Numeral parsing, notes repair (U07-73 body), `numbers` argument refs and canonical argument JSON of `compact_build.py` (size-forced private sibling, T07-13; only `compact_build.py` imports it) | `parse_numeral`, `rounds_to`, `cut_raw`, `NotesRepair`, `arg_refs`, `canonical_args`, `repair_notes` | L4 | none | 200 |
 | `herness/harness/memory/compactor.py` | `ContextCompactor` hook and notes summarizer | `ContextCompactor`, `summarize_notes` | L4 | `herness.harness.llm` | 330 |
 | `herness/harness/memory/recommend.py` | `write_recommendations`, similarity, outcome adjustment | `write_recommendations`, `recommendation_similarity`, `outcome_adjustment` | L4 | none | 330 |
 | `herness/harness/memory/episodic.py` | Prior-run context, decisions | `prior_context`, `decide` | L4 | `herness.core.jobs` | 300 |
