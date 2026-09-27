@@ -93,7 +93,8 @@ class ScriptedRunner:
 
 @dataclass
 class FakeConfig:
-    """The parts of `HernessConfig` the handlers read: `sources` and `paths.data`."""
+    """The only part of `HernessConfig` the handlers read here: `sources` (the scripted
+    runner supplies `data_root`, so `paths.data` is never needed)."""
 
     sources: SourcesConfig
 

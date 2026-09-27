@@ -21,6 +21,7 @@ from tests.support.fake_keyring import MemoryKeyring
 from tests.support.ops_store import OpsStoreHandle
 from tests.support.sync_env import drop_inbox, init_sync_config
 
+import herness.connectors.jobs as jobs_module
 from herness.connectors.files import FilesConnector
 from herness.connectors.jobs import build_sync_payload, handle_sync, register_job_handlers
 from herness.connectors.runner import SyncResult
@@ -28,12 +29,13 @@ from herness.core import config as c
 from herness.core import redact as r
 from herness.core import registry
 from herness.core.jobs import queue
-from herness.core.jobs.handlers import resolve_handler, run_handler
+from herness.core.jobs.handlers import Handler, register_handler, resolve_handler, run_handler
 from herness.core.jobs.ports import JobRow, JobsBackend, bind_jobs_backend, require_jobs_backend
 from herness.core.redact_directory import NameDirectory
 from herness.core.resilience import ProcessState, bind_ops_backend
+from herness.core.resilience import reset_process_state as reset_state
 from herness.core.settings import RedactionConfig
-from herness.core.types import JobOutcome
+from herness.core.types import JobKind, JobOutcome
 from herness.store.ops import read_all
 from herness.store.ops.jobs import SqliteJobsBackend
 from herness.store.ops.privacy import create_deletion_request, set_deletion_status
@@ -132,6 +134,40 @@ def test_it01_08_sync_job_runs_through_the_queue(env: Path) -> None:
     finished = queue.get(job_id)
     assert finished.status == "done"
     assert finished.result == done
+
+
+def test_it01_08_register_job_handlers_is_idempotent(
+    reset_process_state: ProcessState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT01-08 (U01-53) both kinds registered on the first call; the second call is a no-op
+    that never reaches `register_handler` again (the module flag)."""
+    seen: list[str] = []
+
+    def spy(kind: JobKind, handler: Handler) -> None:
+        seen.append(kind)
+        register_handler(kind, handler)
+
+    monkeypatch.setattr(jobs_module, "register_handler", spy)
+    register_job_handlers()
+    assert seen == ["sync", "reconcile"]
+    register_job_handlers()
+    assert seen == ["sync", "reconcile"]
+    assert resolve_handler("sync") is handle_sync
+    assert resolve_handler("reconcile") is jobs_module.handle_reconcile
+    assert set(reset_process_state.handlers) == {"sync", "reconcile"}
+
+
+def test_it01_08_registration_follows_a_reset_process_state(
+    reset_process_state: ProcessState,
+) -> None:
+    """IT01-08 (U01-53) a replaced process state (empty handler table) counts as not
+    registered, so the next call registers the handlers again."""
+    register_job_handlers()
+    assert reset_process_state.handlers
+    fresh = reset_state()
+    assert fresh.handlers == {}
+    register_job_handlers()
+    assert resolve_handler("sync") is handle_sync
 
 
 def _request(record_id: str, *statuses: str) -> None:

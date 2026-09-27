@@ -7,6 +7,10 @@ the factory passes (the real classes land with T01-17 / T01-19)."""
 from __future__ import annotations
 
 import datetime
+import importlib.util
+import os
+import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -208,3 +212,60 @@ def test_ut01_94_other_sources_get_no_extra_kwargs(tmp_path: Path) -> None:
     assert isinstance(conn, FakeServiceNow)
     assert conn.kwargs == {}
     assert conn.settings is config.sources.source("servicenow")
+
+
+_FILES_ROW = ("connector", "files")
+
+
+def _shipped_builtins() -> dict[tuple[str, str], str]:
+    """`_BUILTINS` as shipped: a fresh load of registry.py (test_registry's autouse fixture
+    clears the live table for the rest of the session)."""
+    spec = importlib.util.spec_from_file_location("_registry_probe", registry.__file__)
+    assert spec is not None
+    assert spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    return dict(probe._BUILTINS)
+
+
+def test_ut01_94_files_resolves_through_the_builtin_table(
+    cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-94 the shipped `_BUILTINS` row resolves `files` with no explicit registration."""
+    row = _shipped_builtins()[_FILES_ROW]
+    assert row == "herness.connectors.files:FilesConnector"
+    registry.reset_registry()
+    monkeypatch.setitem(registry._BUILTINS, _FILES_ROW, row)
+    assert registry.get("connector", "files") is FilesConnector
+    assert isinstance(build_connector("files", cfg), FilesConnector)
+
+
+_PROBE = """\
+import sys
+from pathlib import Path
+from herness.connectors.factory import build_connector
+from herness.core import config as c
+assert "herness.connectors.files" not in sys.modules
+cfg = c.load_config("local", config_dir=Path(sys.argv[1]), env={})
+conn = build_connector("files", cfg)
+sys.stdout.write(type(conn).__module__ + ":" + type(conn).__name__)
+"""
+
+
+def test_ut01_94_build_connector_files_without_prior_import(tmp_path: Path) -> None:
+    """UT01-94 in a fresh interpreter, `build_connector("files", cfg)` resolves the class
+    through `_BUILTINS` although `herness.connectors.files` was never imported."""
+    config_dir = write_sync_config(tmp_path, SOURCES_YAML.format(inbox="data/inbox"))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HERNESS_")}
+    done = subprocess.run(  # noqa: S603 - fixed interpreter and script, test only
+        [sys.executable, "-c", _PROBE, str(config_dir)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env | {"HERNESS_ENV": "test"},
+        cwd=Path(__file__).resolve().parents[3],
+        timeout=120,
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    # config warnings are logged to stdout too; the probe writes its answer last
+    assert done.stdout.endswith("\nherness.connectors.files:FilesConnector")

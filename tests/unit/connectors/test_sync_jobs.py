@@ -25,8 +25,6 @@ from tests.unit.connectors._settings_data import adapter, jira, monitoring, serv
 
 from herness.connectors import jobs
 from herness.core.errors import ConfigError, SchemaViolation, SourceUnavailable
-from herness.core.jobs.handlers import resolve_handler
-from herness.core.resilience import ProcessState
 
 pytestmark = pytest.mark.unit
 
@@ -364,28 +362,3 @@ def test_ut01_55_monitoring_is_not_reconciled(monkeypatch: pytest.MonkeyPatch) -
     with pytest.raises(ConfigError, match="monitoring is not reconciled"):
         jobs.handle_reconcile(ctx({"source": "monitoring"}, kind="reconcile"))
     assert calls.runners == []
-
-
-# --- U01-53 registration ---------------------------------------------------------------------
-
-
-def test_ut01_54_register_job_handlers_is_idempotent(reset_process_state: ProcessState) -> None:
-    """UT01-54 register_job_handlers registers both kinds once; a second call is a no-op."""
-    jobs.register_job_handlers()
-    jobs.register_job_handlers()
-    assert resolve_handler("sync") is jobs.handle_sync
-    assert resolve_handler("reconcile") is jobs.handle_reconcile
-    assert set(reset_process_state.handlers) == {"sync", "reconcile"}
-
-
-def test_ut01_54_registration_follows_a_reset_process_state() -> None:
-    """UT01-54 after the process state is reset, a call registers the handlers again."""
-    from herness.core.resilience import reset_process_state  # noqa: PLC0415 - reset twice
-
-    reset_process_state()
-    jobs.register_job_handlers()
-    fresh = reset_process_state()
-    assert fresh.handlers == {}
-    jobs.register_job_handlers()
-    assert resolve_handler("sync") is jobs.handle_sync
-    reset_process_state()
