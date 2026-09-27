@@ -182,6 +182,7 @@ def test_ut05_93_skeptic_check_count_validator() -> None:
 def test_ut05_93_skeptic_revise_needs_required_actions() -> None:
     """UT05-93 a revise verdict needs at least one required action (as Challenge)."""
     ok = {"finding_id": _FND, "checks": _checks(*SKEPTIC_CHECKS), "verdict": "revise"}
+    actions: list[str] | None
     for actions in ([], None):
         payload = ok if actions is None else {**ok, "required_actions": actions}
         with pytest.raises(ValidationError, match="revise verdict needs"):
@@ -194,20 +195,26 @@ def test_ut05_93_skeptic_revise_needs_required_actions() -> None:
 
 def test_ut05_93_skeptic_output_fields() -> None:
     """UT05-93 SkepticOutput verdicts, required_actions and extra keys (TH05-16)."""
-    ok = {"finding_id": _FND, "checks": _checks(*SKEPTIC_CHECKS), "verdict": "revise"}
-    out = SkepticOutput.model_validate({**ok, "required_actions": ["re-run q"]})
+    ok = {
+        "finding_id": _FND,
+        "checks": _checks(*SKEPTIC_CHECKS),
+        "verdict": "revise",
+        "required_actions": ["re-run q"],
+    }
+    out = SkepticOutput.model_validate(ok)
     assert (out.verdict, out.required_actions) == ("revise", ["re-run q"])
-    rest = SKEPTIC_CHECKS[1:]
-    for bad in (
-        {**ok, "verdict": "maybe"},
-        {**ok, "finding_id": "task_01ARZ3NDEKTSV4RRFFQ69G5FAV"},
-        {**ok, "required_actions": ["a" * 401]},
-        {**ok, "required_actions": ["a"] * 11},
-        {**ok, "round": 1},
-        {**ok, "checks": [{**_checks(SKEPTIC_CHECKS[0])[0], "result": "fail"}, *_checks(*rest)]},
+    failed = [{**_checks(SKEPTIC_CHECKS[0])[0], "result": "fail"}, *_checks(*SKEPTIC_CHECKS[1:])]
+    for bad, field in (
+        ({**ok, "verdict": "maybe"}, "verdict"),
+        ({**ok, "finding_id": "task_01ARZ3NDEKTSV4RRFFQ69G5FAV"}, "finding_id"),
+        ({**ok, "required_actions": ["a" * 401]}, "required_actions"),
+        ({**ok, "required_actions": ["a"] * 11}, "required_actions"),
+        ({**ok, "round": 1}, "round"),
+        ({**ok, "checks": failed}, "checks"),
     ):
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as caught:
             SkepticOutput.model_validate(bad)
+        assert [e["loc"][0] for e in caught.value.errors()] == [field]
 
 
 def test_ut05_93_chat_output_is_chat_answer() -> None:
