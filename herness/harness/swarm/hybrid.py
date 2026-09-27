@@ -11,7 +11,7 @@ This module builds no LLM or HTTP client; ``count_tokens`` (R-17) is its only ou
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 from herness.core.errors import BudgetExceeded, NotFound
@@ -29,18 +29,25 @@ __all__ = ["PACK_HEADROOM_TOKENS", "Pseudonymizer", "build_evidence_pack"]
 PACK_HEADROOM_TOKENS: Final = 8_000  # U06-123 step 2: room for the role prompt and the output
 _MAX_PART_CHARS: Final = 200_000  # TextPart.text max_length: a longer pack cannot be sent
 _ID_KEYS: Final = frozenset({"target_id", "entity_id", "row_key"})  # U06-124 step 3
+_NEVER: Final = frozenset(
+    {"result_sample", "text_redacted", "notes", "prior_context", "ticket_text"}
+)
+_IDK: Final = ("_id", "row_key")  # outbound id-valued keys: *_id and row_key
 _PORTFOLIO_LISTS: Final = ("rows", "selected", "query_ids")
 
 _log = get_logger("harness.swarm")
 
 
-def _whole_token_re(strings: Sequence[str]) -> re.Pattern[str] | None:
-    """One alternation, longest string first, matching only whole tokens; None when empty."""
-    if not strings:
-        return None
-    ordered = sorted(strings, key=lambda s: (-len(s), s))
-    body = "|".join(re.escape(s) for s in ordered)
-    return re.compile(rf"(?<!\w)(?:{body})(?!\w)")
+def _replacer(table: Mapping[str, str], flags: int = 0) -> Callable[[str], str]:
+    """Replace ``table``'s keys by its values: longest first, whole tokens only, single pass."""
+    # Leftmost match wins: of "A B" and "B C" in "A B C" the first is replaced, "C" stays text.
+    keys = sorted(table, key=lambda s: (-len(s), s))
+    if not keys:
+        return lambda text: text
+    body = "|".join(f"(?P<g{i}>{re.escape(key)})" for i, key in enumerate(keys))
+    pattern = re.compile(rf"(?<!\w)(?:{body})(?!\w)", flags)
+    values = [table[key] for key in keys]
+    return lambda text: pattern.sub(lambda m: values[int(str(m.lastgroup)[1:])], text)
 
 
 class Pseudonymizer:
@@ -49,7 +56,8 @@ class Pseudonymizer:
     def __init__(self, entities: Sequence[tuple[str, str, str | None]]) -> None:
         self._tokens: dict[tuple[str, str], str] = {}
         self._entries: dict[str, tuple[str, str, str | None]] = {}
-        self._forward: dict[str, str] = {}  # raw id or name -> token; the first entity wins
+        forward: dict[str, str] = {}  # raw id or name -> token; first entity wins, any case
+        folded: set[str] = set()
         counts: dict[str, int] = {}
         for entity_type, entity_id, name in entities:
             if (entity_type, entity_id) in self._tokens:
@@ -59,10 +67,13 @@ class Pseudonymizer:
             self._tokens[entity_type, entity_id] = token
             self._entries[token] = (entity_type, entity_id, name)
             for raw in (entity_id, name):
-                if raw:
-                    self._forward.setdefault(raw, token)
-        self._forward_re = _whole_token_re(list(self._forward))
-        self._reverse_re = _whole_token_re(list(self._entries))
+                if raw and raw.lower() not in folded:
+                    folded.add(raw.lower())
+                    forward[raw] = token
+        # Outbound matching ignores case (a case variant is still the name); restore does not.
+        self._forward = _replacer(forward, re.IGNORECASE)
+        self._to_ids = _replacer({t: e[1] for t, e in self._entries.items()})
+        self._to_names = _replacer({t: e[2] or e[1] for t, e in self._entries.items()})
 
     def token(self, entity_type: str, entity_id: str) -> str:
         """The pseudonym of one entity; ``NotFound`` when the entity was not given."""
@@ -73,14 +84,12 @@ class Pseudonymizer:
             raise NotFound(msg, entity_type=entity_type) from None
 
     def pseudonymize(self, text: str) -> str:
-        """``text`` with every id and name replaced by its token (longest first, whole tokens)."""
-        if self._forward_re is None:
-            return text
-        return self._forward_re.sub(lambda m: self._forward[m.group(0)], text)
+        """``text`` with every id and name (any case) replaced by its token (whole tokens)."""
+        return self._forward(text)
 
     def restore(self, text: str) -> str:
         """Prose: each token back to the entity name, or to its id when it has none."""
-        return self._restore(text, ids=False)
+        return self._to_names(text)
 
     def restore_obj(self, obj: object) -> object:
         """Walk dicts and lists: id-valued fields (``_ID_KEYS``) restore to ids, prose to names."""
@@ -88,27 +97,14 @@ class Pseudonymizer:
 
     def mapping(self) -> dict[str, dict[str, str]]:
         """``{token: {"entity_type", "entity_id"[, "name"]}}`` for the task checkpoint (U06-140)."""
-        out: dict[str, dict[str, str]] = {}
-        for token, (entity_type, entity_id, name) in self._entries.items():
-            entry = {"entity_type": entity_type, "entity_id": entity_id}
-            if name is not None:
-                entry["name"] = name
-            out[token] = entry
-        return out
-
-    def _restore(self, text: str, *, ids: bool) -> str:
-        if self._reverse_re is None:
-            return text
-
-        def back(match: re.Match[str]) -> str:
-            _type, entity_id, name = self._entries[match.group(0)]
-            return entity_id if ids or not name else name
-
-        return self._reverse_re.sub(back, text)
+        return {
+            token: {"entity_type": t, "entity_id": eid} | ({} if name is None else {"name": name})
+            for token, (t, eid, name) in self._entries.items()
+        }
 
     def _walk(self, obj: object, *, ids: bool) -> object:
         if isinstance(obj, str):
-            return self._restore(obj, ids=ids)
+            return self._to_ids(obj) if ids else self._to_names(obj)
         if isinstance(obj, Mapping):
             return {k: self._walk(v, ids=ids or k in _ID_KEYS) for k, v in obj.items()}
         if isinstance(obj, list | tuple):
@@ -131,14 +127,18 @@ def _clean(pseudo: Pseudonymizer, text: str) -> str:
     return out
 
 
-def _scrub(pseudo: Pseudonymizer, value: object) -> object:
-    """``value`` with every string cleaned; dicts and lists walked, other scalars kept."""
+def _scrub(pseudo: Pseudonymizer, value: object, *, ids: bool = False) -> object:
+    """Strings and keys cleaned, never-packed keys dropped; an int id-field value is matched too."""
     if isinstance(value, str):
         return _clean(pseudo, value)
     if isinstance(value, Mapping):
-        return {str(k): _scrub(pseudo, v) for k, v in value.items()}
+        pairs = [(str(k), v) for k, v in value.items() if k not in _NEVER]
+        return {_clean(pseudo, k): _scrub(pseudo, v, ids=ids or k.endswith(_IDK)) for k, v in pairs}
     if isinstance(value, list | tuple):
-        return [_scrub(pseudo, item) for item in value]
+        return [_scrub(pseudo, item, ids=ids) for item in value]
+    if ids and isinstance(value, int) and not isinstance(value, bool):
+        token = pseudo.pseudonymize(str(value))
+        return value if token == str(value) else token
     return value
 
 
@@ -173,7 +173,8 @@ def _finding_item(pseudo: Pseudonymizer, f: Finding) -> dict[str, object] | None
     """One pack finding; None (dropped, fail closed) for an unknown entity or unredactable text."""
     try:
         numbers = [
-            n.model_dump(mode="json") | {"row_key": _scrub(pseudo, n.row_key)} for n in f.numbers
+            n.model_dump(mode="json") | {"row_key": _scrub(pseudo, n.row_key, ids=True)}
+            for n in f.numbers
         ]
         return {
             "finding_id": f.finding_id,

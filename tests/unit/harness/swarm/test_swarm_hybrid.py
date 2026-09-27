@@ -412,6 +412,53 @@ def test_ut06_83_unknown_entity_finding_dropped() -> None:
     assert "team-unknown" not in canonical_json(pack)
 
 
+def test_ut06_83_row_keys_int_ids_and_never_keys() -> None:
+    """UT06-83 dict keys and int id-field values are pseudonymized; never-packed keys dropped."""
+    pseudo = Pseudonymizer([*ENTITIES, ("work_item", "10042", None)])
+    number = NumberRef(
+        id="n1", value=1, unit="count", query_id=Q1, column="c",
+        row_key={"team-core": "x", "wid": 10042, "week": 3},
+    )  # fmt: skip
+    inp = _inp(
+        levers=[
+            {
+                "by_team": {"team-core": 3, "Payments Platform": 4},
+                "entity_id": 10042,
+                "score": 10042,
+                "ok": True,
+                "result_sample": [{"s": PLANTED["sample"]}],
+                "nested": [{"text_redacted": PLANTED["enrich"], "notes": PLANTED["notes"]}],
+            }
+        ],
+        portfolio={
+            "rows": [{"candidate_id": "team-core", "prior_context": PLANTED["prior"]}],
+            "selected": [{"ticket_text": PLANTED["ticket"]}],
+        },
+    )
+    pack = build_evidence_pack(
+        _spec(), findings=[_finding(1, numbers=[number])], inp=inp, pseudo=pseudo,
+        max_tokens=BIG, cfg=CFG,
+    )  # fmt: skip
+    row_key = pack["findings"][0]["numbers"][0]["row_key"]  # type: ignore[index]
+    assert row_key == {"team_002": "x", "wid": "work_item_001", "week": 3}
+    assert pack["levers"] == [
+        {
+            "by_team": {"team_002": 3, "team_001": 4},
+            "entity_id": "work_item_001",
+            "score": 10042,
+            "ok": True,
+            "nested": [{}],
+        }
+    ]
+    assert pack["portfolio"]["rows"] == [{"candidate_id": "team_002"}]  # type: ignore[index]
+    assert pack["portfolio"]["selected"] == [{}]  # type: ignore[index]
+    text = canonical_json(pack)
+    for planted in PLANTED.values():
+        assert planted not in text
+    for key in ("result_sample", "text_redacted", "notes", "prior_context", "ticket_text"):
+        assert key not in text
+
+
 def test_ut06_83_missing_or_malformed_inputs_give_empty_sections() -> None:
     """UT06-83 inp without portfolio, levers or flags yields empty, well-formed sections."""
     pack = _pack([], inp={"portfolio": "bad", "levers": None, "dq_warnings": [1, {"x": 2}]})
@@ -440,6 +487,17 @@ def test_ut06_84_tokens_stable_by_input_order() -> None:
     assert a.mapping() == b.mapping()
     dup = Pseudonymizer([*OVERLAP, ("team", "t-1", "Other")])
     assert dup.mapping() == a.mapping()
+
+
+def test_ut06_84_case_variants_pseudonymized_restore_canonical() -> None:
+    """UT06-84 names and ids match in any case on the way out; restore gives the canonical form."""
+    p = Pseudonymizer(OVERLAP)
+    out = p.pseudonymize("core platform CORE PLATFORM core Core T-3 cOrE")
+    assert out == "team_002 team_002 team_001 team_001 team_003 team_001"
+    assert p.restore(out) == "Core Platform Core Platform Core Core t-3 Core"
+    assert p.restore("TEAM_001") == "TEAM_001"  # restore stays case-sensitive
+    first = Pseudonymizer([("team", "a-1", "Core"), ("team", "a-2", "CORE")])
+    assert first.pseudonymize("CORE core") == "team_001 team_001"  # first entity wins
 
 
 def test_ut06_84_longest_first_whole_token_replacement() -> None:
@@ -488,37 +546,43 @@ def test_ut06_84_unknown_entity_and_empty_map() -> None:
 
 # --- PT06-06 round trip -------------------------------------------------------------------------
 
-_WORD = st.text(alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJ", min_size=1, max_size=6)
-_NAME = st.lists(_WORD, min_size=1, max_size=3).map(" ".join)
+_NAME_WORD = st.text(alphabet="abcdefghijABCDEFGHIJ", min_size=1, max_size=6)
+_FILLER = st.text(alphabet="klmnopqrstuvwxyzKLMNOPQRSTUVWXYZ", min_size=1, max_size=6)
+_NAME = st.lists(_NAME_WORD, min_size=1, max_size=3).map(" ".join)
 _ID = st.from_regex(r"[a-z]{1,4}-[0-9]{1,3}", fullmatch=True)
 
 
 @st.composite
 def _world(draw: st.DrawFn) -> tuple[list[tuple[str, str, str | None]], str]:
     ids = draw(st.lists(_ID, min_size=1, max_size=6, unique=True))
+    names = draw(st.lists(_NAME, min_size=len(ids), max_size=len(ids), unique_by=str.lower))
+    named = draw(st.lists(st.booleans(), min_size=len(ids), max_size=len(ids)))
     entities: list[tuple[str, str, str | None]] = [
-        (draw(st.sampled_from(["team", "service"])), eid, draw(st.none() | _NAME)) for eid in ids
+        (draw(st.sampled_from(["team", "service"])), eid, name if keep else None)
+        for eid, name, keep in zip(ids, names, named, strict=True)
     ]
     # Prose restores a token to the name, so a named entity appears by name and an unnamed one
-    # by id (U06-124 step 3); ids contain a digit and names do not, so filler never forms an id.
+    # by id (U06-124 step 3). Matching ignores case, so names are unique ignoring case and filler
+    # letters are disjoint from name letters; ids hold a digit, so filler never forms an id.
     pieces = [name if name is not None else eid for _t, eid, name in entities]
-    text = " ".join(draw(st.lists(st.sampled_from(pieces) | _WORD, max_size=12)))
+    text = " ".join(draw(st.lists(st.sampled_from(pieces) | _FILLER, max_size=12)))
     return entities, text
 
 
 def _whole(raw: str) -> re.Pattern[str]:
-    return re.compile(rf"(?<!\w){re.escape(raw)}(?!\w)")
+    return re.compile(rf"(?<!\w){re.escape(raw)}(?!\w)", re.IGNORECASE)
 
 
 @given(_world())
 def test_pt06_06_restore_inverts_pseudonymize_and_hides_raw(
     world: tuple[list[tuple[str, str, str | None]], str],
 ) -> None:
-    """PT06-06 restore(pseudonymize(x)) == x; no raw id or name survives as a whole token."""
+    """PT06-06 restore(pseudonymize(x)) == x; no raw id or name, in any case, survives."""
     entities, text = world
     p = Pseudonymizer(entities)
     out = p.pseudonymize(text)
     assert p.restore(out) == text
+    assert p.pseudonymize(text.upper()).lower() == p.pseudonymize(text.lower())
     for _t, eid, name in entities:
         assert _whole(eid).search(out) is None
         assert name is None or _whole(name).search(out) is None
