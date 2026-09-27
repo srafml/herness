@@ -41,6 +41,7 @@ from herness.core.types import (
 from herness.enrich.deciders.openjev import ERRORS_METRIC, LATENCY_METRIC, _asked
 
 __all__ = ["CompletionClient", "LlmDecider", "load_prompt", "vote_distribution", "vote_schema"]
+__all__ += ["wrap_untrusted"]  # the R-20 wrapper, shared with cluster naming (T03-24)
 
 DEFAULT_PROMPT: Final = Path(__file__).resolve().parents[1] / "prompts" / "enrich_decider.md"
 _VOTES: Final = frozenset({1, 3, 5})
@@ -141,12 +142,16 @@ def load_prompt(path: Path) -> tuple[str, tuple[str, ...]]:
     return bodies[0], tuple(bodies[1:])
 
 
-def _wrap(item: DecisionInput) -> str:
+def wrap_untrusted(text: str, *, record_id: str = "", source: str = _SOURCE) -> str:
     """The R-20 block: `</untrusted_data` (any case) in the text becomes `&lt;/…` first; the
-    record id is attribute-escaped so it cannot close the attribute or the tag."""
-    body = _CLOSE_RE.sub(lambda m: "&lt;" + m.group(0)[1:], item.text)
-    rid = html.escape(item.record_id, quote=True)
-    return f'<untrusted_data source="{_SOURCE}" record_id="{rid}">{body}</untrusted_data>'
+    record id and source are attribute-escaped so they cannot close the attribute or tag."""
+    body = _CLOSE_RE.sub(lambda m: "&lt;" + m.group(0)[1:], text)
+    rid, src = html.escape(record_id, quote=True), html.escape(source, quote=True)
+    return f'<untrusted_data source="{src}" record_id="{rid}">{body}</untrusted_data>'
+
+
+def _wrap(item: DecisionInput) -> str:
+    return wrap_untrusted(item.text, record_id=item.record_id)
 
 
 def _described(question: Question) -> list[str]:
