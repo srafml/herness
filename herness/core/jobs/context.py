@@ -119,9 +119,10 @@ class ChildJobContext(ContextBase):
         return self._services
 
     def close(self, timeout_s: float = 1.0) -> None:
-        """Stop the reader thread (it polls, so it ends within `READER_POLL_S`)."""
+        """Stop the reader (it polls, so it ends within `READER_POLL_S`); later GPU calls fail."""
         self._closing.set()
         self._reader.join(timeout_s)
+        self._fail_waiters()
 
     def _read_loop(self) -> None:
         try:
@@ -152,13 +153,17 @@ class ChildJobContext(ContextBase):
         if self._closing.is_set() and reason == "closed":
             return  # our own shutdown closed the connection
         _log.error("jobs.pipe.lost", job_id=self.job_id, reason=reason)
+        self._fail_waiters()
+        self._set_stop("shutdown")
+
+    def _fail_waiters(self) -> None:
+        """No reader any more: wake every waiting GPU call and refuse new ones."""
         with self._lock:
             self._dead = True
             boxes = list(self._replies.values())
         for box in boxes:
             with suppress(queue.Full):
                 box.put_nowait(None)
-        self._set_stop("shutdown")
 
     def _send(self, msg: PipeMessage) -> None:
         data = encode_message(msg)

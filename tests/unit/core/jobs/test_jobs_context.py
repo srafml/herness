@@ -560,6 +560,8 @@ def test_cv_t08_20_close_is_quiet(pipe_pair: tuple[Connection, Connection]) -> N
         ctx._pipe_lost("closed")
     assert logs == []
     assert ctx.should_yield() is False
+    with pytest.raises(ModelUnavailable, match="supervisor pipe closed"):
+        ctx.require_gpu_class("large")  # no reader any more: fails at once, no default wait
 
 
 # --- row shortcuts and load_state ------------------------------------------------------
