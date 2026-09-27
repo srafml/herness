@@ -24,6 +24,7 @@ from herness.connectors.base import Connector, SupportsKeyListing
 from herness.connectors.factory import build_connector
 from herness.connectors.files import FilesConnector
 from herness.connectors.mongodb import MongoConnector
+from herness.connectors.snowflake import SnowflakeConnector
 from herness.core import config as c
 from herness.core import registry
 from herness.core.errors import ConfigError
@@ -67,6 +68,19 @@ sources:
     database: ops
     entities:
       orders: {{collection: orders, updated_field: ts, fields: [a]}}
+  snowflake:
+    enabled: true
+    account: acme-xy12345
+    hosts: [acme-xy12345.snowflakecomputing.com]
+    auth: {{method: key_pair, credentials: "secret:snowflake_svc"}}
+    warehouse: HERNESS_XS
+    role: HERNESS_READER
+    entities:
+      cost_center:
+        table: FINANCE.PUBLIC.COST_CENTER
+        key_field: CC_ID
+        updated_field: UPDATED_AT
+        columns: [CC_ID, UPDATED_AT]
 """
 
 MAPPINGS_YAML = """\
@@ -121,6 +135,7 @@ def cfg(tmp_path: Path) -> c.HernessConfig:
     registry entries for all three connectors and the prometheus adapter."""
     registry.register("connector", "files")(FilesConnector)
     registry.register("connector", "mongodb")(MongoConnector)
+    registry.register("connector", "snowflake")(SnowflakeConnector)
     registry.register("connector", "jira")(FakeJira)
     registry.register("connector", "monitoring")(FakeMonitoring)
     registry.register("monitoring_adapter", "prometheus")(FakeAdapter)
@@ -137,7 +152,7 @@ def test_ut01_94_every_registered_connector_builds_without_network(
     with respx.mock(assert_all_called=False) as mock:
         built = {name: build_connector(name, cfg) for name in registry.available("connector")}
     assert not mock.calls
-    assert set(built) == {"files", "jira", "monitoring", "mongodb"}
+    assert set(built) == {"files", "jira", "monitoring", "mongodb", "snowflake"}
     for name, conn in built.items():
         assert conn.name == name
         for member in ("check", "sync", "watermark_field"):
@@ -147,6 +162,7 @@ def test_ut01_94_every_registered_connector_builds_without_network(
     assert isinstance(built["files"], SupportsKeyListing)
     assert isinstance(built["jira"], SupportsKeyListing)
     assert isinstance(built["mongodb"], SupportsKeyListing)
+    assert isinstance(built["snowflake"], SupportsKeyListing)
     assert not isinstance(built["monitoring"], SupportsKeyListing)
 
 
@@ -199,8 +215,8 @@ def test_ut01_94_disabled_unconfigured_or_unregistered(
     """UT01-94 disabled, unconfigured and unregistered sources → ConfigError."""
     with pytest.raises(ConfigError, match="source servicenow is disabled"):
         build_connector("servicenow", cfg)
-    with pytest.raises(ConfigError, match="source snowflake is not configured"):
-        build_connector("snowflake", cfg)
+    with pytest.raises(ConfigError, match="source dataverse is not configured"):
+        build_connector("dataverse", cfg)
     registry.reset_registry()
     monkeypatch.setattr(registry, "_BUILTINS", {})  # independent of later built-in rows
     with pytest.raises(ConfigError, match="unknown connector 'files'"):
@@ -272,6 +288,30 @@ def test_ut01_94_mongodb_resolves_through_the_builtin_table(
     assert conn._clock is _fixed
     assert conn._client is None
     assert conn.entities == ("orders",)
+
+
+_SNOWFLAKE_ROW = ("connector", "snowflake")
+
+
+def test_ut01_94_snowflake_resolves_through_the_builtin_table(
+    cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-94 the shipped `_BUILTINS` row resolves the real `SnowflakeConnector`, which
+    satisfies `Connector` and `SupportsKeyListing`; `build_connector("snowflake", cfg)` passes
+    the section and the clock only, and makes no network call (the connection is lazy)."""
+    row = _shipped_builtins()[_SNOWFLAKE_ROW]
+    assert row == "herness.connectors.snowflake:SnowflakeConnector"
+    registry.reset_registry()
+    monkeypatch.setitem(registry._BUILTINS, _SNOWFLAKE_ROW, row)
+    assert registry.get("connector", "snowflake") is SnowflakeConnector
+    conn = build_connector("snowflake", cfg, clock=_fixed)
+    assert isinstance(conn, SnowflakeConnector)
+    assert isinstance(conn, SupportsKeyListing)
+    assert _conforms(conn) is conn
+    assert conn._settings is cfg.sources.source("snowflake")
+    assert conn._clock is _fixed
+    assert conn._conn is None
+    assert conn.entities == ("cost_center",)
 
 
 _PROBE = """\

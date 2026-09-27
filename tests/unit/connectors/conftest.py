@@ -1,5 +1,6 @@
 """Fixtures of the sync-runner tests (T01-06): a recording fake lake and a fake breaker guard;
-of the MongoDB tests (T01-22): the URI secret and a spy breaker.
+of the MongoDB tests (T01-22): the URI secret and a spy breaker; of the Snowflake tests
+(T01-23): the key-pair credential and a spy breaker.
 
 Imports of the runner stay inside the fixtures so the other connector tests never import it.
 """
@@ -68,6 +69,29 @@ def mongo_breaker(
     import herness.core.resilience.retry as retry_module  # noqa: PLC0415 - mongo only
 
     del reset_process_state, mongo_uri
+    spy = SpyBreaker()
+    monkeypatch.setattr(retry_module, "guard", lambda _key: None)
+    monkeypatch.setattr(retry_module, "breaker", lambda _key: spy)
+    return spy
+
+
+@pytest.fixture
+def snowflake_env(
+    monkeypatch: pytest.MonkeyPatch,
+    reset_process_state: ProcessState,
+    fake_keyring: MemoryKeyring,
+) -> SpyBreaker:
+    """Snowflake tests (T01-23): the in-memory keyring holds `secret:snowflake_svc` (user and a
+    run-time PEM key); `retry_page` guards and records on a spy breaker, sleeps are no-ops."""
+    from tests.unit.connectors._mongo_data import SpyBreaker  # noqa: PLC0415 - snowflake only
+    from tests.unit.connectors._snowflake_data import (  # noqa: PLC0415 - snowflake only
+        store_credential,
+    )
+
+    import herness.core.resilience.retry as retry_module  # noqa: PLC0415 - snowflake only
+
+    del reset_process_state, fake_keyring
+    store_credential()
     spy = SpyBreaker()
     monkeypatch.setattr(retry_module, "guard", lambda _key: None)
     monkeypatch.setattr(retry_module, "breaker", lambda _key: spy)
