@@ -88,6 +88,7 @@ class _FakeCurrentSettingConn:
     def __init__(self, value: object) -> None:
         self._value = value
         self._last_sql = ""
+        self.closed = False
 
     def execute(self, sql: str, *args: object) -> _FakeCurrentSettingConn:
         self._last_sql = sql
@@ -95,6 +96,9 @@ class _FakeCurrentSettingConn:
 
     def fetchone(self) -> tuple[object, ...] | None:
         return (self._value,) if "current_setting" in self._last_sql else None
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_ut05_49_self_check_fails_loudly_when_lock_does_not_hold(
@@ -105,6 +109,46 @@ def test_ut05_49_self_check_fails_loudly_when_lock_does_not_hold(
     monkeypatch.setattr(wh.duckdb, "connect", lambda *a, **k: _FakeCurrentSettingConn(True))
     with pytest.raises(ConfigError, match="self-check"):
         wh.open_warehouse(BUILD_ID, warehouse_dir=tmp_path, sql=SqlSettings())
+
+
+class _SpyConn(_FakeCurrentSettingConn):
+    """`_FakeCurrentSettingConn` that can fail on one SET statement."""
+
+    def __init__(self, value: object, *, fail_on: str | None = None) -> None:
+        super().__init__(value)
+        self._fail_on = fail_on
+
+    def execute(self, sql: str, *args: object) -> _SpyConn:
+        if self._fail_on is not None and self._fail_on in sql:
+            msg = "simulated SET failure"
+            raise duckdb.InvalidInputException(msg)
+        super().execute(sql, *args)
+        return self
+
+
+@pytest.mark.parametrize(
+    ("value", "fail_on", "error"),
+    [
+        (True, None, ConfigError),  # self-check reports the lock not held
+        (False, "enable_external_access", duckdb.Error),
+        (False, "lock_configuration", duckdb.Error),
+    ],
+)
+def test_ut05_49_failed_lock_down_closes_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: object,
+    fail_on: str | None,
+    error: type[Exception],
+) -> None:
+    """UT05-49 a failing SET or self-check after connect closes the DuckDB connection (T05-17
+    carry-over: open_warehouse leaked it)."""
+    _make_tiny_build(tmp_path)
+    spy = _SpyConn(value, fail_on=fail_on)
+    monkeypatch.setattr(wh.duckdb, "connect", lambda *a, **k: spy)
+    with pytest.raises(error):
+        wh.open_warehouse(BUILD_ID, warehouse_dir=tmp_path, sql=SqlSettings())
+    assert spy.closed
 
 
 def test_ut05_49_io_exception_on_connect_raises_query_error(
