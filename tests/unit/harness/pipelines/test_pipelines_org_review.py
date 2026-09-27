@@ -15,6 +15,7 @@ from typing import Any
 
 import duckdb
 import pytest
+from pydantic import JsonValue
 
 from herness.core.types import EntityScope, Finding, ReportDraft
 from herness.harness.findings import compute_dedup_key
@@ -96,9 +97,9 @@ class _Reader:
 
     def __init__(self, path: Path) -> None:
         self._con = duckdb.connect(str(path), read_only=True)
-        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.calls: list[tuple[str, dict[str, JsonValue]]] = []
 
-    def __call__(self, sql: str, params: dict[str, object]) -> RecordedResult:
+    def __call__(self, sql: str, params: dict[str, JsonValue]) -> RecordedResult:
         self.calls.append((sql, params))
         cur = self._con.execute(sql, params)
         columns = [d[0] for d in cur.description or []]
@@ -387,7 +388,7 @@ def _finding(n: int, *, challenge: list[dict[str, Any]] | None = None) -> Findin
 
 
 def _challenge(verdict: str, concern: str) -> dict[str, Any]:
-    checks = [
+    checks: list[dict[str, Any]] = [
         {"check": c, "result": "pass", "note": ""}
         for c in ("seasonality", "mis_mapping", "small_sample", "double_counting", "survivorship")
     ]
@@ -432,7 +433,8 @@ def test_ut06_53_writer_input_findings_and_challenge_summary(reader: _Reader) ->
     challenged = _finding(1, challenge=[_challenge("reject", "old"), _challenge("uphold", "new")])
     ctx = _ctx()
     out = OrgReviewPipeline(reader, window_end=_END).writer_input(ctx, [challenged, _finding(2)])
-    first, second = out["findings"]  # type: ignore[misc]
+    findings: Any = out["findings"]
+    first, second = findings
     assert first["finding_id"] == f"fnd_{_ULID}1"
     assert (first["entity_type"], first["entity_id"], first["claim"]) == (
         "team",

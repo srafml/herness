@@ -394,7 +394,7 @@ def _finding(n: int, *, challenge: list[dict[str, Any]] | None = None) -> Findin
 
 
 def _challenge(verdict: str, concern: str) -> dict[str, Any]:
-    checks = [
+    checks: list[dict[str, Any]] = [
         {"check": c, "result": "pass", "note": ""}
         for c in ("seasonality", "mis_mapping", "small_sample", "double_counting", "survivorship")
     ]
@@ -436,7 +436,8 @@ def test_ut06_51_writer_input_keys_and_outline(reader: _Recorded) -> None:
     assert out["outline"] == ["executive_summary", "recommendations", "portfolio",
                               "retrospective", "risks_and_caveats", "method"]  # fmt: skip
     assert out["portfolio"] == ctx.portfolio
-    first, second = out["findings"]  # type: ignore[misc]
+    findings: Any = out["findings"]
+    first, second = findings
     assert set(first) == {"finding_id", "entity_type", "entity_id", "claim", "numbers",
                           "confidence", "query_ids", "challenge_summary"}  # fmt: skip
     assert first["challenge_summary"] == {"verdict": "uphold", "notes": ["new"]}

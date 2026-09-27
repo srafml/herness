@@ -116,7 +116,7 @@ def dq_matches(ctx: PlanContext, needles: Sequence[str]) -> list[str]:
         for w in ctx.dq_warnings
         if any(n in json.dumps(w["details"], ensure_ascii=False) for n in needles)
     ]
-    return unique(names)[:_DQ_MAX]
+    return unique(names)[:_DQ_MAX]  # TaskInputs.dq_warnings holds at most 100 names (U06-03)
 
 
 def challenge_summary(f: Finding) -> dict[str, object] | None:
