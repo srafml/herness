@@ -327,3 +327,26 @@ def test_cv_t08_21_worker_row_heartbeat_and_current_jobs(sup_env: SupEnv) -> Non
     ]
     sup.terminate_now = True
     assert sup.stop() == 0
+
+
+def test_cv_t08_21_signal_during_start_drains(
+    sup_env: SupEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T08-21 R-46: the handlers are installed before start-up, so an interrupt during
+    `start()` drains (nothing is claimed, exit 0) and the old handler is restored."""
+    import signal  # noqa: PLC0415
+
+    before = signal.getsignal(signal.SIGINT)
+    job_id = sup_env.enqueue()
+    sup = sup_env.supervisor()
+    real_start = sup.start
+
+    def interrupted_start() -> int | None:
+        signal.raise_signal(signal.SIGINT)
+        return real_start()
+
+    monkeypatch.setattr(sup, "start", interrupted_start)
+    assert sup.run() == 0
+    assert sup.draining
+    assert sup_env.job(job_id).status == "queued"
+    assert signal.getsignal(signal.SIGINT) is before

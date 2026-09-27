@@ -93,13 +93,16 @@ class Supervisor:
         return self._t
 
     def run(self) -> int:
-        """Steps 1-8 of U08-87; any unexpected failure ends the worker with exit code 1."""
-        previous: dict[int, object] = {}
+        """Steps 1-8 of U08-87; any unexpected failure ends the worker with exit code 1.
+
+        The step 5 handlers are installed first, so an interrupt during start-up drains
+        instead of ending the process with a traceback (R-46: exit codes 0 and 1 only).
+        """
+        previous = boot.install_signals(self._on_signal)
         try:
             code = self.start()
             if code is not None:
                 return code
-            previous = boot.install_signals(self._on_signal)
             self._loop()
             return self.stop()
         except Exception as exc:  # noqa: BLE001 - worker top level: exit 1, never a traceback
