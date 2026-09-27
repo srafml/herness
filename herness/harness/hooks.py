@@ -1,18 +1,15 @@
 """Gated model calls, the loop hooks and the truncation fallback (U05-61, U05-62, U05-76).
 
-Design 05 §3.3 and §5.2.3. `HarnessHooks` is the only `LoopHooks` implementation (R-02): it
-composes the spec 08 building blocks `ModelChain`, `complete_validated`, `loop_signal_policy`
-and `save_checkpoint`, looked up on their packages at call time. A `GatedClient` holds its
-call gate for exactly one model call and releases it before returning or raising, so a gate
-is never held across tool execution (TH05-08). `truncate_context` is the R-25 fallback when
-no compactor is configured or the compactor's summarising failed.
+Design 05 §3.3, §5.2.3. `HarnessHooks` (R-02) composes the spec 08 building blocks, looked up
+on their packages at call time. A gate is held for one model call only, never across tool
+execution (TH05-08). `truncate_context` is the R-25 fallback.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
@@ -58,9 +55,7 @@ class CallGateLike(Protocol):
     async def __aexit__(self, *exc: object) -> object: ...
 
 
-class _PressureLike(Protocol):
-    """Context pressure of a state: estimated tokens and the soft limit."""
-
+class _PressureLike(Protocol):  # context pressure: estimated tokens and the soft limit
     @property
     def tokens(self) -> int: ...
     @property
@@ -134,12 +129,17 @@ class GatedClient:
             await sink(None)  # an earlier attempt already showed text: reset the UI
             state.emitted = False
         resp: LLMResponse | None = None
-        async for event in inner.astream(req):
-            if isinstance(event, TextDelta):
-                await sink(event.text)
-                state.emitted = True
-            elif isinstance(event, Done):
-                resp = event.response
+        events = inner.astream(req)
+        try:
+            async for event in events:
+                if isinstance(event, TextDelta):
+                    await sink(event.text)
+                    state.emitted = True
+                elif isinstance(event, Done):
+                    resp = event.response
+        finally:
+            if isinstance(events, AsyncGenerator):  # close a half-read stream inside the gate
+                await events.aclose()
         if resp is None:
             msg = "stream ended without a final response"
             raise OutputValidationError(msg, client=self.name)

@@ -1240,7 +1240,7 @@ This spec owns the `evidence` area of the `herness.store.ops` package (R-08). Ev
 | Side effects | Gate acquisition; UI callbacks. |
 | Errors | Propagates the inner client's errors; `ModelRefused`. |
 | Concurrency | One instance per chain candidate per call; the gate is shared across tasks (owned by spec 06). |
-| Complexity and limits | Gate wait is measured and traced (`gate_wait_ms`). |
+| Complexity and limits | Gate wait is measured and traced (`gate_wait_ms`). Note (T05-22): a stream is iterated in `try`/`finally` and, when it is an async generator, closed with `aclose()` before the gate is released (a half-read or cancelled stream never outlives the gate); a stream that ends without `Done` raises `OutputValidationError` (defensive, so the chain can fall back). `last_gate_wait_ms` holds the last attempt only: repair attempts inside `complete_validated` on the same instance overwrite it, as specified. |
 | Security notes | TH05-08 (concurrency bound). |
 | Tests | UT05-95–UT05-97, IT05-11 |
 
@@ -1258,7 +1258,7 @@ This spec owns the `evidence` area of the `herness.store.ops` package (R-08). Ev
 | Side effects | Model calls through the chain; checkpoint writes; trace events through spec 08. |
 | Errors | Propagates chain errors; `OutputValidationError`; `CancelledError`. |
 | Concurrency | One instance per task. |
-| Complexity and limits | Checkpoint write off the event loop (`to_thread`). |
+| Complexity and limits | Checkpoint write off the event loop (`to_thread`). Note (T05-22): (a) the tracer is passed to spec 08 as `cast("TracerLike", tracer)` (same object), because `Tracer.emit`'s `type` is positional-only while impl 08 `TracerLike.emit`'s is not; making it positional-only in impl 08 removes the cast. (b) `save_checkpoint` is called as `herness.core.jobs.tasks.save_checkpoint` because the lazy `herness.core.jobs` package does not export it; `state.to_checkpoint()` is already a JSON-mode dict and is passed as is. (c) "the state is stopping" is read from the `LoopState._stopping` PrivateAttr (U05-14 has no public accessor); T05-23 `_finish` sets it; a public accessor is wanted later. (d) Gate wait is noted in `state` only when `call` succeeds (step 4 follows steps 2 and 3). |
 | Security notes | TH05-08. |
 | Tests | UT05-98–UT05-102, UT05-111, UT05-128 |
 
@@ -1276,7 +1276,7 @@ This spec owns the `evidence` area of the `herness.store.ops` package (R-08). Ev
 | Side effects | None (the caller logs and emits the `compaction` trace). |
 | Errors | None. |
 | Concurrency | Pure. |
-| Complexity and limits | O(messages²) in the worst case; bounded by `max_steps` groups. |
+| Complexity and limits | O(messages²) in the worst case; bounded by `max_steps` groups. Note (T05-22): messages carry no step numbers, so assistant groups are numbered counting back from `state.step` (the newest group is `state.step`); leading messages before the first `assistant` message form one group without a step. Earlier `compaction_summary` messages are dropped before grouping so the result holds exactly one note; the new note carries every id, and the text of an earlier compactor summary is discarded. |
 | Security notes | TH05-01 (the note is wrapped as untrusted text because it copies model-produced ids), TH05-08 (context bound). |
 | Tests | UT05-127, UT05-128 |
 

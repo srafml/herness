@@ -7,6 +7,7 @@ The spec 08 building blocks (`ModelChain`, `complete_validated`, `loop_signal_po
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -745,3 +746,140 @@ def test_ut05_127_truncate_only_task_message() -> None:
     assert len(out) == 2
     assert out[0] is state.messages[0]
     assert out[1].kind == "compaction_summary"
+
+
+# --- review round 1: stream closing and mutation-killing tests -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_ut05_97_half_read_stream_closed_before_gate_release() -> None:
+    """UT05-97 a sink failing mid-stream closes the stream before the gate is released."""
+    log: list[str] = []
+
+    class Streamer(FakeClient):
+        async def astream(self, req: LLMRequest) -> AsyncIterator[object]:
+            try:
+                yield TextDelta("a")
+                yield TextDelta("b")
+            finally:
+                log.append("closed")
+
+    async def sink(text: str | None) -> None:
+        msg = "ui gone"
+        raise RuntimeError(msg)
+
+    g = h.GatedClient(Streamer(), RecordingGate(log), on_text_delta=sink)
+    with pytest.raises(RuntimeError):
+        await g.acomplete(_req())
+    assert log == ["enter", "closed", "exit"]
+
+
+@pytest.mark.asyncio
+async def test_ut05_97_plain_async_iterator_stream_without_aclose() -> None:
+    """UT05-97 an astream returning a plain AsyncIterator (no aclose) still works."""
+
+    class Events:
+        def __init__(self) -> None:
+            self.items: list[object] = [TextDelta("x"), Done(_resp())]
+
+        def __aiter__(self) -> Events:
+            return self
+
+        async def __anext__(self) -> object:
+            if not self.items:
+                raise StopAsyncIteration
+            return self.items.pop(0)
+
+    class Streamer(FakeClient):
+        def astream(self, req: LLMRequest) -> Events:
+            return Events()
+
+    deltas: list[str | None] = []
+
+    async def sink(text: str | None) -> None:
+        deltas.append(text)
+
+    resp = await h.GatedClient(Streamer(), None, on_text_delta=sink).acomplete(_req())
+    assert resp.text == "ok"
+    assert deltas == ["x"]
+
+
+@pytest.mark.asyncio
+async def test_ut05_98_schema_alone_disables_stream_sink() -> None:
+    """UT05-98 schema set (request without response_schema): the chain clients get no sink."""
+    deltas: list[str | None] = []
+
+    async def sink(text: str | None) -> None:
+        deltas.append(text)
+
+    streamer = StreamClient([])  # astream would fail: no scripted attempt
+    chain = FakeChain(["s"])
+    hooks = _hooks(registry=FakeRegistry({"s": streamer}), chain=chain, on_text_delta=sink)
+    req = _req()
+    assert req.response_schema is None
+    await hooks.call(streamer, req, _state(), Answer)
+    assert streamer.calls == [req]
+    assert deltas == []
+
+
+@pytest.mark.asyncio
+async def test_ut05_98_gate_chosen_by_chain_key_not_client_name() -> None:
+    """UT05-98 client_for(key) uses gates[key] even when the client's name differs."""
+    by_key: list[str] = []
+    by_name: list[str] = []
+    inner = FakeClient("provider-name")
+    chain = FakeChain(["chain-key"])
+    hooks = _hooks(
+        registry=FakeRegistry({"chain-key": inner}),
+        gates={"chain-key": RecordingGate(by_key), "provider-name": RecordingGate(by_name)},
+        chain=chain,
+    )
+    await hooks.call(inner, _req(), _state(), None)
+    assert by_key == ["enter", "exit"]
+    assert by_name == []
+
+
+@pytest.mark.asyncio
+async def test_ut05_102_checkpoint_saved_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT05-102 save_checkpoint runs in a worker thread (asyncio.to_thread), not on the loop."""
+    threads: list[int] = []
+
+    def fake_save(task_id: str, key: str, value: object, *, writes: object = None) -> None:
+        threads.append(threading.get_ident())
+
+    monkeypatch.setattr(jobs_tasks, "save_checkpoint", fake_save)
+    await _hooks().after_step(_state(1))
+    assert len(threads) == 1
+    assert threads[0] != threading.get_ident()
+
+
+def test_ut05_127_earlier_summary_in_kept_group_is_dropped() -> None:
+    """UT05-127 an earlier compaction_summary inside a kept group is superseded by the note."""
+    state = _state(0)
+    old = Message(role="user", parts=[TextPart(text="old")], kind="compaction_summary")
+    state.messages.extend([_asst("c1"), _tool("c1"), old, _asst("c2"), _tool("c2")])
+    state.step = 2
+    out = h.truncate_context(state)
+    assert [m.kind for m in out].count("compaction_summary") == 1
+    assert all(m is not old for m in out)
+    assert len(out) == 6
+
+
+def test_ut05_127_steps_counted_back_from_state_step() -> None:
+    """UT05-127 after an earlier compaction (step > groups) steps count back from state.step."""
+    state = _state(2, soft=10, hard=20, budget=30)
+    state.step = 10
+    note = h.truncate_context(state)[1].parts[0]
+    assert isinstance(note, TextPart)
+    assert f"Steps removed: 9{DASH}9" in note.text
+
+
+def test_ut05_127_estimate_equal_to_soft_drops() -> None:
+    """UT05-127 an estimate exactly at the soft limit drops the oldest group; one below not."""
+    exact = estimate_tokens(h.truncate_context(_state(2)))
+    at = _state(2, soft=exact, hard=exact + 1, budget=exact + 2)
+    above = _state(2, soft=exact + 1, hard=exact + 2, budget=exact + 3)
+    assert len(h.truncate_context(at)) == 4
+    assert len(h.truncate_context(above)) == 6
