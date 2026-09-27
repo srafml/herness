@@ -1,0 +1,8 @@
+{
+    "in_features": 16,
+    "out_features": 1024,
+    "bias": true,
+    "activation_function": "torch.nn.modules.linear.Identity",
+    "module_input_name": "sentence_embedding",
+    "module_output_name": "sentence_embedding"
+}
