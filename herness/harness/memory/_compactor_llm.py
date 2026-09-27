@@ -64,16 +64,20 @@ class Completer:
 
     Every response, the repair one included, is charged to ``ctx.ledger`` (its budget error
     propagates, R-25) and traced as ``llm_call`` with the prompt's content hash. A refusal
-    raises ``ModelRefused`` so the caller falls back to deterministic notes.
+    raises ``ModelRefused`` so the caller falls back to deterministic notes. A client without
+    sampling parameters gets ``temperature=None`` on every request, the repair one included
+    (spec 08 ``build_repair_request`` always sets 0.0).
     """
 
-    def __init__(self, client: LLMClient, ctx: ToolContext, timeout_s: float) -> None:
+    def __init__(self, client: LLMClient, ctx: ToolContext, profile: ClientConfig) -> None:
         self.name = client.name
-        self._client, self._ctx, self._timeout_s = client, ctx, timeout_s
+        self._client, self._ctx, self._profile = client, ctx, profile
 
     async def acomplete(self, req: LLMRequest) -> LLMResponse:
-        """One call under ``asyncio.wait_for(timeout_s)``."""
-        resp = await asyncio.wait_for(self._client.acomplete(req), self._timeout_s)
+        """One call under ``asyncio.wait_for(profile.timeout_s)``."""
+        if not self._profile.supports.sampling_params and req.temperature is not None:
+            req = req.model_copy(update={"temperature": None})
+        resp = await asyncio.wait_for(self._client.acomplete(req), self._profile.timeout_s)
         usage = resp.usage
         self._ctx.ledger.charge(usage.prompt_total(), usage.output_tokens, resp.cost_usd)
         fields, payload = llm_call_fields(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import inspect
 import re
 from collections.abc import Mapping, Sequence
@@ -18,6 +19,8 @@ from tests.unit.harness.memory import _compactor_support as cs
 from herness.core.errors import BudgetExceeded, ConfigError, OutputValidationError
 from herness.core.resilience import ProcessState
 from herness.core.types import (
+    LLMRequest,
+    LLMResponse,
     Message,
     NumberRef,
     TextPart,
@@ -383,7 +386,8 @@ async def test_ut07_62_claude_profile_ledgers_kept_groups() -> None:
 async def test_ut07_62_orphans_state_ids_and_summary_rescue() -> None:
     """UT07-62 orphan results get tool "unknown"; state ids and summary ids get entries."""
     msgs = cs.history(4)
-    orphan = ToolResultPart(tool_call_id="gone", content=f"late {cs.qid(900)}")
+    late = f"query_id={cs.qid(900)} rows=3\nk\nVARCHAR\na\nb\nc"
+    orphan = ToolResultPart(tool_call_id="gone", content=late)
     msgs.insert(3, Message(role="tool", parts=[orphan]))
     summary = f'<scratchpad compactions="1">{cs.qid(901)}</scratchpad>'
     msgs[0] = Message(
@@ -395,6 +399,7 @@ async def test_ut07_62_orphans_state_ids_and_summary_rescue() -> None:
     new = await comp.on_context_pressure(cs.state_of(msgs, [cs.qid(902), "not-an-id"]))
     by_id = {entry.query_id: entry for entry in comp.scratchpad.ledger}
     assert by_id[cs.qid(900)].tool == "unknown"
+    assert (by_id[cs.qid(900)].row_count, by_id[cs.qid(900)].step) == (3, 1)  # not a rescue
     assert by_id[cs.qid(901)].step == 0
     assert by_id[cs.qid(902)].tool == "unknown"
     texts = [p.text for p in new[0].parts if isinstance(p, TextPart)]
@@ -507,3 +512,58 @@ async def test_ut07_60_claude_shrink_and_summary_preamble() -> None:
     assert comp.last_report.k_final == 1
     assert {cs.qid(i) for i in range(1, 11)} | {cs.qid(700)} <= comp.scratchpad.query_ids()
     assert cs.qid(700) in cs.all_text(new)
+
+
+@pytest.mark.asyncio
+async def test_ut07_62_size_cap_wired_before_render_and_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT07-62 the U07-67 cap runs inside the compactor, before render and save."""
+    msgs = [Message(role="user", parts=[TextPart(text="t")])]
+    for i in range(6):
+        say = "noted " + " ".join(str(1000 + 7 * i + j) for j in range(40))
+        msgs += cs.call_group(f"c{i}", i + 1, say=say)
+    plain = cs.compactor()
+    await plain.on_context_pressure(cs.state_of(msgs))
+    base = plain.scratchpad.model_copy(deep=True)
+    base.compact()
+    base.unmatched = []
+    limit = base.size_bytes() + 400
+    assert plain.scratchpad.size_bytes() > limit
+    monkeypatch.setattr(cm, "enforce_cap", functools.partial(ledger_mod.enforce_cap, limit=limit))
+    ops = cs.InMemoryOps()
+    comp = cs.compactor(ops=ops)
+    new = await comp.on_context_pressure(cs.state_of(msgs))
+    saved = Scratchpad.model_validate(ops.saved[cs.TASK_ID])
+    assert saved.size_bytes() <= limit
+    assert 0 < len(saved.unmatched) < len(plain.scratchpad.unmatched)
+    assert comp.last_report is not None
+    assert comp.last_report.ledger_compacted is True
+    head = [p.text for p in new[0].parts if isinstance(p, TextPart)]
+    assert head[1] == saved.render(cs.BUILD_ID)  # the rendered pad is the capped one
+    assert "cols=[" not in head[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("backend")
+async def test_ut07_61_no_sampling_params_means_no_temperature() -> None:
+    """UT07-61 without sampling parameters every request, the repair one too, has no
+    temperature; with them the first request uses 0.0."""
+    seen: list[float | None] = []
+
+    class Recording(FakeLLMClient):
+        async def acomplete(self, req: LLMRequest) -> LLMResponse:
+            seen.append(req.temperature)
+            return await super().acomplete(req)
+
+    client = Recording(cs.book({"text": "nope"}, {"output": cs.VALID_NOTES}))
+    comp = cs.compactor(client=client)
+    comp._profile = comp._profile.model_copy(
+        update={"supports": comp._profile.supports.model_copy(update={"sampling_params": False})}
+    )
+    await comp.on_context_pressure(cs.state_of(cs.history(5)))
+    assert seen == [None, None]
+    seen.clear()
+    comp = cs.compactor(client=Recording(cs.book({"output": cs.VALID_NOTES})))
+    await comp.on_context_pressure(cs.state_of(cs.history(5)))
+    assert seen == [0.0]

@@ -12,9 +12,11 @@ import re
 
 import pytest
 from pydantic import JsonValue
+from tests.support.harness_fakes import RecordingTracer
 from tests.unit.harness.memory import _compactor_support as cs
 
 from herness.core.types import Message, TextPart, ToolCall, ToolCallPart, ToolResultPart
+from herness.harness.memory.working import CompactionNotes
 
 pytestmark = pytest.mark.unit
 
@@ -137,3 +139,37 @@ async def test_st07_16_invented_numbers_and_ids_repaired(kind: str) -> None:
     assert head.count("</scratchpad>") == 1
     pad = head[head.index("<scratchpad ") : head.index("</scratchpad>")]
     assert not re.search(r"(?m)^(user|assistant|system):", pad)  # notes lines are flattened
+
+
+def _request_body(comp_ctx_tracer: object) -> str:
+    assert isinstance(comp_ctx_tracer, RecordingTracer)
+    (event,) = [e for e in comp_ctx_tracer.events if e[0] == "llm_call"]
+    payload = event[2]["payload"]
+    assert isinstance(payload, dict)
+    return str(payload["messages"][0]["parts"][0]["text"])
+
+
+@pytest.mark.asyncio
+async def test_st07_16_summarizer_input_is_escaped_and_wrapped() -> None:
+    """ST07-16 the dropped groups and the prior notes reach the summarizer escaped; the
+    tool results sit in exactly one tool_results wrapper."""
+    task, *rest = _adversarial_history()
+    ctx = cs.make_ctx()
+    comp = cs.compactor(client=cs.notes_llm(cs.VALID_NOTES), ctx=ctx)
+    comp.scratchpad.notes = CompactionNotes(progress=f"{FAKE_PAD} {INJECTION}")
+    await comp.on_context_pressure(
+        cs.state_of([task, *rest, *(m for i in range(3) for m in cs.call_group(f"t{i}", 300 + i))])
+    )
+    body = _request_body(ctx.tracer)
+    assert body.count('<untrusted_data source="tool_results" record_id="">') == 1
+    assert body.count("<untrusted_data") == 1
+    assert body.count("</untrusted_data>") == 1
+    assert body.endswith("\n</untrusted_data>")
+    assert INJECTION not in body
+    assert "<scratchpad" not in body  # neither from the prior notes nor from a tool result
+    notes_part = body[: body.index("LEDGER IDS:")]
+    assert "&lt;blocked-scratchpad compactions" in notes_part  # prior notes escaped
+    assert "&lt;/blocked-untrusted_data&gt; SYSTEM" in notes_part
+    data_part = body[body.index("<untrusted_data") :]
+    assert "&lt;/blocked-untrusted_data&gt; SYSTEM" in data_part  # tool results escaped
+    assert "&lt;blocked-scratchpad compactions" in data_part

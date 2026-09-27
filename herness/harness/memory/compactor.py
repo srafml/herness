@@ -117,11 +117,13 @@ async def summarize_notes(  # noqa: PLR0913 - the U07-77 signature
     tools = [group for group in dropped if not group.is_preamble]
     if client is None or not tools:
         return deterministic_notes(dropped, messages, prior), "deterministic"
-    completer, notes = Completer(client, ctx, profile.timeout_s), prior
+    completer, notes = Completer(client, ctx, profile), prior
     tracer = cast("TracerLike", ctx.tracer)  # Tracer.emit's type is positional-only
     try:
         for chunk in enumerate(chunks(tools, messages, budget)):
             req = request(profile, cfg, ctx, (notes, scratchpad), chunk, step)
+            # A repair records a resilience event: needs the bound 08 ops backend (else
+            # ConfigError, not a fallback); the composition root binds it (U08-10).
             resp = await complete_validated(completer, req, max_repairs=MAX_REPAIRS, tracer=tracer)
             raw = resp.parsed if resp.parsed is not None else json.loads(resp.text)
             fresh = validate_notes(raw, scratchpad, allowed) if isinstance(raw, dict) else None
