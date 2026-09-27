@@ -33,6 +33,7 @@ from herness.harness.memory._compact_text import (
     rounds_to,
 )
 from herness.harness.memory.policy import find_uncited_numerals
+from herness.harness.memory.render import escape_content, wrap_untrusted
 from herness.harness.memory.working import (
     CompactionNotes,
     LedgerEntry,
@@ -49,6 +50,7 @@ __all__ = [
     "deterministic_notes",
     "entry_from_result",
     "split_groups",
+    "transcript",
     "validate_notes",
 ]
 
@@ -348,7 +350,8 @@ def _message_lines(
     return lines
 
 
-def _transcript(keep: Sequence[Group], messages: Sequence[Message]) -> str:
+def transcript(keep: Sequence[Group], messages: Sequence[Message]) -> str:
+    """The U07-75 step 3 transcript of ``keep``, raw (callers escape and wrap it, R-20)."""
     lines = [TRANSCRIPT_HEADER]
     for group in keep:
         members = [messages[i] for i in group.indices]
@@ -369,8 +372,9 @@ def build_compacted(
 ) -> list[Message]:
     """The new message list: merged M0 + scratchpad head, then the kept groups."""
     head = [*(p.model_copy(deep=True) for p in m0.parts), *_text_parts(scratchpad_text)]
-    if fresh_conversation:  # Claude: one user message, no ToolCall or Reasoning part
-        head += _text_parts(_transcript(keep, messages))
+    if fresh_conversation:  # Claude: one user message, the transcript as untrusted data
+        body = escape_content(transcript(keep, messages))
+        head += _text_parts(wrap_untrusted("tool_results", None, body))
         return [Message(role="user", kind="compaction_summary", parts=head)]
     out = [Message(role="user", kind="compaction_summary", parts=head)]
     for group in keep:

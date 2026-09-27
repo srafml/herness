@@ -1,9 +1,11 @@
-"""Property tests for herness.harness.memory.compact_build (impl 07 PT07-01 pure part, PT07-02).
+"""Property tests for impl 07 compaction (PT07-01, PT07-02; U07-70 … U07-76).
 
-PT07-01 here covers the pure steps only (U07-70 … U07-75): a test-local driver plays the
-design 07 §5.4 ledger algorithm; the ``ContextCompactor`` part (U07-76) belongs to T07-14.
+PT07-01 has two parts: the pure steps (U07-70 … U07-75) under a test-local driver of the
+design 07 §5.4 ledger algorithm (T07-13), and the ``ContextCompactor`` loop (U07-76, T07-14)
+that feeds each returned list back as ``state.messages``.
 """
 
+import asyncio
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any
@@ -11,6 +13,7 @@ from typing import Any
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from tests.unit.harness.memory import _compactor_support as cs
 
 from herness.core.types import (
     Message,
@@ -30,6 +33,7 @@ from herness.harness.memory.compact_build import (
     entry_from_result,
     split_groups,
 )
+from herness.harness.memory.settings import CompactionConfig
 from herness.harness.memory.working import Scratchpad
 
 pytestmark = pytest.mark.unit
@@ -196,6 +200,57 @@ def test_pt07_01_query_ids_and_cited_numbers_survive(
         kept = {(r.query_id, str(r.value)) for r in _cited(out[1:])}
         assert {(r.query_id, str(r.value)) for r in seen_refs} <= known | kept
         messages = [m0, *out[1:]]  # the next round starts from the original task message
+
+
+def _unsplit(before: list[Message], after: list[Message]) -> None:
+    """Every kept call keeps all its results, in the same group of the new list."""
+    results: dict[str, int] = {}
+    for part in (p for m in before for p in m.parts if isinstance(p, ToolResultPart)):
+        results[part.tool_call_id] = results.get(part.tool_call_id, 0) + 1
+    groups = split_groups(after[1:], 0)
+    where = {i: n for n, g in enumerate(groups) for i in g.indices}
+    owner: dict[str, int] = {}
+    seen: dict[str, int] = {}
+    for index, message in enumerate(after[1:], start=1):
+        for part in message.parts:
+            if isinstance(part, ToolCallPart):
+                owner[part.call.id] = where[index]
+            elif isinstance(part, ToolResultPart):
+                assert owner[part.tool_call_id] == where[index]
+                seen[part.tool_call_id] = seen.get(part.tool_call_id, 0) + 1
+    assert all(seen.get(call_id, 0) == results.get(call_id, 0) for call_id in owner)
+
+
+@_SETTINGS
+@given(
+    batches=st.lists(_steps, min_size=1, max_size=4),
+    keep_k=st.integers(1, 3),
+    fresh=st.booleans(),
+)
+def test_pt07_01_compactor_loop_keeps_ids_numbers_and_groups(
+    batches: list[list[_Step]], keep_k: int, *, fresh: bool
+) -> None:
+    """PT07-01 through ContextCompactor, output fed back as state.messages: every original
+    query_id and cited number is present after each compaction; groups never split."""
+    keep = {"local": keep_k, "claude": keep_k}
+    cfg = CompactionConfig.model_validate({"keep_last_tool_groups": keep})
+    comp = cs.compactor(kind="anthropic" if fresh else "local", cfg=cfg)
+    messages = [Message(role="user", parts=[TextPart(text="task")])]
+    seen_ids: set[str] = set()
+    seen_refs: set[tuple[str, str]] = set()
+    for number, batch in enumerate(batches):
+        new = _history(batch, f"b{number}c")
+        seen_ids |= set(QUERY_ID_SCAN_RE.findall(cs.all_text(new)))
+        seen_refs |= {(r.query_id, str(r.value)) for r in _cited(new)}
+        before = [*messages, *new]
+        out = asyncio.run(comp.on_context_pressure(cs.state_of(before)))
+        text = cs.all_text(out)
+        assert seen_ids <= set(QUERY_ID_SCAN_RE.findall(text))
+        assert all(qid in text and value in text for qid, value in seen_refs)
+        if not fresh:
+            _unsplit(before, out)
+        messages = out
+    assert comp.scratchpad.compactions == len(batches)
 
 
 _histories = st.lists(

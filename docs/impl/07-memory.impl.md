@@ -79,6 +79,8 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (design 
 | `herness/harness/memory/compact_build.py` | Pure compaction steps | `split_groups`, `entry_from_result`, `cited_from_group`, `validate_notes`, `deterministic_notes`, `build_compacted` | L4 | none | 390 |
 | `herness/harness/memory/_compact_text.py` | Numeral parsing, notes repair (U07-73 body), `numbers` argument refs and canonical argument JSON of `compact_build.py` (size-forced private sibling, T07-13; only `compact_build.py` imports it) | `parse_numeral`, `rounds_to`, `cut_raw`, `NotesRepair`, `arg_refs`, `canonical_args`, `repair_notes` | L4 | none | 200 |
 | `herness/harness/memory/compactor.py` | `ContextCompactor` hook and notes summarizer | `ContextCompactor`, `summarize_notes` | L4 | `herness.harness.llm` | 330 |
+| `herness/harness/memory/_compactor_ledger.py` | U07-76 step 5 ledger pass (orphan results under a placeholder `unknown` call, id rescue), M0 recovery from a merged head, step 9 invariants and the U07-67 `SCRATCHPAD_MAX_BYTES` cap of `compactor.py` (size-forced private sibling, T07-14; only `compactor.py` imports it) | `LedgerPass`, `task_message`, `text_of`, `query_ids_in`, `kept_refs`, `invariants_hold`, `enforce_cap` | L4 | none | 200 |
+| `herness/harness/memory/_compactor_llm.py` | U07-77 model-call plumbing of `compactor.py`: the U07-99 prompt loader (read once, content hash), the notes JSON schema, the completer handed to `complete_validated` (timeout, ledger charge and `llm_call` trace per response), chunking and the request (size-forced private sibling, T07-14; only `compactor.py` imports it) | `compaction_prompt`, `NOTES_SCHEMA`, `Completer`, `chunks`, `request` | L4 | `herness.harness.llm`, `herness.harness.tracing` | 200 |
 | `herness/harness/memory/recommend.py` | `write_recommendations`, similarity, outcome adjustment | `write_recommendations`, `recommendation_similarity`, `outcome_adjustment` | L4 | none | 330 |
 | `herness/harness/memory/episodic.py` | Prior-run context, decisions | `prior_context`, `decide` | L4 | `herness.core.jobs` | 300 |
 | `herness/harness/memory/outcome_stats.py` | Pure outcome statistics | `measurement_windows`, `did_statistics`, `classify_verdict` | L4 | none | 240 |
@@ -1711,6 +1713,8 @@ A **group** (design 07 §5.4) is one assistant message with at least one `ToolCa
 | Security notes | TH07-15. Claude shape follows design 07 §5.4 until open question 1 is verified (§13). |
 | Tests | UT07-58, UT07-59, PT07-02 |
 
+Spec note (T07-14, controller ruling on open question 1): step 3's transcript is no longer appended "unchanged". It is built as before (`compact_build.transcript`, now public so U07-77 reuses the same format), then passed through `escape_content` and wrapped as `wrap_untrusted("tool_results", None, …)` (U07-44, R-20), exactly like rendered memory, before it becomes the third `TextPart` of `head`. Query ids and numbers are unaffected by the escape; injected closing tags, fake `<scratchpad>` tags and role-marker lines inside tool results stay inside the one wrapper (ST07-15).
+
 #### U07-76 herness.harness.memory.compactor.ContextCompactor
 
 | Field | Content |
@@ -1731,6 +1735,8 @@ A **group** (design 07 §5.4) is one assistant message with at least one `ToolCa
 
 `CompactorOps` is a small protocol with `get_task_scratchpad(task_id) -> str | None` and `save_scratchpad(task_id, value: dict[str, JsonValue]) -> None`, bound by U07-97 to U07-29 and to T08-16 (herness.core.jobs.save_checkpoint) with key `"scratchpad"` (R-21), so unit tests pass an in-memory fake.
 
+Spec note (T07-14): (a) M0 passed to `build_compacted` is the ORIGINAL task message: when `msgs[0]` is a merged head (`kind == "compaction_summary"`) its parts before the first `<scratchpad ` text are used, so old scratchpads never nest. (b) Claude profiles (`fresh`) ledger the kept groups too (they become transcript text and leave the list on the next compaction); a group is ledgered at most once per call, and `covers_steps` then ends at the last ledgered step. (c) A `ToolResultPart` without a call in its group is ledgered under a placeholder call named `"unknown"`; a non-summary preamble is ledgered like a tool group. (d) Step 5's id rescue is applied to every `q_…` id of `state.messages` (and `state.query_ids`) that is missing from the ledger and absent from M0 and the kept groups, which covers the summary and state-id rules and makes the step 9 id invariant hold by construction. (e) The U07-67 `SCRATCHPAD_MAX_BYTES` cap is enforced here before each render and save (`compact()`, then the oldest `unmatched` numerals are dropped; `compact()` already clears every `sample`; ids and cited refs are never dropped). (f) Step 9's "numeral mention" check is: every recorded `unmatched` value is present in the new list. (g) `pressure`/`on_context_pressure` match spec 05 `herness.harness.hooks.CompactorLike` (mypy-checked in UT07-62). (h) Metric label `backend` is `profile.kind`. (i) The ledger pass, invariants and cap live in the private sibling `_compactor_ledger.py`, the model-call plumbing in `_compactor_llm.py` (§2).
+
 #### U07-77 herness.harness.memory.compactor.summarize_notes
 
 | Field | Content |
@@ -1750,6 +1756,8 @@ A **group** (design 07 §5.4) is one assistant message with at least one `ToolCa
 | Tests | UT07-61, FT07-05, ST07-16 |
 
 The summarizer calls the client directly, not through spec 08 `ModelChain` or the spec 06 call gate (the compactor has neither); see §13 DD17 and residual R3.
+
+Spec note (T07-14): steps 3 and 5 run via `complete_validated(max_repairs=1)` (U08-35) over a private completer that wraps the client: it applies `asyncio.wait_for(client.acomplete(req), profile.timeout_s)`, charges `ctx.ledger` for EVERY response (the repair call included), emits `llm_call` (with the prompt's content hash as `prompt_hash`) and raises `ModelRefused` on a refusal. The repair message is spec 08's (U08-36), not the literal of step 5; `OutputValidationError` from `complete_validated` gives deterministic notes. `validate_notes` is still applied to the parsed result (`None` → deterministic). "Calls the client directly" above still holds: no `ModelChain`, no call gate. The prior notes JSON in the request is escaped too. On success the dropped groups' deterministic step lines are appended after the prior `steps` (U07-74), as on the fallback path. An oversize single group is cut to the chunk limit (LLM10).
 
 ### 3.15 Recommendations and episodic memory (`recommend.py`, `episodic.py`)
 
@@ -2194,6 +2202,8 @@ Returns `int` (memory items removed).
 | Complexity and limits | each ≤ 60 lines |
 | Security notes | TH07-01, TH07-16, TH07-22. |
 | Tests | UT07-86 |
+
+Spec note (T07-14): `compaction_notes.md` is loaded through `importlib.resources` (`herness.harness.memory` package data, path `prompts/compaction_notes.md`; the wheel ships the whole package) and cached for the process; its 16-hex SHA-256 is the `llm_call` `prompt_hash`. Until `MemoryStore` exists (U07-97), the missing-file `ConfigError` is raised at `ContextCompactor` construction; UT07-62 covers the file's contract until UT07-86 lands.
 
 ## 4. State and data
 

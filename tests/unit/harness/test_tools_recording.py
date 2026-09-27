@@ -357,6 +357,7 @@ _NON_ROW_HASHES = {
     ("memory/policy.py", "content_hash"),  # memory content (R-14)
     ("memory/policy.py", "keyed_hash"),  # memory key
     ("memory/tokens.py", "_message_key"),  # per-message token-count cache key (U07-68)
+    ("memory/_compactor_llm.py", "compaction_prompt"),  # prompt file version hash (U07-99)
     ("roles/base.py", "prompt_hash"),  # prompt file version hash (U05-49)
 }
 _HASH_CALLS = frozenset({"sha1", "sha224", "sha256", "sha384", "sha512", "blake2b", "blake2s"})
