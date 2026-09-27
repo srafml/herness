@@ -36,6 +36,7 @@ from herness.core.errors import (
     EgressBlocked,
     FatalError,
     ModelUnavailable,
+    RateLimited,
     SchemaViolation,
 )
 from herness.core.types import DecisionInput
@@ -371,12 +372,62 @@ def test_ut03_81_unavailable_chunk_two_cap_three(
 
 
 def test_ut03_81_no_teacher_defers_queue_and_pairs(decide_env: DecideEnv) -> None:
-    """UT03-81 teacher None: the queue plus the (capped) pairs come back deferred."""
-    deferred, report = _escalate(decide_env, None, records=2, pairs=(_pair(1), _pair(2), _pair(3)))
+    """UT03-81 teacher None: the queue plus the (capped, logged) pairs come back deferred;
+    an empty queue at cap 0 logs no capped event."""
+    with capture_logs() as logs:
+        deferred, report = _escalate(
+            decide_env, None, records=2, pairs=(_pair(1), _pair(2), _pair(3))
+        )
+    capped = [e for e in logs if e["event"] == "enrich.decide.pairs_capped"]
+    assert [(e["pairs"], e["cap"], e["log_level"]) for e in capped] == [(3, 2, "info")]
     assert [d.record_id for d in deferred] == [rid(2), rid(1), "pair_1", "pair_2"]
     assert deferred[-1].question_ids == ("change_caused_pair",)
     assert (report.status, report.note) == ("skipped", "teacher_unavailable")
     assert decide_env.rows() == []
+
+
+def test_ut03_81_cap_zero_empty_queue_not_capped(decide_env: DecideEnv) -> None:
+    """UT03-81 cap 0: nothing is queued or sent and no capped event is logged."""
+    teacher = ScriptedDecider("openjev")
+    with capture_logs() as logs:
+        deferred, _ = _escalate(decide_env, teacher, cap=0)
+    assert (deferred, teacher.calls) == ([], [])
+    assert not [e for e in logs if e["event"].endswith("_capped")]
+
+
+def test_ut03_81_rate_limited_chunk_is_deferred(
+    decide_env: DecideEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-81 RateLimited (past the policy) on chunk 2 is not propagated: the chunk is
+    deferred with a WARNING naming the class; lost chunks still heartbeat."""
+    monkeypatch.setattr(st, "DECIDE_CHUNK", 2)
+
+    def fail(items: Any) -> BaseException | None:
+        return RateLimited("429", retry_after=900.0) if items[0].record_id == rid(3) else None
+
+    teacher, ctx = ScriptedDecider("openjev", fail=fail), FakeJobContext()
+    with capture_logs() as logs:
+        deferred, report = _escalate(decide_env, teacher, ctx=ctx)
+    assert [d.record_id for d in deferred] == [rid(3), rid(2)]
+    assert (report.status, report.note) == ("degraded", "openjev_unavailable")
+    assert {r["content_hash"] for r in decide_env.rows()} == {digest(5), digest(4), digest(1)}
+    assert ctx.heartbeats == ["decide-escalate"] * 3
+    warn = [e for e in logs if e["event"] == "enrich.decider.unavailable"]
+    assert [(e["error_class"], e["deferred"]) for e in warn] == [("RateLimited", 2)]
+
+
+def test_ut03_81_fatal_propagates_after_flushing(
+    decide_env: DecideEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-81 a FatalError on chunk 2 propagates; chunk 1's answers are flushed first."""
+    monkeypatch.setattr(st, "DECIDE_CHUNK", 2)
+
+    def fail(items: Any) -> BaseException | None:
+        return SchemaViolation("bad reply") if items[0].record_id == rid(3) else None
+
+    with pytest.raises(SchemaViolation):
+        _escalate(decide_env, ScriptedDecider("openjev", fail=fail))
+    assert {r["content_hash"] for r in decide_env.rows()} == {digest(5), digest(4)}
 
 
 def test_ut03_81_pairs_sent_after_records_and_item_errors_retried_once(
@@ -513,8 +564,22 @@ def test_ut03_82_unavailable_stops_and_none_is_degraded(
     assert len(llm.calls) == 2
     assert (report.status, report.note) == ("degraded", "llm_unavailable")
     warn = [e for e in logs if e["event"] == "enrich.decider.unavailable"]
-    assert warn[0]["left"] == 7
+    assert warn[0]["deferred"] == 7
     assert warn[0]["log_level"] == "warning"
+    assert len(decide_env.rows()) == 10
+
+
+def test_ut03_82_fatal_propagates_after_flushing(
+    decide_env: DecideEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-82 AuthError on chunk 2 propagates; chunk 1's answers are flushed first."""
+    monkeypatch.setattr(st, "LLM_CHUNK", 5)
+
+    def fail(items: Any) -> BaseException | None:
+        return AuthError("401") if items[0].record_id == rid(6) else None
+
+    with pytest.raises(AuthError):
+        _llm(decide_env, _items(12), ScriptedDecider("llm", fail=fail), cap=20)
     assert len(decide_env.rows()) == 10
 
 

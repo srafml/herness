@@ -119,8 +119,9 @@ def test_ft03_03_kill_after_batch_write_during_laya(
 
     monkeypatch.setattr(os, "kill", killed)
     fault_env([{"point": "enrich.after_batch_write", "action": "kill", "nth": 2}])
-    checkpoint = st.CHECKPOINT_CALLS * 1 * 1  # call_batch 1 (test config) x 1 Laya question
-    primaries = {"q_bool": "laya"}
+    checkpoint = st.CHECKPOINT_CALLS * 1 * 2  # rows: call_batch 1 (test config) x 2 questions
+    per_record = 2  # rows per record: q_bool and q_score
+    primaries = {"q_bool": "laya", "q_score": "laya"}
     laya = ScriptedDecider("laya", version="v1")
     with pytest.raises(_Killed):
         st.run_decide_primary(
@@ -145,8 +146,8 @@ def test_ft03_03_kill_after_batch_write_during_laya(
         report=report,
     )
     keys = _keys(decide_env)
-    assert len(keys) == 100
+    assert len(keys) == 100 * per_record
     assert max(keys.values()) == 1
-    rework = laya.decided + rerun.decided - 100
-    assert 0 <= rework <= checkpoint
-    assert rerun.decided == 100 - 2 * checkpoint
+    rework = laya.decided + rerun.decided - 100  # records decided twice
+    assert 0 <= rework * per_record <= checkpoint
+    assert rerun.decided == 100 - 2 * checkpoint // per_record

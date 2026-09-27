@@ -28,6 +28,8 @@ from herness.core.errors import (
     ConfigError,
     EgressBlocked,
     ModelUnavailable,
+    RecoverableError,
+    RetryableError,
     SchemaViolation,
 )
 from herness.core.jobs import JobContext
@@ -122,9 +124,6 @@ def _input(rid: str, entity: str, digest: str, text: str, qids: Sequence[str]) -
         "content_hash": digest, "text": text, "question_ids": tuple(qids)})  # fmt: skip
 
 
-# --- U03-84 --------------------------------------------------------------------------------------
-
-
 def _have_table(cache: DecisionCache, decider: str, version: str) -> pa.Table:
     dataset = cache.dataset()
     if dataset is None:
@@ -178,9 +177,6 @@ def build_inputs(  # noqa: PLR0913 - U03-84's keyword-only signature is binding
         wh.unregister(_ASKED)
 
 
-# --- U03-85 --------------------------------------------------------------------------------------
-
-
 def _laya_questions(qs: QuestionSet, primaries: Mapping[str, str]) -> frozenset[str]:
     return frozenset(
         q.id for q in qs.questions if primaries.get(q.id) == "laya" and q.id not in PAIR_QUESTIONS
@@ -228,9 +224,6 @@ def run_decide_primary(  # noqa: PLR0913 - U03-85's keyword-only signature is bi
     finally:
         laya.unload()
     _log.info("enrich.decide.primary_done", decided=report.decided, failed=report.failed)
-
-
-# --- U03-86 --------------------------------------------------------------------------------------
 
 
 def _as_input(item: QueueItem) -> DecisionInput:
@@ -290,23 +283,27 @@ class _Sender:
             batch, retry = retry, []  # retries of one chunk: never more than a chunk
             take = DECIDE_CHUNK - len(batch)
             batch, fresh = batch + fresh[:take], fresh[take:]
+            error_class = None  # the chain logs which of ModelUnavailable/CircuitOpen it was
             try:
                 decided, _left = self.chain.decide([inputs[i] for i in batch], qs)
             except (AuthError, EgressBlocked) as exc:
                 self._stopped(exc)
                 return deferred | set(batch) | set(retry) | set(fresh)
-            if not decided:  # chunk lost to ModelUnavailable / CircuitOpen
+            except (RetryableError, RecoverableError) as exc:  # e.g. RateLimited past its cap
+                decided, error_class = [], type(exc).__name__
+            if decided:
+                self.report.escalated += sum(1 for i in batch if i < records and i not in tried)
+                self.writer.add(decided, samples=None)
+                errors = [i for i, o in zip(batch, decided, strict=True) if o.error is not None]
+                retry = [i for i in errors if i not in tried]
+                deferred.update(set(errors) - set(retry))
+                self.report.failed += len(errors) - len(retry)
+                tried.update(retry)
+            else:  # chunk lost: deferred to the LLM phase
                 deferred.update(batch)
                 _mark(self.report, "degraded", f"{self.name}_unavailable")
-                _log.warning("enrich.decider.unavailable", decider=self.name, items=len(batch))
-                continue
-            self.report.escalated += sum(1 for i in batch if i < records and i not in tried)
-            self.writer.add(decided, samples=None)
-            errors = [i for i, out in zip(batch, decided, strict=True) if out.error is not None]
-            retry = [i for i in errors if i not in tried]
-            deferred.update(set(errors) - set(retry))
-            self.report.failed += len(errors) - len(retry)
-            tried.update(retry)
+                _log.warning("enrich.decider.unavailable", decider=self.name,
+                             error_class=error_class, deferred=len(batch))  # fmt: skip
             _checkpoint(self.ctx, self.writer, "decide-escalate")
         return deferred
 
@@ -333,9 +330,12 @@ def run_decide_escalate(  # noqa: PLR0913 - U03-86's keyword-only signature is b
                   now=a.now)  # fmt: skip
     cap = cfg.escalation.max_rows_per_night
     queue = escalation_queue(wh, max_records=cap)
-    if len(queue) >= cap:
+    if queue and len(queue) >= cap:
         _log.info("enrich.decide.escalation_capped", queued=len(queue), cap=cap)
-    pair_items = [_as_item(p) for p in pairs[: cfg.change_link.decider_max_pairs]]
+    pair_cap = cfg.change_link.decider_max_pairs
+    if len(pairs) > pair_cap:
+        _log.info("enrich.decide.pairs_capped", pairs=len(pairs), cap=pair_cap)
+    pair_items = [_as_item(p) for p in pairs[:pair_cap]]
     if teacher is None:
         _mark(report, "skipped", "teacher_unavailable")
         return queue + pair_items
@@ -345,16 +345,15 @@ def run_decide_escalate(  # noqa: PLR0913 - U03-86's keyword-only signature is b
     writer = cache.writer(teacher.name, teacher.version, questions=qs, flush_rows=WRITE_ROWS)
     chain = DeciderChain([teacher.name], gpu=gpu or gpu_state(), resolve=lambda _n: teacher)
     sender = _Sender(chain, teacher.name, writer, ctx, report)
-    deferred = sorted(sender.run([_as_input(i) for i in items], qs, len(send)))
-    writer.flush()
+    try:
+        deferred = sorted(sender.run([_as_input(i) for i in items], qs, len(send)))
+    finally:
+        writer.flush()
     parts += [items[i] for i in deferred if i < len(send)]
     out = _merge(queue, parts) + [items[i] for i in deferred if i >= len(send)]
     _log.info("enrich.decide.escalated", sent=len(items), escalated=report.escalated,
               deferred=len(out), failed=report.failed)  # fmt: skip
     return out
-
-
-# --- U03-87 --------------------------------------------------------------------------------------
 
 
 def run_llm_escalation(  # noqa: PLR0913 - U03-87's keyword-only signature is binding
@@ -370,18 +369,21 @@ def run_llm_escalation(  # noqa: PLR0913 - U03-87's keyword-only signature is bi
     todo = list(deferred[: max(cap, 0)])
     writer = cache.writer(llm.name, llm.version, questions=qs, flush_rows=WRITE_ROWS)
     answered = 0
-    for start in range(0, len(todo), LLM_CHUNK):
-        chunk = todo[start : start + LLM_CHUNK]
-        try:
-            outputs = llm.decide([_as_input(item) for item in chunk], qs)
-        except (ModelUnavailable, CircuitOpen) as exc:
-            _mark(report, "degraded", "llm_unavailable")
-            _log.warning("enrich.decider.unavailable", decider=llm.name,
-                         error_class=type(exc).__name__, left=len(todo) - start)  # fmt: skip
-            break
-        writer.add(outputs, samples=llm.samples)
-        answered += _count(outputs, report)
-        _checkpoint(ctx, writer, "reasoning")
-    writer.flush()
+    try:
+        for start in range(0, len(todo), LLM_CHUNK):
+            chunk = todo[start : start + LLM_CHUNK]
+            try:
+                outputs = llm.decide([_as_input(item) for item in chunk], qs)
+            except (ModelUnavailable, CircuitOpen) as exc:
+                _mark(report, "degraded", "llm_unavailable")
+                left = len(todo) - start
+                _log.warning("enrich.decider.unavailable", decider=llm.name,
+                             error_class=type(exc).__name__, deferred=left)  # fmt: skip
+                break
+            writer.add(outputs, samples=llm.samples)
+            answered += _count(outputs, report)
+            _checkpoint(ctx, writer, "reasoning")
+    finally:
+        writer.flush()
     _log.info("enrich.decide.llm_escalated", answered=answered, taken=len(todo))
     return answered
