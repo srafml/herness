@@ -321,7 +321,12 @@ def test_rf_shipped_owner_files_load_yaml_shaped(cfg_dir: Path) -> None:
     assert cfg.weights.business_timezone == "America/New_York"
     assert cfg.weights.version == 1
     assert cfg.metrics.version == 1
-    assert cfg.metrics.metrics[0].name == "mttr_hours"
+    assert [m.name for m in cfg.metrics.metrics][:4] == [
+        "incident_count",
+        "p1p2_count",
+        "mttr_hours",
+        "mttr_p50_hours",
+    ]
     assert cfg.eval is not None
     assert cfg.eval.baseline == "synthetic-42-small"
     assert cfg.resilience.resilience.jobs.lease_s > 0

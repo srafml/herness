@@ -46,7 +46,7 @@ def _seed_watermark(value: datetime.datetime, *, source: str = _SRC) -> None:
 @pytest.fixture
 def paths_config(ops_store: OpsStoreHandle, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Stub the runner's `get_config()` so `paths.data` is the ops store's data root (the
-    repository config does not load as a whole until T04-08 fills the metric catalog)."""
+    runner then works on the test's store; the real default is covered by UT01-29 below)."""
     stub = SimpleNamespace(paths=SimpleNamespace(data=ops_store.data_root))
     monkeypatch.setattr(runner_module, "get_config", lambda: stub)
     return ops_store.data_root

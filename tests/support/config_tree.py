@@ -1,11 +1,10 @@
 """Full, valid ``config/`` trees for ``load_config`` tests (impl 10 §11 ``tmp_config``).
 
 ``write_full_config`` copies the repository's shipped owner files ``decisions``, ``eval``,
-``models``, ``weights`` and ``resilience`` verbatim and adds minimal ``version: 1`` sections for
-the rest plus its own ``herness.yaml`` and profiles. ``write_repo_config`` (T10-13, T10-03b)
-copies the whole shipped ``config/`` tree verbatim. Both apply one adaptation: ``metrics.yaml``
-ships ``metrics: []`` until T04-08, so one catalog entry is inserted. Every shipped owner file
-carries ``version: 1`` (T10-03b fix round 1), so no copy needs the line added.
+``models``, ``weights``, ``resilience`` and ``metrics`` verbatim and adds minimal ``version: 1``
+sections for the rest plus its own ``herness.yaml`` and profiles. ``write_repo_config`` (T10-13,
+T10-03b) copies the whole shipped ``config/`` tree verbatim. Every shipped owner file carries
+``version: 1`` (T10-03b fix round 1), so no copy needs the line added.
 """
 
 from __future__ import annotations
@@ -53,40 +52,13 @@ security:
   egress: {enabled: true, destinations: [api.anthropic.com], purposes: [reasoning]}
 """
 
-METRIC_ENTRY = """\
-metrics:
-  - name: mttr_hours
-    description: Mean wall-clock hours from opened_at to resolved_at.
-    domain: ops
-    grains: [service, team]
-    unit: hours
-    better: lower
-    aggregation: mean
-    min_sample_size: 10
-    owner: sre-analytics
-    estimate: false
-    uses_weights: []
-    usd_model: mttr
-    filters: [priority, service_id]
-    enabled: true
-    requires_columns: []
-    sql: SELECT 1
-"""
-
-
-def _with_metric_entry(cfg: Path) -> None:
-    metrics = (SHIPPED / "metrics.yaml").read_text(encoding="utf-8")
-    assert "\nmetrics: []\n" in metrics, "T04-08 shipped the catalog: drop this stand-in"
-    (cfg / "metrics.yaml").write_text(metrics.replace("metrics: []\n", METRIC_ENTRY), "utf-8")
-
 
 def write_full_config(root: Path) -> Path:
     """Write a loadable ``config/`` tree (and profiles) under ``root``; return the config dir."""
     cfg = root / "config"
     (cfg / "profiles").mkdir(parents=True)
-    for name in ("decisions", "eval", "models", "weights", "resilience"):
+    for name in ("decisions", "eval", "models", "weights", "resilience", "metrics"):
         shutil.copyfile(SHIPPED / f"{name}.yaml", cfg / f"{name}.yaml")
-    _with_metric_entry(cfg)
     for stem in ("sources", "mappings", "pipelines", "memory", "app"):
         (cfg / f"{stem}.yaml").write_text("version: 1\n", encoding="utf-8")
     (cfg / "herness.yaml").write_text(HERNESS_YAML, encoding="utf-8")
@@ -126,7 +98,7 @@ def write_checked_config(root: Path) -> Path:
     return cfg
 
 
-# Every shipped owner file except ``metrics`` (T04-08 stand-in) is copied byte for byte.
+# Owner files copied byte for byte; ``metrics.yaml`` is copied alongside them.
 OWNER_STEMS: tuple[str, ...] = (
     "sources",
     "mappings",
@@ -143,10 +115,10 @@ _PROFILES: tuple[str, ...] = ("local", "hybrid", "premium", "synth")
 
 
 def write_repo_config(root: Path) -> Path:
-    """Copy the repository's shipped ``config/`` tree; only ``metrics.yaml`` is adapted.
+    """Copy the repository's shipped ``config/`` tree byte for byte.
 
-    ``herness.yaml``, ``profiles/*.yaml``, ``injection_patterns.txt`` and the ``OWNER_STEMS``
-    files are copied byte for byte; ``metrics.yaml`` gets one catalog entry (T04-08).
+    ``herness.yaml``, ``profiles/*.yaml``, ``injection_patterns.txt``, ``metrics.yaml`` and the
+    ``OWNER_STEMS`` files are copied unchanged.
     """
     cfg = root / "config"
     (cfg / "profiles").mkdir(parents=True)
@@ -154,7 +126,7 @@ def write_repo_config(root: Path) -> Path:
     for name in OWNER_STEMS:
         shutil.copyfile(SHIPPED / f"{name}.yaml", cfg / f"{name}.yaml")
     shutil.copyfile(SHIPPED / "injection_patterns.txt", cfg / "injection_patterns.txt")
-    _with_metric_entry(cfg)
+    shutil.copyfile(SHIPPED / "metrics.yaml", cfg / "metrics.yaml")
     for name in _PROFILES:
         shutil.copyfile(SHIPPED / "profiles" / f"{name}.yaml", cfg / "profiles" / f"{name}.yaml")
     return cfg

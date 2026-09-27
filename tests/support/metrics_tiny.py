@@ -15,10 +15,10 @@ from typing import Any, Final
 import duckdb
 import pytest
 import yaml
-from tests.support.metrics_render import FakeCatalog
 
 from herness.metrics import facts
-from herness.metrics.settings import WeightsConfig
+from herness.metrics.catalog import MetricCatalog
+from herness.metrics.settings import MetricsCatalogConfig, WeightsConfig
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 FIXTURE_DIR: Final = ROOT / "tests" / "fixtures" / "metrics_tiny"
@@ -102,14 +102,22 @@ def tiny_weights() -> WeightsConfig:
     return WeightsConfig.model_validate(raw)
 
 
+def shipped_catalog(**min_sample_size: int) -> MetricCatalog:
+    """The shipped `config/metrics.yaml` catalog, with per-metric `min_sample_size` overrides.
+
+    `metrics_tiny` holds three resolved incidents, below the shipped minimum of 10 for the MTTR
+    metrics; tests that check hand-computed values lower it (keyword: metric name).
+    """
+    raw: dict[str, Any] = yaml.safe_load((ROOT / "config" / "metrics.yaml").read_text("utf-8"))
+    for entry in raw["metrics"]:
+        entry["min_sample_size"] = min_sample_size.get(entry["name"], entry["min_sample_size"])
+    return MetricCatalog(MetricsCatalogConfig.model_validate(raw))
+
+
 def patch_facts_config(
     monkeypatch: pytest.MonkeyPatch, weights: WeightsConfig | None = None
 ) -> None:
-    """Point `materialize_facts` at the shipped catalog sections and the tiny weights.
-
-    `config/metrics.yaml` loads as a whole only once T04-08 adds catalog entries, so the
-    catalog is the partial `FakeCatalog` (shipped `defaults` and `scoring`).
-    """
+    """Point `materialize_facts` at the shipped catalog and the tiny weights."""
     cfg = SimpleNamespace(weights=weights if weights is not None else tiny_weights())
-    monkeypatch.setattr(facts, "catalog_from_config", FakeCatalog)
+    monkeypatch.setattr(facts, "catalog_from_config", shipped_catalog)
     monkeypatch.setattr(facts, "get_config", lambda: cfg)

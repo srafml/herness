@@ -1,8 +1,8 @@
 """Shared fixtures for the metric rendering tests (impl 04 T04-04).
 
-`config/metrics.yaml` does not load as a whole until T04-08 and `MetricCatalog` lands with
-T04-03, so these helpers build a partial catalog: the shipped `defaults` and `scoring`
-sections plus hand-written metric entries, behind the catalog read surface `render` uses.
+The render tests exercise hand-written metric entries (not the shipped catalog), so these
+helpers build a partial catalog: the shipped `defaults` and `scoring` sections plus those
+entries, behind the catalog read surface `render` uses.
 """
 
 import datetime

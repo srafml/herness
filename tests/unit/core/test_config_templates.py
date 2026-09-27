@@ -1,9 +1,9 @@
 """Tests for the repository config templates (impl 10 U10-93, U10-94, U10-95; UT10-76).
 
 UT10-76 loads the repository's own `config/` tree (via `tests.support.config_tree.
-write_repo_config`, which copies every shipped file and adapts only the unversioned owner
-files and the empty T04-08 metric catalog) for all four profiles, and checks the two
-non-config-loader artifacts of U10-95 (`.env.example`, `.streamlit/config.toml`) directly.
+write_repo_config`, which copies every shipped file byte for byte) for all four profiles, and
+checks the two non-config-loader artifacts of U10-95 (`.env.example`,
+`.streamlit/config.toml`) directly.
 `hybrid` and `premium` load once the copy's `herness.yaml` records the approval U10-09 step 5
 requires; the shipped file records none, so they fail the gate as shipped.
 """
@@ -127,15 +127,14 @@ def test_ut10_76_owner_files_ship_with_version_1() -> None:
         assert data["version"] == 1, stem
 
 
-def test_ut10_76_bare_repo_tree_fails_only_on_the_empty_metric_catalog() -> None:
-    """UT10-76 the bare repo `config/` passes every version check; only T04-08's `metrics: []`
-    still fails (drop this test's expectation when the catalog ships)."""
+def test_ut10_76_bare_repo_tree_loads() -> None:
+    """UT10-76 the bare repo `config/` loads as a whole for `local` and `synth` (the metric
+    catalog ships with T04-08), so every version check passes on the shipped files."""
     for profile in ("local", "synth"):
-        with pytest.raises(ConfigError) as info:
-            c.load_config(profile, config_dir=REPO / "config", env={})
-        issues = info.value.issues  # type: ignore[attr-defined]
-        assert [(i.path, i.file) for i in issues] == [("metrics.metrics", "metrics.yaml")]
-        assert "version must be 1" not in info.value.message
+        cfg = c.load_config(profile, config_dir=REPO / "config", env={})
+        assert cfg.profile == profile
+        assert cfg.metrics.version == 1
+        assert cfg.metrics.metrics
 
 
 def _approve(cfg_dir: Path) -> None:

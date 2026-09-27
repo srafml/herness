@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -84,12 +84,21 @@ def fake_config(monkeypatch: pytest.MonkeyPatch) -> None:
 # --- UT04-13 load_catalog, version ------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, raises=ConfigError, reason="config/metrics.yaml ships `metrics: []` until T04-08"
-)
 def test_ut04_13_shipped_metrics_yaml_loads(fake_config: None) -> None:
-    """UT04-13 the shipped config/metrics.yaml loads (fails until T04-08 adds the entries)."""
-    assert load_catalog(SHIPPED).names()
+    """UT04-13 the shipped config/metrics.yaml loads; until T04-09 … T04-11 ship the rest of
+    the 28 entries, its only errors are U04-26 step 8 for scorecard metrics not yet shipped."""
+    raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
+    shipped = MetricsCatalogConfig.model_validate(raw)
+    names = {m.name for m in shipped.metrics}
+    assert {"incident_count", "p1p2_count", "mttr_hours", "mttr_p50_hours"} <= names
+    pending = sorted(set(shipped.scoring.org.metrics) - names)
+    if not pending:  # every scorecard metric shipped: the whole file validates
+        assert load_catalog(SHIPPED).names() == sorted(names)
+        return
+    with pytest.raises(ConfigError) as info:
+        load_catalog(SHIPPED)
+    issues = cast("list[ConfigIssue]", info.value.issues)  # type: ignore[attr-defined]
+    assert sorted(i.path for i in issues) == [f"scoring.org.metrics.{n}" for n in pending]
 
 
 def _reordered(value: object) -> object:
