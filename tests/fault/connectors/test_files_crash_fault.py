@@ -110,6 +110,7 @@ def test_ft01_02_kill_before_record_reingests_the_file_once(
     assert first_files, "the kill must land after LakeWriter.commit()"
     assert sorted(lake_table(first_files).column("_source_key").to_pylist()) == KEYS
     assert _ingest_rows() == []
+    # files never writes a watermark (U01-50): this is a guard, not the crash-safety proof
     assert read_all("SELECT entity FROM watermark WHERE source = 'files'") == []
     teams_dir = data / "raw" / "files" / "teams"
     assert [p.name for p in teams_dir.rglob(".*")] == []  # committed: no temp file left
@@ -127,6 +128,7 @@ def test_ft01_02_kill_before_record_reingests_the_file_once(
     (third,) = _result(_child(config_dir, ops_store.db_path, None))["results"]
     assert (third["rows"], third["files"]) == (0, [])
     assert len(_ingest_rows()) == 1
+    # guard only: the files path never writes a watermark, killed or not
     assert read_all("SELECT entity FROM watermark WHERE source = 'files'") == []
 
     # the raw lake is at-least-once: each record twice (killed commit + rerun), never thrice

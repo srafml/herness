@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -23,14 +24,25 @@ import herness.connectors
 pytestmark = pytest.mark.unit
 
 CONNECTORS: Final = Path(herness.connectors.__file__).resolve().parent
-_CLIENTS: Final = ("Client", "AsyncClient", "HTTPTransport", "AsyncHTTPTransport")
-_CTOR_RE: Final = re.compile(r"\bhttpx\s*\.\s*(?:Async)?(?:Client|HTTPTransport)\s*\(")
+_HTTP_MODULES: Final = frozenset({"httpx", "httpx2"})  # httpx2: the egress client library
+_CLIENTS: Final = frozenset({"Client", "AsyncClient", "HTTPTransport", "AsyncHTTPTransport"})
+_CTOR_RE: Final = re.compile(r"\bhttpx2?\s*\.\s*(?:Async)?(?:Client|HTTPTransport)\s*\(")
 _VERIFY_RE: Final = re.compile(r"\bverify\s*=\s*False\b")
 _ALLOWED: Final = frozenset({"GET", "POST"})
-_OTHER_VERBS: Final = frozenset({"PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"})
-# httpx client verb methods other than get/post (`.connect(` is e.g. duckdb.connect)
-_VERB_CALLS: Final = frozenset({"put", "patch", "delete", "head", "options"})
+_OTHER_VERBS: Final = frozenset(
+    {"PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT", "QUERY"}
+)
+# client verb methods other than get/post (`.connect(` is e.g. duckdb.connect, not flagged)
+_VERB_CALLS: Final = frozenset({"put", "patch", "delete", "head", "options", "query"})
 _REQUEST_CALLS: Final = frozenset({"request", "stream", "build_request"})
+
+
+@dataclass(frozen=True, slots=True)
+class _Names:
+    """Local names bound to an HTTP module and to its `Request` class (import aliases)."""
+
+    modules: frozenset[str]
+    requests: frozenset[str]
 
 
 def _is_false(node: ast.expr) -> bool:
@@ -43,31 +55,72 @@ def _literal_method(node: ast.expr | None) -> str | None:
     return None
 
 
+def _root(module: str) -> str:
+    return module.split(".", maxsplit=1)[0]
+
+
+def _bound_names(tree: ast.AST) -> _Names:
+    modules, requests = set(_HTTP_MODULES), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(
+                a.asname for a in node.names if a.asname and _root(a.name) in _HTTP_MODULES
+            )
+        elif isinstance(node, ast.ImportFrom) and _root(node.module or "") in _HTTP_MODULES:
+            requests.update(a.asname or a.name for a in node.names if a.name == "Request")
+    return _Names(frozenset(modules), frozenset(requests))
+
+
 def _import_findings(node: ast.AST) -> list[str]:
     if isinstance(node, ast.Import):
-        return [f"import {a.name}" for a in node.names if a.name.split(".")[0] == "requests"]
+        return [f"import {a.name}" for a in node.names if _root(a.name) == "requests"]
     if isinstance(node, ast.ImportFrom) and node.module is not None:
-        root = node.module.split(".")[0]
+        root = _root(node.module)
         if root == "requests":
             return [f"from {node.module} import"]
-        if root == "httpx":
-            return [f"from httpx import {a.name}" for a in node.names if a.name in _CLIENTS]
+        if root in _HTTP_MODULES:
+            return [f"from {root} import {a.name}" for a in node.names if a.name in _CLIENTS]
     return []
 
 
-def _call_findings(node: ast.Call) -> list[str]:
+def _method_of(node: ast.Call) -> str | None:
+    """The literal method of a request-style call: `method=` keyword, else the first arg."""
+    keyword = next((k.value for k in node.keywords if k.arg == "method"), None)
+    return _literal_method(keyword if keyword is not None else next(iter(node.args), None))
+
+
+def _constructor_findings(node: ast.Call, names: _Names) -> list[str]:
+    """`<http module alias>.Client(...)` etc. and `Request(<not GET/POST>)` constructions."""
+    func, line = node.func, node.lineno
+    owner = (
+        func.value.id
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+        else None
+    )
+    if owner in names.modules and isinstance(func, ast.Attribute) and func.attr in _CLIENTS:
+        return [f"{owner}.{func.attr}( at line {line}"]
+    request = (
+        owner in names.modules and isinstance(func, ast.Attribute) and func.attr == "Request"
+    ) or (isinstance(func, ast.Name) and func.id in names.requests)
+    if request and _method_of(node) not in _ALLOWED:
+        return [f"Request() method {_method_of(node) or 'not a literal'} at line {line}"]
+    return []
+
+
+def _call_findings(node: ast.Call, names: _Names) -> list[str]:
     found = [
         f"verify=False at line {node.lineno}"
         for k in node.keywords
         if k.arg == "verify" and _is_false(k.value)
     ]
+    found += _constructor_findings(node, names)
     func = node.func
     name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
     if isinstance(func, ast.Attribute) and name in _VERB_CALLS:
         found.append(f".{name}( at line {node.lineno}")
     keyword = next((k.value for k in node.keywords if k.arg == "method"), None)
     if name in _REQUEST_CALLS:
-        method = _literal_method(keyword if keyword is not None else next(iter(node.args), None))
+        method = _method_of(node)
         if method not in _ALLOWED:
             found.append(f"{name}() method {method or 'not a literal'} at line {node.lineno}")
     elif keyword is not None and _literal_method(keyword) in _OTHER_VERBS:
@@ -79,10 +132,12 @@ def scan_source(text: str) -> list[str]:
     """Findings of one module: banned constructor text, then AST findings."""
     found = [f"{m.group(0)!r} in text" for m in _CTOR_RE.finditer(text)]
     found += [f"{m.group(0)!r} in text" for m in _VERIFY_RE.finditer(text)]
-    for node in ast.walk(ast.parse(text)):
+    tree = ast.parse(text)
+    names = _bound_names(tree)
+    for node in ast.walk(tree):
         found += _import_findings(node)
         if isinstance(node, ast.Call):
-            found += _call_findings(node)
+            found += _call_findings(node, names)
     return found
 
 
@@ -128,6 +183,19 @@ def test_st01_14_connectors_open_no_client_and_use_only_get_post() -> None:
         "def f(client):\n    client.stream('PATCH', '/x')\n",
         "def f(client):\n    client.build_request('DELETE', '/x')\n",
         "def f(send):\n    send(url='/x', method='PUT')\n",
+        "def f(client):\n    client.query('/x', content=b'{}')\n",
+        "def f(send):\n    send(url='/x', method='QUERY')\n",
+        "import httpx2\nc = httpx2.Client()\n",
+        "import httpx2\nt = httpx2.AsyncHTTPTransport()\n",
+        "from httpx2 import AsyncClient\n",
+        "import httpx as h\nc = h.Client()\n",
+        "import httpx2 as x\nt = x.AsyncHTTPTransport()\n",
+        "import httpx.foo as h\nc = h.AsyncClient()\n",
+        "import httpx\ndef f(c):\n    c.send(httpx.Request('PUT', '/x'))\n",
+        "import httpx2\ndef f(c):\n    c.send(httpx2.Request(method='DELETE', url='/x'))\n",
+        "import httpx2 as x\ndef f(c, m):\n    c.send(x.Request(m, '/x'))\n",
+        "from httpx2 import Request as R\ndef f(c):\n    c.send(R('PATCH', '/x'))\n",
+        "from httpx import Request\ndef f(c):\n    c.send(Request('QUERY', '/x'))\n",
     ],
 )
 def test_st01_14_scanner_flags_planted_snippet(snippet: str) -> None:
@@ -155,5 +223,7 @@ def f(client: httpx.Client, bundle: str, auth: object) -> None:
     egress.source_http_client("jira")
     if auth.method == "none":
         pass
+    client.send(httpx.Request("GET", "/e"))
+    client.send(httpx.Request(method="POST", url="/f"))
 """
     assert scan_source(allowed) == []
