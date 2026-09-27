@@ -13,6 +13,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+import structlog
 
 from herness.core.errors import ConfigError, SchemaViolation
 from herness.model.meta import collect_row_counts, insert_build_row, update_build_row
@@ -132,7 +133,12 @@ def test_it02_21_collect_row_counts(con: duckdb.DuckDBPyConnection) -> None:
     con.execute("CREATE VIEW core.v AS SELECT 1")
     con.execute('CREATE TABLE core."Bad Name" AS SELECT 1')
     con.execute("INSERT INTO enrich.cluster_member VALUES ('r', 'c', 0.5)")
-    counts = collect_row_counts(con, ["enrich", "core"])
+    with structlog.testing.capture_logs() as logs:
+        counts = collect_row_counts(con, ["enrich", "core"])
+    assert [(e["event"], e["log_level"], e["count"]) for e in logs] == [
+        ("model.build.row_count_skipped", "warning", 1)
+    ]
+    assert "Bad Name" not in repr(logs)
     assert counts == {
         "core.a": 0,
         "core.b": 3,

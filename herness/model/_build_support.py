@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import math
 import re
 from collections.abc import Mapping
 from typing import Final
@@ -53,15 +54,18 @@ def resolve_memory_limit(value: str) -> str:
     """``build.memory_limit`` in a unit DuckDB accepts (T02-18 spec note).
 
     A percentage (1-100) becomes MiB of total physical RAM, at least 256 MiB; a size passes
-    through unchanged when it is at least 256 MiB. Anything else is ConfigError.
+    through unchanged when it is finite, at least 256 MiB and at most total physical RAM.
+    Anything else is ConfigError.
     """
+    total = _total_memory()
     percent = _PERCENT_RE.fullmatch(value)
     if percent is not None:
-        size = max(_total_memory() * int(percent.group(1)) // 100, _MIN_MEMORY)
+        size = max(total * int(percent.group(1)) // 100, _MIN_MEMORY)
         return f"{size // _MIB}MiB"
     sized = _SIZE_RE.fullmatch(value)
-    if sized is None or float(sized.group(1)) * _UNIT_BYTES[sized.group(2)] < _MIN_MEMORY:
-        msg = "build.memory_limit must be 1-100% or a size of at least 256 MiB"
+    size_bytes = float(sized.group(1)) * _UNIT_BYTES[sized.group(2)] if sized else math.nan
+    if not (math.isfinite(size_bytes) and _MIN_MEMORY <= size_bytes <= total):
+        msg = "build.memory_limit must be 1-100% or a size from 256 MiB to total physical RAM"
         raise ConfigError(msg)
     return value
 

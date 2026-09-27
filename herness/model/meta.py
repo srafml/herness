@@ -163,20 +163,25 @@ def collect_row_counts(
 ) -> dict[str, int]:
     """Rows per base table of ``schemas`` as ``{"schema.table": n}``, sorted by key (U02-92).
 
-    Tables whose schema or table name is not a plain lower-case identifier are skipped.
+    Tables whose schema or table name is not a plain lower-case identifier are skipped and
+    counted in one ``model.build.row_count_skipped`` WARNING (schemas and count only).
     """
     if not set(schemas) <= _COUNT_SCHEMAS:
         msg = "collect_row_counts: unknown schema"
         raise ConfigError(msg)
     counts: dict[str, int] = {}
+    skipped = 0
     try:
         tables = con.execute(_TABLES, [list(schemas)]).fetchall()
         for schema, table in tables:
             if not (_IDENT_RE.fullmatch(str(schema)) and _IDENT_RE.fullmatch(str(table))):
+                skipped += 1
                 continue
             row = con.execute(f'SELECT count(*) FROM "{schema}"."{table}"').fetchone()  # noqa: S608 - checked identifiers
             counts[f"{schema}.{table}"] = int(row[0]) if row is not None else 0
     except duckdb.Error as exc:
         msg = "row count collection failed"
         raise SchemaViolation(msg, error_type=type(exc).__name__) from exc
+    if skipped:  # names are not logged: they failed the identifier check
+        _log.warning("model.build.row_count_skipped", schemas=sorted(schemas), count=skipped)
     return dict(sorted(counts.items()))

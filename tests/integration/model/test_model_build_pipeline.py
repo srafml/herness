@@ -16,6 +16,7 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
+import duckdb
 import pytest
 import structlog
 from tests.support.build_harness import FakeJobContext
@@ -23,7 +24,7 @@ from tests.support.lake_small import GOLDEN_CORE, GOLDEN_COUNTS, core_snapshot, 
 from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.config import HernessConfig, config_hash
-from herness.core.errors import ConfigError, HernessError
+from herness.core.errors import ConfigError, HernessError, SchemaViolation
 from herness.core.jobs.handlers import register_handler, resolve_handler, run_handler
 from herness.core.jobs.ports import JobContext
 from herness.core.resilience import ProcessState
@@ -375,3 +376,42 @@ def test_it02_21_payload_errors(env: Env, fake_job_context: Callable[..., FakeJo
     assert isinstance(missing, ConfigError)
     assert "enrich" in str(missing)
     assert warehouse.list_builds(layout=env.layout) == []
+
+
+def test_it02_21_extra_payload_key_not_echoed(
+    env: Env, fake_job_context: Callable[..., FakeJobContext]
+) -> None:
+    """IT02-21 (fix round 1) an unexpected payload key is reported as `extra field`, never by
+    its caller-supplied name."""
+    error = _run(fake_job_context({"stages": ["build"], LITERAL: 1}))
+    assert isinstance(error, ConfigError)
+    assert "extra field" in str(error)
+    assert LITERAL not in str(error)
+
+
+@pytest.mark.parametrize("raised", [duckdb.IOException, OSError])
+def test_it02_22_non_herness_error_runs_failure_path(
+    env: Env,
+    fake_job_context: Callable[..., FakeJobContext],
+    monkeypatch: pytest.MonkeyPatch,
+    raised: type[Exception],
+) -> None:
+    """IT02-22 (fix round 1) a raw duckdb.Error or OSError inside the build stage (here from
+    the row counts before CHECKPOINT) becomes a sanitised SchemaViolation; the build is
+    marked failed, `model.build.failed` and the failed metric are written."""
+
+    def boom(*_args: object) -> dict[str, int]:
+        msg = f"IO Error: cannot write '{LITERAL}'"
+        raise raised(msg)
+
+    monkeypatch.setattr(build.meta, "collect_row_counts", boom)
+    with structlog.testing.capture_logs() as logs:
+        error = _run(fake_job_context({"stages": ["build"]}))
+    assert type(error) is SchemaViolation
+    assert LITERAL not in str(error)
+    assert error.__cause__ is None
+    [failed] = [e for e in logs if e["event"] == "model.build.failed"]
+    assert failed["error_class"] == "SchemaViolation"
+    assert LITERAL not in json.dumps(logs, default=str)
+    assert [b.status for b in warehouse.list_builds(layout=env.layout)] == ["failed"]
+    assert ("herness_model_build_total", '{"status":"failed"}') in _metrics()

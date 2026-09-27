@@ -28,7 +28,7 @@ from pydantic import (
 
 from herness.core import time as clock
 from herness.core.config import HernessConfig, config_hash, get_config
-from herness.core.errors import ConfigError, HernessError
+from herness.core.errors import ConfigError, HernessError, SchemaViolation
 from herness.core.jobs.ports import JobContext
 from herness.core.logging import get_logger
 from herness.core.resilience import fault_point
@@ -264,12 +264,19 @@ def _stage_build(run: _BuildRun) -> StageStatus:
 _STAGE_UNITS: Final[Mapping[str, _StageUnit]] = {"build": _stage_build}
 
 
+def _error_label(loc: tuple[int | str, ...], kind: str) -> str:
+    """A payload field name of the model itself; caller-supplied keys are never echoed."""
+    if kind == "extra_forbidden":
+        return "extra field"
+    return str(loc[0]) if loc and loc[0] in BuildPipelinePayload.model_fields else "payload"
+
+
 def _parse_payload(ctx: JobContext) -> BuildPipelinePayload:
     try:
         payload = BuildPipelinePayload.model_validate(dict(ctx.job.payload))
     except ValidationError as exc:
         _log.error("model.build.payload_invalid", job_id=ctx.job_id)
-        fields = sorted({".".join(str(p) for p in e["loc"]) or "payload" for e in exc.errors()})
+        fields = sorted({_error_label(e["loc"], e["type"]) for e in exc.errors()})
         msg = f"invalid build_pipeline payload: {', '.join(fields)[:_ERRORS_SHOWN]}"
         raise ConfigError(msg) from None
     missing = [stage for stage in payload.stages if stage not in _STAGE_UNITS]
@@ -323,6 +330,12 @@ def _run_stages(run: _BuildRun) -> JobOutcome:
         except HernessError as exc:
             _fail(run, name, exc)
             raise
+        except (duckdb.Error, OSError) as exc:  # e.g. CHECKPOINT, scan_lake: raw text dropped
+            error = SchemaViolation(
+                f"build stage {name} failed", build_id=run.build_id, error_type=type(exc).__name__
+            )
+            _fail(run, name, error)
+            raise error from None
         if status == "yield":
             return _yield(run)
         run.stages_done.append(name)

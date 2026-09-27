@@ -98,9 +98,25 @@ def test_ut02_65_memory_limit_resolution(
     assert support.resolve_memory_limit(value) == expected
 
 
-@pytest.mark.parametrize("value", ["0%", "101%", "abc", "10MB", "0.1GB", "", "75 %", "-5%"])
-def test_ut02_65_memory_limit_rejects(value: str) -> None:
-    """UT02-65 (T02-18 spec note) percentages outside 1..100, unknown formats and sizes below
-    256 MiB are ConfigError."""
-    with pytest.raises(ConfigError, match="memory_limit"):
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0%",
+        "101%",
+        "abc",
+        "10MB",
+        "0.1GB",
+        "",
+        "75 %",
+        "-5%",
+        "65GiB",
+        "99999999999GB",
+        "9" * 400 + "GB",
+    ],
+)
+def test_ut02_65_memory_limit_rejects(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """UT02-65 (T02-18 spec note, fix round 1) percentages outside 1..100, unknown formats,
+    sizes below 256 MiB, above total physical RAM or not finite are ConfigError."""
+    monkeypatch.setattr(support, "_total_memory", lambda: 64 * GIB)
+    with pytest.raises(ConfigError, match=r"build\.memory_limit"):
         support.resolve_memory_limit(value)
