@@ -7,6 +7,8 @@ test-local `FakeLLMClient` (impl 11 U11-42 carry-over), scripted per vote by `se
 
 from __future__ import annotations
 
+import asyncio
+import datetime
 import math
 import re
 from pathlib import Path
@@ -14,12 +16,21 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from structlog.testing import capture_logs
 from tests.unit.enrich._fake_llm import FakeLLMClient, Reply, votes_by_seed
 from tests.unit.enrich._openjev_support import BOOL, CHOICE, QS, SCORE, item, jev_env
 
-from herness.core.errors import AuthError, ConfigError, ModelUnavailable, OutputValidationError
-from herness.core.resilience import ProcessState
-from herness.core.types import DecisionInput, LLMRequest
+from herness.core.errors import (
+    AuthError,
+    CircuitOpen,
+    ConfigError,
+    EgressBlocked,
+    HernessError,
+    ModelUnavailable,
+    OutputValidationError,
+)
+from herness.core.resilience import ProcessState, aretry_call
+from herness.core.types import DecisionInput, LLMRequest, LLMResponse
 from herness.enrich.deciders import llm
 from herness.enrich.deciders.llm import (
     CompletionClient,
@@ -208,13 +219,13 @@ def test_ut03_61_ties_go_to_first_label_and_text_replies(jev_env: ProcessState) 
 
 
 def test_ut03_61_prompt_files_hold_no_secrets() -> None:
-    """UT03-61 the prompt files contain no `secret:`, `Bearer` or key-like strings."""
+    """UT03-61 the prompt files contain no `sensitive:`, `Bearer` or key-like strings."""
     key_like = re.compile(r"sk-[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{12,}|[A-Za-z0-9+/_-]{32,}")
     files = sorted(_PROMPTS.glob("*.md"))
     assert [f.name for f in files] == ["cluster_namer.md", "enrich_decider.md"]
     for path in files:
         text = path.read_text(encoding="utf-8")
-        assert "secret:" not in text.lower()
+        assert "sensitive:" not in text.lower()
         assert "bearer" not in text.lower()
         assert key_like.search(text) is None
         assert "https://" not in text
@@ -302,11 +313,76 @@ def test_ut03_61_record_id_cannot_break_the_attribute(jev_env: ProcessState) -> 
     assert text.count('source="') == 1
 
 
-def test_ut03_61_backend_errors_propagate(jev_env: ProcessState) -> None:
-    """UT03-61 an AuthError from the client is not an item error: it propagates."""
-    client = FakeLLMClient(lambda _req: AuthError("denied"))
-    with pytest.raises(AuthError):
-        _decider(client).decide([item(1, _ASKED), item(2, _ASKED)], QS)
+_RETRY_AT = datetime.datetime(2030, 1, 1, tzinfo=datetime.UTC)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        AuthError("denied"),
+        ModelUnavailable("down"),
+        CircuitOpen("open", key="decider:llm", retry_at=_RETRY_AT),
+        EgressBlocked("blocked"),
+    ],
+    ids=["auth", "model_unavailable", "circuit_open", "egress_blocked"],
+)
+def test_ut03_61_backend_errors_propagate(jev_env: ProcessState, failure: HernessError) -> None:
+    """UT03-61 a backend error from the client is not a dropped vote or an item error: it
+    propagates out of decide as its own class. Items run one at a time: with two in flight,
+    the retried ModelUnavailable calls of both can open the breaker first (CircuitOpen)."""
+    client = FakeLLMClient(lambda _req: failure)
+    with capture_logs() as logs, pytest.raises(type(failure)):
+        _decider(client, max_concurrency=1).decide([item(1, _ASKED), item(2, _ASKED)], QS)
+    assert not [e for e in logs if e["event"] == "enrich.decide.vote_dropped"]
+
+
+class _SlowClient(FakeLLMClient):
+    """Yields to the loop inside each call and records the peak number of calls in flight."""
+
+    def __init__(self) -> None:
+        super().__init__(votes_by_seed(dict.fromkeys(range(3), _GOOD)))
+        self.in_flight = 0
+        self.peak = 0
+
+    async def acomplete(self, req: LLMRequest) -> LLMResponse:
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            await asyncio.sleep(0.01)
+            return await super().acomplete(req)
+        finally:
+            self.in_flight -= 1
+
+
+@pytest.mark.parametrize("max_concurrency", [1, 2, 3])
+def test_ut03_61_calls_in_flight_bounded_by_max_concurrency(
+    jev_env: ProcessState, max_concurrency: int
+) -> None:
+    """UT03-61 across several items at most `max_concurrency` model calls are in flight, and
+    the bound is reached (items do run concurrently when it allows)."""
+    client = _SlowClient()
+    items = [item(i, _ASKED) for i in range(1, 8)]
+    outs = _decider(client, votes=3, max_concurrency=max_concurrency).decide(items, QS)
+    assert [o.error for o in outs] == [None] * 7
+    assert len(client.requests) == 21
+    assert client.peak == max_concurrency
+
+
+def test_ut03_61_votes_run_under_the_decider_breaker(
+    jev_env: ProcessState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-61 every vote runs through aretry_call("llm_local", ...) with
+    breaker_key="decider:llm"."""
+    seen: list[tuple[object, object]] = []
+    real = aretry_call
+
+    async def spy(name: str, fn: object, /, *a: object, **kw: object) -> object:
+        seen.append((name, kw.get("breaker_key")))
+        return await real(name, fn, *a, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(llm, "aretry_call", spy)
+    _one(_decider(FakeLLMClient(votes_by_seed(dict.fromkeys(range(3), _GOOD)))))
+    assert seen == [("llm_local", "decider:llm")] * 3
 
 
 # --- UT03-62 -------------------------------------------------------------------------------
@@ -320,6 +396,38 @@ def test_ut03_62_all_votes_invalid_is_an_item_error(jev_env: ProcessState) -> No
     assert out.answers == {}
     assert ok.error == "OutputValidationError"  # `_BAD` fails every schema that asks is_outage
     assert len(client.requests) == 18
+
+
+def test_ut03_62_dropped_vote_and_item_error_logs_carry_no_text(jev_env: ProcessState) -> None:
+    """UT03-62 the vote_dropped and item_failed events carry ids, counts and error classes
+    only: never the ticket text."""
+    sensitive = "customer Jane Roe cannot log in to payroll"
+
+    def script(req: LLMRequest) -> Reply:
+        assert req.seed is not None
+        return _BAD if sensitive in _user_text(req) or req.seed == 1 else _GOOD
+
+    client = FakeLLMClient(script)
+    texts = [
+        DecisionInput(
+            record_id=f"INC0000{n}", entity="incident", content_hash=f"{n:032x}",
+            text=body, question_ids=_ASKED,
+        )
+        for n, body in ((1, "plain outage note"), (2, sensitive))
+    ]  # fmt: skip
+    with capture_logs() as logs:
+        first, second = _decider(client).decide(texts, QS)
+    assert first.error is None
+    assert second.error == "OutputValidationError"
+    dropped = [e for e in logs if e["event"] == "enrich.decide.vote_dropped"]
+    failed = [e for e in logs if e["event"] == "enrich.decide.item_failed"]
+    assert len(dropped) == 4  # vote 1 of item 1, votes 0-2 of item 2
+    assert len(failed) == 1
+    for event in logs:
+        rendered = repr(event)
+        assert sensitive not in rendered
+        assert "plain outage note" not in rendered
+        assert "Jane" not in rendered
 
 
 def test_ut03_62_health_success_is_a_one_token_probe() -> None:
