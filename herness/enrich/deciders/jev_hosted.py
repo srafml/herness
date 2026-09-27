@@ -10,14 +10,13 @@ Registration as `("decider", "jev")` is T03-16's.
 
 from __future__ import annotations
 
-import re
 import threading
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar
-from typing import Final
+from typing import Annotated, Final
 
 import httpx2
-from pydantic import SecretStr
+from pydantic import SecretStr, TypeAdapter, ValidationError
 
 from herness.core import egress
 from herness.core.errors import ModelUnavailable, OutputValidationError
@@ -33,7 +32,10 @@ _HEALTH_TIMEOUT_S: Final = 5.0
 # Spec 10 U10-51 step 2 admits payload class "none" only for `model_download`, so the
 # health probe (an empty-bodied GET) is sent as `redacted_text` like `decide` (see report).
 _HEALTH_PAYLOAD: Final = "redacted_text"
-_MODEL_RE: Final = re.compile(r"[A-Za-z0-9._:/@+-]{1,128}")  # `decider_version` pattern
+# The `decider_version` field itself validates a returned model: one pattern source.
+_MODEL_ID: Final[TypeAdapter[str]] = TypeAdapter(
+    Annotated[str, DecisionOutput.model_fields["decider_version"]]
+)
 # The `model` of the reply being parsed, set by `_check` and read by `_send` in one task.
 _RETURNED: Final[ContextVar[str | None]] = ContextVar("jev_returned_model", default=None)
 
@@ -49,10 +51,13 @@ def _returned_model(raw: bytes) -> str | None:
     model = load_wire_body(raw).get("model")
     if model is None:
         return None
-    if not isinstance(model, str) or _MODEL_RE.fullmatch(model) is None:
-        msg = "model: not a model id"
+    msg = "model: not a model id"
+    if not isinstance(model, str):
         raise OutputValidationError(msg)
-    return model
+    try:
+        return _MODEL_ID.validate_python(model)
+    except ValidationError as exc:
+        raise OutputValidationError(msg) from exc
 
 
 class JevHostedDecider(_JevHttpBackend):

@@ -180,6 +180,31 @@ def test_ut03_54_returned_model_recorded_as_version(
     assert all(o.error is None for o in out)
 
 
+def test_ut03_54_resend_without_model_drops_stale_returned_model(
+    premium: c.HernessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-54 attempt 1 carries a model but invalid answers; the resend is valid and omits
+    model -> the output records version, never the stale model of the rejected reply."""
+    del premium
+    replies: list[Reply] = []
+
+    def handler(body: dict[str, Any]) -> Reply:
+        status, raw, headers = ok(body)
+        payload = json.loads(raw)
+        if not replies:
+            payload = {"model": "jev-stale", "answers": {}}
+        else:
+            del payload["model"]
+        replies.append((status, json.dumps(payload).encode(), headers))
+        return replies[-1]
+
+    net = install(monkeypatch, handler)
+    out = _decider().decide([item(1)], QS)
+    assert len(net.requests) == 2
+    assert out[0].error is None
+    assert out[0].decider_version == "jev-latest"
+
+
 @pytest.mark.parametrize("model", ["bad model!", 7, "x" * 129])
 def test_ut03_54_malformed_returned_model_is_item_error(
     premium: c.HernessConfig, monkeypatch: pytest.MonkeyPatch, model: object
