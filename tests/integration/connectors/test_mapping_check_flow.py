@@ -68,19 +68,17 @@ MAPPINGS = {
 }
 
 
-def _servicenow() -> dict[str, object]:
-    entities: dict[str, dict[str, object]] = {
-        e: {"fields": f} for e, f in SERVICENOW_FIELDS.items()
-    }
+def _servicenow(fields: dict[str, list[str]]) -> dict[str, object]:
+    entities: dict[str, dict[str, object]] = {e: {"fields": list(f)} for e, f in fields.items()}
     entities["cmdb_ci"]["classes"] = ["cmdb_ci_service"]
     return servicenow(entities=entities)
 
 
-def _synth_config(root: Path) -> c.HernessConfig:
+def _synth_config(root: Path, fields: dict[str, list[str]] = SERVICENOW_FIELDS) -> c.HernessConfig:
     sources = {
         "version": 1,
         "sources": {
-            "servicenow": _servicenow(),
+            "servicenow": _servicenow(fields),
             "jira": jira(),
             "monitoring": monitoring(),
             "mongodb": mongodb(entities={"orders": mongo_entity(fields=["customerId", "total"])}),
@@ -105,11 +103,8 @@ def test_it01_07_synth_config_matches_every_staging_file(tmp_path: Path) -> None
 
 def test_it01_07_dropped_field_is_reported(tmp_path: Path) -> None:
     """IT01-07 control: without `close_code` on change_request, the shipped SQL reports it."""
-    SERVICENOW_FIELDS["change_request"].remove("close_code")
-    try:
-        cfg = _synth_config(tmp_path)
-    finally:
-        SERVICENOW_FIELDS["change_request"].append("close_code")
+    change = [f for f in SERVICENOW_FIELDS["change_request"] if f != "close_code"]
+    cfg = _synth_config(tmp_path, SERVICENOW_FIELDS | {"change_request": change})
     issues = check_mapping("servicenow", cfg)
     assert [(i.entity, i.column, i.file) for i in issues] == [
         ("change_request", "close_code", "110_stg_servicenow.sql")
