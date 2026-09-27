@@ -516,6 +516,56 @@ def test_ut03_110_scores_below_threshold_emit_nothing(
     ]
 
 
+def test_ut03_109_match_keys_separate_jira_components(
+    ops_store: OpsStoreHandle, metrics: _Metrics
+) -> None:
+    """UT03-109 a rejected item for (PAY, component A, s1) does not suppress (PAY, B, s1):
+    `jira_component` is part of the match key."""
+    rejected = {
+        "subject_type": "jira_component", "jira_project": "PAY", "jira_component": "a",
+        "team_id": None, "service_id": "s1", "score": 0.9,
+    }  # fmt: skip
+    decide_review_item(
+        create_review_item("mapping_suggestion", rejected, now=T0), "rejected",
+        decided_by=USER, now=T0,
+    )  # fmt: skip
+    vectors = _vectors([_jira("PAY", "a"), _jira("PAY", "b")], [ms.Service("s1", "PAY a b")])
+    report = _Report()
+
+    ms.run_suggest_stage(_wh(), vectors=vectors, cfg=_cfg(), report=report)
+
+    got = [(p["jira_project"], p["jira_component"], p["service_id"]) for p in _pending()]
+    assert got == [("PAY", "b", "s1")]
+    assert report.rows == 1
+
+
+def test_ut03_110_min_score_boundary_is_inclusive(
+    ops_store: OpsStoreHandle, metrics: _Metrics
+) -> None:
+    """UT03-110 a pair whose score equals `min_score` is emitted (`score >= min_score`).
+
+    Scores are float32 and compared with the float64 `min_score`; the boundary value here is
+    taken from the same float32 `mapping_scores` path, so equality holds exactly. A pair whose
+    real-valued score is exactly 0.60 may round to a float32 just below 0.60 and be dropped.
+    """
+    vectors = _vectors(
+        [_team("t1", "Billing")], [ms.Service("s1", "Billing"), ms.Service("s2", "Zq Xv")]
+    )
+    scores = ms.mapping_scores(
+        subject_names=["Billing"], subject_types=["team"], service_names=["Billing", "Zq Xv"],
+        subject_vecs=vectors.subject_vecs, service_vecs=vectors.service_vecs,
+        cooccurrence=np.zeros((1, 2)), weights=MappingWeights(), abbreviations=ABBR,
+    )  # fmt: skip
+    boundary = float(scores.score[0, 0])
+    assert float(scores.score[0, 1]) < boundary
+    report = _Report()
+
+    ms.run_suggest_stage(_wh(), vectors=vectors, cfg=_cfg(min_score=boundary), report=report)
+
+    assert [p["service_id"] for p in _pending()] == ["s1"]
+    assert report.rows == 1
+
+
 def test_ut03_110_skipped_without_vectors(metrics: _Metrics) -> None:
     """UT03-110 the embed stage was skipped (no vectors): stage skipped, nothing emitted."""
     report = _Report()
