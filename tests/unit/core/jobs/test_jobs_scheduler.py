@@ -11,6 +11,7 @@ import pytest
 import structlog
 from tests.unit.core.jobs import _sched_env
 from tests.unit.core.jobs._sched_env import (
+    TZ,
     Clock,
     events,
     finish,
@@ -23,6 +24,7 @@ from herness.core import config as c
 from herness.core import time as clock
 from herness.core.errors import ConfigError, SchemaViolation
 from herness.core.jobs import scheduler
+from herness.core.jobs.cron import CronExpr
 from herness.core.jobs.ports import JobRow, require_jobs_backend
 from herness.core.resilience.settings import ChainStep
 from herness.core.types import JobSpec
@@ -374,3 +376,19 @@ def test_ut08_80_chain_repair_error_is_counted(
     assert (report.errors, report.chains_advanced) == (1, 0)
     errors = [line for line in logs if line["event"] == "jobs.schedule.error"]
     assert [(e["schedule"], e["error_type"]) for e in errors] == [("nightly", "SchemaViolation")]
+
+
+@pytest.mark.usefixtures("sched_db")
+def test_ut08_79_cron_without_a_fire_in_a_year_does_nothing() -> None:
+    """UT08-79 a cron with no fire in the last 366 days (30 February) neither fires nor
+    reports a miss."""
+    entry = scheduler.ScheduleEntry(
+        name="never",
+        cron=CronExpr.parse("0 0 30 2 *"),
+        catch_up_max=timedelta(hours=1),
+        job=ChainStep(kind="eval", gpu_class="none"),
+        then=(),
+        idem_mode="sched",
+    )
+    assert scheduler._fire(entry, local(TUE, "20:00"), TZ) is None
+    assert jobs() == []
