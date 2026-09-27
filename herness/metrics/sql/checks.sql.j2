@@ -1,0 +1,47 @@
+{#- Scoring invariants of step `check` (impl 04 U04-60, design 04 §10.2).
+    One segment per check, split on the `-- @check <name>` lines; each is a static SELECT
+    returning one row (value DOUBLE, n_bad BIGINT). The only bind is the catalog-derived
+    `s_count_metrics` list. Segment bodies hold no SQL comments (run_recorded rejects them). -#}
+-- T04-21: add the score.* checks of U04-60 (score_share_sum ... score_portfolio_blockers,
+-- score_unconfirmed_rows) in table order and extend score_evidence_coverage with
+-- score.*.query_ids and score.funding_attribution.query_id.
+-- @check score_fact_duration_negative
+SELECT CAST(c.n AS DOUBLE) AS value, CAST(c.n AS BIGINT) AS n_bad
+FROM (
+  SELECT
+    (SELECT count(*) FROM metrics.incident_fact
+      WHERE resolve_h < 0 OR resolve_bh < 0 OR impact_h < 0 OR toil_h < 0)
+    + (SELECT count(*) FROM metrics.change_fact WHERE lead_time_h < 0)
+    + (SELECT count(*) FROM metrics.work_item_fact WHERE cycle_days < 0) AS n
+) c
+-- @check score_metric_ratio_range
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM metrics.metric_value
+WHERE unit = 'ratio' AND (value < 0 OR value > 1)
+-- @check score_metric_pct_range
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM metrics.metric_value
+WHERE unit = 'pct' AND (value < 0 OR value > 100)
+-- @check score_metric_negative
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM metrics.metric_value
+WHERE value < 0 OR numerator < 0 OR denominator < 0 OR sample_size < 0
+-- @check score_metric_count_integral
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM metrics.metric_value
+WHERE list_contains({{ p('s_count_metrics') }}, metric) AND value <> floor(value)
+-- @check score_evidence_coverage
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM (
+  SELECT query_id FROM metrics.org_closure
+  UNION SELECT query_id FROM metrics.work_item_closure
+  UNION SELECT query_id FROM metrics.incident_fact
+  UNION SELECT query_id FROM metrics.change_fact
+  UNION SELECT query_id FROM metrics.work_item_fact
+  UNION SELECT query_id FROM metrics.metric_value
+) q
+WHERE NOT EXISTS (SELECT 1 FROM meta.evidence e WHERE e.query_id = q.query_id)
+-- @check score_work_item_cycle
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM metrics.work_item_closure
+WHERE depth = 10
