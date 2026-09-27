@@ -1,22 +1,28 @@
 """Tests for herness.harness.roles get_role, ROLE_NAMES and the part-1 roles (impl 05 U05-51).
 
-UT05-92 for planner, judge and the seven analysts, plus every error combination (T05-19);
-T05-20 extends it with skeptic, writer and chat.
+UT05-92 for planner, judge and the seven analysts, plus every error combination (T05-19),
+and for skeptic, writer (with its retrospective variant) and chat (T05-20).
 """
 
 from __future__ import annotations
+
+import dataclasses
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 from tests.support.dispatch_standin import SyncTool, strict_schema
 
 from herness.core.errors import ConfigError
-from herness.core.types import PlannedTask
+from herness.core.types import ChatAnswer, PlannedTask
 from herness.harness.roles import base
 from herness.harness.roles.analyst import ANALYST_SPECIALTIES, AnalystOutput, analyst_role
 from herness.harness.roles.base import ROLE_NAMES, RoleSpec, get_role
+from herness.harness.roles.chat import CHAT
 from herness.harness.roles.judge import JUDGE, JudgeOutput
 from herness.harness.roles.planner import PLANNER, PlannerOutput
+from herness.harness.roles.skeptic import SKEPTIC, SkepticOutput
+from herness.harness.roles.writer import WRITER, WRITER_RETROSPECTIVE, WriterOutput
 from herness.harness.tools import TOOL_OWNERS, ToolRegistry
 
 pytestmark = pytest.mark.unit
@@ -37,7 +43,32 @@ _ANALYST_TOOLS = {
     "list_findings",
     "request_subtask",
 }
-_PART_ONE = ("planner", "judge", *(f"analyst_{s}" for s in ANALYST_SPECIALTIES))
+_SKEPTIC_TOOLS = {
+    "run_sql",
+    "get_metric",
+    "get_scores",
+    "describe_table",
+    "list_findings",
+    "semantic_search",
+    "get_cluster",
+    "get_record",
+    "recall_memory",
+}
+_WRITER_TOOLS = {"list_findings", "get_scores", "get_metric", "recall_memory"}
+_CHAT_TOOLS = {
+    "list_tables",
+    "describe_table",
+    "run_sql",
+    "get_metric",
+    "get_scores",
+    "get_cluster",
+    "get_record",
+    "semantic_search",
+    "list_findings",
+    "recall_memory",
+    "propose_memory",
+    "escalate",
+}
 
 
 def test_ut05_92_role_names() -> None:
@@ -127,20 +158,75 @@ def test_ut05_92_bad_combinations(name: str, kwargs: dict[str, str], message: st
         get_role(name, **kwargs)  # type: ignore[arg-type]
 
 
+def test_ut05_92_skeptic_table() -> None:
+    """UT05-92 skeptic table values; the Skeptic judges claims (R-37)."""
+    skeptic = get_role("skeptic")
+    assert skeptic is SKEPTIC
+    assert (skeptic.name, skeptic.specialty, skeptic.model_role) == ("skeptic", None, "skeptic")
+    assert skeptic.allowed_tools == frozenset(_SKEPTIC_TOOLS)
+    assert skeptic.output_model is SkepticOutput
+    assert (skeptic.temperature, skeptic.effort, skeptic.thinking) == (0.5, "high", "auto")
+    assert skeptic.prompt_files == ("_common.md", "skeptic.md")
+
+
+def test_ut05_92_writer_table() -> None:
+    """UT05-92 writer and its retrospective variant (no propose_memory, R-27)."""
+    writer = get_role("writer")
+    assert writer is WRITER
+    assert (writer.name, writer.specialty, writer.model_role) == ("writer", None, "writer")
+    assert writer.allowed_tools == frozenset(_WRITER_TOOLS)
+    assert "propose_memory" not in writer.allowed_tools
+    assert writer.output_model is WriterOutput
+    assert (writer.temperature, writer.effort, writer.thinking) == (0.4, "high", "auto")
+    assert writer.prompt_files == ("_common.md", "writer.md")
+    retro = get_role("writer", variant="retrospective")
+    assert retro is WRITER_RETROSPECTIVE
+    assert retro.prompt_files == ("_common.md", "writer.md", "writer_retrospective.md")
+    assert retro == dataclasses.replace(WRITER, prompt_files=retro.prompt_files)
+
+
+def test_ut05_92_chat_table() -> None:
+    """UT05-92 chat table values; ChatAnswer is the output model."""
+    chat = get_role("chat")
+    assert chat is CHAT
+    assert (chat.name, chat.specialty, chat.model_role) == ("chat", None, "chat")
+    assert chat.allowed_tools == frozenset(_CHAT_TOOLS)
+    assert chat.output_model is ChatAnswer
+    assert (chat.temperature, chat.effort, chat.thinking) == (0.3, "medium", "auto")
+    assert chat.prompt_files == ("_common.md", "chat.md")
+
+
 @pytest.mark.parametrize(
-    ("name", "kwargs"),
+    ("name", "model_role", "constant"),
     [
-        ("skeptic", {}),
-        ("skeptic", {"model_role": "skeptic_final"}),
-        ("chat", {"model_role": "chat_off_hours"}),
-        ("writer", {"variant": "retrospective"}),
-        ("writer", {}),
+        ("skeptic", "skeptic_final", SKEPTIC),
+        ("chat", "chat_off_hours", CHAT),
+        ("skeptic", "skeptic", SKEPTIC),
+        ("chat", "chat", CHAT),
+        ("writer", "writer", WRITER),
     ],
 )
-def test_ut05_92_part_two_roles_not_yet_available(name: str, kwargs: dict[str, str]) -> None:
-    """UT05-92 skeptic/writer/chat pass the preconditions, then are not available (T05-20)."""
-    with pytest.raises(ConfigError, match=f"role {name} not available"):
-        get_role(name, **kwargs)  # type: ignore[arg-type]
+def test_ut05_92_part_two_model_roles(name: str, model_role: str, constant: RoleSpec) -> None:
+    """UT05-92 skeptic_final / chat_off_hours replace only model_role; defaults are equal."""
+    role = get_role(name, model_role=model_role)
+    assert role.model_role == model_role
+    assert role == dataclasses.replace(constant, model_role=model_role)
+    assert constant.model_role == name
+
+
+def test_ut05_92_retrospective_variant_with_model_role() -> None:
+    """UT05-92 the writer retrospective variant accepts the writer's own model role."""
+    assert get_role("writer", variant="retrospective", model_role="writer") == WRITER_RETROSPECTIVE
+
+
+def test_ut05_92_retrospective_prompt_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT05-92 the retrospective variant appends writer_retrospective.md to the writer prompt."""
+    for file, text in (("_common.md", "C"), ("writer.md", "W"), ("writer_retrospective.md", "R")):
+        (tmp_path / file).write_text(text, encoding="utf-8")
+    monkeypatch.setattr(base, "_prompts_root", lambda: tmp_path)
+    fresh = dataclasses.replace(WRITER_RETROSPECTIVE)
+    assert fresh.prompt_text() == "C\n\nW\n\nR"
+    assert dataclasses.replace(WRITER).prompt_text() == "C\n\nW"
 
 
 def test_ut05_92_model_role_replaced(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,7 +250,7 @@ def test_ut05_92_unknown_specialty() -> None:
         analyst_role("finance")
 
 
-@pytest.mark.parametrize("name", _PART_ONE)
+@pytest.mark.parametrize("name", ROLE_NAMES)
 def test_ut05_92_tools_resolve_strict(name: str) -> None:
     """UT05-92 every allow-list is within TOOL_OWNERS and resolves with strict tools (TH05-07)."""
     role = get_role(name)
