@@ -23,6 +23,7 @@ from tests.support.sync_env import write_sync_config
 from herness.connectors.base import Connector, SupportsKeyListing
 from herness.connectors.factory import build_connector
 from herness.connectors.files import FilesConnector
+from herness.connectors.mongodb import MongoConnector
 from herness.core import config as c
 from herness.core import registry
 from herness.core.errors import ConfigError
@@ -59,6 +60,13 @@ sources:
     auth: {{method: oauth_client_credentials, credentials: "secret:sn_oauth"}}
     entities:
       incident: {{fields: [number]}}
+  mongodb:
+    enabled: true
+    hosts: [db1.example.com]
+    auth: {{method: connection_string, credentials: "secret:mongo_uri"}}
+    database: ops
+    entities:
+      orders: {{collection: orders, updated_field: ts, fields: [a]}}
 """
 
 MAPPINGS_YAML = """\
@@ -112,6 +120,7 @@ def cfg(tmp_path: Path) -> c.HernessConfig:
     """Synthetic config with files (relative inbox), jira, monitoring and a disabled source;
     registry entries for all three connectors and the prometheus adapter."""
     registry.register("connector", "files")(FilesConnector)
+    registry.register("connector", "mongodb")(MongoConnector)
     registry.register("connector", "jira")(FakeJira)
     registry.register("connector", "monitoring")(FakeMonitoring)
     registry.register("monitoring_adapter", "prometheus")(FakeAdapter)
@@ -128,7 +137,7 @@ def test_ut01_94_every_registered_connector_builds_without_network(
     with respx.mock(assert_all_called=False) as mock:
         built = {name: build_connector(name, cfg) for name in registry.available("connector")}
     assert not mock.calls
-    assert set(built) == {"files", "jira", "monitoring"}
+    assert set(built) == {"files", "jira", "monitoring", "mongodb"}
     for name, conn in built.items():
         assert conn.name == name
         for member in ("check", "sync", "watermark_field"):
@@ -137,6 +146,7 @@ def test_ut01_94_every_registered_connector_builds_without_network(
         _conforms(conn)
     assert isinstance(built["files"], SupportsKeyListing)
     assert isinstance(built["jira"], SupportsKeyListing)
+    assert isinstance(built["mongodb"], SupportsKeyListing)
     assert not isinstance(built["monitoring"], SupportsKeyListing)
 
 
@@ -189,8 +199,8 @@ def test_ut01_94_disabled_unconfigured_or_unregistered(
     """UT01-94 disabled, unconfigured and unregistered sources → ConfigError."""
     with pytest.raises(ConfigError, match="source servicenow is disabled"):
         build_connector("servicenow", cfg)
-    with pytest.raises(ConfigError, match="source mongodb is not configured"):
-        build_connector("mongodb", cfg)
+    with pytest.raises(ConfigError, match="source snowflake is not configured"):
+        build_connector("snowflake", cfg)
     registry.reset_registry()
     monkeypatch.setattr(registry, "_BUILTINS", {})  # independent of later built-in rows
     with pytest.raises(ConfigError, match="unknown connector 'files'"):
@@ -238,6 +248,30 @@ def test_ut01_94_files_resolves_through_the_builtin_table(
     monkeypatch.setitem(registry._BUILTINS, _FILES_ROW, row)
     assert registry.get("connector", "files") is FilesConnector
     assert isinstance(build_connector("files", cfg), FilesConnector)
+
+
+_MONGODB_ROW = ("connector", "mongodb")
+
+
+def test_ut01_94_mongodb_resolves_through_the_builtin_table(
+    cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-94 the shipped `_BUILTINS` row resolves the real `MongoConnector`, which satisfies
+    `Connector` and `SupportsKeyListing`; `build_connector("mongodb", cfg)` passes the
+    section and the clock only, and makes no network call (the client is lazy)."""
+    row = _shipped_builtins()[_MONGODB_ROW]
+    assert row == "herness.connectors.mongodb:MongoConnector"
+    registry.reset_registry()
+    monkeypatch.setitem(registry._BUILTINS, _MONGODB_ROW, row)
+    assert registry.get("connector", "mongodb") is MongoConnector
+    conn = build_connector("mongodb", cfg, clock=_fixed)
+    assert isinstance(conn, MongoConnector)
+    assert isinstance(conn, SupportsKeyListing)
+    assert _conforms(conn) is conn
+    assert conn._settings is cfg.sources.source("mongodb")
+    assert conn._clock is _fixed
+    assert conn._client is None
+    assert conn.entities == ("orders",)
 
 
 _PROBE = """\
