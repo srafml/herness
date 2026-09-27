@@ -3,24 +3,26 @@
 UT06-52 builds a local tiny DuckDB in `tmp_path` with only the tables the org queries read
 (`score.org`, `score.action_lever`, `core.team`); it switches to the spec 11 `tiny_build` fixture
 when T11-17 (tests/support/builds.py) lands. `_Reader` implements the `RecordedReader` contract
-over that DuckDB and hands out a distinct `query_id` per call (precedent: T06-07 UT06-34).
+over that DuckDB (returning spec 05 `RecordedResult`) and hands out a distinct `query_id` per call
+(precedent: T06-07 UT06-34).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pytest
+from pydantic import JsonValue
 
 from herness.core.types import EntityScope, Finding, ReportDraft
 from herness.harness.findings import compute_dedup_key
 from herness.harness.pipelines.base import Pipeline, PlanContext, get_pipeline
 from herness.harness.pipelines.org_review import OrgReviewPipeline
 from herness.harness.pipelines.settings import PipelinesConfig, resolve_knobs
+from herness.harness.tools import RecordedResult
 
 pytestmark = pytest.mark.unit
 
@@ -83,12 +85,11 @@ def _make_build(path: Path) -> None:
     con.close()
 
 
-@dataclass(frozen=True)
-class _Result:
-    query_id: str
-    columns: list[str]
-    rows: list[tuple[object, ...]]
-    row_count: int
+def _result(
+    query_id: str, columns: list[str], rows: list[tuple[object, ...]], row_count: int
+) -> RecordedResult:
+    """A spec 05 `RecordedResult` as the `RecordedReader` contract returns it."""
+    return RecordedResult(query_id, columns, [], rows, row_count, truncated=False, ordered=True)
 
 
 class _Reader:
@@ -96,14 +97,14 @@ class _Reader:
 
     def __init__(self, path: Path) -> None:
         self._con = duckdb.connect(str(path), read_only=True)
-        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.calls: list[tuple[str, dict[str, JsonValue]]] = []
 
-    def __call__(self, sql: str, params: dict[str, object]) -> _Result:
+    def __call__(self, sql: str, params: dict[str, JsonValue]) -> RecordedResult:
         self.calls.append((sql, params))
         cur = self._con.execute(sql, params)
         columns = [d[0] for d in cur.description or []]
         rows = [tuple(r) for r in cur.fetchall()]
-        return _Result(_q(len(self.calls)), columns, rows, len(rows))
+        return _result(_q(len(self.calls)), columns, rows, len(rows))
 
 
 @pytest.fixture
@@ -343,9 +344,9 @@ def test_ut06_52_dq_warnings_match_entity_or_table(reader: _Reader) -> None:
 def test_ut06_52_dq_warnings_match_non_ascii_team_id() -> None:
     """UT06-52 a non-ASCII team id in the DQ details JSON still matches (no ASCII escaping)."""
     results = iter([
-        _Result(_q(1), ["entity_id", "rank"], [("équipe-ü", 1)], 1),
-        _Result(_q(2), ["entity_id", "metric", "delta_usd", "query_ids"], [], 0),
-        _Result(_q(3), ["org_id", "n", "team_ids"], [], 0),
+        _result(_q(1), ["entity_id", "rank"], [("équipe-ü", 1)], 1),
+        _result(_q(2), ["entity_id", "metric", "delta_usd", "query_ids"], [], 0),
+        _result(_q(3), ["org_id", "n", "team_ids"], [], 0),
     ])  # fmt: skip
     warning = {"check_name": "accent_gap", "severity": "warn", "value": 1, "threshold": 0,
                "details": {"entity_id": "équipe-ü"}, "query_id": _q(900)}  # fmt: skip
@@ -387,7 +388,7 @@ def _finding(n: int, *, challenge: list[dict[str, Any]] | None = None) -> Findin
 
 
 def _challenge(verdict: str, concern: str) -> dict[str, Any]:
-    checks = [
+    checks: list[dict[str, Any]] = [
         {"check": c, "result": "pass", "note": ""}
         for c in ("seasonality", "mis_mapping", "small_sample", "double_counting", "survivorship")
     ]
@@ -432,7 +433,8 @@ def test_ut06_53_writer_input_findings_and_challenge_summary(reader: _Reader) ->
     challenged = _finding(1, challenge=[_challenge("reject", "old"), _challenge("uphold", "new")])
     ctx = _ctx()
     out = OrgReviewPipeline(reader, window_end=_END).writer_input(ctx, [challenged, _finding(2)])
-    first, second = out["findings"]  # type: ignore[misc]
+    findings: Any = out["findings"]
+    first, second = findings
     assert first["finding_id"] == f"fnd_{_ULID}1"
     assert (first["entity_type"], first["entity_id"], first["claim"]) == (
         "team",
