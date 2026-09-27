@@ -296,6 +296,11 @@ ignore_imports = [
     # hooks in one process; imported lazily inside the enrich and score stage units only.
     "herness.model._build_stages -> herness.enrich.gpu",
     "herness.model._build_stages -> herness.metrics.facts",
+    # impl 01 §2 module map: mapping_check renders staging SQL with T02-11 (render_sql); the
+    # render context and lake inventory types come from their own modules (T01-12 report).
+    "herness.connectors.mapping_check -> herness.model.sqlfiles",
+    "herness.connectors.mapping_check -> herness.model.render_context",
+    "herness.connectors.mapping_check -> herness.model.lakeinfo",
 ]
 # The settings exception matches nothing until impl 10 creates herness.core.config.
 unmatched_ignore_imports_alerting = "none"
