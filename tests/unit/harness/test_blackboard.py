@@ -17,6 +17,7 @@ import structlog
 from pydantic import ValidationError
 from tests.unit.harness import _blackboard_env as env_mod
 from tests.unit.harness._blackboard_env import (
+    BUILD_ID,
     META_QID,
     PLANTED_NAME,
     BbEnv,
@@ -34,6 +35,7 @@ from herness.core.jobs.tasks import save_checkpoint
 from herness.core.types import FindingStatus
 from herness.harness import blackboard as bbmod
 from herness.harness.blackboard import Blackboard, FindingFilter
+from herness.harness.findings import EntityCatalog
 from herness.store.ops import (
     get_findings,
     get_task,
@@ -346,8 +348,15 @@ def test_st06_05_pii_claim_names_types_only(bb_env: BbEnv) -> None:
 def test_st06_05_pii_checked_before_numerals_and_ids(bb_env: BbEnv) -> None:
     """ST06-05 an unmarked phone number and email are rejected as PII; no digit is echoed."""
     claim = "Team t1 had [[n1]] incidents, call +1 415-867-5309 or ops42@example.com about 17"
+    # Fixed run and task ids (logged with the rejection): random ULIDs could contain "17".
+    run_id, task_id = "run_" + "A" * 26, "task_" + "B" * 26
+    bb = Blackboard(
+        run_id, build_id=BUILD_ID, catalog=EntityCatalog(bb_env.warehouse), allowed_numerals=()
+    )
+    bb_env.extra.append(bb)
+    ctx = bb_env.ctx(task_id=task_id).model_copy(update={"run_id": run_id})
     with structlog.testing.capture_logs() as logs, pytest.raises(ToolInputError) as info:
-        _post(bb_env, claim=claim, entity_id="t9")
+        bb.post(ctx, **args(bb_env.ops_qid, claim=claim, entity_id="t9"))
     err = info.value
     assert err.message == "claim contains personal data (EMAIL, PHONE)"
     parts = [str(err), err.hint or "", repr(dict(err.context)), repr(dict(err.details)), repr(logs)]
