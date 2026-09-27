@@ -189,17 +189,18 @@ def test_ut04_19_shipped_sections_validate() -> None:
     assert defaults == MetricsDefaults()
     scoring = ScoringConfig.model_validate(raw["scoring"])
     assert scoring.as_of is None
-    # T04-10/11: the design 04 §7.1 weights sum to 1.0 once every scorecard metric ships
-    # (change_failure_rate; cycle_time_days, unplanned_work_ratio, epic_predictability).
+    # T04-11: the design 04 §7.1 weights sum to 1.0 once every scorecard metric ships
+    # (cycle_time_days 0.10, unplanned_work_ratio 0.10, epic_predictability 0.05).
     assert scoring.org.metrics == {
         "mttr_hours": 0.15,
         "repeat_incident_rate": 0.15,
+        "change_failure_rate": 0.15,
         "sla_breach_rate": 0.10,
         "reopen_rate": 0.05,
         "reassignment_rate": 0.05,
         "alert_noise_ratio": 0.10,
     }
-    assert sum(scoring.org.metrics.values()) == pytest.approx(0.60)
+    assert sum(scoring.org.metrics.values()) == pytest.approx(0.75)
     assert set(scoring.levers.templates) == set(typing.get_args(s.UsdModel))
 
 

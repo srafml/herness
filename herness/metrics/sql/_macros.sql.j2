@@ -80,6 +80,12 @@ JOIN metrics.work_item_closure wc_{{ a }} ON wc_{{ a }}.record_id = {{ a }}.reco
 {%- endif -%}
 {%- endmacro -%}
 
+{%- macro period_end_date(ps) -%}
+{%- if period in ('t12w', 't12m') -%}{{ p('window_end_date') }}
+{%- else -%}CAST({{ ps }} + INTERVAL 1 {{ period }} AS DATE)
+{%- endif -%}
+{%- endmacro -%}
+
 {%- macro _local(date_expr) -%}
 timezone({{ p('tz') }}, CAST({{ date_expr }} AS TIMESTAMP))
 {%- endmacro -%}

@@ -393,7 +393,7 @@ def test_ut04_26_default_binds_values() -> None:
     """UT04-26 default_binds reads defaults and scoring; pairs are sorted by key."""
     lever = metric(name="reopen_rate", usd_model="reopen", unit="ratio")
     catalog = FakeCatalog([metric(), lever, metric(name="off_metric", enabled=False)])
-    # The design 04 §7.1 scorecard (the shipped file trims it until T04-09/10/11 ship its
+    # The design 04 §7.1 scorecard (the shipped file trims it until T04-11 ships its
     # metrics), so the bind pairs and lower-better intersection are exercised in full.
     org = catalog.scoring.org.model_copy(update={"metrics": SPEC_SCORECARD})
     catalog.scoring = catalog.scoring.model_copy(update={"org": org})

@@ -430,7 +430,7 @@ def test_ut04_35_materialize_records_evidence(con: duckdb.DuckDBPyConnection) ->
             f" FROM {table} f",
             {"q": qid},
         ).fetchone()
-        assert found == (0, True)  # change_fact is empty on metrics_tiny (no core.change rows)
+        assert found == (0, True)
     events = [e for e in logs if e["event"] == "metrics.facts.materialized"]
     assert [e["table"] for e in events] == list(FACT_TABLES)
     assert all(e["build_id"] == BUILD_ID and "sql" not in e for e in events)
