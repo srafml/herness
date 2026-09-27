@@ -297,7 +297,8 @@ def _run(run: LeakRun, tracer: Tracer, monkeypatch: pytest.MonkeyPatch) -> None:
     outcome = handle_sync(FakeJobContext({"source": "files"}, kind="sync"))
     results = outcome.result["results"]
     assert isinstance(results, list)
-    run.synced_rows = sum(int(res["rows"]) for res in results if isinstance(res, dict))
+    counts = [res["rows"] for res in results if isinstance(res, dict)]
+    run.synced_rows = sum(n for n in counts if isinstance(n, int))
     run.lake_text = _lake_text(run.data_root)
     _connector_auth_failure(tracer)
     record = _record_text(run.lake_text)
