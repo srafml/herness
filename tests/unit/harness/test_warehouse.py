@@ -137,6 +137,33 @@ def test_ut05_49_schema_and_table_comment(tmp_path: Path) -> None:
         handle.close()
 
 
+def test_ut05_49_concurrent_schema_and_table_comment(tmp_path: Path) -> None:
+    """UT05-49 schema() and table_comment() called from many threads at once on a cold handle
+    give the full answer every time (T05-16 regression: shared-connection race)."""
+    _make_tiny_build(tmp_path)
+    handle = wh.open_warehouse(BUILD_ID, warehouse_dir=tmp_path, sql=SqlSettings())
+    got: list[tuple[bool, str]] = []
+    lock = threading.Lock()
+
+    def work() -> None:
+        for _ in range(20):
+            ok = "incident" in handle.schema()["core"]
+            comment = handle.table_comment("core.incident")
+            with lock:
+                got.append((ok, comment))
+
+    try:
+        threads = [threading.Thread(target=work) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        handle.close()
+    assert len(got) == 160
+    assert set(got) == {(True, "tiny incident table")}
+
+
 def test_ut05_49_cursor_is_per_thread(tmp_path: Path) -> None:
     """UT05-49 cursor() caches one cursor per calling thread."""
     _make_tiny_build(tmp_path)

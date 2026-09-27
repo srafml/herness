@@ -1,43 +1,66 @@
-"""Recorded SQL execution and model-facing formatting (impl 05 U05-35, U05-36, U05-48).
+"""Tool registry, dispatch, recorded SQL and formatting (impl 05 U05-33-U05-36, U05-48).
 
-Design 05 §5.4.4-§5.4.5. `execute_recorded` runs one query on the task's build and records
-its `evidence` and `evidence_use` rows (flow F05-04); `format_result` renders the compact
-table the model sees; `wrap_untrusted` builds the one R-20 `<untrusted_data>` block
-(TH05-01). The execution internals live in the private `_tools_record` module; the tool
-registry and dispatch (U05-33, U05-34) join this module in later cards. `json_safe` is the
-U05-35 step 6 JSON-safe cell conversion, re-exported for the Verifier's re-run samples.
+Design 05 §3.4, §5.3, §5.4.4-§5.4.5. `ToolRegistry` / `tool_registry` hold the process-wide
+tools, whose names come only from `TOOL_OWNERS` (U05-33, TH05-07); `dispatch` runs the tool
+calls of one assistant message (U05-34, flow F05-03). `execute_recorded` runs one query on the
+task's build and records its `evidence` and `evidence_use` rows (flow F05-04); `format_result`
+renders the compact table the model sees; `wrap_untrusted` builds the one R-20
+`<untrusted_data>` block (TH05-01). The internals live in the private `_tools_record`,
+`_tools_dispatch` and `_tools_schema` modules. `json_safe` is the U05-35 step 6 JSON-safe cell
+conversion, re-exported for the Verifier's re-run samples.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+import threading
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Final, Protocol, runtime_checkable
+from types import MappingProxyType
+from typing import Final, Literal, Protocol, runtime_checkable
 
 from pydantic import JsonValue
 
 from herness.core import time as clock
+from herness.core.errors import ConfigError
 from herness.core.ids import normalize_sql
 from herness.core.resilience import retry_call
 from herness.core.resilience.metrics import record_histogram
-from herness.core.types import AsyncTool, Evidence, Tool, ToolContext
+from herness.core.types import (
+    AsyncTool,
+    Evidence,
+    LoopState,
+    Tool,
+    ToolCall,
+    ToolContext,
+    ToolResult,
+    ToolSpec,
+)
+from herness.harness import _tools_dispatch as dsp
 from herness.harness import _tools_record as rec
+from herness.harness._tools_dispatch import MAX_TOOL_ARGUMENT_CHARS, MAX_TOOL_CALLS_PER_MESSAGE
 from herness.harness._tools_record import json_safe
+from herness.harness._tools_schema import check_tool_schema
 from herness.harness.sql_guard import SqlGuard
 
 __all__ = [
+    "MAX_TOOL_ARGUMENT_CHARS",
+    "MAX_TOOL_CALLS_PER_MESSAGE",
     "TOOL_CONTENT_MAX_CHARS",
+    "TOOL_OWNERS",
     "AsyncTool",
     "RecordedResult",
     "SqlGuard",
     "Tool",
+    "ToolRegistry",
+    "dispatch",
     "execute_recorded",
     "format_result",
     "json_safe",
+    "tool_registry",
     "wrap_untrusted",
 ]
 
@@ -219,3 +242,151 @@ def format_result(
     if len(content) > max_chars:  # headers alone are too long: hard cut keeps the bound
         content = content[: max(max_chars - 1, 0)] + "…"[:max_chars]
     return content, shown
+
+
+# --- U05-33 tool registry -------------------------------------------------------------------
+
+type _Owner = Literal["05", "06", "07"]
+type _AnyTool = Tool | AsyncTool
+
+# The only tool names that can ever exist (TH05-07): no URL, email, shell or write tool.
+TOOL_OWNERS: Final[Mapping[str, _Owner]] = MappingProxyType(
+    {
+        "list_tables": "05",
+        "describe_table": "05",
+        "run_sql": "05",
+        "get_metric": "05",
+        "get_scores": "05",
+        "get_cluster": "05",
+        "get_record": "05",
+        "semantic_search": "05",
+        "recall_memory": "07",
+        "propose_memory": "07",
+        "post_finding": "06",
+        "list_findings": "06",
+        "request_subtask": "06",
+        "escalate": "06",
+    }
+)
+
+
+class _RoleLike(Protocol):
+    """What `resolve` reads of a role; `RoleSpec` (T05-19) satisfies it structurally."""
+
+    @property
+    def name(self) -> str: ...
+    @property
+    def allowed_tools(self) -> Collection[str]: ...
+
+
+class ToolRegistry:
+    """Process-wide tools by name, only names of `TOOL_OWNERS` (U05-33, design §3.4)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._tools: dict[str, _AnyTool] = {}
+
+    def register(self, tool: _AnyTool, *, owner: _Owner) -> None:
+        """Add `tool`; idempotent for the same object; `ConfigError` on any rule broken."""
+        name = tool.name
+        expected = TOOL_OWNERS.get(name)
+        if expected is None:
+            msg = f"tool {name[:64]} is not a known tool name"
+            raise ConfigError(msg)
+        if expected != owner:
+            msg = f"tool {name} is owned by {expected}, not {owner}"
+            raise ConfigError(msg)
+        check_tool_schema(tool)
+        with self._lock:
+            current = self._tools.get(name)
+            if current is tool:
+                return
+            if current is not None:
+                msg = f"tool {name} already registered"
+                raise ConfigError(msg)
+            self._tools[name] = tool
+
+    def names(self) -> list[str]:
+        """Registered tool names, sorted."""
+        with self._lock:
+            return sorted(self._tools)
+
+    def resolve(
+        self, role: _RoleLike, names: Sequence[str], task_tools: Mapping[str, _AnyTool]
+    ) -> list[_AnyTool]:
+        """The tools for one task in `sorted(names)` order (duplicates once); task tools win."""
+        extra = set(names) - set(role.allowed_tools)
+        if extra:
+            msg = f"tools {', '.join(sorted(extra))} not allowed for role {role.name}"
+            raise ConfigError(msg)
+        for key, task_tool in task_tools.items():  # TH05-22: spec 06 names, strict schemas
+            if TOOL_OWNERS.get(key) != "06" or task_tool.name != key:
+                msg = f"task tool {key[:64]} must be a spec 06 tool registered under its name"
+                raise ConfigError(msg)
+            check_tool_schema(task_tool)
+        with self._lock:
+            registered = dict(self._tools)
+        resolved: list[_AnyTool] = []
+        for name in sorted(set(names)):
+            tool = task_tools[name] if name in task_tools else registered.get(name)
+            if tool is None:
+                msg = f"tool {name} not registered"
+                raise ConfigError(msg)
+            resolved.append(tool)
+        return resolved
+
+    def tool_specs(self, tools: Sequence[_AnyTool]) -> list[ToolSpec]:
+        """The model-facing specs, `strict=True`; registration enforced R-26 (D05-10)."""
+        return [
+            ToolSpec(
+                name=t.name, description=t.description, input_schema=t.input_schema, strict=True
+            )
+            for t in tools
+        ]
+
+
+class _Process:
+    """The process `ToolRegistry` (ENG §2.3 exception; reset by `reset_harness_state`)."""
+
+    lock: Final = threading.Lock()
+    registry: ToolRegistry | None = None
+
+
+def tool_registry() -> ToolRegistry:
+    """The process-wide registry, created on first call."""
+    with _Process.lock:
+        if _Process.registry is None:
+            _Process.registry = ToolRegistry()
+        return _Process.registry
+
+
+def _reset_tool_registry() -> None:
+    """Drop the process registry; only the `reset_harness_state` test fixture calls this."""
+    with _Process.lock:
+        _Process.registry = None
+
+
+# --- U05-34 dispatch ------------------------------------------------------------------------
+
+
+class _LoopHooksLike(Protocol):
+    """`LoopHooks` (T05-22/23) is passed through untouched; any object satisfies this."""
+
+
+async def dispatch(
+    ctx: ToolContext,
+    tools: Mapping[str, _AnyTool],
+    calls: list[ToolCall],
+    hooks: _LoopHooksLike | None,
+    state: LoopState,
+    /,
+) -> list[ToolResult]:
+    """Run the tool calls of one assistant message; one result per call, in call order.
+
+    Only a `FatalError` escapes (after the sibling calls are cancelled); every other failure
+    is an `ok=False` result (flow F05-03, design §5.3).
+    """
+    del hooks  # passed through by the loop; dispatch does not consult it (U05-34 signature)
+    slots = [dsp.precheck(ctx, tools, state, i, call) for i, call in enumerate(calls)]
+    await dsp.execute(ctx, slots)
+    return [dsp.finish(ctx, state, slot) for slot in slots]
