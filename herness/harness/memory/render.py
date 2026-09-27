@@ -33,7 +33,9 @@ MAX_QUERY_IDS: Final = 5
 NOT_AVAILABLE: Final = "n/a"
 
 # Unicode category Cc is exactly U+0000-001F and U+007F-009F; tab (9) and newline (10) stay.
-_CC: Final = [c for c in range(0xA0) if unicodedata.category(chr(c)) == "Cc" and c not in (9, 10)]
+_CC: Final = tuple(
+    c for c in range(0xA0) if unicodedata.category(chr(c)) == "Cc" and c not in (9, 10)
+)
 _DROP: Final[Mapping[int, None]] = dict.fromkeys([*_CC, *map(ord, ZERO_WIDTH)])
 _ANGLES: Final = str.maketrans({"<": "&lt;", ">": "&gt;"})
 _RESERVED_RE: Final = re.compile(r"(&lt;/?)(" + "|".join(RESERVED_TAGS) + ")", re.IGNORECASE)
