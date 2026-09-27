@@ -1,8 +1,7 @@
-"""The Analyst roles and their output model (impl 05 U05-50, U05-51; design 05 §5.5).
+"""Analyst roles, one `analyst_<specialty>` per specialty, and their output (impl 05 U05-50/51).
 
-One `RoleSpec` per specialty, named `analyst_<specialty>` with prompt `analyst_<specialty>.md`;
-all share the model role `analyst`. Finding ids come from the task buffer, not the output.
-"""
+Design 05 §5.5: prompt `analyst_<specialty>.md`, model role `analyst`; finding ids stay in the
+task buffer, not the output."""
 
 from __future__ import annotations
 
