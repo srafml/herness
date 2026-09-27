@@ -467,3 +467,11 @@ def test_ut01_88_connect_logs_no_credential(snowflake_env: SpyBreaker) -> None:
     with capture_logs() as logs:
         list(connector(_server()).sync("cost_center", None))
     assert "PRIVATE KEY" not in repr(logs)
+
+
+def test_ut01_86_key_not_castable_to_text_is_schema_violation(snowflake_env: SpyBreaker) -> None:
+    """UT01-86 a binary key that is not UTF-8 → SchemaViolation, not a raw Arrow error."""
+    del snowflake_env
+    server = FakeSnowflake(key_tables=[key_table([b"\xff\xfe"], pa.binary())])
+    with pytest.raises(SchemaViolation, match="invalid source key"):
+        list(connector(server).list_keys("cost_center"))

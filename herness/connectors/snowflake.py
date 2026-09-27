@@ -123,8 +123,11 @@ def _source_keys(column: pa.Array | pa.ChunkedArray, entity: str) -> pa.Array:
     if column.null_count:
         msg = "null key in result"
         raise SchemaViolation(msg, source=_SOURCE, entity=entity)
-    keys = pc.cast(column, pa.string())
-    if len(keys) and not pc.all(pc.match_substring_regex(keys, _KEY_RE2)).as_py():
+    try:
+        keys = pc.cast(column, pa.string())
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
+        keys = None
+    if keys is None or (len(keys) and not pc.all(pc.match_substring_regex(keys, _KEY_RE2)).as_py()):
         msg = "invalid source key in result"
         raise SchemaViolation(msg, source=_SOURCE, entity=entity)
     return keys
