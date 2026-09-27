@@ -100,6 +100,20 @@ def missing_required_columns(
     return missing
 
 
+def _rollback(
+    con: duckdb.DuckDBPyConnection, step: str, build_id: str | None, err: BaseException
+) -> None:
+    """ROLLBACK; a failing rollback is logged and noted on `err`, which stays the one raised."""
+    try:
+        con.execute("ROLLBACK")
+    except duckdb.Error as failure:
+        name = type(failure).__name__
+        _log.error(
+            "metrics.scoring.rollback_failed", build_id=build_id, step=step, error_class=name
+        )
+        err.add_note(f"rollback after {step} failed: {name}")
+
+
 def _validate_step(
     con: duckdb.DuckDBPyConnection, catalog: MetricCatalog, weights: WeightsConfig
 ) -> frozenset[str]:
@@ -111,16 +125,21 @@ def _validate_step(
     if errors:
         msg = f"metric catalog invalid: {errors[0].path}: {errors[0].message}"
         raise ConfigError(msg)
-    missing = missing_required_columns(con, catalog)
-    con.execute("BEGIN TRANSACTION")
     try:
-        con.execute("DELETE FROM meta.dq_result WHERE check_name = ?", [_DISABLED])
-        for metric, columns in sorted(missing.items()):
-            con.execute(_DISABLED_ROW_SQL, [_DISABLED, metric, columns])
-        con.execute("COMMIT")
-    except duckdb.Error:
-        con.execute("ROLLBACK")
-        raise
+        missing = missing_required_columns(con, catalog)
+        con.execute("BEGIN TRANSACTION")
+        try:
+            con.execute("DELETE FROM meta.dq_result WHERE check_name = ?", [_DISABLED])
+            for metric, columns in sorted(missing.items()):
+                con.execute(_DISABLED_ROW_SQL, [_DISABLED, metric, columns])
+            con.execute("COMMIT")
+        except duckdb.Error as err:
+            _rollback(con, "validate", None, err)
+            raise
+    except duckdb.Error as err:
+        _log.error("metrics.scoring.step_failed", step="validate", error_class=type(err).__name__)
+        msg = f"validate failed: {err}"
+        raise SchemaViolation(msg) from err
     for metric, columns in sorted(missing.items()):
         _log.warning("metrics.scoring.metric_disabled", metric=metric, missing_count=len(columns))
     return frozenset(missing)
@@ -173,6 +192,9 @@ def _requested(steps: Sequence[str] | None) -> list[str]:
     """`STEPS` when None, else the listed names in `STEPS` order with `validate` first."""
     if steps is None:
         return list(STEPS)
+    if isinstance(steps, str):  # a bare name would iterate its characters
+        msg = f"unknown scoring step {steps[:64]}"
+        raise ConfigError(msg)
     for step in steps:
         if step not in STEPS:
             msg = f"unknown scoring step {str(step)[:64]}"
@@ -223,7 +245,7 @@ def _run_step(con: duckdb.DuckDBPyConnection, step: str, fn: StepFn, sc: StepCon
         result = fn(con, sc)
         con.execute("COMMIT")
     except Exception as err:
-        con.execute("ROLLBACK")
+        _rollback(con, step, sc.build_id, err)
         _log.error(
             "metrics.scoring.step_failed",
             build_id=sc.build_id,

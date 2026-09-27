@@ -10,6 +10,7 @@ from typing import Final, Literal
 
 import duckdb
 
+from herness.core.config import config_hash, get_config
 from herness.core.logging import get_logger
 from herness.core.resilience.metrics import record_counter
 from herness.metrics.context import StepContext, StepResult
@@ -60,9 +61,12 @@ def existing_tables(con: duckdb.DuckDBPyConnection) -> set[str]:
     return {str(row[0]) for row in con.execute(_TABLES_SQL).fetchall()}
 
 
-def _run_one(con: duckdb.DuckDBPyConnection, name: str, severity: str, sc: StepContext) -> bool:
+def _run_one(
+    con: duckdb.DuckDBPyConnection, name: str, severity: str, sc: StepContext, cfg_hash: str
+) -> bool:
     """Run one check, insert its row and return DuckDB's `passed`."""
-    rendered = render_named(f"checks:{name}", {}, sc.binds())
+    context: dict[str, str | int | bool] = {"config_hash": cfg_hash}
+    rendered = render_named(f"checks:{name}", context, sc.binds())
     params = {"bind": rendered.bind, "template": rendered.template}
     rq = run_recorded(con, rendered.sql, params, "score", build_id=sc.build_id)
     value, n_bad = (rq.rows or [(None, None)])[0]
@@ -91,6 +95,9 @@ def run_check_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> StepRe
     failing statement aborts the step's transaction.
     """
     con.execute(_DELETE_SQL, [_NAMES])
+    # config_hash joins the template (hence the query_id): a same-build retry after a config fix
+    # records its own evidence instead of conflicting with the earlier result (TH04-06).
+    cfg_hash = config_hash(get_config())
     present = existing_tables(con)
     failed: list[str] = []
     warnings: list[str] = []
@@ -98,7 +105,7 @@ def run_check_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> StepRe
         if not set(tables) <= present:
             con.execute(_SKIPPED_SQL, [name, severity])
             continue
-        if _run_one(con, name, severity, sc):
+        if _run_one(con, name, severity, sc, cfg_hash):
             continue
         if severity == "error":
             failed.append(name)

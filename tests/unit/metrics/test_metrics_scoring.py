@@ -571,13 +571,106 @@ def test_ut04_121_step_rolls_back_unexpected_errors(
         run_scoring(BUILD_ID, steps=["metrics"], con=tiny)
 
 
-def test_ut04_121_validate_rollback_on_write_error(
+def test_ut04_121_validate_write_error_is_schema_violation(
     tiny: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT04-121 a failing dq write in the validate step rolls back its transaction."""
+    """UT04-121 a failing dq write in the validate step is a SchemaViolation (U04-56 error
+    contract) and its transaction is rolled back."""
     tiny.execute("UPDATE core.incident SET acknowledged_at = NULL")
     monkeypatch.setattr(scoring, "_DISABLED_ROW_SQL", "INSERT INTO meta.nope VALUES (?, ?, ?)")
-    with pytest.raises(duckdb.Error):
+    with capture_logs() as logs, pytest.raises(SchemaViolation, match=r"^validate failed: Catalog"):
         run_scoring(BUILD_ID, steps=["metrics"], con=tiny)
+    assert [e["step"] for e in logs if e["event"] == "metrics.scoring.step_failed"] == ["validate"]
     tiny.execute("BEGIN TRANSACTION")  # no transaction left open by the failed step
     tiny.execute("ROLLBACK")
+
+
+def test_ut04_121_validate_read_error_is_schema_violation(
+    tiny: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT04-121 a DuckDB error while reading required columns is a SchemaViolation too."""
+    monkeypatch.setattr(scoring, "_COLUMN_SQL", "SELECT count(*) FROM no_such_table")
+    with pytest.raises(SchemaViolation, match=r"^validate failed: "):
+        run_scoring(BUILD_ID, steps=["metrics"], con=tiny)
+
+
+def test_ut04_121_rollback_failure_keeps_original_error(
+    tiny: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT04-121 when ROLLBACK itself fails, the step's own error is raised, with the rollback
+    failure logged and added as a note; the validate path uses the same helper."""
+
+    def ends_txn_then_fails(con: duckdb.DuckDBPyConnection, _sc: StepContext) -> None:
+        con.execute("ROLLBACK")  # the runner's ROLLBACK now has no transaction
+        msg = "bad template"
+        raise ConfigError(msg)
+
+    monkeypatch.setitem(scoring._STEP_FUNCS, "metrics", ends_txn_then_fails)
+    with capture_logs() as logs, pytest.raises(ConfigError, match=r"^bad template") as caught:
+        run_scoring(BUILD_ID, steps=["metrics"], con=tiny)
+    assert str(caught.value) == "bad template"
+    assert caught.value.__notes__ == ["rollback after metrics failed: TransactionException"]
+    failed = [e for e in logs if e["event"] == "metrics.scoring.rollback_failed"]
+    assert [(e["step"], e["error_class"]) for e in failed] == [("metrics", "TransactionException")]
+    err = RuntimeError("validate write")
+    scoring._rollback(tiny, "validate", None, err)
+    assert err.__notes__ == ["rollback after validate failed: TransactionException"]
+
+
+def test_ut04_111_bare_string_steps_rejected(tiny: duckdb.DuckDBPyConnection) -> None:
+    """UT04-111 `steps="metrics"` (a str, not a list of names) is a ConfigError, not a run of
+    the steps named by its characters."""
+    with pytest.raises(ConfigError, match=r"^unknown scoring step metrics$"):
+        run_scoring(BUILD_ID, steps="metrics", con=tiny)
+    assert "metrics.metric_value" not in _tables(tiny)
+
+
+def test_ut04_115_same_build_retry_after_config_change(
+    tiny: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT04-115 a check fails, the config is fixed and the job retried on the same build: the
+    checkpoint resets, metrics rewrites, and the check records a new query_id (config_hash is
+    part of its template) instead of a "nondeterministic result" conflict. Uses the real
+    `load_config` and `config_hash`; only the catalog stays the small test catalog (the config
+    hash covers the whole config, the catalog only decides which metrics run)."""
+    from herness.core.config import config_hash, load_config  # noqa: PLC0415 - local
+
+    first = load_config("local", config_dir=ROOT / "config", env={})
+    fixed = load_config(
+        "local",
+        overrides=["weights.cost_per_engineer_hour.value=150"],
+        config_dir=ROOT / "config",
+        env={},
+    )
+    assert config_hash(first) != config_hash(fixed)
+    for module in (scoring, _scoring_checks):
+        monkeypatch.setattr(module, "config_hash", config_hash)
+        monkeypatch.setattr(module, "get_config", lambda: first)
+    ctx = FakeJobContext()
+    run_scoring(BUILD_ID, steps=["metrics"], con=tiny, ctx=ctx)
+    tiny.execute("UPDATE metrics.metric_value SET value = 2 WHERE unit = 'ratio'")
+    with pytest.raises(SchemaViolation, match="score_metric_ratio_range"):
+        run_scoring(BUILD_ID, con=tiny, ctx=FakeJobContext(state=ctx.saved_states[-1]))
+    failed_qid = json.loads(_dq(tiny, "score_metric_ratio_range")[0][4])["query_id"]
+    for module in (scoring, _scoring_checks):
+        monkeypatch.setattr(module, "get_config", lambda: fixed)
+    retry = FakeJobContext(state=ctx.saved_states[-1])
+    report = run_scoring(BUILD_ID, con=tiny, ctx=retry)
+    assert set(report.duration_ms) == {"metrics", "check"}  # stale checkpoint: metrics reran
+    severity, value, _, passed, details = _dq(tiny, "score_metric_ratio_range")[0]
+    assert (severity, value, passed) == ("error", 0.0, True)
+    new_qid = json.loads(details)["query_id"]
+    assert new_qid != failed_qid
+    hashes = dict(
+        tiny.execute(
+            "SELECT query_id, json_extract_string(params, '$.template.config_hash')"
+            " FROM meta.evidence WHERE query_id IN (?, ?)",
+            [failed_qid, new_qid],
+        ).fetchall()
+    )
+    assert hashes == {failed_qid: config_hash(first), new_qid: config_hash(fixed)}
+    assert retry.saved_states[-1]["scoring"] == {
+        "build_id": BUILD_ID,
+        "config_hash": config_hash(fixed),
+        "steps_done": ["metrics", "check"],
+    }

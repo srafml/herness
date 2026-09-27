@@ -16,7 +16,7 @@ from freezegun import freeze_time
 from tests.support.metrics_tiny import BUILD_ID, build_metrics_tiny, shipped_catalog, tiny_weights
 
 from herness.core.config_view import ConfigIssue
-from herness.metrics import facts, scoring
+from herness.metrics import _scoring_checks, facts, scoring
 from herness.metrics.catalog import MetricCatalog, validate_catalog
 from herness.metrics.facts import materialize_facts
 from herness.metrics.settings import MetricsCatalogConfig, WeightsConfig
@@ -63,6 +63,8 @@ def patches(catalog: MetricCatalog, cfg_hash: str = CFG_HASH) -> list[tuple[obje
         (scoring, "get_config", lambda: cfg),
         (scoring, "catalog_from_config", lambda _cfg=None: catalog),
         (scoring, "config_hash", lambda _cfg: cfg_hash),
+        (_scoring_checks, "get_config", lambda: cfg),
+        (_scoring_checks, "config_hash", lambda _cfg: cfg_hash),
     ]
 
 
