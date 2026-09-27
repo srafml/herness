@@ -7,7 +7,9 @@
   are counted into stg.build_counts row `enrich_pruned` and deleted (a NULL ID is never
   live). Then core.incident.content_hash comes from enrich.text_redacted, and
   enrich.decision_wide is created when spec 03 did not create it. Static statements only:
-  no value from the data becomes SQL text (ST02-16). A re-run gives the same rows.
+  no value from the data becomes SQL text (ST02-16). A re-run leaves the same enrich and
+  core rows; its `enrich_pruned` row replaces the earlier one and counts only the rows that
+  run pruned (0 when nothing new was pruned).
 #}
 {#- dead(column): the ID in `column` is not a live record ID. -#}
 {% macro dead(column) -%}
@@ -23,7 +25,7 @@ SELECT record_id FROM core.problem
 UNION
 SELECT record_id FROM core.work_item;
 
-{#- build_counts only inserts: drop this file's row first so a re-run stays idempotent. -#}
+{#- build_counts only inserts: drop this file's row first so a re-run keeps one row (its own count). -#}
 DELETE FROM stg.build_counts WHERE name = 'enrich_pruned';
 INSERT INTO stg.build_counts
 SELECT 'enrich_pruned', CAST(sum(n) AS BIGINT) FROM (

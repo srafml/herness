@@ -65,14 +65,18 @@ class _RunScoring(Protocol):
 
 def _hook(module: str, name: str, stage: str) -> object:
     """``module.name`` imported lazily; ConfigError when that module or name is absent."""
+    msg = f"build stage {stage} is not available"
     try:
-        return getattr(importlib.import_module(module), name)
+        loaded = importlib.import_module(module)
     except ModuleNotFoundError as exc:
         if exc.name != module:  # a dependency of an installed hook: a real fault
             raise
+        raise ConfigError(msg) from None
+    # only the lookup is guarded: an AttributeError while importing the module propagates
+    try:
+        return getattr(loaded, name)
     except AttributeError:
         pass
-    msg = f"build stage {stage} is not available"
     raise ConfigError(msg)
 
 

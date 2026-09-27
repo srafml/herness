@@ -85,6 +85,19 @@ def test_ut02_78_hook_dependency_fault_propagates(monkeypatch: pytest.MonkeyPatc
         stages._hook("herness.enrich.pipeline", "run_enrichment", "enrich")
 
 
+def test_ut02_78_hook_import_attribute_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT02-78 an AttributeError raised while an installed hook module is imported is not
+    turned into "not available" (only the name lookup is guarded)."""
+
+    def broken(name: str) -> object:
+        msg = "module attribute missing during import"
+        raise AttributeError(msg)
+
+    monkeypatch.setattr(stages, "importlib", types.SimpleNamespace(import_module=broken))
+    with pytest.raises(AttributeError, match="during import"):
+        stages._hook("herness.enrich.pipeline", "run_enrichment", "enrich")
+
+
 def test_ut02_78_hook_loaders_until_hooks_land() -> None:
     """UT02-78 the loaders resolve the spec 03 / 04 hooks; absent on this tree -> ConfigError.
 
