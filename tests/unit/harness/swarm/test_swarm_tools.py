@@ -16,19 +16,23 @@ from typing import Any, cast
 import pytest
 from tests.support.dispatch_standin import call, make_state, use_test_config
 from tests.unit.harness import _blackboard_env as env_mod
-from tests.unit.harness._blackboard_env import BbEnv, task_spec
+from tests.unit.harness._blackboard_env import BUILD_ID, T0, BbEnv, add_running_task, task_spec
 from tests.unit.harness._blackboard_env import args as bb_args
 
 from herness.core import config as c
+from herness.core import time as clock
 from herness.core.errors import ConfigError, ToolInputError
 from herness.core.ids import IdKind, new_id
 from herness.core.resilience import ProcessState
 from herness.core.types import Finding, TaskSpec, ToolContext
 from herness.harness._tools_schema import check_tool_schema, schema_hint
+from herness.harness.blackboard import Blackboard
+from herness.harness.findings import EntityCatalog
 from herness.harness.roles.analyst import analyst_role
 from herness.harness.swarm import tools as st
 from herness.harness.swarm.spawn import SpawnBroker, SpawnDecision
 from herness.harness.tools import ToolRegistry, dispatch
+from herness.store.ops import run_write
 
 pytestmark = pytest.mark.unit
 
@@ -376,13 +380,34 @@ def cfg(tmp_path: Path, reset_process_state: ProcessState) -> Iterator[None]:
     c.reset_config()
 
 
+def _post_in_second_run(env: BbEnv) -> tuple[str, str]:
+    """A second running review run with one posted finding: (run_id, finding_id)."""
+    run_id = new_id(IdKind.RUN)
+    sql = (
+        "INSERT INTO run (run_id, kind, depth, profile, config_hash, build_id, status,"
+        " started_at) VALUES (?, 'org_review', 'standard', 'default', 'h', ?, 'running', ?)"
+    )
+    run_write(
+        lambda conn: conn.execute(sql, (run_id, BUILD_ID, clock.format_utc(T0))), op="test_run"
+    )
+    task_id = add_running_task(run_id, n=9)
+    bb = Blackboard(
+        run_id, build_id=BUILD_ID, catalog=EntityCatalog(env.warehouse), allowed_numerals=()
+    )
+    env.extra.append(bb)
+    ctx = env.ctx(task_id=task_id).model_copy(update={"run_id": run_id})
+    return run_id, st.PostFindingTool(bb)(ctx, **args(env.ops_qid)).finding_ids[0]  # type: ignore[arg-type]
+
+
 def test_st06_17_dispatch_rejects_and_binding_is_used(cfg: None, bb_env: BbEnv) -> None:
     """ST06-17 dispatch refuses a run_id argument; the tool reads its bound run only."""
     del cfg
     fid = st.PostFindingTool(bb_env.bb)(bb_env.ctx(), **args(bb_env.ops_qid)).finding_ids[0]  # type: ignore[arg-type]
+    other_run, other_fid = _post_in_second_run(bb_env)
+    assert other_fid != fid
     tool = st.ListFindingsTool(bb=bb_env.bb, run_id=bb_env.run_id, past_reader=None)
     ctx = bb_env.ctx()
-    other = "run_" + "9" * 26
+    other = other_run
     bad = call("list_findings", **{**_NULL_FILTER, "run_id": other})
     [refused] = asyncio.run(dispatch(ctx, {"list_findings": tool}, [bad], None, make_state()))
     assert not refused.ok
@@ -391,6 +416,9 @@ def test_st06_17_dispatch_rejects_and_binding_is_used(cfg: None, bb_env: BbEnv) 
     good = call("list_findings", "c2", **_NULL_FILTER)
     [listed] = asyncio.run(dispatch(ctx, {"list_findings": tool}, [good], None, make_state()))
     assert listed.ok
-    assert listed.finding_ids == [fid]
+    assert listed.finding_ids == [fid]  # the second run's finding is not listed
+    assert other_fid not in listed.content
+    ctx_other = ctx.model_copy(update={"run_id": other_run})  # even from the other run's context
+    assert asyncio.run(tool(ctx_other, **_NULL_FILTER)).finding_ids == [fid]
     with pytest.raises(ToolInputError, match="unexpected list_findings arguments"):
         asyncio.run(tool(ctx, **{**_NULL_FILTER, "run_id": other}))

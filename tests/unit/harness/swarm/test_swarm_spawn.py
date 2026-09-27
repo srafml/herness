@@ -141,37 +141,40 @@ def _counter(approved: str, reason: str) -> float:
 
 
 def test_ut06_46_denials_in_rule_order(bb_env: BbEnv, reset_process_state: ProcessState) -> None:
-    """UT06-46 every later rule also fails; relaxing one rule at a time walks design §5.5."""
+    """UT06-46 each step fails its rule AND every later rule; relaxing one at a time walks §5.5.
+
+    So a request that fails several rules must report the first in design order: swapping two
+    rules or moving a check (e.g. the catalog check after the dedup lookup) turns this red.
+    """
     del reset_process_state
     narrow = ["describe_table", "post_finding", "run_sql"]  # crosscheck-like: rule 8 fails
-    dup_parent = _parent(bb_env, tools=narrow)
-    scope = EntityScope(entity_type="team", entity_ids=["t2"])
-    dup = dup_parent.model_copy(
-        update={
-            "task_id": new_id(IdKind.TASK),
-            "parent_task_id": None,
-            "dedup_key": compute_dedup_key("analyst", "ops", scope, _args()["objective"]),
-        }
-    )
-    _insert(dup)
-    deep_parent = _parent(bb_env, depth=1, tools=narrow)
+    template = _parent(bb_env, tools=narrow)
+    dups = {}
+    for ids in (["t2"], ["zz"]):  # rule 7 fails for the good scope and for the unknown one
+        scope = EntityScope(entity_type="team", entity_ids=ids)
+        key = compute_dedup_key("analyst", "ops", scope, _args()["objective"])
+        dup = template.model_copy(update={"task_id": new_id(IdKind.TASK), "dedup_key": key})
+        _insert(dup)
+        dups[ids[0]] = dup.task_id
+    deep_parent = _parent(bb_env, depth=1, tools=narrow)  # rule 2 fails in standard
     parent = _parent(bb_env, tools=narrow)
+    assert count_tasks(bb_env.run_id, roles={"analyst", "skeptic"}) > 1
+    no_children = SwarmSettings(max_children_per_task=0)  # rule 3 fails (0 >= 0)
     many = SwarmSettings(max_children_per_task=3)
+    one_task = {"max_tasks_per_run": 1}  # rule 4 fails (the run already has more)
+    zz = _args(ids=["zz"])  # rule 6 fails; its dedup key also exists (rule 7)
     steps: list[tuple[Harness, TaskSpec, dict[str, Any], str]] = [
-        (_harness(bb_env, "fast", tokens_cap=1), deep_parent, _args(ids=["zz"]), "spawn_disabled"),
-        (_harness(bb_env, tokens_cap=1), deep_parent, _args(ids=["zz"]), "max_depth"),
-        (
-            _harness(bb_env, settings=SwarmSettings(max_children_per_task=0), tokens_cap=1),
-            parent, _args(ids=["zz"]), "max_children",
-        ),
-        (
-            _harness(bb_env, knobs=_knobs("standard", max_tasks_per_run=1), settings=many,
-                     tokens_cap=1),
-            parent, _args(ids=["zz"]), "max_tasks",
-        ),
-        (_harness(bb_env, settings=many, tokens_cap=1), parent, _args(ids=["zz"]), "budget"),
-        (_harness(bb_env, settings=many), parent, _args(ids=["zz"]), "bad_scope"),
-        (_harness(bb_env, settings=many), parent, _args(), f"duplicate:{dup.task_id}"),
+        (_harness(bb_env, "fast", knobs=_knobs("fast", **one_task), settings=no_children,
+                  tokens_cap=1), deep_parent, zz, "spawn_disabled"),
+        (_harness(bb_env, knobs=_knobs("standard", **one_task), settings=no_children,
+                  tokens_cap=1), deep_parent, zz, "max_depth"),
+        (_harness(bb_env, knobs=_knobs("standard", **one_task), settings=no_children,
+                  tokens_cap=1), parent, zz, "max_children"),
+        (_harness(bb_env, knobs=_knobs("standard", **one_task), settings=many, tokens_cap=1),
+         parent, zz, "max_tasks"),
+        (_harness(bb_env, settings=many, tokens_cap=1), parent, zz, "budget"),
+        (_harness(bb_env, settings=many), parent, zz, "bad_scope"),
+        (_harness(bb_env, settings=many), parent, _args(), f"duplicate:{dups['t2']}"),
         (_harness(bb_env, settings=many), parent, _args("new objective"), "tool_escalation"),
     ]  # fmt: skip
     reasons = []
