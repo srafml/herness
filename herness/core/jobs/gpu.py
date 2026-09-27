@@ -215,7 +215,7 @@ class GpuController:
     ) -> None:
         """Step 8 (and step 4): fail closed to class `none`."""
         self._stop_quietly(_services(target))
-        self._set_loaded("none")
+        self._set_loaded("none", requested_class=None)
         if step in {"start", "warmup"}:
             self._record_failures(_endpoints(target), err)
         detail = {"from": source, "to": target, "step": step, "error_type": type(err).__name__}

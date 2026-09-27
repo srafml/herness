@@ -269,6 +269,7 @@ def test_ut08_92_warmup_failure_fails_closed(env: Env) -> None:
         ctl.swap("reasoning", reason="claimable")
     assert env.gpu.states["vllm-reasoning"] == "exited"
     assert ctl.loaded == "none" == env.worker().gpu_class_loaded
+    assert env.worker().requested_class is None
     for key in REASONING_KEYS:
         row = env.ops.health_get(key)
         assert row is not None
@@ -305,6 +306,7 @@ def test_ut08_92_vram_not_freed(env: Env, fake_clock: FakeClock) -> None:
     failed = env.events("gpu_swap_failed")[-1]
     assert (failed["step"], failed["error_type"]) == ("vram", "ModelUnavailable")
     assert ctl.loaded == "none" == env.worker().gpu_class_loaded
+    assert env.worker().requested_class is None
     assert env.ops.health_get("model:local-large-offload") is None
 
 
