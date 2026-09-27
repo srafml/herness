@@ -59,6 +59,10 @@ def build_decider(  # noqa: PLR0913 - U03-69's keyword-only signature is binding
     """Construct a configured decider from its registry class (U03-69). Raises ConfigError
     (disabled backend, missing `llm` tuple, unknown name) or AuthError (no hosted Jev key)."""
     settings = cfg.models.deciders
+    backend = settings.openjev if name == "openjev" else settings.jev if name == "jev" else None
+    if backend is not None and not backend.enabled:  # before the registry lookup
+        msg = f"decider {name} disabled"
+        raise ConfigError(msg)
     cls = registry.get("decider", name)
     if name == "laya":
         return cls(settings.laya, paths=paths, embed_fn=embed_fn)  # type: ignore[no-any-return]
@@ -70,12 +74,8 @@ def build_decider(  # noqa: PLR0913 - U03-69's keyword-only signature is binding
         votes, temperature = getattr(settings.llm.votes, depth), settings.llm.temperature
         return cls(client, version=version, votes=votes, temperature=temperature,  # type: ignore[no-any-return]
                    max_concurrency=max_concurrency)  # fmt: skip
-    if name not in ("openjev", "jev"):
+    if backend is None:
         msg = f"decider {name} is not built by build_decider"
-        raise ConfigError(msg)
-    backend = settings.openjev if name == "openjev" else settings.jev
-    if not backend.enabled:
-        msg = f"decider {name} disabled"
         raise ConfigError(msg)
     samples = samples_override or getattr(settings.openjev.samples, depth)
     ref = backend.api_key

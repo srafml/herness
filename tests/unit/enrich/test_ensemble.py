@@ -160,6 +160,12 @@ def test_ut03_64_version_changes_with_weight_and_is_stable() -> None:
     assert ensemble_version(MEMBERS, below_precision) == first  # format(w, ".6f")
 
 
+def test_ut03_64_version_is_pinned_for_a_fixed_input() -> None:
+    """UT03-64 the hex of a fixed configuration is pinned (canonical JSON, sha256[:12])."""
+    weights = {("laya", "q_a"): 0.9, ("openjev", "q_a"): 0.8}
+    assert ensemble_version(MEMBERS, weights) == "87865117b6d8"
+
+
 def test_ut03_64_version_changes_with_member_version() -> None:
     """UT03-64 a changed member version changes the ensemble version."""
     weights = {("laya", "q_a"): 0.9}
@@ -279,7 +285,7 @@ def test_ut03_65_pooled_answers_from_three_members(paths: EnrichPaths) -> None:
     decider = EnsembleDecider(cache, calibration, members=MEMBERS, weights=WEIGHTS, qsv=QSV)
     assert decider.name == "ensemble"
     assert decider.version == ensemble_version(MEMBERS, WEIGHTS)
-    assert decider.health() is None
+    decider.health()  # no-op: must not raise
 
     out = decider.decide([_item(H1), _item(H2), _item(H3)], QS)
 
@@ -390,3 +396,56 @@ def test_ut03_65_cache_read_lock_is_store_busy(
     decider = EnsembleDecider(cache, calibration, members=MEMBERS, weights=WEIGHTS, qsv=QSV)
     with pytest.raises(StoreBusy):
         decider.decide([_item(H1)], QS)
+
+
+def test_ut03_65_calibration_lock_is_store_busy(
+    paths: EnrichPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-65 an OS lock while reading a calibration file surfaces as StoreBusy."""
+    cache, calibration = _seed(paths)
+
+    def locked(*args: object) -> None:
+        raise OSError(errno.EBUSY, "locked")
+
+    monkeypatch.setattr(calibration, "temperature", locked)
+    decider = EnsembleDecider(cache, calibration, members=MEMBERS, weights=WEIGHTS, qsv=QSV)
+    with pytest.raises(StoreBusy):
+        decider.decide([_item(H1)], QS)
+
+
+def test_ut03_65_row_of_member_name_with_other_member_version_dropped(
+    paths: EnrichPaths,
+) -> None:
+    """UT03-65 a row with a member's decider name but a version not its own is not pooled."""
+    cache, calibration = DecisionCache(paths, QSV), CalibrationStore(paths)
+    _write(cache, LAYA, {H1: {"q_a": {"true": 0.8, "false": 0.2}}})
+    # decider "llm" with laya's version: passes both isin filters, fails the pairing check.
+    _write(cache, ("llm", LAYA[1]), {H1: {"q_a": {"true": 0.01, "false": 0.99}}})
+    decider = EnsembleDecider(cache, calibration, members=(LAYA, LLM), weights={}, qsv=QSV)
+    answer = decider.decide([_item(H1, ("q_a",))], QS)[0].answers["q_a"]
+    assert answer.distribution["true"] == pytest.approx(_expected_pool([[0.8, 0.2]], [1])[0])
+    assert answer.backend_confidence == 1.0
+
+
+def _calibrated_choice(p: list[float], t: float) -> list[float]:
+    z = [math.log(v + 1e-9) / t for v in p]
+    e = [math.exp(v - max(z)) for v in z]
+    return [v / sum(e) for v in e]
+
+
+def test_ut03_65_choice_question_uses_member_temperature(paths: EnrichPaths) -> None:
+    """UT03-65 a choice question with T = 0.5 for openjev pools the calibrated vector."""
+    cache, calibration = _seed(paths)
+    result = CalibrationResult(
+        temperature=0.5, ece=0.01, ece_raw=0.02, accuracy=0.9, n=200, uncalibrated=False
+    )
+    calibration.save(OPENJEV[0], OPENJEV[1], QSV, {"q_c": result})
+    decider = EnsembleDecider(cache, calibration, members=MEMBERS, weights=WEIGHTS, qsv=QSV)
+    c = decider.decide([_item(H1, ("q_c",))], QS)[0].answers["q_c"]
+    openjev = _calibrated_choice([0.2, 0.7, 0.1], 0.5)
+    expected = _expected_pool([[0.6, 0.3, 0.1], openjev], [1.0, 1.0])  # no q_c weights
+    assert [c.distribution[k] for k in ("db", "net", "app")] == pytest.approx(
+        list(expected), abs=1e-9
+    )
+    assert c.answer == "net"
+    assert c.probability == pytest.approx(expected[1], abs=1e-9)

@@ -96,6 +96,15 @@ def test_ut03_67_openjev_disabled_is_config_error(tmp_path: Path) -> None:
         _build("openjev", tmp_path, cfg=cfg)
 
 
+@pytest.mark.parametrize("name", ["openjev", "jev"])
+def test_ut03_67_disabled_reported_before_registry_lookup(tmp_path: Path, name: str) -> None:
+    """UT03-67 a disabled backend reports "decider <name> disabled" even with an empty registry."""
+    registry.reset_registry()
+    cfg = _cfg(DecidersSettings(openjev=OpenJevSettings(enabled=False)))
+    with pytest.raises(ConfigError, match=f"decider {name} disabled"):
+        build_decider(name, cfg=cfg, depth="deep", paths=_paths(tmp_path), llm=None)  # type: ignore[arg-type]
+
+
 def test_ut03_67_jev_disabled_is_config_error(tmp_path: Path) -> None:
     """UT03-67 jev disabled (the default) -> ConfigError("decider jev disabled")."""
     with pytest.raises(ConfigError, match="decider jev disabled"):

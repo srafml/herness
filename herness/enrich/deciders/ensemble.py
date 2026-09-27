@@ -176,7 +176,11 @@ class EnsembleDecider:
 
     def _temperature(self, decider: str, qid: str) -> float:
         if (decider, qid) not in self._temps:
-            t, _ = self._calibration.temperature(decider, self._versions[decider], self._qsv, qid)
+            version = self._versions[decider]
+            try:
+                t, _ = self._calibration.temperature(decider, version, self._qsv, qid)
+            except OSError as exc:
+                raise io_error(exc, "cannot read calibration", decider=self.name) from exc
             self._temps[(decider, qid)] = t
         return self._temps[(decider, qid)]
 
