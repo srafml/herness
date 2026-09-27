@@ -736,3 +736,20 @@ def test_ut07_44_fusion_is_deterministic_and_bounded(store: Any, parts: Any) -> 
     assert all(ids_of(r) == ids_of(runs[0]) for r in runs)
     assert all(r.n_candidates == runs[0].n_candidates == 20 for r in runs)
     assert len(set(ids_of(runs[0]))) == len(runs[0].hits) == 7
+
+
+def test_ut07_44_malformed_vector_ids_dropped(store: Any, parts: Any) -> None:
+    """UT07-44 a foreign or corrupted vector-index id never raises; valid hits still return."""
+    _, vec, _ = parts
+    good = put(1, "churn", vec)
+    for bad in ("not-a-memory-id", "mem_" + "U" * 26, "q_0123456789abcdef"):
+        vec.add(bad, "semantic", "active", unit_vec("churn"))
+    with capture_logs() as logs:
+        result = recaller(parts).recall("churn", now=NOW)
+    assert ids_of(result) == [good]
+    assert not result.degraded
+    assert result.n_candidates == 1
+    warned = [e for e in logs if e["event"] == "memory.recall.invalid_vector_ids"]
+    assert warned == [{"event": "memory.recall.invalid_vector_ids", "count": 3,
+                       "log_level": "warning", "component": "harness.memory"}]  # fmt: skip
+    assert "not-a-memory-id" not in repr(logs)

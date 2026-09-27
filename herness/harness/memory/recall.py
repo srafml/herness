@@ -12,7 +12,7 @@ import unicodedata
 from collections import OrderedDict
 from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import zip_longest
 from typing import Final, get_args
 
@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from herness.core import time as clock
 from herness.core.errors import ToolInputError
+from herness.core.ids import IdKind, is_valid_id
 from herness.core.logging import get_logger
 from herness.core.redact import Redactor
 from herness.core.resilience.metrics import record_histogram
@@ -44,10 +45,8 @@ _QUERY_MAX: Final = 2000
 _K_MAX: Final = 50
 _ALL_LAYERS: Final[tuple[Layer, ...]] = get_args(Layer)
 _EMPTY_MAP_TTL_S: Final = 60.0
-_SECONDS_PER_DAY: Final = 86_400.0
 _LATENCY: Final = "herness_memory_recall_latency_seconds"
 _SERVICE_MAP_SQL: Final = "SELECT service_id, team_id, org_id FROM core.service_map"
-_TEAM_SQL: Final = "SELECT team_id, org_id FROM core.team"
 
 type _Groups = dict[str, frozenset[str]]
 
@@ -165,7 +164,7 @@ class RelatednessCache:
             con = self._connect(build_id)  # read-only warehouse handle, closed after two reads
             try:
                 rows = con.execute(_SERVICE_MAP_SQL).fetchall()
-                rows += con.execute(_TEAM_SQL).fetchall()
+                rows += con.execute("SELECT team_id, org_id FROM core.team").fetchall()
             finally:
                 con.close()
         except Exception as exc:  # noqa: BLE001 - U07-61 never raises; empty map for 60 s
@@ -212,8 +211,7 @@ def _checked_layers(query: object, layers: Sequence[Layer] | None, k: object) ->
     return chosen
 
 
-def _visible(item: MemoryItem, scan: _Scan) -> bool:
-    """The step 6 filters, decided on the SQLite row (TH07-06, TH07-13)."""
+def _visible(item: MemoryItem, scan: _Scan) -> bool:  # step 6 on SQLite rows (TH07-06, TH07-13)
     flt, owner = scan.filters, scan.filters.include_pending_for
     status_ok = item.status == "active" or (item.status == "pending_approval"
                                             and owner is not None
@@ -255,7 +253,8 @@ class MemoryRecaller:
         filters: RecallFilters | None = None, k: int = 10,
         run_ctx: MemoryRunContext | None = None, *, now: datetime | None = None,
     ) -> RecallResult:  # fmt: skip
-        """Hits in MMR order; raises ToolInputError, StoreBusy; vector failures degrade."""
+        """Hits in MMR order; vector-path failures degrade. Raises ToolInputError, StoreBusy,
+        SchemaViolation for a naive ``now`` and RedactionFailed (fail closed, deliberate)."""
         started = clock.monotonic()
         at = clock.ensure_utc(now) if now is not None else clock.now()
         scan = _Scan(_checked_layers(query, layers, k), filters or RecallFilters(), at, run_ctx,
@@ -287,7 +286,9 @@ class MemoryRecaller:
         try:
             scan.query_vector = self._embedder.embed(text)
             found_ann = self._vectors.search(scan.query_vector, layers, statuses, limits.vector)
-            scan.ann = dict(found_ann)
+            scan.ann = {i: d for i, d in found_ann if is_valid_id(IdKind.MEMORY, i)}
+            if dropped := len({i for i, _ in found_ann} - scan.ann.keys()):  # foreign/corrupt rows
+                _log.warning("memory.recall.invalid_vector_ids", count=dropped)
         except Exception as exc:  # noqa: BLE001 - any vector-path failure degrades (U07-62)
             self._degrade(scan, exc)
         if (match := fts_query_string(text)) is not None:
@@ -332,9 +333,8 @@ class MemoryRecaller:
             return 0.0
         if not set(own).isdisjoint(wanted):
             return 1.0
-        if self._relatedness is None or build is None:
-            return 0.0
-        return 0.5 if self._relatedness.related_any(build, own, wanted) else 0.0
+        rel = self._relatedness
+        return 0.5 if rel and build and rel.related_any(build, own, wanted) else 0.0
 
     def _rank(self, items: list[MemoryItem], scan: _Scan, k: int) -> list[RecallHit]:
         rc, keyword, flt = self._rc, scan.keyword or {}, scan.filters
@@ -346,7 +346,7 @@ class MemoryRecaller:
             parts = score_candidate(
                 sim=self._sim(item.memory_id, scan), kw_raw=keyword.get(item.memory_id),
                 max_kw=max_kw, ent=self._ent(item, scan, build),
-                age_days=(scan.now - touched).total_seconds() / _SECONDS_PER_DAY,
+                age_days=(scan.now - touched) / timedelta(days=1),
                 half_life_days=rc.half_life_days[item.kind], confidence=item.confidence,
                 is_pending=item.status == "pending_approval", weights=rc.weights,
                 conf_floor=rc.conf_floor, rec_floor=rc.rec_floor, degraded=scan.degraded,
