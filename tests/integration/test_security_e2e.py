@@ -15,21 +15,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from tests.support.fake_keyring import MemoryKeyring
 from tests.support.ops_store import OpsStoreHandle
-from tests.support.secret_leak import (
-    SECRET_NAME,
-    SENTINEL_KEY,
-    SENTINELS,
-    USER_REF,
-    LeakRun,
-    run_sentinel_pipeline,
-)
+from tests.support.secret_leak import SECRET_NAME, SENTINEL_KEY, SENTINELS, USER_REF, LeakRun
 from tests.support.sync_env import init_sync_config
 
 from herness.core import secrets
 from herness.core.audit import verify_chain
-from herness.core.resilience import ProcessState
 from herness.store.errors import ReviewItemConflict
 from herness.store.ops import create_review_item, decide_review_item, get_review_item
 
@@ -101,19 +92,6 @@ def test_it10_05_second_decision_is_refused_and_chain_links(logs: Path) -> None:
 
 
 # ------------------------------------------------------------------ IT10-10 sentinel run
-
-
-@pytest.fixture
-def leak_run(
-    ops_store: OpsStoreHandle,
-    fake_keyring: MemoryKeyring,
-    reset_process_state: ProcessState,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> LeakRun:
-    """The IT10-10 sentinel run over the fixture ops store."""
-    del fake_keyring, reset_process_state
-    return run_sentinel_pipeline(tmp_path, ops_store.db_path, monkeypatch)
 
 
 def test_it10_10_sentinel_run_completes_end_to_end(leak_run: LeakRun) -> None:

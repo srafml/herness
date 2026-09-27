@@ -32,12 +32,14 @@ import sqlite3
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import pyarrow.parquet as pq
 import pytest
 from tests.support.build_harness import FakeJobContext
+from tests.support.fake_keyring import MemoryKeyring
 from tests.support.fake_llm import FakeLLMClient, respx_router
+from tests.support.ops_store import OpsStoreHandle
 from tests.support.sync_env import SETTLED_S, init_sync_config
 
 from herness.connectors.files import FilesConnector
@@ -45,14 +47,21 @@ from herness.connectors.jobs import handle_sync
 from herness.core import egress_socket as es
 from herness.core import redact as r
 from herness.core import registry, secrets
+from herness.core import time as clock
 from herness.core.audit import record_config_change
-from herness.core.errors import EgressBlocked
+from herness.core.errors import EgressBlocked, FatalError
 from herness.core.ids import new_ulid
+from herness.core.jobs import queue
+from herness.core.jobs.handlers import register_handler, resolve_handler, run_handler
+from herness.core.jobs.outcomes import finish_job
+from herness.core.jobs.ports import JobsBackend, bind_jobs_backend
 from herness.core.logging import configure_logging, get_logger, reset_logging
 from herness.core.redact_directory import NameDirectory
-from herness.core.resilience import bind_ops_backend
+from herness.core.resilience import ProcessState, bind_ops_backend
+from herness.core.resilience.events import record_event
 from herness.core.settings import RedactionConfig
 from herness.core.types import (
+    JobOutcome,
     LLMRequest,
     LLMResponse,
     Message,
@@ -68,9 +77,13 @@ from herness.harness.llm.openai_compat import OpenAICompatClient
 from herness.harness.llm.settings import ClientConfig, TraceSettings
 from herness.harness.tracing import Tracer, llm_call_fields, tool_call_fields
 from herness.store.ops import create_review_item, decide_review_item, list_review_items
+from herness.store.ops.jobs import SqliteJobsBackend
 from herness.store.ops.resilience import SqliteResilienceBackend
 
-__all__ = ["BLOCKED_HOST", "SENTINELS", "LeakRun", "artefacts", "run_sentinel_pipeline"]
+__all__ = ["BLOCKED_HOST", "JOB_ERROR", "SECRET_NAME", "SENTINELS", "SENTINEL_CRED"]
+__all__ += ["SENTINEL_KEY", "SENTINEL_URL", "SOURCES_YAML", "TICKET_TEXT", "USER_REF"]
+__all__ += ["LeakRun", "RecordingFakeLLM", "artefacts", "fail_job", "known_secret_job_dump"]
+__all__ += ["leak_run", "ops_dump", "run_sentinel_pipeline"]
 
 SENTINEL_KEY: Final = "synthetic-sentinel-keyring-7Qv2Lm9Xw4Pz"
 SENTINEL_CRED: Final = "synthetic-sentinel-cred-3Hd8Rk1Nc6Ua"
@@ -80,6 +93,7 @@ BLOCKED_HOST: Final = "tracker.synthetic-blocked.invalid"
 SECRET_NAME: Final = "jira_api_token"  # noqa: S105 - a secret name, not a value
 USER_REF: Final = "0123456789abcdef0123456789abcdef"  # pragma: allowlist secret - a user_ref
 _NOW: Final = datetime.datetime(2026, 9, 24, 12, 0, tzinfo=datetime.UTC)
+_OWNER: Final = "h:1:cpu0"
 _INBOX_MTIME: Final = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
 _OPENAI_BASE: Final = "http://127.0.0.1:8000/v1"
 _ANSWER: Final = "Ticket TCK-1 reports a printer outage; the pasted credentials were redacted."
@@ -240,7 +254,8 @@ def _chat_turn(
 
 
 def _connector_auth_failure(tracer: Tracer) -> None:
-    """A connector-side failure whose message echoes the resolved secret (log and trace)."""
+    """A connector-side failure whose message echoes the resolved secret: log, trace, and a
+    ``resilience_event`` row in ops.sqlite through the production ``record_event``."""
     token = secrets.resolve(f"secret:{SECRET_NAME}").get_secret_value()  # point of use
     log = get_logger("connectors.files")
     try:
@@ -249,6 +264,37 @@ def _connector_auth_failure(tracer: Tracer) -> None:
     except PermissionError as exc:
         log.exception("connectors.auth.failed", source="jira", detail=str(exc))
         tracer.emit("retry", attempt=1, error_type=type(exc).__name__, error=str(exc))
+        detail = {"key": "source:jira", "failures": 1, "trips": 1, "reason": str(exc)}
+        record_event("breaker_open", component="resilience", target="jira", detail=detail)
+
+
+def _failing_handler(message: str) -> Callable[[object], JobOutcome]:
+    def handler(_ctx: object) -> JobOutcome:
+        raise FatalError(message)
+
+    return handler
+
+
+def fail_job(message: str) -> str:
+    """Run one ``reconcile`` job through the real queue whose handler fails with ``message``;
+    ``finish_job`` stores its ``last_error`` in ops.sqlite. Returns the job id."""
+    register_handler("reconcile", _failing_handler(message))
+    job_id = queue.enqueue("reconcile", {"source": "jira"}, "none")
+    row = queue.claim(owner=_OWNER, allowed_classes=("none",))
+    assert row is not None
+    assert row.job_id == job_id
+    ctx = FakeJobContext(dict(row.payload), kind="reconcile", job_id=row.job_id)
+    outcome = run_handler(ctx, resolve_handler("reconcile"))
+    finish_job(row, _OWNER, outcome, attempt_started_at=clock.now(), stop_reason=None)
+    return job_id
+
+
+# Only CREDENTIAL / URL_TOKEN shapes: a bare known value in a job error is stored unmasked
+# (the leak recorded by ST10-14's strict xfail), so it stays out of the green run.
+JOB_ERROR: Final = (
+    f"reconcile failed: password={SENTINEL_CRED} "
+    f"see https://wiki.synthetic-corp.test/kb?token={SENTINEL_URL}"
+)
 
 
 def _try_blocked_host(monkeypatch: pytest.MonkeyPatch, run: LeakRun) -> None:
@@ -272,6 +318,8 @@ def _try_blocked_host(monkeypatch: pytest.MonkeyPatch, run: LeakRun) -> None:
 
 
 def _review_item(record_key: str) -> None:
+    """Structural only: production review payloads carry ids, scores and counts, never ticket
+    text (TH03-03, enrich.mapping_suggest._payload), so no sentinel has a path here."""
     payload = {"source": "files", "entity": "tickets", "key": record_key, "field": "category"}
     item_id = create_review_item("mapping_suggestion", payload | {"value": "printer"}, now=_NOW)
     decide_review_item(item_id, "approved", decided_by=USER_REF, now=_NOW)
@@ -289,6 +337,7 @@ def _bind_state(monkeypatch: pytest.MonkeyPatch) -> None:
     redactor = r.Redactor(RedactionConfig(directory_file=None), bytes(range(32)), directory)
     monkeypatch.setattr(r._State, "redactor", redactor)
     bind_ops_backend(SqliteResilienceBackend())
+    bind_jobs_backend(cast("JobsBackend", SqliteJobsBackend()))
     for var in _OFFLINE_VARS:  # install_socket_guard sets them; monkeypatch restores them
         monkeypatch.setenv(var, "1")
 
@@ -301,6 +350,7 @@ def _run(run: LeakRun, tracer: Tracer, monkeypatch: pytest.MonkeyPatch) -> None:
     run.synced_rows = sum(n for n in counts if isinstance(n, int))
     run.lake_text = _lake_text(run.data_root)
     _connector_auth_failure(tracer)
+    fail_job(JOB_ERROR)
     record = _record_text(run.lake_text)
     fake = registry.get("llm_client", "fake")(_book())  # the registry's model client
     run.answers.append(_chat_turn(fake.complete, record, tracer, tracer.run_id))
@@ -362,7 +412,8 @@ def _files(root: Path) -> Iterator[tuple[str, str]]:
             yield path.relative_to(root).as_posix(), path.read_text("utf-8", errors="replace")
 
 
-def _ops_dump(db_path: Path) -> str:
+def ops_dump(db_path: Path) -> str:
+    """The ``sqlite3`` ``.dump`` text of the ops store."""
     conn = sqlite3.connect(db_path)
     try:
         return "\n".join(conn.iterdump())
@@ -377,7 +428,7 @@ def artefacts(run: LeakRun) -> dict[str, list[tuple[str, str]]]:
         "data/logs": list(_files(root / "logs")),
         "data/traces": list(_files(root / "traces")),
         "data/config_snapshots": list(_files(root / "config_snapshots")),
-        "ops.sqlite .dump": [("ops.sqlite", _ops_dump(run.db_path))],
+        "ops.sqlite .dump": [("ops.sqlite", ops_dump(run.db_path))],
         "data/reports": list(_files(root / "reports")),
         "model requests (FakeLLMClient)": [
             (f"request {i}", req.model_dump_json()) for i, req in enumerate(run.fake_requests)
@@ -385,3 +436,27 @@ def artefacts(run: LeakRun) -> dict[str, list[tuple[str, str]]]:
         "model requests (wire)": [(f"body {i}", b) for i, b in enumerate(run.wire_bodies)],
         "review items": [(f"item {i}", p) for i, p in enumerate(run.review_payloads)],
     }
+
+
+def known_secret_job_dump(tmp_path: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A ``reconcile`` job fails with a message echoing the resolved keyring secret (no
+    credential shape); returns the ops.sqlite dump for the known-value check."""
+    init_sync_config(tmp_path, SOURCES_YAML)
+    _bind_state(monkeypatch)
+    secrets.set_secret(SECRET_NAME, SENTINEL_KEY, actor="system")
+    token = secrets.resolve(f"secret:{SECRET_NAME}").get_secret_value()
+    fail_job(f"upstream rejected credential {token}")
+    return ops_dump(db_path)
+
+
+@pytest.fixture
+def leak_run(
+    ops_store: OpsStoreHandle,
+    fake_keyring: MemoryKeyring,
+    reset_process_state: ProcessState,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> LeakRun:
+    """The IT10-10 sentinel run over the fixture ops store (shared by IT10-10 and ST10-14)."""
+    del fake_keyring, reset_process_state
+    return run_sentinel_pipeline(tmp_path, ops_store.db_path, monkeypatch)
