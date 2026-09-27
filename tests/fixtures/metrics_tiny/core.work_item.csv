@@ -1,7 +1,12 @@
-record_id,key,type,parent_key,project,status,status_category,created_at,team_id,service_id
-W1,PAY-1,initiative,,PAY,Open,todo,2025-12-01 09:00:00-05,T1,S1
-W2,PAY-2,epic,PAY-1,PAY,In Progress,in_progress,2025-12-02 09:00:00-05,T1,S1
-W3,PAY-3,story,PAY-2,PAY,In Progress,in_progress,2025-12-03 09:00:00-05,T1,S1
-W4,PAY-4,sub-task,PAY-3,PAY,Done,done,2025-12-04 09:00:00-05,T1,S1
-W5,PAY-5,epic,,PAY,Done,done,2025-12-05 09:00:00-05,T2,S2
-W6,PAY-6,story,PAY-5,PAY,Open,todo,2025-12-06 09:00:00-05,T2,S2
+record_id,key,type,parent_key,project,status,status_category,created_at,story_points,team_id,service_id
+W1,PAY-1,initiative,,PAY,Open,todo,2025-12-01 09:00:00-05,,T1,S1
+W2,PAY-2,epic,PAY-1,PAY,In Progress,in_progress,2025-12-02 09:00:00-05,,T1,S1
+W3,PAY-3,story,PAY-2,PAY,In Progress,in_progress,2025-12-03 09:00:00-05,,T1,S1
+W4,PAY-4,sub-task,PAY-3,PAY,Done,done,2025-12-04 09:00:00-05,,T1,S1
+W5,PAY-5,epic,,PAY,Done,done,2025-12-05 09:00:00-05,,T2,S2
+W6,PAY-6,story,PAY-5,PAY,Open,todo,2025-12-06 09:00:00-05,,T2,S2
+W7,PAY-7,epic,PAY-1,PAY,Done,done,2025-12-12 09:00:00-05,,T1,S1
+W8,PAY-8,story,PAY-5,PAY,Done,done,2025-12-10 09:00:00-05,3,T2,S2
+W9,PAY-9,bug,PAY-7,PAY,Done,done,2025-12-15 09:00:00-05,2,T1,S1
+W10,PAY-10,task,PAY-7,PAY,Done,done,2026-01-12 09:00:00-05,,T1,S1
+W11,PAY-11,story,PAY-7,PAY,Done,done,2025-12-20 09:00:00-05,,T1,S1

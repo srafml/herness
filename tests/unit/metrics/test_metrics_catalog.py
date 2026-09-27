@@ -85,8 +85,8 @@ def fake_config(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_ut04_13_shipped_metrics_yaml_loads(fake_config: None) -> None:
-    """UT04-13 the shipped config/metrics.yaml loads with no error issue: metrics #1-#19, #27,
-    #28 and a scorecard naming only shipped metrics (T04-11 restores the other design weights)."""
+    """UT04-13 the shipped config/metrics.yaml loads with no error issue: all 28 metrics of
+    U04-48 and the full design 04 §7.1 scorecard."""
     raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
     shipped = MetricsCatalogConfig.model_validate(raw)
     assert shipped.version == 1
@@ -113,6 +113,13 @@ def test_ut04_13_shipped_metrics_yaml_loads(fake_config: None) -> None:
             "change_caused_incident_count",
             "change_lead_time_hours",
             "emergency_change_ratio",
+            "throughput",
+            "cycle_time_days",
+            "carryover_rate",
+            "backlog_age_days",
+            "wip_count",
+            "unplanned_work_ratio",
+            "epic_predictability",
             "availability_pct",
             "error_rate",
         ]

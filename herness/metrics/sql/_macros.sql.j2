@@ -126,7 +126,7 @@ AND ({{ p('entity_ids') }} IS NULL OR list_contains({{ p('entity_ids') }}, {{ rs
 
 {%- macro cat_at_join(ts_expr, item_alias, name) -%}
 {%- set w = rs.alias(item_alias) -%}{%- set n = rs.alias(name) -%}
-ASOF LEFT JOIN (SELECT record_id, at, arg_max(to_category, CASE to_category WHEN 'done' THEN 3 WHEN 'in_progress' THEN 2 ELSE 1 END) AS to_category FROM core.work_item_transition GROUP BY record_id, at) {{ n }} ON {{ n }}.record_id = {{ w }}.record_id AND {{ ts_expr }} >= {{ n }}.at
+ASOF LEFT JOIN (SELECT record_id, "at", arg_max(to_category, CASE to_category WHEN 'done' THEN 3 WHEN 'in_progress' THEN 2 ELSE 1 END) AS to_category FROM core.work_item_transition GROUP BY record_id, "at") {{ n }} ON {{ n }}.record_id = {{ w }}.record_id AND {{ ts_expr }} >= {{ n }}."at"
 {%- endmacro -%}
 
 {%- macro cat_at(ts_expr, item_alias, name) -%}

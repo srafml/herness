@@ -96,7 +96,10 @@ WORK_ITEM_LINKS = [
 def con(monkeypatch: pytest.MonkeyPatch) -> Iterator[duckdb.DuckDBPyConnection]:
     patch_facts_config(monkeypatch)
     c = build_metrics_tiny()
-    for table in ("core.incident", "enrich.incident_change_link", "core.work_item", "core.change"):
+    for table in (
+        *("core.incident", "enrich.incident_change_link", "core.work_item", "core.change"),
+        *("core.work_item_transition", "core.work_item_link"),
+    ):
         c.execute(f"DELETE FROM {table}")  # noqa: S608 - fixed table names
     c.executemany(
         "INSERT INTO core.change (record_id, number, type, opened_at, actual_end, service_id,"

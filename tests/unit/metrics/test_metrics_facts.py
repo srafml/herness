@@ -286,10 +286,17 @@ def test_ut04_34_org_closure_cycle_and_depth_cap(con: duckdb.DuckDBPyConnection)
 
 def test_ut04_34_work_item_closure_and_candidate(con: duckdb.DuckDBPyConnection) -> None:
     """UT04-34 pairs over parent_key; the nearest todo/in-progress initiative, epic or feature
-    ancestor-or-self is every row's candidate; a done epic is no candidate."""
+    ancestor-or-self is every row's candidate; a done epic is no candidate (W5 none, the
+    children of the done epic W7 fall through to the initiative W1)."""
     _materialize(con)
     assert _closure(con, "metrics.work_item_closure") == [
         ("W1", "W1", "W1", 0),
+        ("W10", "W1", "W1", 2),
+        ("W10", "W10", "W1", 0),
+        ("W10", "W7", "W1", 1),
+        ("W11", "W1", "W1", 2),
+        ("W11", "W11", "W1", 0),
+        ("W11", "W7", "W1", 1),
         ("W2", "W1", "W2", 1),
         ("W2", "W2", "W2", 0),
         ("W3", "W1", "W2", 2),
@@ -302,6 +309,13 @@ def test_ut04_34_work_item_closure_and_candidate(con: duckdb.DuckDBPyConnection)
         ("W5", "W5", None, 0),
         ("W6", "W5", None, 1),
         ("W6", "W6", None, 0),
+        ("W7", "W1", "W1", 1),
+        ("W7", "W7", "W1", 0),
+        ("W8", "W5", None, 1),
+        ("W8", "W8", None, 0),
+        ("W9", "W1", "W1", 2),
+        ("W9", "W7", "W1", 1),
+        ("W9", "W9", "W1", 0),
     ]
 
 

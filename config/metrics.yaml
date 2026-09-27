@@ -12,8 +12,7 @@ defaults:
   noise_severities: [critical, major, minor, warning]   # info excluded from noise ratio
   failure_outcomes: [unsuccessful, backed_out]
   compute_timeout_s: 30.0          # interactive compute timeout (DD04-06)
-# The 28 catalog entries (U04-48, tables A and B), in table order; T04-11 adds #20-#26
-# between #19 and #27.
+# The 28 catalog entries (U04-48, tables A and B), in table order.
 metrics:
   - name: incident_count
     description: Count of non-excluded incidents opened in the period.
@@ -505,6 +504,194 @@ metrics:
       WHERE c.actual_end >= {{ p('window_start') }} AND c.actual_end < {{ p('window_end') }}
         AND c.deployed {{ filter_clause('change', 'c') }} {{ entity_filter() }}
       GROUP BY ALL
+  - name: throughput
+    description: Count of story, bug and task items done in the period.
+    domain: delivery
+    grains: [service, team, org, work_item]
+    unit: count
+    better: higher
+    aggregation: count
+    min_sample_size: 1
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id,
+             {{ period_start('w.done_at') }} AS period_start,
+             count(*) AS value, count(*) AS numerator, NULL AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      WHERE w.done_at >= {{ p('window_start') }} AND w.done_at < {{ p('window_end') }}
+        AND w.type IN ('story', 'bug', 'task')
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: cycle_time_days
+    description: Median days from first in-progress to done of story, bug and task items.
+    domain: delivery
+    grains: [service, team, org, work_item]
+    unit: days
+    better: lower
+    aggregation: median
+    min_sample_size: 10
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id,
+             {{ period_start('w.done_at') }} AS period_start,
+             median(w.cycle_days) AS value, NULL AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      WHERE w.done_at >= {{ p('window_start') }} AND w.done_at < {{ p('window_end') }}
+        AND w.type IN ('story', 'bug', 'task') AND w.cycle_days IS NOT NULL
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: carryover_rate
+    description: Share of items in progress at period start that are not done at period end.
+    domain: delivery
+    grains: [team, org, work_item]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 10
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      {%- set OPEN = "coalesce(" ~ cat_at('spine.end_ts', 'w', 'ce') ~ ", '') <> 'done'" %}
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id, spine.period_start AS period_start,
+             count(*) FILTER (WHERE {{ OPEN }}) / count(*) AS value,
+             count(*) FILTER (WHERE {{ OPEN }}) AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      CROSS JOIN {{ period_spine() }} {{ cat_at_join('spine.start_ts', 'w', 'cs') }}
+      {{ cat_at_join('spine.end_ts', 'w', 'ce') }}
+      WHERE w.type IN ('story', 'bug', 'task')
+        AND {{ cat_at('spine.start_ts', 'w', 'cs') }} = 'in_progress'
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: backlog_age_days
+    description: Median age in days of to-do story, bug and task items at the period snapshot.
+    domain: delivery
+    grains: [service, team, org, work_item]
+    unit: days
+    better: lower
+    aggregation: median
+    min_sample_size: 10
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id, spine.period_start AS period_start,
+             median(date_diff('second', w.created_at, spine.snap_ts) / 86400.0) AS value,
+             NULL AS numerator, count(*) AS denominator, count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      CROSS JOIN {{ period_spine() }} {{ cat_at_join('spine.snap_ts', 'w', 'cn') }}
+      WHERE w.type IN ('story', 'bug', 'task')
+        AND {{ cat_at('spine.snap_ts', 'w', 'cn') }} = 'todo'
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: wip_count
+    description: Count of story, bug and task items in progress at the period snapshot.
+    domain: delivery
+    grains: [team, org, work_item]
+    unit: count
+    better: lower
+    aggregation: snapshot
+    min_sample_size: 1
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id, spine.period_start AS period_start,
+             count(*) AS value, count(*) AS numerator, NULL AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      CROSS JOIN {{ period_spine() }} {{ cat_at_join('spine.snap_ts', 'w', 'cn') }}
+      WHERE w.type IN ('story', 'bug', 'task')
+        AND {{ cat_at('spine.snap_ts', 'w', 'cn') }} = 'in_progress'
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: unplanned_work_ratio
+    description: Share of done story, bug and task items that are bugs or incident-linked.
+    domain: delivery
+    grains: [service, team, org]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 20
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id,
+             {{ period_start('w.done_at') }} AS period_start,
+             count(*) FILTER (WHERE w.is_unplanned) / count(*) AS value,
+             count(*) FILTER (WHERE w.is_unplanned) AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      WHERE w.done_at >= {{ p('window_start') }} AND w.done_at < {{ p('window_end') }}
+        AND w.type IN ('story', 'bug', 'task')
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: epic_predictability
+    description: Committed-points-weighted share of epic scope done by the epic's done date.
+    domain: delivery
+    grains: [team, org, work_item]
+    unit: ratio
+    better: higher
+    aggregation: ratio
+    min_sample_size: 3
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'e') }} AS entity_id,
+             {{ period_start('e.done_at') }} AS period_start,
+             sum(k.done_pts) / sum(k.committed_pts) AS value, sum(k.done_pts) AS numerator,
+             sum(k.committed_pts) AS denominator, count(DISTINCT e.record_id) AS sample_size
+      FROM metrics.work_item_fact e
+      JOIN (SELECT a.ancestor_record_id AS epic_id, sum(coalesce(c.story_points, 1)) AS committed_pts,
+                   sum(CASE WHEN c.done_at <= x.done_at THEN coalesce(c.story_points, 1) ELSE 0 END)
+                     AS done_pts
+            FROM metrics.work_item_closure a
+            JOIN metrics.work_item_fact x ON x.record_id = a.ancestor_record_id
+            JOIN metrics.work_item_fact c ON c.record_id = a.record_id
+            WHERE a.depth >= 1 AND c.type IN ('story', 'bug', 'task')
+              AND c.created_at <= coalesce(x.first_in_progress_at, x.created_at)
+            GROUP BY a.ancestor_record_id) k ON k.epic_id = e.record_id
+      {{ entity_join('work_item', 'e') }}
+      WHERE e.done_at >= {{ p('window_start') }} AND e.done_at < {{ p('window_end') }}
+        AND e.type = 'epic' {{ filter_clause('work_item', 'e') }} {{ entity_filter() }}
+      GROUP BY ALL
   - name: availability_pct
     description: Mean daily availability; org grain is request-count weighted when counts exist.
     domain: monitoring
@@ -577,11 +764,10 @@ scoring:
     min_peer_group: 5
     trend_weight: 0.5
     min_weight_coverage: 0.5
-    # T04-11: add cycle_time_days 0.10, unplanned_work_ratio 0.10, epic_predictability 0.05
-    # (design 04 §7.1) as they ship; U04-26 step 8 rejects names absent from the catalog.
     metrics: {mttr_hours: 0.15, repeat_incident_rate: 0.15, change_failure_rate: 0.15,
               sla_breach_rate: 0.10, reopen_rate: 0.05, reassignment_rate: 0.05,
-              alert_noise_ratio: 0.10}
+              alert_noise_ratio: 0.10, cycle_time_days: 0.10, unplanned_work_ratio: 0.10,
+              epic_predictability: 0.05}
   peer_group:
     min_service_peers: 3          # below this, service/work_item peer_group() returns fallback "prior_year"
   levers:
