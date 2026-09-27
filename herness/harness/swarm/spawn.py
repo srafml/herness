@@ -39,6 +39,7 @@ __all__ = ["SpawnBroker", "SpawnDecision"]
 METRIC: Final = "herness_harness_spawn_decisions_total"
 MAX_SCOPE_ENTITIES: Final = 50
 PRIORITY_FACTOR: Final = 0.9
+OBJECTIVE_MAX: Final = 2_000
 _SPECIALTIES: Final = frozenset(get_args(Specialty.__value__))
 _ENTITY_TYPES: Final = frozenset(get_args(ScopeEntityType.__value__))
 
@@ -76,6 +77,8 @@ def _parse(parent: TaskSpec, args: Mapping[str, object]) -> _Request | None:
     ids, entity_type = args.get("entity_ids"), args.get("entity_type")
     objective, specialty, reason = args.get("objective"), args.get("specialty"), args.get("reason")
     if not isinstance(ids, list) or len(ids) > MAX_SCOPE_ENTITIES or not isinstance(objective, str):
+        return None
+    if not 1 <= len(objective) <= OBJECTIVE_MAX:
         return None
     if entity_type not in _ENTITY_TYPES or specialty not in _SPECIALTIES:
         return None
@@ -143,17 +146,11 @@ class SpawnBroker:
             return "budget"  # the writer ledger is a separate RunBudget: never touched here
         return None
 
-    def _in_catalog(self, scope: EntityScope) -> bool:
-        try:
-            return not self._catalog.missing(scope.entity_type, scope.entity_ids)
-        except ValueError:  # an entity type the catalog cannot look up
-            return False
-
     async def _decide(self, parent: TaskSpec, args: Mapping[str, object]) -> _Outcome:
         if (cap := self._check_caps(parent)) is not None:
             return _Outcome(reason=cap)
         req = _parse(parent, args)
-        if req is None or not self._in_catalog(req.scope):
+        if req is None or self._catalog.missing(req.scope.entity_type, req.scope.entity_ids):
             return _Outcome(reason="bad_scope")
         key = compute_dedup_key("analyst", req.specialty, req.scope, req.objective)
         if (existing := get_task_by_dedup(self.run_id, key)) is not None:

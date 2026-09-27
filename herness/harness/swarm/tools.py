@@ -166,9 +166,7 @@ class PostFindingTool:
 
     def __call__(self, ctx: ToolContext, **kwargs: JsonValue) -> ToolResult:
         """Commit the finding; a rejected post raises `ToolInputError` (dispatch reports it)."""
-        args = dict(kwargs)
-        if "numbers" in args:
-            args["numbers"] = _numbers(args["numbers"])
+        args = {**kwargs, "numbers": _numbers(kwargs.get("numbers"))}  # absent: rejected by post
         fid = self._bb.post(ctx, **args)
         return ToolResult(
             ok=True,
