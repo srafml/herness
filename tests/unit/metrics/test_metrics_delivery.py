@@ -332,3 +332,23 @@ def test_ut04_61_epic_without_committed_child_is_skipped(
         ("O1", _approx(2 / 3), 1),
         ("O2", _approx(2 / 3), 1),
     ]
+
+
+def test_ut04_61_zero_committed_points_is_null(
+    tiny: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT04-61 committed children with 0 story points (W6, W8 of W5) give a zero denominator:
+    the value is NULL, never NaN (ratios stay in [0, 1]); O2 keeps W7's 2/3 over 3 points."""
+    _use(monkeypatch, shipped_catalog(epic_predictability=1))
+    tiny.execute(
+        "UPDATE metrics.work_item_fact SET story_points = 0 WHERE record_id IN ('W6', 'W8')"
+    )
+    team = compute_metric("epic_predictability", "team", None, "quarter", con=tiny).rows
+    assert [(r.entity_id, r.value, r.numerator, r.denominator, r.sample_size) for r in team] == [
+        ("T1", _approx(2 / 3), 2.0, 3.0, 1),
+        ("T2", None, 0.0, 0.0, 1),
+    ]
+    org = compute_metric("epic_predictability", "org", ["O2"], "quarter", con=tiny).rows
+    assert [(r.value, r.numerator, r.denominator, r.sample_size) for r in org] == [
+        (_approx(2 / 3), 2.0, 3.0, 2)
+    ]

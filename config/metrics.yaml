@@ -676,7 +676,7 @@ metrics:
     sql: |
       SELECT {{ entity_col('work_item', 'e') }} AS entity_id,
              {{ period_start('e.done_at') }} AS period_start,
-             sum(k.done_pts) / sum(k.committed_pts) AS value, sum(k.done_pts) AS numerator,
+             sum(k.done_pts) / nullif(sum(k.committed_pts), 0) AS value, sum(k.done_pts) AS numerator,
              sum(k.committed_pts) AS denominator, count(DISTINCT e.record_id) AS sample_size
       FROM metrics.work_item_fact e
       JOIN (SELECT a.ancestor_record_id AS epic_id, sum(coalesce(c.story_points, 1)) AS committed_pts,

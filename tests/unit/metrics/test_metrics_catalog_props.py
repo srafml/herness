@@ -52,11 +52,19 @@ ORG_OF_TEAM: Final[dict[str | None, str | None]] = {"T1": "O2", "T2": "O3", None
 ORG_PARENTS: Final = {"O1": None, "O2": "O1", "O3": "O2"}
 RANK: Final = {"todo": 1, "in_progress": 2, "done": 3}
 CATALOG: Final = shipped_catalog(**dict.fromkeys(COVERED, 1))
-SLOW_OK: Final = settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
+# Each example runs one or two DuckDB queries: keep the commit profile's 200 examples but cap
+# the nightly profile (10,000 would take about 25 minutes for these two tests).
+MAX_EXAMPLES: Final = min(settings().max_examples, 300)
+SLOW_OK: Final = settings(
+    deadline=None, max_examples=MAX_EXAMPLES, suppress_health_check=[HealthCheck.too_slow]
+)
 # PT04-04: additive metrics. Counts and sums add up; for ratios (and the mean) the numerator
 # and denominator add up and the value is their quotient. change_count is left out: its
 # denominator is calendar weeks, and a month without deployments has no row to add its weeks.
 # The spine metrics (carryover, backlog, WIP) and medians are not additive over periods.
+# customer_impact_minutes, incident_cost_usd and change_caused_incident_count are additive but
+# excluded because the generator does not fill the columns they read (impact_h,
+# impact_estimated, total_usd; core.incident / enrich.incident_change_link causes).
 SUMMED: Final = ("incident_count", "p1p2_count", "throughput", "toil_hours_est")
 RATIOS: Final = (
     *("mttr_hours", "repeat_incident_rate", "reopen_rate", "sla_breach_rate"),
@@ -140,7 +148,7 @@ def _item(draw: st.DrawFn, rid: str, earlier: list[str]) -> WorkItem:
         service_id=draw(_service),
         team_id=team,
         org_id=ORG_OF_TEAM[team],
-        story_points=draw(st.sampled_from([None, 0.5, 1.0, 2.0, 3.0, 5.0])),
+        story_points=draw(st.sampled_from([None, 0.0, 0.5, 1.0, 2.0, 3.0, 5.0])),
         created_at=created,
         first_in_progress_at=started,
         done_at=done,
@@ -257,7 +265,13 @@ def test_pt04_03_sql_equals_oracle(
     grain = data.draw(st.sampled_from(CATALOG.get(metric).grains))
     period = data.draw(st.sampled_from(PERIODS))
     _load(warehouse, facts)
-    rows = compute_metric(metric, grain, None, period, con=warehouse).rows  # type: ignore[arg-type]
+    _assert_oracle(warehouse, facts, metric, grain, period)
+
+
+def _assert_oracle(
+    con: duckdb.DuckDBPyConnection, facts: Facts, metric: str, grain: str, period: str
+) -> None:
+    rows = compute_metric(metric, grain, None, period, con=con).rows  # type: ignore[arg-type]
     got, expect = _got(rows), oracle(metric, grain, facts, _frame(period))
     assert sorted(got) == sorted(expect)
     for key, (value, num, den, n) in expect.items():
@@ -268,6 +282,44 @@ def test_pt04_03_sql_equals_oracle(
             n,
         )
     _check_invariants(metric, rows)
+
+
+def _item_row(rid: str, kind: str, parent: str | None, **ts: datetime.datetime) -> WorkItem:
+    moves = tuple((at, cat) for cat, at in ts.items() if cat in RANK)
+    done = ts.get("done")
+    return WorkItem(
+        record_id=rid,
+        type=kind,
+        parent_id=parent,
+        service_id="S1",
+        team_id="T1",
+        org_id="O2",
+        story_points=0.0,
+        created_at=ts["created"],
+        first_in_progress_at=ts.get("in_progress"),
+        done_at=done,
+        cycle_days=None,
+        is_unplanned=False,
+        transitions=moves,
+    )
+
+
+def test_pt04_03_zero_point_epic_matches_oracle(warehouse: duckdb.DuckDBPyConnection) -> None:
+    """PT04-03 fixed case the random draw rarely reaches: a done epic whose only committed
+    child has 0 story points has a zero denominator; SQL and oracle give value NULL (not NaN)
+    at every grain and period."""
+    day = datetime.datetime(2026, 1, 5, 14, tzinfo=datetime.UTC)
+    epic = _item_row(
+        "E", "epic", None, created=day, in_progress=day, done=day + datetime.timedelta(days=30)
+    )
+    child = _item_row("S", "story", "E", created=day - datetime.timedelta(days=3))
+    facts = Facts(items=[epic, child], org_parents=ORG_PARENTS)
+    _load(warehouse, facts)
+    for grain in CATALOG.get("epic_predictability").grains:
+        for period in PERIODS:
+            _assert_oracle(warehouse, facts, "epic_predictability", grain, period)
+    rows = compute_metric("epic_predictability", "team", None, "quarter", con=warehouse).rows
+    assert [(r.value, r.numerator, r.denominator) for r in rows] == [(None, 0.0, 0.0)]
 
 
 def _quarter(day: datetime.date) -> datetime.date:
