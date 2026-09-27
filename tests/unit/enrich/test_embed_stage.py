@@ -100,6 +100,13 @@ def test_ut03_30_unknown_column_or_bare_string_is_schema_violation() -> None:
         lance_filter_in("content_hash", HASH)
 
 
+def test_ut03_30_non_str_value_is_schema_violation() -> None:
+    """UT03-30 a non-str value (M-4) -> SchemaViolation, not TypeError."""
+    for value in (5, None, b"s:e:1"):
+        with pytest.raises(SchemaViolation, match="invalid record_id for vector filter"):
+            lance_filter_in("record_id", ["s:e:1", value])  # type: ignore[list-item]
+
+
 # --- UT03-31: run_embed_stage -------------------------------------------------------------------
 
 
@@ -330,6 +337,98 @@ def test_ut03_31_warehouse_error_is_schema_violation(
     wh.execute("DROP TABLE core.problem")
     with pytest.raises(SchemaViolation, match="embed stage: CatalogException"):
         _run(wh, FakeEncoder())
+
+
+def test_ut03_31_text_swap_reads_reuse_vector_before_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-31 (I-1) A1's text changes, new B1 gets A1's old text: B1 reuses the old vector."""
+    store = use_store(tmp_path, monkeypatch)
+    add_rows(store, [("servicenow:incident:A1", "old text", MODEL_ID)])
+    recs = [Rec("incident", "A1", "new text"), Rec("incident", "B1", "old text")]
+    wh = embed_warehouse(tmp_path / "wh.duckdb", recs)
+    encoder = FakeEncoder()
+    report = _run(wh, encoder)
+    assert encoder.inputs == ["new text"]
+    assert (report.embedded, report.cache_hits, report.rows) == (1, 1, 2)
+    rows = stored(store)
+    assert rows["servicenow:incident:A1"]["content_hash"] == content_hash("new text")
+    assert rows["servicenow:incident:B1"]["content_hash"] == content_hash("old text")
+    assert np.allclose(rows["servicenow:incident:B1"]["vector"], unit_vector("old text"))
+
+
+def test_ut03_31_reuse_hash_missing_at_read_is_encoded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-31 (I-1) a reuse hash not found when vectors are read -> encoded, no KeyError."""
+    store = use_store(tmp_path, monkeypatch)
+    add_rows(store, [("servicenow:incident:A1", "shared text", MODEL_ID)])
+    wh = embed_warehouse(
+        tmp_path / "wh.duckdb",
+        [Rec("incident", "A1", "shared text"), Rec("incident", "B1", "shared text")],
+    )
+    monkeypatch.setattr(embed_stage, "_read_vectors", lambda _sink, _hashes: {})
+    encoder = FakeEncoder()
+    report = _run(wh, encoder)
+    assert encoder.inputs == ["shared text"]
+    assert (report.embedded, report.cache_hits, report.rows) == (1, 0, 1)
+    assert set(stored(store)) == {"servicenow:incident:A1", "servicenow:incident:B1"}
+
+
+def test_ut03_31_non_allowlisted_record_is_not_embedded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-31 (I-2) a record_id outside the U03-33 allowlist: not embedded, WARNING count."""
+    store = use_store(tmp_path, monkeypatch)
+    recs = [Rec("incident", "INC 1/a", "odd key text"), Rec("incident", "INC2", "fine")]
+    wh = embed_warehouse(tmp_path / "wh.duckdb", recs)
+    encoder = FakeEncoder()
+    with capture_logs() as logs:
+        report = _run(wh, encoder)
+    assert encoder.inputs == ["fine"]
+    assert set(stored(store)) == {"servicenow:incident:INC2"}
+    assert report.rows == 1
+    skipped = [e for e in logs if e["event"] == "enrich.embed.ids_skipped"]
+    assert [(e["log_level"], e["records"], e["orphans"]) for e in skipped] == [("warning", 1, 0)]
+    assert "INC 1" not in repr(logs)
+
+
+def test_ut03_31_vectors_map_by_aligned_result_not_batch_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-31 (M-1) batches reported out of order: each record still gets its own vector."""
+    store = use_store(tmp_path, monkeypatch)
+    wh = embed_warehouse(tmp_path / "wh.duckdb", _many(5))
+
+    def shuffled(encoder: Any, texts: Any, *, batch_size: int, on_batch: Any) -> np.ndarray:
+        result = np.stack([unit_vector(t) for t in texts])
+        on_batch(0, result[::-1])  # a different order than the texts
+        return result
+
+    monkeypatch.setattr(embed_stage, "embed_texts", shuffled)
+    _run(wh, FakeEncoder())
+    rows = stored(store)
+    for rec in _many(5):
+        assert np.allclose(rows[rec.record_id]["vector"], unit_vector(str(rec.text)))
+
+
+def test_ut03_31_result_not_aligned_with_texts_is_schema_violation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-31 (M-1) fewer rows reported or returned than texts -> SchemaViolation, 0 rows."""
+    store = use_store(tmp_path, monkeypatch)
+    wh = embed_warehouse(tmp_path / "wh.duckdb", _many(4, prefix="secret"))
+
+    def short(encoder: Any, texts: Any, *, batch_size: int, on_batch: Any) -> np.ndarray:
+        result = np.stack([unit_vector(t) for t in texts[:-1]])
+        on_batch(0, result)
+        return result
+
+    monkeypatch.setattr(embed_stage, "embed_texts", short)
+    with pytest.raises(SchemaViolation, match="embedding shape") as info:
+        _run(wh, FakeEncoder())
+    assert "secret" not in str(info.value)
+    assert store.count("ticket_embedding") == 0
 
 
 def test_ut03_31_default_store_path_and_config_batch_size(

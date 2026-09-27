@@ -1,12 +1,8 @@
 """Embed stage: anti-join, upsert, orphan delete and index upkeep (impl 03 U03-33 ... U03-35).
 
-Design 03 §5.2, flow F03-03. Keeps LanceDB `ticket_embedding` in step with
-`enrich.text_redacted`: a record whose `(record_id, content_hash, model)` row is missing is
-upserted by `record_id`; a hash already stored for the encoder's model reuses its vector, and
-each new hash is encoded once. Rows of records gone from `core.*` are deleted and the IVF_PQ
-index is kept fresh. Only `enrich.text_redacted.text` reaches the encoder (TH03-13); logs
-carry counts only. The caller holds the GPU class (`ctx.gpu_scope("decider")`, R-43): this
-module takes no GPU lock.
+Design 03 §5.2, F03-03: keeps LanceDB `ticket_embedding` in step with `enrich.text_redacted`;
+each new hash is encoded once, stored hashes reuse their vector. Only redacted text reaches
+the encoder (TH03-13); logs carry counts only. The caller holds the GPU class (R-43).
 """
 
 from __future__ import annotations
@@ -15,7 +11,7 @@ import functools
 import math
 import re
 from collections.abc import Callable, Iterator, Sequence
-from typing import Final, Literal, Protocol
+from typing import Final, Literal, NamedTuple, Protocol
 
 import duckdb
 import numpy as np
@@ -48,6 +44,7 @@ INDEX_SUB_VECTORS: Final = 64
 INDEX_ROWS_KEY: Final = "herness.index_rows"
 _TABLE: Final = "ticket_embedding"
 _STAGE: Final = "embed"
+_SHAPE: Final = "embedding shape or dtype does not match the vector table"
 _ALLOW: Final[dict[str, re.Pattern[str]]] = {
     "record_id": re.compile(r"[a-z0-9_]{1,32}:[a-z0-9_]{1,64}:[A-Za-z0-9._-]{1,128}"),
     "content_hash": re.compile(r"[0-9a-f]{32}"),
@@ -80,10 +77,7 @@ _log = get_logger("enrich.embed")
 
 
 class _Report(Protocol):
-    """Counters the stage mutates.
-
-    T03-28 pipeline: retype to StageReport (U03-142, herness.enrich.pipeline).
-    """
+    """Counters the stage mutates. T03-28: retype to StageReport (U03-142)."""
 
     embedded: int
     cache_hits: int
@@ -91,6 +85,10 @@ class _Report(Protocol):
 
 
 # --- U03-33 --------------------------------------------------------------------------------------
+
+
+def _allowed(pattern: re.Pattern[str], value: object) -> bool:
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
 
 
 def lance_filter_in(column: Literal["record_id", "content_hash"], values: Sequence[str]) -> str:
@@ -104,7 +102,7 @@ def lance_filter_in(column: Literal["record_id", "content_hash"], values: Sequen
         msg = "invalid column for vector filter"
         raise SchemaViolation(msg)
     valid = not isinstance(values, str) and 1 <= len(values) <= FILTER_MAX
-    if not valid or not all(pattern.fullmatch(value) for value in values):
+    if not valid or not all(_allowed(pattern, value) for value in values):
         msg = f"invalid {column} for vector filter"
         raise SchemaViolation(msg)
     return f"{column} IN ({', '.join(f"'{value}'" for value in values)})"
@@ -125,82 +123,71 @@ def _chunks[T](items: Sequence[T], size: int) -> Iterator[Sequence[T]]:
     return (items[i : i + size] for i in range(0, len(items), size))
 
 
-class _Sink:
-    """Upserts rows by `record_id` (`merge_insert`), counts them; holds the job context."""
-
-    def __init__(self, table: Table, model: str, report: _Report, ctx: JobContext) -> None:
-        self.table, self.model, self.report, self.ctx = table, model, report, ctx
-
-    def upsert(self, meta: pa.Table, vectors: np.ndarray) -> int:
-        """Write `meta` rows (`_META` columns) with `vectors`; returns the rows written."""
-        flat = pa.array(vectors.reshape(-1), pa.float32())
-        rows = meta.select(_META).append_column(
-            "model", pa.array([self.model] * meta.num_rows, pa.string())
-        )
-        rows = rows.append_column("vector", pa.FixedSizeListArray.from_arrays(flat, EMBEDDING_DIM))
-        rows = rows.cast(TICKET_EMBEDDING_SCHEMA)
-        _lance("upsert", lambda: self._merge(rows))
-        count: int = rows.num_rows
-        self.report.rows += count
-        return count
-
-    def _merge(self, rows: pa.Table) -> None:
-        builder = self.table.merge_insert("record_id").when_matched_update_all()
-        builder.when_not_matched_insert_all().execute(rows)
+class _Sink(NamedTuple):
+    table: Table
+    model: str
+    report: _Report
+    ctx: JobContext
 
 
-class _NewRows:
-    """`embed_texts` callback: maps each vector to every record sharing its hash.
+def _read(table: Table, columns: list[str], where: str | None = None) -> pa.Table:
+    query = table.search() if where is None else table.search().where(where)
+    return _lance("read", query.select(columns).limit(None).to_arrow)
 
-    Hashes are fed shortest first, as `embed_texts` orders them (a stable sort, so its own
-    sort keeps this order); the cursor walks them batch by batch. Every 20 batches it
-    checkpoints: flush, heartbeat, then `YieldRequested` when the job must yield. The buffer
-    holds at most 20 x batch_size rows: <= 20 x 512 x 4 KiB = 40 MiB of vectors (10 MiB at
-    the default batch 128), plus their five key columns.
-    """
 
-    def __init__(self, meta: pa.Table, groups: list[list[int]], sink: _Sink, limit: int) -> None:
-        self.meta, self.groups, self.sink, self.limit = meta, groups, sink, limit
-        self.cursor = 0
-        self.batches = 0
+class _Buffer:
+    """Rows of `meta` awaiting their upsert by `record_id`, flushed at `limit` (20 x batch)
+    rows: <= 20 x 512 x 4 KiB = 40 MiB of vectors (10 MiB at batch 128) plus 5 key columns."""
+
+    def __init__(self, meta: pa.Table, sink: _Sink, limit: int) -> None:
+        self.meta, self.sink, self.limit = meta, sink, limit
         self.index: list[int] = []
         self.vectors: list[np.ndarray] = []
 
-    def on_batch(self, _index: int, rows: np.ndarray) -> None:
-        """Check the batch's shape before buffering its rows; flush at the row bound."""
-        remaining = len(self.groups) - self.cursor
-        if not (
-            rows.ndim == 2  # noqa: PLR2004 - a matrix
-            and 0 < rows.shape[0] <= remaining
-            and rows.shape[1] == EMBEDDING_DIM
-            and np.issubdtype(rows.dtype, np.floating)
-        ):
-            msg = "embedding shape or dtype does not match the vector table"
-            raise SchemaViolation(msg)
-        for vector in rows:
-            for position in self.groups[self.cursor]:
-                self.index.append(position)
-                self.vectors.append(vector)
-                if len(self.index) >= self.limit:
-                    self.flush()
-            self.cursor += 1
-        self.sink.report.embedded += rows.shape[0]
-        self.batches += 1
-        if self.batches % FLUSH_BATCHES == 0:
-            self.flush()
-            self.sink.ctx.heartbeat(_STAGE)
-            if self.sink.ctx.should_yield():
-                raise YieldRequested(_STAGE)
+    def add(self, positions: Sequence[int], vector: np.ndarray) -> None:
+        for position in positions:
+            self.index.append(position)
+            self.vectors.append(vector)
+            if len(self.index) >= self.limit:
+                self.flush()
 
     def flush(self) -> None:
-        if self.index:
-            rows = self.sink.upsert(self.meta.take(self.index), np.stack(self.vectors))
-            self.index, self.vectors = [], []
-            _log.info("enrich.embed.batch_flushed", rows=rows)
+        if not self.index:
+            return
+        rows = self.meta.take(self.index).select(_META)
+        flat = pa.array(np.stack(self.vectors).reshape(-1), pa.float32())
+        rows = rows.append_column("model", pa.array([self.sink.model] * rows.num_rows))
+        rows = rows.append_column("vector", pa.FixedSizeListArray.from_arrays(flat, EMBEDDING_DIM))
+        _lance("upsert", functools.partial(self._merge, rows.cast(TICKET_EMBEDDING_SCHEMA)))
+        self.sink.report.rows += rows.num_rows
+        self.index, self.vectors = [], []
+        _log.info("enrich.embed.batch_flushed", rows=rows.num_rows)
+
+    def _merge(self, rows: pa.Table) -> None:
+        builder = self.sink.table.merge_insert("record_id").when_matched_update_all()
+        builder.when_not_matched_insert_all().execute(rows)
 
 
-def _embed_new(new: pa.Table, encoder: Encoder, sink: _Sink) -> None:
-    """Encode each distinct new hash once, shortest first, then flush the rest."""
+def _encode(encoder: Encoder, texts: Sequence[str], batch_size: int) -> np.ndarray:
+    """`embed_texts` rows aligned with `texts`; each batch is checked before any use (M2)."""
+    received = 0
+
+    def check(_index: int, rows: np.ndarray) -> None:
+        nonlocal received
+        received += len(rows)
+        matrix = rows.ndim == 2 and rows.shape[1] == EMBEDDING_DIM  # noqa: PLR2004
+        if not (matrix and np.issubdtype(rows.dtype, np.floating) and received <= len(texts)):
+            raise SchemaViolation(_SHAPE)
+
+    result = embed_texts(encoder, texts, batch_size=batch_size, on_batch=check)
+    if received != len(texts) or result.shape != (len(texts), EMBEDDING_DIM):
+        raise SchemaViolation(_SHAPE)
+    return result
+
+
+def _embed_new(new: pa.Table, encoder: Encoder, sink: _Sink, batch_size: int) -> None:
+    """Encode each new hash once, shortest first, one `embed_texts` call (whose result is
+    input-aligned) per 20-batch window; checkpoint per window: flush, heartbeat, yield."""
     first: dict[str, int] = {}
     groups: dict[str, list[int]] = {}
     for position, digest in enumerate(new.column("content_hash").to_pylist()):
@@ -208,40 +195,54 @@ def _embed_new(new: pa.Table, encoder: Encoder, sink: _Sink) -> None:
         groups.setdefault(digest, []).append(position)
     texts = new.column("text").to_pylist()
     hashes = sorted(first, key=lambda digest: len(texts[first[digest]]))
-    batch_size = get_config().decisions.embedding.batch_size
     window = FLUSH_BATCHES * batch_size
-    state = _NewRows(new, [groups[digest] for digest in hashes], sink, window)
-    # One embed_texts call per 20-batch window keeps its result matrix bounded as well.
+    buffer = _Buffer(new, sink, window)
     for chunk in _chunks(hashes, window):
-        chunk_texts = [texts[first[digest]] for digest in chunk]
-        embed_texts(encoder, chunk_texts, batch_size=batch_size, on_batch=state.on_batch)
-    state.flush()
+        vectors = _encode(encoder, [texts[first[digest]] for digest in chunk], batch_size)
+        for digest, vector in zip(chunk, vectors, strict=True):
+            buffer.add(groups[digest], vector)
+        sink.report.embedded += len(chunk)
+        if len(chunk) == window:
+            buffer.flush()
+            sink.ctx.heartbeat(_STAGE)
+            if sink.ctx.should_yield():
+                raise YieldRequested(_STAGE)
+    buffer.flush()
 
 
-def _upsert_reuse(reuse: pa.Table, sink: _Sink) -> None:
-    """Upsert records whose hash is stored for the model, with the stored vector."""
-    hashes = list(dict.fromkeys(reuse.column("content_hash").to_pylist()))
-    wanted = reuse.column("content_hash")
+def _read_vectors(sink: _Sink, hashes: Sequence[str]) -> dict[str, np.ndarray]:
+    """Stored vectors of the encoder's model by hash, in chunks of 1,000 hashes."""
+    found: dict[str, np.ndarray] = {}
     for chunk in _chunks(hashes, FILTER_MAX):
-        query = sink.table.search().where(lance_filter_in("content_hash", chunk))
-        found = _lance(
-            "read", query.select(["content_hash", "model", "vector"]).limit(None).to_arrow
-        )
-        found = found.filter(pc.equal(found.column("model"), sink.model))
-        matrix = found.column("vector").combine_chunks().flatten().to_numpy()
-        matrix = matrix.reshape(-1, EMBEDDING_DIM)
-        row_of = {digest: i for i, digest in enumerate(found.column("content_hash").to_pylist())}
-        rows = reuse.filter(pc.is_in(wanted, pa.array(chunk, pa.string())))
-        picks = [row_of[digest] for digest in rows.column("content_hash").to_pylist()]
-        sink.report.cache_hits += sink.upsert(rows, matrix[picks])
+        where = lance_filter_in("content_hash", chunk)
+        part = _read(sink.table, ["content_hash", "model", "vector"], where)
+        part = part.filter(pc.equal(part.column("model"), sink.model))
+        matrix = part.column("vector").combine_chunks().flatten().to_numpy()
+        rows = matrix.reshape(-1, EMBEDDING_DIM).copy()
+        found.update(zip(part.column("content_hash").to_pylist(), rows, strict=True))
+    return found
 
 
-def _query(wh: duckdb.DuckDBPyConnection, sql: str, model: str | None = None) -> pa.Table:
+def _plan(wh: duckdb.DuckDBPyConnection, have: pa.Table, model: str) -> tuple[pa.Table, list[str]]:
+    """Rows to write and orphan ids with U03-33-allowlisted `record_id`s only: others could
+    never be deleted by filter (spec note: make_record_id is wider); WARNING with counts."""
+    wh.register(_HAVE, have)
     try:
-        return wh.execute(sql, None if model is None else {"model": model}).to_arrow_table()
+        todo = wh.execute(_TODO_SQL, {"model": model}).to_arrow_table()
+        orphans = wh.execute(_ORPHAN_SQL).to_arrow_table().column("record_id").to_pylist()
     except duckdb.Error as exc:  # the class only: messages may quote row values
         msg = f"embed stage: {type(exc).__name__}"
         raise SchemaViolation(msg) from None
+    finally:
+        wh.unregister(_HAVE)
+    ids = _ALLOW["record_id"]
+    mask = [_allowed(ids, record_id) for record_id in todo.column("record_id").to_pylist()]
+    ok = todo.filter(pa.array(mask, pa.bool_()))
+    kept = [record_id for record_id in orphans if _allowed(ids, record_id)]
+    records, others = todo.num_rows - ok.num_rows, len(orphans) - len(kept)
+    if records or others:
+        _log.warning("enrich.embed.ids_skipped", records=records, orphans=others)
+    return ok, kept
 
 
 def run_embed_stage(
@@ -249,37 +250,38 @@ def run_embed_stage(
 ) -> None:
     """Embed new hashes, reuse stored ones, delete orphans, maintain the index (U03-34).
 
-    Precondition: the caller is inside `ctx.gpu_scope("decider")` (R-43) with the encoder
-    loaded. Raises `YieldRequested("embed")` after a checkpoint flush when `ctx` asks to
-    yield; StoreBusy on a LanceDB conflict or lock (the caller retries, policy `embed_batch`).
+    Caller inside `ctx.gpu_scope("decider")` (R-43). `YieldRequested("embed")` after a
+    checkpoint flush; StoreBusy on a LanceDB conflict or lock (retry policy `embed_batch`).
     """
     started = clock.monotonic()
     store = VectorStore()
     store.ensure_tables()
     table = store.table(_TABLE)
-    have = _lance(
-        "read", table.search().select(["record_id", "content_hash", "model"]).limit(None).to_arrow
-    )
+    have = _read(table, ["record_id", "content_hash", "model"])
     sink = _Sink(table, encoder.model_id, report, ctx)
-    wh.register(_HAVE, have)
-    try:
-        todo = _query(wh, _TODO_SQL, sink.model)
-        orphans = _query(wh, _ORPHAN_SQL).column("record_id").to_pylist()
-    finally:
-        wh.unregister(_HAVE)
-    is_reuse = todo.column("reuse")
-    before = (report.embedded, report.cache_hits, report.rows)
-    _embed_new(todo.filter(pc.invert(is_reuse)), encoder, sink)
-    _upsert_reuse(todo.filter(is_reuse), sink)
+    todo, orphans = _plan(wh, have, sink.model)
+    # Step 5 before any write: a hash whose stored row is gone by now is encoded instead.
+    flagged = todo.column("reuse")
+    stored = _read_vectors(sink, pc.unique(todo.filter(flagged)["content_hash"]).to_pylist())
+    known = pc.is_in(todo.column("content_hash"), pa.array(list(stored), pa.string()))
+    ready = pc.and_(flagged, known)
+    batch_size = get_config().decisions.embedding.batch_size
+    _embed_new(todo.filter(pc.invert(ready)), encoder, sink, batch_size)
+    reuse = todo.filter(ready)
+    buffer = _Buffer(reuse, sink, FLUSH_BATCHES * batch_size)
+    for position, digest in enumerate(reuse.column("content_hash").to_pylist()):
+        buffer.add((position,), stored[digest])
+    buffer.flush()
+    report.cache_hits += reuse.num_rows
     for chunk in _chunks(orphans, FILTER_MAX):
         _lance("delete", functools.partial(table.delete, lance_filter_in("record_id", chunk)))
     action = maintain_index(table)
-    # T08-05: herness_enrich_embeddings_total += report.embedded - before[0]
+    # T08-05: herness_enrich_embeddings_total += report.embedded
     _log.info(
         "enrich.embed.completed",
-        embedded=report.embedded - before[0],
-        cache_hits=report.cache_hits - before[1],
-        rows=report.rows - before[2],
+        embedded=report.embedded,
+        cache_hits=report.cache_hits,
+        rows=report.rows,
         deleted=len(orphans),
         index_rebuilt=int(action == "rebuilt"),
         duration_ms=round((clock.monotonic() - started) * 1000),
@@ -291,9 +293,8 @@ def run_embed_stage(
 
 def _index_rows(table: Table) -> int | None:
     """Row count at the last index build (field metadata of `vector`); None: never built."""
-    meta = table.schema.field("vector").metadata or {}
-    value = meta.get(INDEX_ROWS_KEY.encode())
-    return int(value) if value is not None and value.isdigit() else None
+    value = (table.schema.field("vector").metadata or {}).get(INDEX_ROWS_KEY.encode(), b"")
+    return int(value) if value.isdigit() else None
 
 
 def maintain_index(table: Table) -> IndexAction:

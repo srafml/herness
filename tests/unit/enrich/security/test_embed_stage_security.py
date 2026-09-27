@@ -45,20 +45,25 @@ def test_st03_09_injected_record_id_is_rejected_and_nothing_deleted(
     assert store.count("ticket_embedding") == 1
 
 
-def test_st03_09_injected_orphan_id_stops_the_orphan_delete(
+def test_st03_09_injected_orphan_id_is_skipped_and_not_deleted_by_filter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ST03-09 a stored orphan record_id `x' OR 1=1 --`: SchemaViolation, no row deleted."""
+    """ST03-09 a stored orphan record_id `x' OR 1=1 --`: never in a filter; nothing else lost."""
     store = use_store(tmp_path, monkeypatch)
     add_rows(
         store,
         [(ATTACK, "planted", MODEL_ID), ("servicenow:incident:GONE", "gone ticket", MODEL_ID)],
     )
     wh = embed_warehouse(tmp_path / "wh.duckdb", [Rec("incident", "INC1", "disk full")])
-    with pytest.raises(SchemaViolation, match="invalid record_id for vector filter") as info:
+    with capture_logs() as logs:
         run_embed_stage(wh, encoder=FakeEncoder(), ctx=FakeJobContext(), report=Report())  # type: ignore[arg-type]
-    assert "OR 1=1" not in str(info.value)
-    assert store.count("ticket_embedding") == 3  # both orphans kept, INC1 upserted
+    ids = {row["record_id"] for row in store.table("ticket_embedding").to_arrow().to_pylist()}
+    assert ids == {ATTACK, "servicenow:incident:INC1"}  # only the valid orphan was deleted
+    skipped = [e for e in logs if e["event"] == "enrich.embed.ids_skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["log_level"] == "warning"
+    assert (skipped[0]["records"], skipped[0]["orphans"]) == (0, 1)
+    assert "OR 1=1" not in repr(logs)
 
 
 def test_st03_15_encoder_inputs_equal_redacted_text_and_logs_carry_no_text(
