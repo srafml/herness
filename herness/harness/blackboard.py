@@ -210,12 +210,12 @@ class Blackboard:
         return rest
 
     def _validate(self, ctx: ToolContext, f: Finding) -> None:
-        """Steps 2, 6, 3, 4, 5: PII runs before numerals and ids reach a message (ENG §3.4)."""
-        if errors := validate_markers(f.claim, f.numbers):
-            self._reject(ctx, "markers", "; ".join(errors), _MARKER_HINT)
+        """Steps 6, 2, 3, 4, 5: PII runs before any claim text reaches a message (ENG §3.4)."""
         if spans := get_redactor().scan(f.claim):
             types = ", ".join(sorted({span.type for span in spans}))
             self._reject(ctx, "pii", f"claim contains personal data ({types})")
+        if errors := validate_markers(f.claim, f.numbers):
+            self._reject(ctx, "markers", "; ".join(errors), _MARKER_HINT)
         if hits := find_uncited(f.claim, self._allowed):
             tokens = ", ".join(hit.text for hit in hits)
             self._reject(ctx, "numerals", f"numerals outside markers: {tokens}")

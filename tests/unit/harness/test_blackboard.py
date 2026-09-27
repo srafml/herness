@@ -346,13 +346,26 @@ def test_st06_05_pii_claim_names_types_only(bb_env: BbEnv) -> None:
 def test_st06_05_pii_checked_before_numerals_and_ids(bb_env: BbEnv) -> None:
     """ST06-05 an unmarked phone number and email are rejected as PII; no digit is echoed."""
     claim = "Team t1 had [[n1]] incidents, call +1 415-867-5309 or ops42@example.com about 17"
-    with pytest.raises(ToolInputError) as info:
+    with structlog.testing.capture_logs() as logs, pytest.raises(ToolInputError) as info:
         _post(bb_env, claim=claim, entity_id="t9")
     err = info.value
     assert err.message == "claim contains personal data (EMAIL, PHONE)"
-    text = " ".join([str(err), err.hint or "", repr(dict(err.context)), repr(dict(err.details))])
+    parts = [str(err), err.hint or "", repr(dict(err.context)), repr(dict(err.details)), repr(logs)]
     for fragment in ("415", "867", "5309", "ops42", "17", "t9"):
-        assert fragment not in text
+        assert fragment not in " ".join(parts)
+    assert _count() == 0
+
+
+def test_st06_05_pii_checked_before_marker_validation(bb_env: BbEnv) -> None:
+    """ST06-05 a bracketed phone number and email are rejected as PII, not echoed as markers."""
+    claim = "Team t1 had [[n1]] incidents, call [[+1 415-867-5309]] or mail [[ops42@example.com]]"
+    with structlog.testing.capture_logs() as logs, pytest.raises(ToolInputError) as info:
+        _post(bb_env, claim=claim)
+    err = info.value
+    assert err.message == "claim contains personal data (EMAIL, PHONE)"
+    parts = [str(err), err.hint or "", repr(dict(err.context)), repr(dict(err.details)), repr(logs)]
+    for fragment in ("415", "867", "5309", "ops42", "example.com", "malformed"):
+        assert fragment not in " ".join(parts)
     assert _count() == 0
 
 
