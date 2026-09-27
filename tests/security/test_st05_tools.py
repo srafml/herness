@@ -34,14 +34,13 @@ from herness.core.resilience import ProcessState
 from herness.core.types import AsyncTool, LoopState, Tool, ToolCall, ToolContext, ToolResult
 from herness.harness import _tools_schema
 from herness.harness import tools as tools_mod
+from herness.harness import warehouse_tools as wt
 from herness.harness.tools import (
     MAX_TOOL_ARGUMENT_CHARS,
     TOOL_CONTENT_MAX_CHARS,
     TOOL_OWNERS,
     ToolRegistry,
     dispatch,
-    execute_recorded,
-    format_result,
     tool_registry,
 )
 from herness.harness.warehouse import DuckWarehouse
@@ -157,20 +156,6 @@ class _SpyCursor:
         return getattr(self._inner, name)
 
 
-class _RunSqlStandin:
-    """Stand-in for the spec 05 `run_sql` tool (T05-17 not built): `execute_recorded` only."""
-
-    name = "run_sql"
-    description = "Run one read-only SQL query"
-    input_schema: dict[str, JsonValue] = strict_schema({"sql": {"type": "string"}})
-
-    def __call__(self, ctx: ToolContext, **kwargs: JsonValue) -> ToolResult:
-        sql = kwargs["sql"]
-        assert isinstance(sql, str)
-        content, _shown = format_result(execute_recorded(ctx, sql, {}))
-        return ok_result(content)
-
-
 @pytest.fixture
 def spied_wh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cfg: None
@@ -187,11 +172,11 @@ def spied_wh(
 def test_st05_07_spec05_sql_executes_only_select(
     spied_wh: tuple[DuckWarehouse, list[str]],
 ) -> None:
-    """ST05-07 through registry and dispatch, the spec 05 SQL path sends only SELECT to DuckDB;
-    write, DDL, COPY and ATTACH attempts are error results and never reach the cursor."""
+    """ST05-07 through registry and dispatch, the real `run_sql` (T05-17) sends only SELECT to
+    DuckDB; write, DDL, COPY and ATTACH attempts are error results and never reach the cursor."""
     wh, seen = spied_wh
     reg = tool_registry()
-    reg.register(_RunSqlStandin(), owner="05")
+    wt.register_warehouse_tools(reg)
     tools = {t.name: t for t in reg.resolve(ANALYST, ["run_sql"], {})}
     attacks = [
         "DELETE FROM core.big",
@@ -201,8 +186,9 @@ def test_st05_07_spec05_sql_executes_only_select(
         "ATTACH 'other.duckdb' AS o",
         "SELECT 1; DROP TABLE core.big",
     ]
-    calls = [call("run_sql", f"a{i}", sql=sql) for i, sql in enumerate(attacks)]
-    calls.append(call("run_sql", "ok", sql="SELECT n FROM core.big ORDER BY n LIMIT 2"))
+    calls = [call("run_sql", f"a{i}", sql=sql, purpose="p") for i, sql in enumerate(attacks)]
+    ok_sql = "SELECT n FROM core.big ORDER BY n LIMIT 2"
+    calls.append(call("run_sql", "ok", sql=ok_sql, purpose="p"))
     ctx = sd.make_ctx(wh, FakeOps())
     results = _run(ctx, tools, calls)
     assert all(not r.ok for r in results[:-1])
@@ -379,10 +365,8 @@ def test_st05_07_concurrent_selects_on_cold_schema(
     regression guard: `DuckWarehouse.schema()` once loaded on the shared connection and raced
     into a partial schema under concurrent dispatch."""
     wh, _seen = spied_wh
-    tools = {"run_sql": _RunSqlStandin()}
-    calls = [
-        call("run_sql", f"q{i}", sql=f"SELECT n FROM core.big ORDER BY n LIMIT {i + 1}")  # noqa: S608 - fixed test SQL
-        for i in range(6)
-    ]
+    tools = {"run_sql": wt.RunSql()}
+    sqls = [f"SELECT n FROM core.big ORDER BY n LIMIT {i + 1}" for i in range(6)]  # noqa: S608 - fixed test SQL
+    calls = [call("run_sql", f"q{i}", sql=sql, purpose="p") for i, sql in enumerate(sqls)]
     results = _run(sd.make_ctx(wh, FakeOps()), tools, calls)
     assert all(r.ok for r in results), [r.content for r in results]

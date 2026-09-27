@@ -175,12 +175,16 @@ def open_warehouse(build_id: str, *, warehouse_dir: Path, sql: SqlSettings) -> D
     except duckdb.IOException as exc:
         msg = f"warehouse build {build_id} unreadable"
         raise QueryError(msg, build_id=build_id) from exc
-    con.execute("SET enable_external_access = false")
-    con.execute("SET lock_configuration = true")
-    check = con.execute("SELECT current_setting('enable_external_access')").fetchone()
-    if check is None or check[0] is not False:
-        msg = "warehouse self-check failed: enable_external_access is not locked to false"
-        raise ConfigError(msg, build_id=build_id)
+    try:  # any failure after connect closes the connection (no leaked handle, T05-17)
+        con.execute("SET enable_external_access = false")
+        con.execute("SET lock_configuration = true")
+        check = con.execute("SELECT current_setting('enable_external_access')").fetchone()
+        if check is None or check[0] is not False:
+            msg = "warehouse self-check failed: enable_external_access is not locked to false"
+            raise ConfigError(msg, build_id=build_id)  # noqa: TRY301 - handler closes con
+    except BaseException:
+        con.close()
+        raise
     return DuckWarehouse(build_id, path, con, sql)
 
 
