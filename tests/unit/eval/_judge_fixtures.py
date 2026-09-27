@@ -1,6 +1,10 @@
 """Shared helpers for the rubric-judge tests (U11-61): a local scripted LLM client.
 
-Carry-over: switch to `tests.support.fake_llm.FakeLLMClient` (U11-42) once it lands.
+Kept local (T11-23 ruling): `tests.support.fake_llm.FakeLLMClient` (U11-42) cannot express
+what these tests assert on: every request is recorded (`requests`, `calls`), a reply may be
+any exception (`EgressBlocked`, `OutputValidationError`, ...), the last reply repeats, and
+the response carries the judge model name (`JudgeScore.model`), where the scripted client
+reports `scripted` and only the ScriptBook fault kinds.
 """
 
 from __future__ import annotations
