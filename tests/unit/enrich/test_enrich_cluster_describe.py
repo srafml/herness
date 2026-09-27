@@ -9,6 +9,7 @@ with the columns the descriptor query reads (as `test_link_changes.py` does).
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
@@ -313,8 +314,12 @@ def test_ut03_96_long_label_and_bad_category_from_lax_client(
     async def lax(_client: object, req: LLMRequest, **_kw: object) -> object:
         return await client.acomplete(req)
 
-    replies = iter([{"label": "L" * 90, "root_cause_category": "change"},
-                    {"label": "ok", "root_cause_category": "made-up"}, "not json"])  # fmt: skip
+    scripted: list[Reply] = [
+        {"label": "L" * 90, "root_cause_category": "change"},
+        {"label": "ok", "root_cause_category": "made-up"},
+        "not json",
+    ]
+    replies: Iterator[Reply] = iter(scripted)
     client = FakeLLMClient(lambda _req: next(replies), as_text=True)
     monkeypatch.setattr(cluster_describe, "complete_validated", lax)
     got = name_clusters(
@@ -401,11 +406,12 @@ def test_ut03_97_model_unavailable_continues_auth_error_stops(jev_env: ProcessSt
     def script(req: LLMRequest) -> Reply:
         cid = next(f"cl_{i:04d}" for i in range(4) if f"ticket {i}" in _user_text(req))
         seen.append(cid)
-        return {
+        by_cluster: dict[str, Reply] = {
             "cl_0000": ModelUnavailable("down"),
             "cl_0001": {"label": "fine"},
             "cl_0002": AuthError("denied"),
-        }.get(cid, {"label": "never"})
+        }
+        return by_cluster.get(cid, {"label": "never"})
 
     got = name_clusters(
         [_cand(i) for i in range(4)],

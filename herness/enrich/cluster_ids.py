@@ -59,10 +59,17 @@ def compute_centroids(
 
 
 def _pairs(sim: np.ndarray, threshold: float) -> list[tuple[int, int]]:
-    """Hungarian assignment on `1 - sim`; the (row, col) pairs with `sim >= threshold`."""
+    """Hungarian assignment on `1 - sim` with pairs below ``threshold`` masked first; the
+    (row, col) pairs with `sim >= threshold`.
+
+    A masked pair costs more than any set of eligible pairs (`2 * min(c, p) + 1`), so the
+    solver takes the most eligible pairs first and an ineligible pair never displaces an
+    eligible one (a split keeps the id on its more similar side).
+    """
     if sim.size == 0:
         return []
-    rows, cols = linear_sum_assignment(1.0 - sim)
+    masked = 2.0 * min(sim.shape) + 1.0
+    rows, cols = linear_sum_assignment(np.where(sim >= threshold, 1.0 - sim, masked))
     return [(int(r), int(c)) for r, c in zip(rows, cols, strict=True) if sim[r, c] >= threshold]
 
 

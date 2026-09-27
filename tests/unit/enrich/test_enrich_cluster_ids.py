@@ -125,6 +125,26 @@ def test_ut03_91_split_merge_revival_and_new() -> None:
     assert got.retired == ("cl_c",)
 
 
+def test_ut03_91_ineligible_pair_does_not_displace_the_closer_split_side() -> None:
+    """UT03-91 regression: A has cos 0.90 to P1 and 0.80 to P2, B has 0.86 to P1 and 0 to
+    P2 (match_cos 0.85); A inherits P1, B is new and P2 retires (ineligible pairs are masked
+    before the assignment)."""
+    p1 = _basis(0)
+    angle_a, angle_b = np.arccos(0.90), -np.arccos(0.86)  # A and B on opposite sides of P1
+    a = np.cos(angle_a) * p1 + np.sin(angle_a) * _basis(1)
+    b = np.cos(angle_b) * p1 + np.sin(angle_b) * _basis(1)
+    in_plane = np.cos(angle_b + np.pi / 2) * p1 + np.sin(angle_b + np.pi / 2) * _basis(1)
+    tilt = 0.80 / float(in_plane @ a)  # P2 is orthogonal to B with cos 0.80 to A
+    p2 = tilt * in_plane + np.sqrt(1 - tilt**2) * _basis(2)
+    new = np.stack([a, b])
+    cos = new @ np.stack([p1, p2]).T
+    np.testing.assert_allclose(cos, [[0.90, 0.80], [0.86, 0.0]], atol=1e-12)
+    got = _match(new, ["cl_p1", "cl_p2"], np.stack([p1, p2]))
+    assert got.ids == ("cl_p1", "cl_new001")
+    assert got.retired == ("cl_p2",)
+    assert (got.inherited, got.revived, got.created) == (1, 0, 1)
+
+
 def test_ut03_91_below_threshold_is_not_inherited() -> None:
     """UT03-91 a best pair below match_cos (0.85) is not inherited; the old id retires."""
     got = _match(np.stack([_near(_basis(0), 0.84, 1)]), ["cl_a"], np.stack([_basis(0)]))
@@ -215,6 +235,9 @@ def test_pt03_12_ids_unique_and_pairs_meet_thresholds(
             kinds["created"] += 1
     assert (got.inherited, got.revived, got.created) == tuple(kinds.values())
     assert set(got.retired) == set(prev_ids) - set(got.ids)
+    unmatched_new = [v for cid, v in zip(got.ids, new, strict=True) if cid not in prev_of]
+    for old_id in got.retired:  # maximal: no eligible pair is left between the unmatched
+        assert all(float(v @ prev_of[old_id]) < 0.85 for v in unmatched_new)
     order = np.random.default_rng(seed + 1).permutation(n_prev)
     shuffled = _match(new, [prev_ids[i] for i in order], prev[order], retired)
     assert shuffled == got
