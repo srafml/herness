@@ -93,6 +93,8 @@ def env(
     with wb.opened(tmp_path / "wh") as wh:
         yield Env(wh, finding, tmp_path)
     c.reset_config()
+    # The shared RoleSpec caches its prompt texts (cached_property); drop the tmp-prompt copy.
+    get_role("analyst_general").__dict__.pop("_prompts", None)
 
 
 def _openai_cfg() -> ClientConfig:
