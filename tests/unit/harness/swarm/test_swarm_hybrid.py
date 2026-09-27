@@ -519,6 +519,27 @@ def test_ut06_84_length_changing_lower_keeps_exact_spelling() -> None:
     assert p.restore(out) == f"{name} and {name} grew"
 
 
+def test_ut06_84_fold_colliding_names_keep_exact_keys() -> None:
+    """UT06-84 names equal only after a resizing lower() both match; each exact spelling hides."""
+    upper = chr(0x130) + "stanbul Ops"  # lower() adds a combining dot: one char longer
+    lower = upper.lower()
+    sharp = "Stra" + chr(0xDF) + "e"  # U+00DF; "STRASSE" is its full case fold, not its lower()
+    p = Pseudonymizer(
+        [
+            ("team", "t-1", lower),
+            ("team", "t-2", upper),
+            ("team", "t-3", sharp),
+            ("team", "t-4", "STRASSE"),
+        ]
+    )
+    out = p.pseudonymize(f"{upper} | {lower} | {sharp} | STRASSE | strasse")
+    assert out == "team_001 | team_001 | team_003 | team_004 | team_004"
+    for raw in (upper, lower, sharp, "STRASSE", "strasse"):
+        assert raw not in out
+    # The lowered key belongs to the first entity, so both spellings restore to its name.
+    assert p.restore(out) == f"{lower} | {lower} | {sharp} | STRASSE | STRASSE"
+
+
 def test_ut06_84_patterns_have_no_groups() -> None:
     """UT06-84 the alternations hold no capture groups (they defeat the regex optimiser)."""
     p = Pseudonymizer(OVERLAP)

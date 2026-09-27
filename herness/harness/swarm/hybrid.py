@@ -67,8 +67,9 @@ class Pseudonymizer:
             self._tokens[entity_type, entity_id] = token
             self._entries[token] = (entity_type, entity_id, name)
             for raw in (entity_id, name):
-                if raw and (low := raw.lower()) not in forward:  # exact key too if lower() resizes
-                    forward |= dict.fromkeys({low, raw} if len(low) != len(raw) else {low}, token)
+                if raw:  # exact key too when lower() resizes, even if the lowered key is taken
+                    first = forward.setdefault(low := raw.lower(), token)
+                    forward |= {raw: first} if len(low) != len(raw) else {}
         # Out: any case, bar length-changing folds ("STRASSE"; redactor backs up). Restore: exact.
         self._forward = _replacer(forward, fold=True)
         self._to_ids = _replacer({t: e[1] for t, e in self._entries.items()})
