@@ -63,7 +63,7 @@ def test_ut06_68_request_subtask_below_max_spawn_depth(
     depth: str, child_depth: int, spawn: bool
 ) -> None:
     """UT06-68 request_subtask only while child_depth < max_spawn_depth."""
-    tools = default_tools("analyst", "ops", depth, child_depth=child_depth, knobs=_knobs(depth))  # type: ignore[arg-type]
+    tools = default_tools("analyst", "ops", depth, child_depth=child_depth, knobs=_knobs(depth))
     assert ("request_subtask" in tools) is spawn
     assert tools == sorted(tools)
 
