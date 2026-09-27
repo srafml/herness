@@ -13,6 +13,7 @@ from collections.abc import Callable
 
 import pytest
 from pydantic import ValidationError
+from structlog.testing import capture_logs
 from tests.unit.connectors._mongo_data import Factory, connector
 from tests.unit.connectors._settings_data import dataverse, snowflake
 
@@ -107,6 +108,25 @@ def test_st01_17_listed_hosts_with_tls_reach_the_factory(mongo_uri: _Put, uri: s
     factory = Factory()
     connector(factory, hosts=["db1.example", "db2.example"]).check()
     assert factory.calls == [uri]
+
+
+def test_st01_17_uri_not_kept_on_the_connector_or_logged(
+    mongo_uri: _Put, mongo_breaker: object
+) -> None:
+    """ST01-17 (TH01-03) the resolved URI is handed to `client_factory` only: no connector
+    attribute holds it and no log event of `check` or `sync` carries it."""
+    del mongo_breaker
+    uri = "mongodb://db1.example/uri_marker_db?tls=true"
+    mongo_uri(uri)
+    factory = Factory()
+    conn = connector(factory, hosts=["db1.example"])
+    with capture_logs() as logs:
+        conn.check()
+        list(conn.sync("orders", None))
+    assert factory.calls == [uri]
+    own = {k: v for k, v in vars(conn).items() if k != "_client"}
+    assert "uri_marker_db" not in repr(own)
+    assert "uri_marker_db" not in repr(logs)
 
 
 def test_st01_17_snowflake_hosts_omitted_rejected() -> None:

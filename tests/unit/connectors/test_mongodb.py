@@ -140,6 +140,17 @@ def test_ut01_84_string_timestamps_and_dotted_fields(mongo_breaker: SpyBreaker) 
     assert rows[0]["_source_updated_at"] == datetime.datetime(2026, 1, 1, tzinfo=UTC)
 
 
+def test_ut01_84_aware_datetime_is_used_as_is(mongo_breaker: SpyBreaker) -> None:
+    """UT01-84 an aware `datetime` watermark is taken as it is (U01-87 step 3); only other
+    values go through `parse_source_timestamp`, so a pre-1970 date is not rejected."""
+    del mongo_breaker
+    factory = Factory()
+    old = datetime.datetime(1969, 7, 20, 20, 17, tzinfo=UTC)
+    factory.collection().insert_one({"ts": old, "a": 1})
+    rows = _rows(list(connector(factory).sync("orders", None)))
+    assert [r["_source_updated_at"] for r in rows] == [old]
+
+
 def test_ut01_84_missing_key_or_timestamp_is_schema_violation(mongo_breaker: SpyBreaker) -> None:
     """UT01-84 a doc without the key field → SchemaViolation("missing key field"); an
     unparseable watermark → SchemaViolation."""

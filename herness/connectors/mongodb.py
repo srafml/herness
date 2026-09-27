@@ -291,7 +291,9 @@ class MongoConnector:
     ) -> tuple[str, datetime.datetime, str, dict[str, str | None]]:
         """``(source_key, updated_at, payload, fields)`` of one document."""
         source_key = str(_key(doc, cfg, entity))
-        updated_at = parse_source_timestamp(_dig(doc, cfg.updated_field), field=cfg.updated_field)
+        ts = _dig(doc, cfg.updated_field)  # an aware datetime is taken as it is (U01-87 step 3)
+        aware = isinstance(ts, datetime.datetime) and ts.utcoffset() is not None
+        updated_at = ts if aware else parse_source_timestamp(ts, field=cfg.updated_field)
         payload = json_util.dumps(doc, json_options=json_util.RELAXED_JSON_OPTIONS)
         record = json.loads(payload)
         fields = flatten_record({c: _dig(record, c) for c in columns})
