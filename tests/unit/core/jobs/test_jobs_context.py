@@ -594,3 +594,77 @@ def test_cv_t08_20_load_state_empty(
         assert ctx.load_state() == {}
     finally:
         ctx.close()
+
+
+# --- review round 1 --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [0, 0.0, -1.5, float("nan"), float("inf"), True, "5"], ids=repr)
+def test_cv_t08_20_bad_timeout_config_error(
+    pipe_pair: tuple[Connection, Connection], bad: object
+) -> None:
+    """CV-T08-20 a handler timeout that is not finite > 0 → ConfigError, nothing sent."""
+    parent_conn, child_conn = pipe_pair
+    ctx = child_ctx(child_conn)
+    calls: list[Callable[[], object]] = [
+        lambda: ctx.require_gpu_class("large", timeout_s=bad),  # type: ignore[arg-type]
+        lambda: ctx.services.start("openjev", timeout_s=bad),  # type: ignore[arg-type]
+    ]
+    try:
+        for call in calls:
+            with pytest.raises(ConfigError, match="finite number > 0") as info:
+                call()
+            assert info.value.context == {"value_type": type(bad).__name__}
+            assert info.value.message == "timeout_s must be None or a finite number > 0"
+        assert drain(parent_conn, 0.05) == []
+    finally:
+        ctx.close()
+
+
+def test_cv_t08_20_explicit_small_timeout_is_not_unset(
+    pipe_pair: tuple[Connection, Connection], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T08-20 an explicit service timeout is used as given (no `or` fallback)."""
+    waits: list[float] = []
+
+    def fake_wait(start: float) -> float:
+        waits.append(start)
+        return 0.01
+
+    monkeypatch.setattr(context, "default_wait_s", fake_wait)
+    ctx = child_ctx(pipe_pair[1])
+    try:
+        with pytest.raises(ModelUnavailable, match="timed out"):
+            ctx.services.start("openjev", timeout_s=0.5)
+    finally:
+        ctx.close()
+    assert waits == [0.5]
+
+
+def test_cv_t08_20_reader_failure_fails_closed(
+    pipe_pair: tuple[Connection, Connection], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T08-20 an unexpected reader error ends the pipe: waiters get ModelUnavailable."""
+
+    def broken(_data: bytes) -> PipeMessage:
+        msg = "decoder bug"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(context, "decode_message", broken)
+    parent_conn, child_conn = pipe_pair
+    ctx = child_ctx(child_conn)
+    try:
+        with capture_logs() as logs:
+            thread, errors = _pending_call(ctx)
+            _wait_registered(ctx)
+            parent_conn.send_bytes(encode_message(StopMsg(reason="cancel")))
+            thread.join(5)
+            ctx._reader.join(5)
+        assert not thread.is_alive()
+        assert [str(e) for e in errors] == ["supervisor pipe closed"]
+        assert ctx.stop_reason == "shutdown"
+        (entry,) = [e for e in logs if e["event"] == "jobs.pipe.lost"]
+        assert (entry["reason"], entry["error_type"]) == ("reader_failed", "RuntimeError")
+        assert "decoder bug" not in str(entry)
+    finally:
+        ctx.close()

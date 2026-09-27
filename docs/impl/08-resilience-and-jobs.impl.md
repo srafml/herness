@@ -100,6 +100,7 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/jobs/gpu.py` | Swap and service control, state reader, external class requests | `GpuController`, `WorkerGpuState`, `gpu_state`, `request_gpu_class` | L0 | none | 400 |
 | `herness/core/jobs/pipe.py` | Supervisor↔child JSON messages | `PipeMessage`, `encode_message`, `decode_message`, `MAX_PIPE_MSG_BYTES` | L0 | `pydantic` | 150 |
 | `herness/core/jobs/context.py` | `JobContext` implementations | `ChildJobContext`, `ChildServiceControl`, `InlineJobContext`, `InlineServiceControl` | L0 | none | 360 |
+| `herness/core/jobs/_context_base.py` | Private shared base of the job contexts (split from context.py to stay under 400, ruling w16-s08b) | none (private) | L0 | none | 180 |
 | `herness/core/jobs/supervisor.py` | Worker supervisor | `WorkerOptions`, `Supervisor`, `run_worker` | L0 | `psutil` | 400 |
 | `herness/core/jobs/child.py` | Child process entry | `child_main` | L0 | none | 150 |
 | `herness/core/jobs/inline.py` | CLI inline run | `run_inline` | L0 | none | 200 |
@@ -2270,6 +2271,8 @@ All events carry `ts`, `level`, `event`, `component` (`resilience` or `jobs`), t
 | `jobs.gpu.swapped` / `.swap_failed` | INFO / ERROR | `from`, `to`, `duration_s`, `step`, `error_type` | U08-81 |
 | `jobs.gpu.compose_failed` | WARNING | `verb`, `service`, `rc` | U08-78 |
 | `jobs.gpu.request_rejected` / `.restore_failed` | WARNING / ERROR | `requested`, `window` / `class` | U08-87, U08-85 |
+| `jobs.pipe.lost` | ERROR | `job_id`, `reason`, `error_type` | U08-85 |
+| `jobs.pipe.late_reply` | DEBUG | `job_id` | U08-85 |
 | `jobs.service.started` / `.stopped` / `.restarted` | INFO / INFO / WARNING | `service`, `duration_s` | U08-81 |
 | `jobs.schedule.fired` / `.missed` / `.error` | INFO / WARNING / ERROR | `schedule`, `fire_at`, `job_id`, `error_type` | U08-72 |
 | `jobs.chain.broken` / `.skipped` | WARNING / INFO | `schedule`, `fire_at`, `step`, `reason` | U08-73 |

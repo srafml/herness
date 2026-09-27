@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import pickle  # noqa: TID251 - ST08-13 builds a pickle attack payload; nothing here unpickles
 import re
+import tokenize
 from multiprocessing import Pipe
 from pathlib import Path
 
@@ -175,18 +177,47 @@ def test_st08_13_extra_field_rejected() -> None:
 
 
 _FORBIDDEN = re.compile(
-    r"\.send\(|\.recv\(|\bimport pickle\b|\bfrom pickle\b|\bpickle\.|\bcPickle\b|\beval\(|\bexec\("
+    r"\.send\(|\.recv\(|\bimport\s+(pickle|cPickle|marshal|shelve)\b"
+    r"|\bfrom\s+(pickle|cPickle|marshal|shelve)\b|\b(pickle|cPickle|marshal|shelve)\."
+    r"|\beval\(|\bexec\(|\bmultiprocessing\.Queue\b|\bManager\("
 )
 
 
+def _code_only(source: str) -> list[str]:
+    """Source lines with every string literal and comment blanked (no docstring false hits)."""
+    lines = source.splitlines()
+    tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+    for tok in tokens:
+        if tok.type not in (tokenize.STRING, tokenize.COMMENT, tokenize.FSTRING_MIDDLE):
+            continue
+        (r0, c0), (r1, c1) = tok.start, tok.end
+        for row in range(r0, r1 + 1):
+            text = lines[row - 1]
+            lo = c0 if row == r0 else 0
+            hi = c1 if row == r1 else len(text)
+            lines[row - 1] = text[:lo] + " " * (hi - lo) + text[hi:]
+    return lines
+
+
+def test_cv_t08_20_code_only_blanks_strings_and_comments() -> None:
+    """CV-T08-20 the grep helper ignores docstrings and comments but sees code."""
+    src = '"""uses pickle.loads"""\nx = 1  # eval(\ny = conn.send(b"")\n'
+    hits = [n for n, line in enumerate(_code_only(src), 1) if _FORBIDDEN.search(line)]
+    assert hits == [3]
+    assert _FORBIDDEN.search("import marshal")
+    assert _FORBIDDEN.search("q = multiprocessing.Queue()")
+    assert _FORBIDDEN.search("m = mp.Manager()")
+
+
 def test_cv_t08_20_no_pickle_calls_in_jobs_package() -> None:
-    """CV-T08-20 acceptance: no `Connection.send(`/`recv(`, pickle, eval or exec in core.jobs."""
-    files = sorted(JOBS_DIR.glob("*.py"))
+    """CV-T08-20 acceptance: no `Connection.send(`/`recv(`, pickle, marshal, eval, exec,
+    `multiprocessing.Queue` or `Manager(` anywhere under herness/core/jobs (recursive)."""
+    files = sorted(JOBS_DIR.rglob("*.py"))
     assert len(files) > 5
     hits = [
-        f"{path.name}:{number}"
+        f"{path.relative_to(JOBS_DIR).as_posix()}:{number}"
         for path in files
-        for number, line in enumerate(path.read_text("utf-8").splitlines(), 1)
+        for number, line in enumerate(_code_only(path.read_text("utf-8")), 1)
         if _FORBIDDEN.search(line)
     ]
     assert hits == []

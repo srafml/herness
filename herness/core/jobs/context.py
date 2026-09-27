@@ -14,10 +14,11 @@ true with reason `shutdown` (unless a `stop` arrived first) so the handler winds
 from __future__ import annotations
 
 import json
+import math
 import queue
 import threading
 from contextlib import suppress
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from herness.core import time as clock
 from herness.core.errors import ConfigError, JobStateError, ModelUnavailable, SchemaViolation
@@ -86,6 +87,17 @@ class ChildServiceControl:
         return self._ctx._service_call("service_healthy", name, None).healthy is True
 
 
+def _check_timeout(timeout_s: object) -> None:
+    """A handler-supplied `timeout_s` is `None` or a finite number > 0, else `ConfigError`."""
+    if timeout_s is None:
+        return
+    number = isinstance(timeout_s, int | float) and not isinstance(timeout_s, bool)
+    if number and math.isfinite(cast("float", timeout_s)) and cast("float", timeout_s) > 0:
+        return
+    msg = "timeout_s must be None or a finite number > 0"
+    raise ConfigError(msg, value_type=type(timeout_s).__name__)
+
+
 def _raise_failed(reply: GpuReplyMsg) -> None:
     if reply.ok:
         return
@@ -133,6 +145,8 @@ class ChildJobContext(ContextBase):
             self._pipe_lost("closed")
         except SchemaViolation:
             self._pipe_lost("bad_message")
+        except Exception as exc:  # noqa: BLE001 - fail closed: any reader failure ends the pipe
+            self._pipe_lost("reader_failed", type(exc).__name__)
 
     def _dispatch(self, msg: PipeMessage) -> None:
         if isinstance(msg, StopMsg):
@@ -149,10 +163,11 @@ class ChildJobContext(ContextBase):
         with suppress(queue.Full):
             box.put_nowait(msg)
 
-    def _pipe_lost(self, reason: str) -> None:
+    def _pipe_lost(self, reason: str, error_type: str | None = None) -> None:
         if self._closing.is_set() and reason == "closed":
             return  # our own shutdown closed the connection
-        _log.error("jobs.pipe.lost", job_id=self.job_id, reason=reason)
+        extra = {} if error_type is None else {"error_type": error_type}
+        _log.error("jobs.pipe.lost", job_id=self.job_id, reason=reason, **extra)
         self._fail_waiters()
         self._set_stop("shutdown")
 
@@ -216,6 +231,7 @@ class ChildJobContext(ContextBase):
 
     def _require(self, cls: GpuClass, timeout_s: float | None) -> GpuClass | None:
         self._check_slot()
+        _check_timeout(timeout_s)
         wait_s = timeout_s if timeout_s is not None else default_wait_s(start_s(cls=cls))
         request = GpuRequestMsg(
             request_id=new_ulid(), op="require_class", cls=cls, timeout_s=timeout_s
@@ -225,7 +241,8 @@ class ChildJobContext(ContextBase):
     def _service_call(self, op: GpuOp, name: ServiceName, timeout_s: float | None) -> GpuReplyMsg:
         """One `service_*` request; same slot check and reply handling as GPU swaps."""
         self._check_slot()
-        wait_s = default_wait_s(timeout_s or start_s(service=name))
+        _check_timeout(timeout_s)
+        wait_s = default_wait_s(timeout_s if timeout_s is not None else start_s(service=name))
         request = GpuRequestMsg(request_id=new_ulid(), op=op, service=name, timeout_s=timeout_s)
         return self._gpu_call(request, wait_s)
 
