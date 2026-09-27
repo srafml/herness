@@ -192,7 +192,9 @@ def _register_service(name: str, base_url: str) -> None:
         text = file.read_text(encoding="utf-8") if file.exists() else ""
         services = json.loads(text) if text.strip() else {}
         services[name] = base_url
-        file.write_text(json.dumps(services, sort_keys=True), encoding="utf-8")
+        tmp = file.with_name(f".{file.name}.{os.getpid()}.tmp")  # same dir: atomic replace
+        tmp.write_text(json.dumps(services, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, file)  # readers in other processes never see a partial file
 
 
 @pytest.fixture

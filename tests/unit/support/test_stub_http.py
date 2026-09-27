@@ -107,6 +107,7 @@ def test_ut11_72_service_file_lists_the_names(stub_services: Path) -> None:
         "llamacpp-large": b.base_url,
     }
     assert unnamed.base_url not in services.values()
+    assert [p.name for p in stub_services.parent.iterdir() if p.suffix == ".tmp"] == []
 
 
 def test_ut11_72_concurrent_service_writes_keep_every_name(stub_services: Path) -> None:

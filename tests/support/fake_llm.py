@@ -86,6 +86,11 @@ class ScriptRouter(MockNet):
         self.requests: list[httpx2.Request] = []
         self._patch: pytest.MonkeyPatch | None = None
 
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> Self:
+        """``MockNet.install``, typed to return this router."""
+        super().install(monkeypatch)
+        return self
+
     def _wire(self, request: httpx2.Request) -> Wire | None:
         return self.endpoints.get(_endpoint(request.url)) if request.method == "POST" else None
 
