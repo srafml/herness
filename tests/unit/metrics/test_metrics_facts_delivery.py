@@ -96,7 +96,10 @@ WORK_ITEM_LINKS = [
 def con(monkeypatch: pytest.MonkeyPatch) -> Iterator[duckdb.DuckDBPyConnection]:
     patch_facts_config(monkeypatch)
     c = build_metrics_tiny()
-    for table in ("core.incident", "enrich.incident_change_link", "core.work_item"):
+    for table in (
+        *("core.incident", "enrich.incident_change_link", "core.work_item", "core.change"),
+        *("core.work_item_transition", "core.work_item_link"),
+    ):
         c.execute(f"DELETE FROM {table}")  # noqa: S608 - fixed table names
     c.executemany(
         "INSERT INTO core.change (record_id, number, type, opened_at, actual_end, service_id,"
@@ -201,10 +204,11 @@ def test_ut04_32_change_fact_shape_and_invariants(con: duckdb.DuckDBPyConnection
 
 
 def test_ut04_32_change_fact_empty_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT04-32 the plain metrics_tiny fixture (no core.change rows) gives an empty change_fact
-    and a work_item_fact row per fixture work item."""
+    """UT04-32 the metrics_tiny fixture with its core.change rows removed gives an empty
+    change_fact and a work_item_fact row per fixture work item."""
     patch_facts_config(monkeypatch)
     c = build_metrics_tiny()
+    c.execute("DELETE FROM core.change")
     try:
         _materialize(c)
         counts = c.execute(

@@ -12,8 +12,7 @@ defaults:
   noise_severities: [critical, major, minor, warning]   # info excluded from noise ratio
   failure_outcomes: [unsuccessful, backed_out]
   compute_timeout_s: 30.0          # interactive compute timeout (DD04-06)
-# The 28 catalog entries (U04-48, tables A and B), in table order. T04-08 ships #1-#4;
-# T04-09 adds #5-#14, T04-10 #15-#19, #27 and #28, and T04-11 #20-#26.
+# The 28 catalog entries (U04-48, tables A and B), in table order.
 metrics:
   - name: incident_count
     description: Count of non-excluded incidents opened in the period.
@@ -115,6 +114,646 @@ metrics:
         AND NOT f.excluded AND f.resolve_h IS NOT NULL
         {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
       GROUP BY ALL
+  - name: mttr_business_hours
+    description: Mean source business hours to resolve of resolved incidents (NULLs dropped).
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: hours
+    better: lower
+    aggregation: mean
+    min_sample_size: 10
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: mttr
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.resolved_at') }} AS period_start,
+             avg(f.resolve_bh) AS value, sum(f.resolve_bh) AS numerator,
+             count(f.resolve_bh) AS denominator, count(f.resolve_bh) AS sample_size,
+             count(f.resolve_bh) / count(*) AS coverage
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.resolved_at >= {{ p('window_start') }} AND f.resolved_at < {{ p('window_end') }}
+        AND NOT f.excluded AND f.resolve_h IS NOT NULL
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: mtta_minutes
+    description: Mean minutes from opened_at to acknowledged_at of non-excluded incidents.
+    domain: ops
+    grains: [service, team, org]
+    unit: minutes
+    better: lower
+    aggregation: mean
+    min_sample_size: 10
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [priority, service_id, team_id, org_id]
+    enabled: true
+    requires_columns: [core.incident.acknowledged_at]
+    sql: |
+      {%- set ACK = "CASE WHEN i.acknowledged_at >= f.opened_at THEN date_diff('second', f.opened_at, i.acknowledged_at) / 60.0 END" %}
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.opened_at') }} AS period_start,
+             avg({{ ACK }}) AS value, sum({{ ACK }}) AS numerator,
+             count({{ ACK }}) AS denominator, count({{ ACK }}) AS sample_size,
+             count({{ ACK }}) / count(*) AS coverage
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      JOIN core.incident i ON i.record_id = f.record_id
+      WHERE f.opened_at >= {{ p('window_start') }} AND f.opened_at < {{ p('window_end') }}
+        AND NOT f.excluded
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: customer_impact_minutes
+    description: Sum of customer impact minutes of non-excluded incidents opened in the period.
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: minutes
+    better: lower
+    aggregation: sum
+    min_sample_size: 1
+    owner: sre-analytics
+    estimate: false
+    uses_weights: [impact_fallback]
+    usd_model: null
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.opened_at') }} AS period_start,
+             sum(f.impact_h * 60) AS value, sum(f.impact_h * 60) AS numerator,
+             NULL AS denominator, count(*) AS sample_size,
+             count(*) FILTER (WHERE f.impact_estimated) AS estimated_count
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.opened_at >= {{ p('window_start') }} AND f.opened_at < {{ p('window_end') }}
+        AND NOT f.excluded
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: repeat_incident_rate
+    description: Share of non-excluded incidents with a service that repeat a recent incident.
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 20
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: repeat
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.opened_at') }} AS period_start,
+             count(*) FILTER (WHERE f.is_repeat) / count(*) AS value,
+             count(*) FILTER (WHERE f.is_repeat) AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.opened_at >= {{ p('window_start') }} AND f.opened_at < {{ p('window_end') }}
+        AND NOT f.excluded AND f.service_id IS NOT NULL
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: reopen_rate
+    description: Share of resolved incidents that were reopened at least once.
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 20
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: reopen
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.resolved_at') }} AS period_start,
+             count(*) FILTER (WHERE f.is_reopened) / count(*) AS value,
+             count(*) FILTER (WHERE f.is_reopened) AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.resolved_at >= {{ p('window_start') }} AND f.resolved_at < {{ p('window_end') }}
+        AND NOT f.excluded AND f.resolve_h IS NOT NULL
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: reassignment_rate
+    description: Share of resolved incidents that were reassigned at least once.
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 20
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: reassign
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.resolved_at') }} AS period_start,
+             count(*) FILTER (WHERE f.is_reassigned) / count(*) AS value,
+             count(*) FILTER (WHERE f.is_reassigned) AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.resolved_at >= {{ p('window_start') }} AND f.resolved_at < {{ p('window_end') }}
+        AND NOT f.excluded AND f.resolve_h IS NOT NULL
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: sla_breach_rate
+    description: Share of resolved incidents with a known SLA outcome that breached the SLA.
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 20
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: sla
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.resolved_at') }} AS period_start,
+             count(*) FILTER (WHERE f.sla_breached) / count(*) AS value,
+             count(*) FILTER (WHERE f.sla_breached) AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.resolved_at >= {{ p('window_start') }} AND f.resolved_at < {{ p('window_end') }}
+        AND NOT f.excluded AND f.resolve_h IS NOT NULL AND f.sla_breached IS NOT NULL
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: alert_noise_ratio
+    description: Share of noise-severity events that are not linked to an incident.
+    domain: monitoring
+    grains: [service, team, org]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 50
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: noise
+    filters: [service_id, team_id, org_id, severity]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('event', 'e') }} AS entity_id,
+             {{ period_start('e.ts') }} AS period_start,
+             count(*) FILTER (WHERE e.incident_id IS NULL) / count(*) AS value,
+             count(*) FILTER (WHERE e.incident_id IS NULL) AS numerator,
+             count(*) AS denominator, count(*) AS sample_size
+      FROM core.event e {{ entity_join('event', 'e') }}
+      WHERE e.ts >= {{ p('window_start') }} AND e.ts < {{ p('window_end') }}
+        AND list_contains({{ p('d_noise_severities') }}, e.severity)
+        {{ filter_clause('event', 'e') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: toil_hours_est
+    description: Estimated engineer toil hours of resolved incidents (design 04 §5.3).
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: hours
+    better: lower
+    aggregation: sum
+    min_sample_size: 1
+    owner: sre-analytics
+    estimate: true
+    uses_weights: [toil]
+    usd_model: null
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.resolved_at') }} AS period_start,
+             sum(f.toil_h) AS value, sum(f.toil_h) AS numerator, NULL AS denominator,
+             count(*) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.resolved_at >= {{ p('window_start') }} AND f.resolved_at < {{ p('window_end') }}
+        AND NOT f.excluded AND f.resolve_h IS NOT NULL
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: incident_cost_usd
+    description: Estimated downtime and toil cost in USD of non-excluded incidents (§5.3).
+    domain: cost
+    grains: [service, team, org, cluster]
+    unit: usd
+    better: lower
+    aggregation: sum
+    min_sample_size: 1
+    owner: sre-analytics
+    estimate: true
+    uses_weights: [cost_per_downtime_hour, priority_impact_multiplier, impact_fallback, toil, cost_per_engineer_hour]
+    usd_model: null
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.opened_at') }} AS period_start,
+             CAST(sum(f.total_usd) AS DOUBLE) AS value,
+             CAST(sum(f.total_usd) AS DOUBLE) AS numerator, NULL AS denominator,
+             count(*) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.opened_at >= {{ p('window_start') }} AND f.opened_at < {{ p('window_end') }}
+        AND NOT f.excluded
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: change_count
+    description: Deployed changes per week of the period cut to the window (DD04-05).
+    domain: change
+    grains: [service, team, org]
+    unit: count
+    better: higher
+    aggregation: ratio
+    min_sample_size: 1
+    owner: change-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, change_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      {%- set PS = period_start('c.actual_end') %}
+      {%- set WEEKS = "date_diff('day', greatest(" ~ PS ~ ", " ~ p('window_start_date') ~ "), least(" ~ period_end_date(PS) ~ ", " ~ p('window_end_date') ~ ")) / 7.0" %}
+      SELECT {{ entity_col('change', 'c') }} AS entity_id, {{ PS }} AS period_start,
+             count(*) / any_value({{ WEEKS }}) AS value, count(*) AS numerator,
+             any_value({{ WEEKS }}) AS denominator, count(*) AS sample_size
+      FROM metrics.change_fact c {{ entity_join('change', 'c') }}
+      WHERE c.actual_end >= {{ p('window_start') }} AND c.actual_end < {{ p('window_end') }}
+        AND c.deployed {{ filter_clause('change', 'c') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: change_failure_rate
+    description: Share of deployed changes that failed (DORA change failure rate).
+    domain: change
+    grains: [service, team, org]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 10
+    owner: change-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: cfr
+    filters: [service_id, team_id, org_id, change_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('change', 'c') }} AS entity_id,
+             {{ period_start('c.actual_end') }} AS period_start,
+             count(*) FILTER (WHERE c.failed) / count(*) AS value,
+             count(*) FILTER (WHERE c.failed) AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.change_fact c {{ entity_join('change', 'c') }}
+      WHERE c.actual_end >= {{ p('window_start') }} AND c.actual_end < {{ p('window_end') }}
+        AND c.deployed {{ filter_clause('change', 'c') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: change_caused_incident_count
+    description: Distinct non-excluded incidents caused by a change, by the change's entity.
+    domain: change
+    grains: [service, team, org]
+    unit: count
+    better: lower
+    aggregation: count
+    min_sample_size: 1
+    owner: change-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, change_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('change', 'c') }} AS entity_id,
+             {{ period_start('f.opened_at') }} AS period_start,
+             count(DISTINCT f.record_id) AS value, count(DISTINCT f.record_id) AS numerator,
+             NULL AS denominator, count(DISTINCT f.record_id) AS sample_size
+      FROM metrics.incident_fact f
+      JOIN (SELECT i.record_id AS incident_id, i.caused_by_change_id AS change_id
+            FROM core.incident i WHERE i.caused_by_change_id IS NOT NULL
+            UNION SELECT l.incident_id, l.change_id FROM enrich.incident_change_link l
+            WHERE l.score >= {{ p('d_change_link_min_score') }}) k ON k.incident_id = f.record_id
+      JOIN metrics.change_fact c ON c.record_id = k.change_id {{ entity_join('change', 'c') }}
+      WHERE f.opened_at >= {{ p('window_start') }} AND f.opened_at < {{ p('window_end') }}
+        AND NOT f.excluded {{ filter_clause('change', 'c') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: change_lead_time_hours
+    description: Median hours from change request opened_at to deployment (DORA lead time proxy).
+    domain: change
+    grains: [service, team, org]
+    unit: hours
+    better: lower
+    aggregation: median
+    min_sample_size: 10
+    owner: change-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, change_type]
+    enabled: true
+    requires_columns: [core.change.opened_at]
+    sql: |
+      SELECT {{ entity_col('change', 'c') }} AS entity_id,
+             {{ period_start('c.actual_end') }} AS period_start,
+             median(c.lead_time_h) AS value, NULL AS numerator,
+             count(c.lead_time_h) AS denominator, count(c.lead_time_h) AS sample_size,
+             count(c.lead_time_h) / count(*) AS coverage
+      FROM metrics.change_fact c {{ entity_join('change', 'c') }}
+      WHERE c.actual_end >= {{ p('window_start') }} AND c.actual_end < {{ p('window_end') }}
+        AND c.deployed {{ filter_clause('change', 'c') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: emergency_change_ratio
+    description: Share of deployed changes of type emergency.
+    domain: change
+    grains: [service, team, org]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 10
+    owner: change-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, change_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('change', 'c') }} AS entity_id,
+             {{ period_start('c.actual_end') }} AS period_start,
+             count(*) FILTER (WHERE c.type = 'emergency') / count(*) AS value,
+             count(*) FILTER (WHERE c.type = 'emergency') AS numerator,
+             count(*) AS denominator, count(*) AS sample_size
+      FROM metrics.change_fact c {{ entity_join('change', 'c') }}
+      WHERE c.actual_end >= {{ p('window_start') }} AND c.actual_end < {{ p('window_end') }}
+        AND c.deployed {{ filter_clause('change', 'c') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: throughput
+    description: Count of story, bug and task items done in the period.
+    domain: delivery
+    grains: [service, team, org, work_item]
+    unit: count
+    better: higher
+    aggregation: count
+    min_sample_size: 1
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id,
+             {{ period_start('w.done_at') }} AS period_start,
+             count(*) AS value, count(*) AS numerator, NULL AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      WHERE w.done_at >= {{ p('window_start') }} AND w.done_at < {{ p('window_end') }}
+        AND w.type IN ('story', 'bug', 'task')
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: cycle_time_days
+    description: Median days from first in-progress to done of story, bug and task items.
+    domain: delivery
+    grains: [service, team, org, work_item]
+    unit: days
+    better: lower
+    aggregation: median
+    min_sample_size: 10
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id,
+             {{ period_start('w.done_at') }} AS period_start,
+             median(w.cycle_days) AS value, NULL AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      WHERE w.done_at >= {{ p('window_start') }} AND w.done_at < {{ p('window_end') }}
+        AND w.type IN ('story', 'bug', 'task') AND w.cycle_days IS NOT NULL
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: carryover_rate
+    description: Share of items in progress at period start that are not done at period end.
+    domain: delivery
+    grains: [team, org, work_item]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 10
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      {%- set OPEN = "coalesce(" ~ cat_at('spine.end_ts', 'w', 'ce') ~ ", '') <> 'done'" %}
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id, spine.period_start AS period_start,
+             count(*) FILTER (WHERE {{ OPEN }}) / count(*) AS value,
+             count(*) FILTER (WHERE {{ OPEN }}) AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      CROSS JOIN {{ period_spine() }} {{ cat_at_join('spine.start_ts', 'w', 'cs') }}
+      {{ cat_at_join('spine.end_ts', 'w', 'ce') }}
+      WHERE w.type IN ('story', 'bug', 'task')
+        AND {{ cat_at('spine.start_ts', 'w', 'cs') }} = 'in_progress'
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: backlog_age_days
+    description: Median age in days of to-do story, bug and task items at the period snapshot.
+    domain: delivery
+    grains: [service, team, org, work_item]
+    unit: days
+    better: lower
+    aggregation: median
+    min_sample_size: 10
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id, spine.period_start AS period_start,
+             median(date_diff('second', w.created_at, spine.snap_ts) / 86400.0) AS value,
+             NULL AS numerator, count(*) AS denominator, count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      CROSS JOIN {{ period_spine() }} {{ cat_at_join('spine.snap_ts', 'w', 'cn') }}
+      WHERE w.type IN ('story', 'bug', 'task')
+        AND {{ cat_at('spine.snap_ts', 'w', 'cn') }} = 'todo'
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: wip_count
+    description: Count of story, bug and task items in progress at the period snapshot.
+    domain: delivery
+    grains: [team, org, work_item]
+    unit: count
+    better: lower
+    aggregation: snapshot
+    min_sample_size: 1
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id, spine.period_start AS period_start,
+             count(*) AS value, count(*) AS numerator, NULL AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      CROSS JOIN {{ period_spine() }} {{ cat_at_join('spine.snap_ts', 'w', 'cn') }}
+      WHERE w.type IN ('story', 'bug', 'task')
+        AND {{ cat_at('spine.snap_ts', 'w', 'cn') }} = 'in_progress'
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: unplanned_work_ratio
+    description: Share of done story, bug and task items that are bugs or incident-linked.
+    domain: delivery
+    grains: [service, team, org]
+    unit: ratio
+    better: lower
+    aggregation: ratio
+    min_sample_size: 20
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id, work_item_type]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'w') }} AS entity_id,
+             {{ period_start('w.done_at') }} AS period_start,
+             count(*) FILTER (WHERE w.is_unplanned) / count(*) AS value,
+             count(*) FILTER (WHERE w.is_unplanned) AS numerator, count(*) AS denominator,
+             count(*) AS sample_size
+      FROM metrics.work_item_fact w {{ entity_join('work_item', 'w') }}
+      WHERE w.done_at >= {{ p('window_start') }} AND w.done_at < {{ p('window_end') }}
+        AND w.type IN ('story', 'bug', 'task')
+        {{ filter_clause('work_item', 'w') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: epic_predictability
+    description: Committed-points-weighted share of epic scope done by the epic's done date.
+    domain: delivery
+    grains: [team, org, work_item]
+    unit: ratio
+    better: higher
+    aggregation: ratio
+    min_sample_size: 3
+    owner: delivery-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('work_item', 'e') }} AS entity_id,
+             {{ period_start('e.done_at') }} AS period_start,
+             sum(k.done_pts) / nullif(sum(k.committed_pts), 0) AS value, sum(k.done_pts) AS numerator,
+             sum(k.committed_pts) AS denominator, count(DISTINCT e.record_id) AS sample_size
+      FROM metrics.work_item_fact e
+      JOIN (SELECT a.ancestor_record_id AS epic_id, sum(coalesce(c.story_points, 1)) AS committed_pts,
+                   sum(CASE WHEN c.done_at <= x.done_at THEN coalesce(c.story_points, 1) ELSE 0 END)
+                     AS done_pts
+            FROM metrics.work_item_closure a
+            JOIN metrics.work_item_fact x ON x.record_id = a.ancestor_record_id
+            JOIN metrics.work_item_fact c ON c.record_id = a.record_id
+            WHERE a.depth >= 1 AND c.type IN ('story', 'bug', 'task')
+              AND c.created_at <= coalesce(x.first_in_progress_at, x.created_at)
+            GROUP BY a.ancestor_record_id) k ON k.epic_id = e.record_id
+      {{ entity_join('work_item', 'e') }}
+      WHERE e.done_at >= {{ p('window_start') }} AND e.done_at < {{ p('window_end') }}
+        AND e.type = 'epic' {{ filter_clause('work_item', 'e') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: availability_pct
+    description: Mean daily availability; org grain is request-count weighted when counts exist.
+    domain: monitoring
+    grains: [service, org]
+    unit: pct
+    better: higher
+    aggregation: mean
+    min_sample_size: 7
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      {%- set WT = 'bool_and(coalesce(m.rc > 0, false))' if entity_type == 'org' else 'false' %}
+      SELECT {{ entity_col('metric_daily', 'm') }} AS entity_id,
+             {{ period_start_date('m.date') }} AS period_start,
+             CASE WHEN {{ WT }} THEN sum(m.v * m.rc) / sum(m.rc) ELSE avg(m.v) END AS value,
+             CASE WHEN {{ WT }} THEN sum(m.v * m.rc) ELSE sum(m.v) END AS numerator,
+             CASE WHEN {{ WT }} THEN sum(m.rc) ELSE count(*) END AS denominator,
+             count(DISTINCT m.date) AS sample_size{{ ', NOT ' ~ WT ~ ' AS unweighted' if entity_type == 'org' }}
+      FROM (SELECT d.date, d.service_id,
+                   avg(d.value) FILTER (WHERE d.metric_name = 'availability_pct') AS v,
+                   max(d.value) FILTER (WHERE d.metric_name = 'request_count') AS rc
+            FROM core.metric_daily d WHERE d.metric_name IN ('availability_pct', 'request_count')
+            GROUP BY d.date, d.service_id) m {{ entity_join('metric_daily', 'm') }}
+      WHERE m.date >= {{ p('window_start_date') }} AND m.date < {{ p('window_end_date') }}
+        AND m.v IS NOT NULL {{ filter_clause('metric_daily', 'm') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: error_rate
+    description: Daily error rate, weighted by request count when every day has one (else mean).
+    domain: monitoring
+    grains: [service, org]
+    unit: ratio
+    better: lower
+    aggregation: mean
+    min_sample_size: 7
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [service_id, team_id, org_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      {%- set WT = 'bool_and(coalesce(m.rc > 0, false))' %}
+      SELECT {{ entity_col('metric_daily', 'm') }} AS entity_id,
+             {{ period_start_date('m.date') }} AS period_start,
+             CASE WHEN {{ WT }} THEN sum(m.v * m.rc) / sum(m.rc) ELSE avg(m.v) END AS value,
+             CASE WHEN {{ WT }} THEN sum(m.v * m.rc) ELSE sum(m.v) END AS numerator,
+             CASE WHEN {{ WT }} THEN sum(m.rc) ELSE count(*) END AS denominator,
+             count(DISTINCT m.date) AS sample_size, NOT {{ WT }} AS unweighted
+      FROM (SELECT d.date, d.service_id,
+                   avg(d.value) FILTER (WHERE d.metric_name = 'error_rate') AS v,
+                   max(d.value) FILTER (WHERE d.metric_name = 'request_count') AS rc
+            FROM core.metric_daily d WHERE d.metric_name IN ('error_rate', 'request_count')
+            GROUP BY d.date, d.service_id) m {{ entity_join('metric_daily', 'm') }}
+      WHERE m.date >= {{ p('window_start_date') }} AND m.date < {{ p('window_end_date') }}
+        AND m.v IS NOT NULL {{ filter_clause('metric_daily', 'm') }} {{ entity_filter() }}
+      GROUP BY ALL
 scoring:
   as_of: null                     # null = build date in business_timezone
   funding:
@@ -125,12 +764,10 @@ scoring:
     min_peer_group: 5
     trend_weight: 0.5
     min_weight_coverage: 0.5
-    # T04-09/10/11: restore the design 04 §7.1 scorecard weights as each metric ships:
-    #   repeat_incident_rate 0.15, sla_breach_rate 0.10, reopen_rate 0.05,
-    #   reassignment_rate 0.05, alert_noise_ratio 0.10 (T04-09); change_failure_rate 0.15
-    #   (T04-10); cycle_time_days 0.10, unplanned_work_ratio 0.10, epic_predictability 0.05
-    #   (T04-11). U04-26 step 8 rejects scorecard names absent from the catalog.
-    metrics: {mttr_hours: 0.15}
+    metrics: {mttr_hours: 0.15, repeat_incident_rate: 0.15, change_failure_rate: 0.15,
+              sla_breach_rate: 0.10, reopen_rate: 0.05, reassignment_rate: 0.05,
+              alert_noise_ratio: 0.10, cycle_time_days: 0.10, unplanned_work_ratio: 0.10,
+              epic_predictability: 0.05}
   peer_group:
     min_service_peers: 3          # below this, service/work_item peer_group() returns fallback "prior_year"
   levers:

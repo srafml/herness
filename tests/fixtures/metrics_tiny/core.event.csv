@@ -1,0 +1,7 @@
+event_id,source_tool,ts,service_id,severity,status,incident_id
+E1,datadog,2026-01-05 09:55:00-05,S1,critical,closed,I1
+E2,datadog,2026-01-10 03:00:00-05,S1,major,closed,
+E3,datadog,2026-01-20 08:55:00-05,S1,warning,closed,I2
+E4,datadog,2026-02-02 14:00:00-05,S1,minor,closed,
+E5,datadog,2026-03-03 11:00:00-05,S1,warning,closed,
+E6,datadog,2026-03-04 11:00:00-05,S1,info,closed,

@@ -1,0 +1,12 @@
+date,service_id,metric_name,value,unit,source_tool
+2026-01-05,S1,availability_pct,99.0,pct,datadog
+2026-01-05,S1,availability_pct,98.0,pct,prometheus
+2026-01-06,S1,availability_pct,100.0,pct,datadog
+2026-01-05,S2,availability_pct,97.0,pct,datadog
+2026-01-05,S1,request_count,1000,count,datadog
+2026-01-06,S1,request_count,3000,count,datadog
+2026-01-05,S2,request_count,1000,count,datadog
+2026-01-05,S2,request_count,500,count,prometheus
+2026-01-05,S1,error_rate,0.02,ratio,datadog
+2026-01-06,S1,error_rate,0.01,ratio,datadog
+2026-01-05,S2,error_rate,0.05,ratio,datadog

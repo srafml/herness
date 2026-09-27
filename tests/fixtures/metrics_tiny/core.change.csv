@@ -1,0 +1,7 @@
+record_id,number,state,type,opened_at,actual_end,service_id,team_id,outcome
+CH1,CHG0001,closed,normal,2026-01-02 09:00:00-05,2026-01-02 15:00:00-05,S1,T1,successful
+CH2,CHG0002,closed,emergency,2026-01-10 10:00:00-05,2026-01-10 12:00:00-05,S1,T1,unsuccessful
+CH3,CHG0003,closed,standard,,2026-02-15 10:00:00-05,S1,T1,successful
+CH4,CHG0004,closed,normal,2026-02-01 08:00:00-05,2026-02-02 08:00:00-05,S2,T2,successful
+CH5,CHG0005,scheduled,normal,2026-03-01 08:00:00-05,,S1,T1,
+CH6,CHG0006,closed,normal,2026-03-09 08:00:00-05,2026-03-10 08:00:00-05,S1,T1,canceled

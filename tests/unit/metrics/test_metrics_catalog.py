@@ -85,14 +85,45 @@ def fake_config(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_ut04_13_shipped_metrics_yaml_loads(fake_config: None) -> None:
-    """UT04-13 the shipped config/metrics.yaml loads with no error issue: metrics #1-#4 and a
-    scorecard naming only shipped metrics (T04-09/10/11 restore the other design weights)."""
+    """UT04-13 the shipped config/metrics.yaml loads with no error issue: all 28 metrics of
+    U04-48 and the full design 04 §7.1 scorecard."""
     raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
     shipped = MetricsCatalogConfig.model_validate(raw)
     assert shipped.version == 1
     errors = [i for i in validate_catalog(shipped, weights=weights()) if i.severity == "error"]
     assert errors == []
-    names = ["incident_count", "mttr_hours", "mttr_p50_hours", "p1p2_count"]
+    names = sorted(
+        [
+            "incident_count",
+            "p1p2_count",
+            "mttr_hours",
+            "mttr_p50_hours",
+            "mttr_business_hours",
+            "mtta_minutes",
+            "customer_impact_minutes",
+            "repeat_incident_rate",
+            "reopen_rate",
+            "reassignment_rate",
+            "sla_breach_rate",
+            "alert_noise_ratio",
+            "toil_hours_est",
+            "incident_cost_usd",
+            "change_count",
+            "change_failure_rate",
+            "change_caused_incident_count",
+            "change_lead_time_hours",
+            "emergency_change_ratio",
+            "throughput",
+            "cycle_time_days",
+            "carryover_rate",
+            "backlog_age_days",
+            "wip_count",
+            "unplanned_work_ratio",
+            "epic_predictability",
+            "availability_pct",
+            "error_rate",
+        ]
+    )
     assert load_catalog(SHIPPED).names() == names
     assert set(shipped.scoring.org.metrics) <= set(names)
 

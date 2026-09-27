@@ -97,7 +97,7 @@ All paths are repo-relative. Layer L3 per ENG §2.1. `herness.metrics` MUST NOT 
 | `herness/metrics/sql/portfolio_input.sql.j2` | Optimizer input rows | — | SQL | — | 110 |
 | `herness/metrics/sql/checks.sql.j2` | Invariant SELECTs, one per check, split by `-- @check` markers | — | SQL | — | 200 |
 | `herness/model/sql/400_facts.sql` | Five fact SELECTs split by `-- @statement` markers | — | SQL (stage 400) | — | 400 |
-| `config/metrics.yaml` | Catalog (28 metrics), defaults, scoring section | — | config | — | 760 |
+| `config/metrics.yaml` | Catalog (28 metrics), defaults, scoring section — budget raised from 760 (T04-11 ruling): 16 required metadata keys per entry, anchors rejected by the config loader | — | config | — | 790 |
 | `config/weights.yaml` | Weights and portfolio section | — | config | — | 45 |
 
 Test-side files (not production, no line budget): `tests/unit/metrics/test_*.py`, `tests/integration/metrics/test_*.py`, `tests/fault/metrics/test_*.py`, `tests/bench/test_metrics_bench.py`, `tests/support/metrics_tiny.py` (builds a DuckDB warehouse from the fixture rows), `tests/support/metrics_oracle.py` (pure-Python reference formulas for property tests), `tests/fixtures/metrics_tiny/*.csv`, `tests/fixtures/result_hash_vectors.json`.

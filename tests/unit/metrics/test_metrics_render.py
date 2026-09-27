@@ -287,16 +287,17 @@ def test_ut04_25_spine_snapshot_capped_at_as_of() -> None:
 
 
 def test_ut04_25_other_macros() -> None:
-    """UT04-25 owner_team, cat_at_join, cat_at and lkp emit the spec text."""
+    """UT04-25 owner_team, cat_at_join, cat_at and lkp emit the spec text (`"at"` quoted: it
+    is a DuckDB keyword)."""
     mod, _ = _macros()
     assert _flat(mod.owner_team("e.service_id", "ow")).endswith(
         "ow ON ow.service_id = e.service_id"
     )
     assert _flat(mod.cat_at_join("spine.end_ts", "w", "ce")) == (
-        "ASOF LEFT JOIN (SELECT record_id, at, arg_max(to_category, CASE to_category"
+        'ASOF LEFT JOIN (SELECT record_id, "at", arg_max(to_category, CASE to_category'
         " WHEN 'done' THEN 3 WHEN 'in_progress' THEN 2 ELSE 1 END) AS to_category"
-        " FROM core.work_item_transition GROUP BY record_id, at) ce"
-        " ON ce.record_id = w.record_id AND spine.end_ts >= ce.at"
+        ' FROM core.work_item_transition GROUP BY record_id, "at") ce'
+        ' ON ce.record_id = w.record_id AND spine.end_ts >= ce."at"'
     )
     assert _flat(mod.cat_at("spine.end_ts", "w", "ce")) == (
         "coalesce(ce.to_category, CASE WHEN w.created_at <= spine.end_ts THEN 'todo' END)"
@@ -393,10 +394,8 @@ def test_ut04_26_default_binds_values() -> None:
     """UT04-26 default_binds reads defaults and scoring; pairs are sorted by key."""
     lever = metric(name="reopen_rate", usd_model="reopen", unit="ratio")
     catalog = FakeCatalog([metric(), lever, metric(name="off_metric", enabled=False)])
-    # The design 04 §7.1 scorecard (the shipped file trims it until T04-09/10/11 ship its
-    # metrics), so the bind pairs and lower-better intersection are exercised in full.
-    org = catalog.scoring.org.model_copy(update={"metrics": SPEC_SCORECARD})
-    catalog.scoring = catalog.scoring.model_copy(update={"org": org})
+    # The shipped scorecard is the full design 04 §7.1 one.
+    assert catalog.scoring.org.metrics == SPEC_SCORECARD
     b = default_binds(catalog)
     assert b["d_exclude_incident_states"] == ["canceled"]
     assert b["d_exclude_close_codes"] == ["Cancelled", "Duplicate", "Not an incident"]
