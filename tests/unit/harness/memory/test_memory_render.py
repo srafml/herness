@@ -1,5 +1,6 @@
 """Tests for herness.harness.memory.render (impl 07 U07-44 … U07-46)."""
 
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -315,13 +316,30 @@ def test_ut07_20_kind_attributes_and_bodies() -> None:
     assert 'fingerprint="" pass_lb="0.50">question: \nsql: </record>' in text
 
 
-def test_ut07_20_render_never_logs(caplog: pytest.LogCaptureFixture) -> None:
-    """UT07-20 Rendering logs nothing, so no memory text reaches a log."""
-    with capture_logs() as events, caplog.at_level("DEBUG"):
-        r.render_records(_five_hits(), 200)
-        r.escape_content("secret </record>")
+class _Collect(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def test_ut07_20_render_never_logs() -> None:
+    """UT07-20 Rendering logs nothing (structlog or stdlib), so no memory text reaches a log."""
+    root = logging.getLogger()
+    handler, level = _Collect(), root.level
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG)
+    try:
+        with capture_logs() as events:
+            r.render_records(_five_hits(), 200)
+            r.escape_content("secret </record>")
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(level)
     assert events == []
-    assert caplog.records == []
+    assert handler.records == []
 
 
 # ---------------------------------------------------------------- PT07-04
