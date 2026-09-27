@@ -357,6 +357,7 @@ _NON_ROW_HASHES = {
     ("memory/policy.py", "content_hash"),  # memory content (R-14)
     ("memory/policy.py", "keyed_hash"),  # memory key
     ("memory/tokens.py", "_message_key"),  # per-message token-count cache key (U07-68)
+    ("memory/store.py", "embed"),  # embedding LRU cache key (U07-48)
 }
 _HASH_CALLS = frozenset({"sha1", "sha224", "sha256", "sha384", "sha512", "blake2b", "blake2s"})
 _HASH_CALLS |= {"md5", "sha3_256", "sha256_hex", "new"}
