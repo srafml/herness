@@ -287,3 +287,31 @@ def test_cv_t08_21_supervisor_gpu_slot_end_to_end(
     row = next(w for w in require_jobs_backend().list_workers() if w.worker_id == sup.worker_id)
     assert (row.gpu_slot, row.gpu_class_loaded) == (1, "decider")
     assert sup.stop() == 0
+
+
+def test_cv_t08_21_plan_chat_window_filter(
+    slot: GpuSlot, sup_env: SupEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T08-21 step 7g (review I1, M2): in the chat window `claimable_counts` gets
+    `min_priority` = `S.batch_in_chat_min_priority` (70) and exempt kinds `["chat"]`, and
+    the claim filter carries both; outside the window neither is set."""
+    backend = require_jobs_backend()
+    seen: list[dict[str, Any]] = []
+    real = backend.claimable_counts
+
+    def counts(**kwargs: Any) -> Any:
+        seen.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(backend, "claimable_counts", counts)
+    slot.swap("reasoning", "setup")
+    _wait_idle(slot)
+    sup_env.enqueue(kind="chat", gpu_class="reasoning", priority=75)
+    noon, night = _local(12), _local(23)
+    assert window_at(noon).spec.name == "chat"
+    assert chat_rule(window_at(noon)) == (70, ["chat"])
+    found = slot.plan(noon, None, preload=False)
+    assert found == ClaimFilter(["reasoning", "none"], 70, ["chat"])
+    assert (seen[-1]["min_priority"], seen[-1]["priority_exempt_kinds"]) == (70, ["chat"])
+    slot.plan(night, None, preload=False)
+    assert (seen[-1]["min_priority"], seen[-1]["priority_exempt_kinds"]) == (None, [])

@@ -79,9 +79,9 @@ def test_cv_t08_21_start_config_errors_exit_1(
     for spec in ("no_colon", "tests.support.nope:bootstrap", "tests.support.worker_bootstrap:NOPE"):
         with structlog.testing.capture_logs() as logs:
             assert sup_env.supervisor(bootstrap_spec=spec).run() == 1
-        assert [e["event"] for e in logs if e["log_level"] == "error"] == [
-            "jobs.worker.config_invalid"
-        ]
+        errors_logged = [e for e in logs if e["log_level"] == "error"]
+        assert [e["event"] for e in errors_logged] == ["jobs.worker.config_invalid"]
+        assert errors_logged[0]["paths"] == ["bootstrap"]
     issue = ConfigIssue("error", "schedule.windows", "gap", "resilience.yaml")
     monkeypatch.setattr(sv, "validate_resilience_config", lambda cfg: [issue])
     with structlog.testing.capture_logs() as logs:
@@ -350,3 +350,93 @@ def test_cv_t08_21_signal_during_start_drains(
     assert sup.draining
     assert sup_env.job(job_id).status == "queued"
     assert signal.getsignal(signal.SIGINT) is before
+
+
+def test_cv_t08_21_once_spawn_failure_ends_the_loop(sup_env: SupEnv) -> None:
+    """CV-T08-21 `--once` (review M1): a child that cannot be started finishes the one
+    claimed job as `child_crash` (requeued) and the worker ends with 0 instead of looping."""
+    sup_env.ctx.start_error = OSError("no processes")
+    job_id = sup_env.enqueue()
+    sup = sup_env.supervisor(once=True)
+    done: list[int] = []
+    thread = threading.Thread(target=lambda: done.append(sup.run()), daemon=True)
+    thread.start()
+    thread.join(60)
+    assert done == [0]
+    row = sup_env.job(job_id)
+    assert row.status == "queued"
+    assert row.last_error["message"] == "child_crash"  # type: ignore[index]
+
+
+def test_cv_t08_21_reaper_step_runs_once_per_interval(
+    sup_env: SupEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T08-21 step 7a (review I3): `run_scheduler`, `run_due_probes` and the reaper run on
+    the first tick and then once per `reaper_interval_s` (1 s here), not on the ticks between."""
+    calls: dict[str, list[Any]] = {"scheduler": [], "probes": []}
+    monkeypatch.setattr(sv, "run_scheduler", calls["scheduler"].append)
+    monkeypatch.setattr(sv, "run_due_probes", calls["probes"].append)
+    sup = sup_env.supervisor(concurrency=0)
+    assert sup.start() is None
+    base = clock.now()
+    ticks = [base, base + timedelta(seconds=0.4), base + timedelta(seconds=0.9)]
+    ticks += [base + timedelta(seconds=1), base + timedelta(seconds=1.5)]
+    for at in ticks:
+        sup.tick(at)
+    assert calls["scheduler"] == [base, base + timedelta(seconds=1)]
+    assert calls["probes"] == [base, base + timedelta(seconds=1)]
+    assert sup.failed_ticks == 0
+    assert sup.stop() == 0
+
+
+class _StubSlot:
+    """A GPU slot whose arbiter step always returns the chat-window claim filter."""
+
+    def __init__(self) -> None:
+        from herness.core.jobs._supervisor_gpu import ClaimFilter  # noqa: PLC0415
+
+        self.found = ClaimFilter(["reasoning", "none"], 70, ["chat"])
+        self.loaded = "reasoning"
+
+    def idle(self) -> bool:
+        return True
+
+    def plan(self, now: Any, worker: Any, *, preload: bool) -> Any:
+        return self.found
+
+    def restart_check(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+def test_cv_t08_21_gpu_claim_uses_the_arbiter_filter(
+    sup_env: SupEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T08-21 step 7g (review I1): the GPU-slot claim gets the plan's classes,
+    `min_priority` and exempt kinds; CPU slots claim `none` with no priority filter."""
+    claims: list[dict[str, Any]] = []
+
+    def record(**kwargs: Any) -> None:
+        claims.append(kwargs)
+
+    monkeypatch.setattr(sv, "_claim", record)
+    sup = sup_env.supervisor(concurrency=1)
+    assert sup.start() is None
+    sup.gpu = _StubSlot()  # type: ignore[assignment]
+    sup.slots["gpu"] = None
+    sup.tick(clock.now())
+    assert sup.failed_ticks == 0
+    cpu, gpu_claim = claims
+    assert (cpu["allowed_classes"], cpu["min_priority"], cpu["priority_exempt_kinds"]) == (
+        ["none"],
+        None,
+        (),
+    )
+    assert gpu_claim["owner"] == f"{sup.worker_id}:gpu"
+    assert gpu_claim["allowed_classes"] == ["reasoning", "none"]
+    assert gpu_claim["min_priority"] == 70
+    assert gpu_claim["priority_exempt_kinds"] == ["chat"]
+    sup.gpu = None
+    assert sup.stop() == 0

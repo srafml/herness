@@ -117,15 +117,16 @@ class Supervisor:
 
     def start(self) -> int | None:
         """Steps 1-4 and the `running` row; an exit code when the worker must not run."""
+        stage = "bootstrap"  # the `paths` entry of a start ConfigError
         try:
             call_bootstrap(self.options.bootstrap)
+            stage = "HERNESS_FAULTS"
             _ensure_loaded()  # a bad fault plan fails here, at start (R-40)
+            stage = "resilience"
             issues = validate_resilience_config(get_config())
         except ConfigError as exc:
-            error_type = type(exc).__name__
-            _log.error(
-                "jobs.worker.config_invalid", worker_id=self.worker_id, error_type=error_type
-            )
+            fields = {"paths": [stage], "error_type": type(exc).__name__}
+            _log.error("jobs.worker.config_invalid", worker_id=self.worker_id, **fields)
             return 1
         if issues:
             paths = [issue.path for issue in issues]
@@ -268,7 +269,7 @@ class Supervisor:
                 priority_exempt_kinds=(),
             )
             if row is None:
-                return  # the other free CPU slots would find nothing either
+                break  # the other free CPU slots would find nothing either
             self._start_child(slot, row, now)
             if self.options.once:
                 return
@@ -296,6 +297,8 @@ class Supervisor:
             self.slots[slot] = spawn(slot, owner, row, self.options.bootstrap, now)
         except OSError:  # the process could not start: a crash without a child
             finish_job(row, owner, child_crash(), attempt_started_at=now, stop_reason=None)
+            if self.options.once:
+                self.draining = True  # step 7i: the one claimed job is finished
 
     def _update_row(self, now: datetime) -> None:
         """Step 7h, every `heartbeat_s`."""

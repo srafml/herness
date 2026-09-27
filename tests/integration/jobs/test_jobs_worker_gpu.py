@@ -77,7 +77,13 @@ def test_it08_13_chat_window_claims_chat_and_high_priority_only(gpu_env: WorkerE
         sup, noon, lambda: gpu_env.job(chat).status == "done" and gpu_env.job(high).status == "done"
     )
     assert sup.gpu.loaded == "reasoning"
+    for _ in range(15):  # the slot is free again: the priority-40 review must still be held
+        sup.tick(noon)
+        run = sup.slots["gpu"]
+        assert run is None or run.row.job_id != low
+        time.sleep(0.1)
     assert gpu_env.job(low).status == "queued"
+    assert gpu_env.job(low).attempts == 0
     counts = require_jobs_backend().claimable_counts(
         now=clock.now(),
         classes=["reasoning"],

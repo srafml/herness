@@ -161,3 +161,38 @@ def test_cv_t08_21_child_main_unencodable_outcome(
     parent, end = multiprocessing.Pipe()
     parent.close()
     child_main(second, OWNER, "cpu", BOOTSTRAP, end)  # OSError on send is swallowed
+
+
+def test_cv_t08_21_child_main_closes_context_before_pipe(
+    sup_env: SupEnv, signals: list[tuple[int, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T08-21 U08-88 step 8 (review M3): `ctx.close()` stops the pipe reader before the
+    connection is closed."""
+    del signals
+    from herness.core.jobs.context import ChildJobContext  # noqa: PLC0415
+
+    order: list[str] = []
+    real_close = ChildJobContext.close
+
+    def ctx_close(self: ChildJobContext, timeout_s: float = 1.0) -> None:
+        order.append("ctx")
+        real_close(self, timeout_s)
+
+    monkeypatch.setattr(ChildJobContext, "close", ctx_close)
+
+    class Conn:
+        def __init__(self, inner: Any) -> None:
+            self.inner = inner
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.inner, name)
+
+        def close(self) -> None:
+            order.append("conn")
+            self.inner.close()
+
+    job_id = _claimed(sup_env)
+    parent, end = multiprocessing.Pipe()
+    child_main(job_id, OWNER, "cpu", BOOTSTRAP, Conn(end))  # type: ignore[arg-type]
+    assert order == ["ctx", "conn"]
+    assert isinstance(decode_message(parent.recv_bytes()), OutcomeMsg)
