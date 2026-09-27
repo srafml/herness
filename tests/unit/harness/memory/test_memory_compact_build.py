@@ -295,6 +295,20 @@ def test_ut07_55_post_finding_refs_and_matches() -> None:
     assert [(u.value, u.step) for u in unmatched] == [("99 x", 3)]
 
 
+def test_ut07_55_beyond_decimal_precision() -> None:
+    """UT07-55 a huge numeral near a huge cell past 60 digits stays unmatched."""
+    table = ParsedTable(query_id=Q1, columns=["k", "v"], rows=[["a", "1e70"]], row_count=1)
+    written = "1" + "0" * 70
+    cited, unmatched = cited_from_group([_asst(TextPart(text=written))], [table], [], 4)
+    assert cited == []
+    assert [u.value for u in unmatched] == [written[:40]]
+
+
+def test_ut07_56_missing_progress() -> None:
+    """UT07-56 notes without progress fail validation and give None."""
+    assert validate_notes({"dead_ends": ["x"]}, _pad(), ALLOWED) is None
+
+
 def test_ut07_55_search_order_and_row_key() -> None:
     """UT07-55 most recent table first; key column and one-row tables carry no row_key."""
     old = ParsedTable(query_id=Q1, columns=["k", "v"], rows=[["a", "5"]], row_count=2)

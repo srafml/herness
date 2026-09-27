@@ -194,7 +194,7 @@ def entry_from_result(
     return [primary, *rest], table
 
 
-type _Cell = tuple[ParsedTable, list[str], int, float, decimal.Decimal]
+type _Cell = tuple[ParsedTable, list[str], int, float]
 
 
 def _cells(tables: Sequence[ParsedTable]) -> Iterator[_Cell]:
@@ -207,7 +207,7 @@ def _cells(tables: Sequence[ParsedTable]) -> Iterator[_Cell]:
                 except ValueError:
                     continue
                 if math.isfinite(number):
-                    yield table, row, column, number, decimal.Decimal(repr(number))
+                    yield table, row, column, number
 
 
 def _match(written: str, cells: Sequence[_Cell]) -> NumberRef | None:
@@ -215,8 +215,11 @@ def _match(written: str, cells: Sequence[_Cell]) -> NumberRef | None:
     if parsed is None:
         return None
     value, places = parsed
-    for table, row, column, number, exact in cells:
-        if not rounds_to(exact, value, places):
+    target = float(value)
+    slack = 10.0**-places + abs(target) * 1e-9  # a cheap float filter before the exact test
+    for table, row, column, number in cells:
+        near = abs(number - target) <= slack
+        if not (near and rounds_to(decimal.Decimal(repr(number)), value, places)):
             continue
         keyed = table.row_count > 1 and column != 0
         try:
