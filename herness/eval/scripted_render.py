@@ -3,7 +3,10 @@
 `parse_tool_table` reads the model-facing table of spec 05 §5.4.5; `render_turn` fills
 `{{row.<col>}}` / `{{last.query_id}}` templates from the last parseable tool result and,
 for `numbers_from: last_tool_result`, builds the `NumberRef`s the Verifier re-checks.
-Pure functions: the same turn and messages always render to the same output.
+Pure functions: the same turn, messages and `call_index` always render to the same output.
+`call_index` (keyword-only, needed for the `call_<call_index>_<i>` tool call ids) is an
+addition to the U11-39 signature; a template gap raises `ScriptMismatch` with placeholder
+call identity, which `ScriptedLLMClient` replaces with the real one.
 """
 
 from __future__ import annotations
