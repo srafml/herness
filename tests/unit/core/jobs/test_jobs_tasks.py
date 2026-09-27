@@ -278,6 +278,8 @@ def test_ut08_68_big_state_violates(run_id: str) -> None:
     with pytest.raises(SchemaViolation, match="exceeds 4 MiB without loop"):
         save_checkpoint(task, "state", {"blob": BIG})
     assert _envelope(task) == {"schema_version": 1, "loop": {"t": 1}}
+    with pytest.raises(SchemaViolation, match="exceeds 4 MiB without loop"):
+        build_checkpoint_envelope("state", {"blob": BIG}, None)
 
 
 @pytest.mark.parametrize(
