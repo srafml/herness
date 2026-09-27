@@ -6,6 +6,8 @@ plugin; T11-40 registers `tests.support.ops_store` (U11-78) in place of the inte
 `tests.support.ops_core_store` (T02-04). T02-12 registers `tests.support.build_harness`
 (`build_harness`, `fake_job_context`; impl 02 §11). T05-16 registers
 `tests.support.harness_state` (autouse `reset_harness_state`: the process tool registry).
+T11-23 registers `tests.support.stub_http` (`stub_services`) and `tests.support.fake_llm`
+(`fake_llm_registered`).
 """
 
 import random
@@ -31,6 +33,8 @@ pytest_plugins = [
     "tests.support.fake_gpu",
     "tests.support.build_harness",
     "tests.support.harness_state",
+    "tests.support.stub_http",
+    "tests.support.fake_llm",
 ]
 
 collect_ignore = ["support", "fixtures"]
