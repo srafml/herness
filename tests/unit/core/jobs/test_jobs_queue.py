@@ -21,6 +21,7 @@ from herness.core.errors import SchemaViolation
 from herness.core.ids import canonical_json
 from herness.core.jobs import queue
 from herness.core.jobs.ports import SchedCheck, require_jobs_backend
+from herness.core.redact import RedactionFailed, Redactor
 from herness.core.resilience import process_state
 from herness.core.types import JobKind, JobSpec
 from herness.store.ops.core import read_one
@@ -253,3 +254,27 @@ def test_ut08_106_invalid_spec_names_the_field(kwargs: dict[str, Any], field: st
     with pytest.raises(SchemaViolation) as caught:
         queue.enqueue(**args)
     assert caught.value.message == f"invalid job spec field: {field}"
+
+
+@pytest.mark.usefixtures("jobs_db")
+def test_ut08_55_unscannable_or_unencodable_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT08-55 a string the redactor cannot scan, or a payload canonical JSON refuses, is a
+    SchemaViolation without the value and without the underlying error as context."""
+
+    def refuse(_self: object, _text: str, **_kw: object) -> list[object]:
+        msg = "text too long"
+        raise RedactionFailed(msg)
+
+    monkeypatch.setattr(Redactor, "scan", refuse)
+    with pytest.raises(SchemaViolation, match="could not be scanned") as caught:
+        queue.validate_payload({"note": "value-x"})
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+
+    def unencodable(_value: object) -> str:
+        msg = "canonical JSON too deep"
+        raise SchemaViolation(msg)
+
+    monkeypatch.setattr(queue, "canonical_json", unencodable)
+    with pytest.raises(SchemaViolation, match="not canonical JSON"):
+        queue.validate_payload({"a": 1})
