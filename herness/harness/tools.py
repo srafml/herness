@@ -46,7 +46,8 @@ from herness.harness._tools_record import json_safe
 from herness.harness._tools_schema import check_tool_schema
 from herness.harness.sql_guard import SqlGuard
 
-if TYPE_CHECKING:  # roles.base imports wrap_untrusted from here
+if TYPE_CHECKING:  # roles.base and loop import this module at run time
+    from herness.harness.loop import LoopHooks
     from herness.harness.roles.base import RoleSpec
 
 __all__ = [
@@ -363,15 +364,11 @@ def _reset_tool_registry() -> None:
 # --- U05-34 dispatch ------------------------------------------------------------------------
 
 
-class _LoopHooksLike(Protocol):
-    """`LoopHooks` (T05-22/23) is passed through untouched; any object satisfies this."""
-
-
 async def dispatch(
     ctx: ToolContext,
     tools: Mapping[str, _AnyTool],
     calls: list[ToolCall],
-    hooks: _LoopHooksLike | None,
+    hooks: LoopHooks | None,
     state: LoopState,
     /,
 ) -> list[ToolResult]:

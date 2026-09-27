@@ -103,6 +103,7 @@ Line budgets are hard limits enforced by the CI module-length check (ENG §2.4).
 | `herness/harness/roles/prompts/*.md` | 15 prompt files | — | data | — | 150 lines each |
 | `herness/harness/hooks.py` | `GatedClient`, `HarnessHooks`, truncation fallback (R-02, R-25) | `GatedClient`, `HarnessHooks`, `CallGateLike`, `CompactorLike`, `truncate_context` | L4 | none | 340 |
 | `herness/harness/loop.py` | Agent loop | `LoopHooks`, `run_agent`, `HarnessHooks` and `GatedClient` (re-exports) | L4 | none | 220 |
+| `herness/harness/_loop_steps.py` | Step helpers of `run_agent` (private: setup of limits and state, compaction step, hard limits, charge and `llm_call` trace, the U05-59 request builder re-exported as `loop._build_request`, `AgentResult` assembly; size-forced private sibling of `loop.py`, T05-23) | `fresh_state`, `compact`, `limit_hit`, `account`, `build_request`, `result` | L4 | none | 200 |
 | `herness/harness/verifier.py` | Verifier (numbers only, R-37) | `Verifier`, `compare_value`, `canonical_cell_text`, `row_matches` | L4 | `duckdb` | 400 |
 | `herness/harness/health.py` | Health check for `herness doctor` | `harness_health` | L4 | none (loopback calls go through `LLMRegistry.health`) | 100 |
 | `config/models.yaml` | Model clients, routing, harness settings | — | config | — | 180 |
@@ -2535,6 +2536,8 @@ All cards are Phase 3. Prompt files (`*.md`) and `config/models.yaml` are data, 
 | Tests | UT05-103–UT05-113, UT05-128, UT05-130, IT05-01–IT05-06, ST05-08, BT05-01 |
 | Threats | TH05-07, TH05-08 |
 | Acceptance checks | tests pass; `loop.py` ≤ 220 lines (CI script) |
+
+Spec note (T05-23 build): `loop.py` keeps `LoopHooks`, `run_agent`, `_finalize`, `_finish`, the U05-74 loop constants and the re-exports within 220 lines; the step helpers and `_build_request` (as `build_request`, imported into `loop` under the spec name) live in the private sibling `herness/harness/_loop_steps.py` (§2 row, ≤ 200 lines). `_build_request` and `_finalize` carry `# noqa: PLR0913` (their U05-59/U05-60 signatures have eight and nine parameters); `run_agent` carries `# noqa: PLR0913, PLR0917` (ruff also flags seven positional parameters). `_finish` sets the `LoopState._stopping` private attribute that `HarnessHooks.after_step` reads (U05-62 note). `dispatch` types `hooks` as `LoopHooks | None` (imported under `TYPE_CHECKING`; `loop` imports `tools` at run time). An invalid `LLMRequest` from `_build_request` raises `ConfigError("invalid model request")` without the pydantic message (it may echo prompt text). The `budget` event `message` is the wrap-up nudge for `kind="wrap_up"` and `null` for `kind="warn"`.
 | Blocked by | none (D05-02 resolved by R-22) |
 | Size | M |
 

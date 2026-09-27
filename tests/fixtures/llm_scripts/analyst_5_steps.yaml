@@ -1,0 +1,29 @@
+# T05-23 (IT05-01, flow F05-01): a review analyst task of 5 tool steps on the stand-in build
+# (tests/support/warehouse_tools_build.py), then the final text turn and the structured final.
+# The adapters send no DD11-02 headers yet, so the script matches every role (`*`).
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: list_tables
+          arguments: {schema: core}
+    - tool_calls:
+        - name: describe_table
+          arguments: {table: core.incident}
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT service_id, count(*) AS incidents FROM core.incident GROUP BY 1 ORDER BY 1"
+            purpose: incidents per service
+    - tool_calls:
+        - name: post_finding
+          arguments: {title: "finding 1"}
+    - tool_calls:
+        - name: post_finding
+          arguments: {title: "finding 2"}
+    - final:
+        text: "Two findings posted; incidents spread evenly across services."
+    - final:
+        output:
+          summary: "Incidents are spread evenly across the four services."
+          unknowns: []
+          suggested_followups: ["Check priority mix per service"]
