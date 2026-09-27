@@ -21,8 +21,8 @@ You receive:
 - Keep every deterministic task. Copy its `dedup_key`, `specialty`, `objective`,
   `entity_type` and `entity_ids` unchanged; the only field you may change is its `notes`
   (at most 400 characters).
-- Add wildcard tasks only within the count given in the input, and leave their `dedup_key`
-  empty. Add none when the deterministic tasks already cover the question.
+- Add wildcard tasks only within the count given in the input, and set their `dedup_key`
+  to JSON `null`. Add none when the deterministic tasks already cover the question.
 - Give each task one testable hypothesis in `objective`: a statement the data can confirm or
   refute, naming the entity, the measure and the period.
 - No two tasks may overlap in entity and specialty. Merge or drop a task that would.
@@ -48,7 +48,7 @@ You receive:
 Return `PlannerOutput`:
 
 - `tasks`: the proposed tasks, deterministic tasks first. Each has `dedup_key` (copied, or
-  empty for a wildcard), `specialty`, `objective` (the hypothesis), `entity_type`,
+  `null` for a wildcard), `specialty`, `objective` (the hypothesis), `entity_type`,
   `entity_ids` and `notes`.
 - `rationale`: why this set of tasks answers the question, in a few sentences.
 - `unknowns`: what the plan cannot cover, including DQ warnings no task addresses.

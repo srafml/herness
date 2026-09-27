@@ -25,12 +25,17 @@ pytestmark = pytest.mark.unit
 _EXPECTED_COUNT = 14  # R-37 removed verifier_claim.md from the card's 15
 _DETECTORS = build_detectors(RedactionConfig())
 _SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]{0,31}://|\bwww\.", re.IGNORECASE)
-_CODE_SPAN = re.compile(r"`[^`\n]*`")  # dotted table names such as `score.org` live in code spans
-_HOST = re.compile(
-    r"\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|ai|app|cloud|local|internal|lan|corp|co|us|uk)\b"
-    r"|\blocalhost\b",
-    re.IGNORECASE,
+# Every dotted token, in prose and in code spans alike, must be a warehouse reference
+# (`schema.table[.column]` in a known schema) or a prompt file name; a token ending in a
+# host suffix is a hit unless it is one of the named tables listed here.
+_DOTTED = re.compile(r"(?<![\w.-])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+")
+_SCHEMAS = frozenset({"core", "enrich", "score", "metrics"})
+_HOST_SUFFIXES = frozenset(
+    {"com", "net", "org", "io", "dev", "ai", "app", "cloud", "local", "internal", "lan", "corp"}
+    | {"co", "us", "uk", "de", "eu", "in", "localdomain", "home", "test", "example"}
 )
+_NOT_HOSTS = frozenset({"score.org"})  # the warehouse table of org scores, not a host
+_LOCALHOST = re.compile(r"\blocalhost\b", re.IGNORECASE)
 
 
 def _prompt_paths() -> Iterator[Path]:
@@ -48,9 +53,19 @@ def _detector_hits(text: str) -> list[str]:
     ]
 
 
+def _is_host_like(token: str) -> bool:
+    labels = token.lower().split(".")
+    if token in _NOT_HOSTS:
+        return False
+    if labels[-1] in _HOST_SUFFIXES:
+        return True
+    return labels[0] not in _SCHEMAS and labels[-1] != "md"
+
+
 def _url_hits(text: str) -> list[str]:
-    prose = _CODE_SPAN.sub("", text)
-    return [m.group() for m in _SCHEME.finditer(text)] + [m.group() for m in _HOST.finditer(prose)]
+    hits = [m.group() for m in _SCHEME.finditer(text)]
+    hits += [m.group() for m in _LOCALHOST.finditer(text)]
+    return hits + [t for t in _DOTTED.findall(text) if _is_host_like(t)]
 
 
 def _detect_secrets_hits(path: Path) -> list[str]:
@@ -89,7 +104,14 @@ def test_st05_21_scanners_bite(tmp_path: Path) -> None:
     assert any(h.startswith("CREDENTIAL") for h in _detector_hits("api" + "_key = " + token))
     assert _url_hits("see https" + "://example.test/x")
     assert _url_hits("ask the team at build.example.com")
-    assert not _url_hits("read `score.org` and `core.service_map.link_source`")
+    assert _url_hits("connect to `wh-01.corp.internal` first") == ["wh-01.corp.internal"]
+    assert _url_hits("the host is `vllm.gpu-pool`") == ["vllm.gpu-pool"]
+    assert _url_hits("the host is `LOCALHOST`") == ["LOCALHOST"]
+    assert _url_hits("mirror at `acme.org`") == ["acme.org"]
+    assert not _url_hits(
+        "read `score.org`, `core.service_map.link_source`, `enrich.incident_change_link`,"
+        " `score.portfolio.expected_impact_usd` and `_common.md`."
+    )
     planted = tmp_path / "planted.md"
     planted.write_text(f"aws_access_key_id = {key}\n", encoding="utf-8")
     assert _detect_secrets_hits(planted)

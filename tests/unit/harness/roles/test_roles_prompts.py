@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import dataclasses
 import re
-import shutil
 from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
 
 import pytest
+import yaml
 from tests.support.dispatch_standin import make_tool_ctx, use_test_config
 
 from herness.core import config as c
@@ -21,6 +21,7 @@ from herness.core.numbers import compile_allowed_patterns, find_uncited
 from herness.harness.pipelines.settings import SkepticSettings
 from herness.harness.roles import base
 from herness.harness.roles.base import ROLE_NAMES, RoleSpec, get_role
+from herness.reports.settings import ReportsSection
 
 pytestmark = pytest.mark.unit
 
@@ -48,14 +49,10 @@ _CHECKS = (
     "double_counting",
     "survivorship",
 )
-# config/app.yaml `reports.allowed_numeral_patterns` (years, ISO dates, quarters, record ids).
-_ALLOWED_NUMERALS = (
-    r"\b(19|20)\d{2}\b",
-    r"\d{4}-\d{2}-\d{2}",
-    r"Q[1-4] \d{4}",
-    r"(INC|CHG|PRB)\d+",
-    r"[A-Z][A-Z0-9]+-\d+",
-)
+# `reports.allowed_numeral_patterns` (years, ISO dates, quarters, record ids): the owner
+# default, which test_ut05_94_allowed_numerals_match_config ties to config/app.yaml.
+_ALLOWED_NUMERALS = tuple(ReportsSection().allowed_numeral_patterns)
+_APP_YAML = Path(__file__).resolve().parents[4] / "config" / "app.yaml"
 # Numerals a unit's invariants allow beyond those patterns.
 _EXTRA_NUMERALS: dict[str, tuple[str, ...]] = {
     "planner.md": (_SCALE, r"\b400\b"),  # U05-53: the rating scale and the note limit
@@ -334,6 +331,20 @@ def test_ut05_94_skeptic_thresholds_match_defaults() -> None:
     assert f"exceeds {round(defaults.single_record_share * 100)} % of a total" in text
 
 
+def test_ut05_94_allowed_numerals_match_config() -> None:
+    """UT05-94 the numeral patterns used here are the ones config/app.yaml ships."""
+    shipped = yaml.safe_load(_APP_YAML.read_text(encoding="utf-8"))["reports"]
+    assert tuple(shipped["allowed_numeral_patterns"]) == _ALLOWED_NUMERALS
+
+
+def test_ut05_94_planner_wildcard_dedup_key_is_null() -> None:
+    """UT05-94 planner.md asks for a JSON null `dedup_key` on wildcards, never an empty one."""
+    text = _package_files()["planner.md"]
+    assert "`dedup_key`\n  to JSON `null`" in text
+    assert "`null` for a wildcard" in text
+    assert "empty" not in text
+
+
 def test_ut05_94_numeral_check_bites() -> None:
     """UT05-94 the numeral check flags a stray number the patterns do not cover."""
     allowed = compile_allowed_patterns(list(_ALLOWED_NUMERALS))
@@ -376,7 +387,6 @@ def test_ut05_94_prompt_hash_follows_content(
     for role in _roles():
         edited = dataclasses.replace(role).prompt_hash
         assert (edited != real[role.name, role.prompt_files]) == (changed in role.prompt_files)
-    shutil.rmtree(root)
 
 
 def test_ut05_94_system_block_one_under_cap(tmp_path: Path) -> None:
