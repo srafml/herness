@@ -100,10 +100,6 @@ class ChildRun:
     preempt_at: datetime | None = None
     pending: dict[str, Future[GpuReplyMsg]] = field(default_factory=dict)
 
-    @property
-    def slot_kind(self) -> Literal["gpu", "cpu"]:
-        return "gpu" if self.slot == "gpu" else "cpu"
-
     def current(self) -> dict[str, str | None]:
         """The `worker.current_jobs` entry of this child (U08-87 step 7h)."""
         return {
@@ -132,7 +128,7 @@ class ChildRun:
         try:
             while not self.closed and self.outcome is None and self.conn.poll(0):
                 self._handle(decode_message(self.conn.recv_bytes(MAX_PIPE_MSG_BYTES)), now, gpu)
-        except EOFError:
+        except (EOFError, BrokenPipeError):  # the child closed its end (Windows: broken pipe)
             self.closed = True
         except (OSError, SchemaViolation):  # oversized or invalid frame (TH08-13, ST08-13)
             self.closed = self.crashed = True

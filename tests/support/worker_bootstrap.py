@@ -82,17 +82,17 @@ def fake_handler(ctx: Any) -> Any:
         _sleep_until_stop(ctx, heartbeat=False, obey=False)
     elif mode == "crash" and first:
         os._exit(9)
-    elif mode == "checkpoint":
-        return _checkpoint(ctx)
+    elif mode in {"checkpoint", "checkpoint_ignore"}:  # `_ignore`: never looks at stops
+        return _checkpoint(ctx, obey=mode == "checkpoint")
     return JobOutcome(status="done", result={"pid": os.getpid(), "attempt": ctx.attempt})
 
 
-def _checkpoint(ctx: Any) -> Any:
+def _checkpoint(ctx: Any, *, obey: bool) -> Any:
     from herness.core.types import JobOutcome  # noqa: PLC0415 - light import for children
 
     n = int(ctx.load_state().get("n", 0))
     deadline = time.monotonic() + LOOP_LIMIT_S
-    while not ctx.should_yield() and time.monotonic() < deadline:
+    while not (obey and ctx.should_yield()) and time.monotonic() < deadline:
         n += 1
         ctx.save_state({"n": n, "pid": os.getpid()})
         ctx.heartbeat(f"step {n}")

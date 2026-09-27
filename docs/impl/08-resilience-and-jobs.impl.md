@@ -2286,6 +2286,8 @@ All events carry `ts`, `level`, `event`, `component` (`resilience` or `jobs`), t
 | `jobs.window.class_never_allowed` | WARNING | `class` | U08-68 |
 | `jobs.chat.no_cloud_client` | WARNING | `depth` | U08-76 |
 | `jobs.worker.started` / `.stopped` / `.gpu_lock_held` / `.nothing_to_do` / `.config_invalid` | INFO / INFO / ERROR / INFO / ERROR | `worker_id`, `slots`, `exit_code`, `paths` | U08-87 |
+| `jobs.worker.start_failed` | ERROR | `worker_id`, `error_type` (T08-21: any unexpected exception in `run()`; exit code 1, R-46) | U08-87 |
+| `jobs.gpu.restart_failed` | WARNING | `service`, `error_type` (T08-21: the step 7a restart check's `restart_service` raised) | U08-87 |
 | `jobs.gpu.class_requested` | INFO | `worker_id`, `class` | U08-102 |
 | `jobs.supervisor.tick_failed` / `.store_unavailable` | ERROR / CRITICAL | `failed_ticks`, `error_type` | U08-87 |
 
