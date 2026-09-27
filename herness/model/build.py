@@ -4,6 +4,7 @@ Stages run in ``STAGE_ORDER`` on one writable build connection. No transaction i
 stages or around ``run_sql_range``: every statement autocommits, so later stage hooks (spec 04
 ``materialize_facts``) start with no open transaction. Only repository SQL runs; nothing from
 the job payload reaches SQL text (TH02-10). ``CURRENT`` changes only inside promotion.
+Stages ``enrich`` / ``score`` and the handler factory live in ``_build_stages`` (T02-19).
 """
 
 from __future__ import annotations
