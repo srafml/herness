@@ -71,6 +71,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (design 
 | `herness/harness/memory/render.py` | Delimited, escaped prompt rendering | `escape_content`, `escape_attr`, `wrap_untrusted`, `render_marker_values`, `render_records` | L4 | `herness.harness.llm.tokens` (`estimate_tokens`, R-17) | 220 |
 | `herness/harness/memory/store.py` | Embedding adapter with LRU cache; LanceDB `memory_embedding` adapter | `Embedder`, `VectorIndex` | L4 | `herness.enrich.embed` (L3), `herness.store.vectors` | 260 |
 | `herness/harness/memory/write.py` | `propose` pipeline | `MemoryWriter` | L4 | `herness.core.redact` | 380 |
+| `herness/harness/memory/_write_steps.py` | Per-proposal steps of the propose pipeline that need no collaborator state (step 3 redaction, step 4 numeral rules, step 6 (d) session check, step 10 confidence, the step 12 row and review payload, the `Draft` record), split off for the 380-line budget of `write.py` (T07-08 spec note, §3.9); imported only by `write.py` | none (private) | L4 | `herness.core.redact` | 260 |
 | `herness/harness/memory/lifecycle.py` | Approve, reject, expiry, use counting, purge | `MemoryLifecycle` | L4 | none | 340 |
 | `herness/harness/memory/recall.py` | Hybrid retrieval and scoring | `fts_query_string`, `score_candidate`, `mmr_select`, `RelatednessCache`, `MemoryRecaller` | L4 | `herness.store.warehouse` | 360 |
 | `herness/harness/memory/tools.py` | `recall_memory` and `propose_memory` tools | `RecallMemoryTool`, `ProposeMemoryTool`, `register_memory_tools` | L4 | `herness.harness.tools` | 280 |
@@ -1232,6 +1233,8 @@ Removed (R-17): see impl 05 U05-23 (`herness.harness.llm.tokens.estimate_tokens`
 | Complexity and limits | p95 < 200 ms excluding review creation (BT07-03); at most one embedding and one ANN query per call |
 | Security notes | TH07-01, TH07-02, TH07-03, TH07-05, TH07-10, TH07-11, TH07-17, TH07-22, TH07-23 |
 | Tests | UT07-24–UT07-31, ST07-01–ST07-03, ST07-05, ST07-10, ST07-11, ST07-17, ST07-22, ST07-23, FT07-01, FT07-02 |
+
+T07-08 spec note (readings applied by the build of U07-50): (1) the stateless steps live in the private sibling `herness/harness/memory/_write_steps.py` (§2 row) to keep `write.py` inside 380 lines; (2) `insert_system_item` skips step 11 (dedupe and merge): a system item's identity is its keyed hash (§4.4), and a near-duplicate merge would fold distinct run summaries, notes or outcomes into one row and break their keyed idempotency; (3) with `conn` the stored row carries `data.embedding_pending = true` (so maintenance repairs a crash before the caller embeds) and `embed_after_commit(memory_id)` embeds, upserts and clears it, leaving it set on `ModelUnavailable`; (4) the step 9 counts run only for the scopes the provenance carries (`run_id`, `session_id`, `author_ref` for `user_correction`), since `count_proposals` needs a scope; (5) an ANN search failure after a successful embedding skips 11 (c)–(d) without `embedding_pending` (the vector is still written in step 13); (6) merges log `memory.proposal.stored` with `merged_into` set; a vanished merge target falls through to the insert.
 
 ### 3.10 Lifecycle (`herness/harness/memory/lifecycle.py`)
 
