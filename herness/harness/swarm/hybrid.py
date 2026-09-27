@@ -46,7 +46,7 @@ def _replacer(table: Mapping[str, str], *, fold: bool = False) -> Callable[[str]
         return lambda text: text
     body = "|".join(map(re.escape, keys))  # no groups: keeps the alternation optimised
     pattern = re.compile(rf"(?<!\w)(?:{body})(?!\w)", re.IGNORECASE if fold else 0)
-    if fold:  # keys are lowered; a lookup miss sends a placeholder, never the raw text
+    if fold:  # every key's .lower() is a key; a lookup miss sends a placeholder, never raw text
         return lambda text: pattern.sub(lambda m: table.get(m.group(0).lower(), "[ENTITY]"), text)
     return lambda text: pattern.sub(lambda m: table[m.group(0)], text)
 
@@ -57,7 +57,7 @@ class Pseudonymizer:
     def __init__(self, entities: Sequence[tuple[str, str, str | None]]) -> None:
         self._tokens: dict[tuple[str, str], str] = {}
         self._entries: dict[str, tuple[str, str, str | None]] = {}
-        forward: dict[str, str] = {}  # lowered raw id or name -> token; the first entity wins
+        forward: dict[str, str] = {}  # lowered id or name -> token; the first entity wins
         counts: dict[str, int] = {}
         for entity_type, entity_id, name in entities:
             if (entity_type, entity_id) in self._tokens:
@@ -67,9 +67,9 @@ class Pseudonymizer:
             self._tokens[entity_type, entity_id] = token
             self._entries[token] = (entity_type, entity_id, name)
             for raw in (entity_id, name):
-                if raw and raw.lower() not in forward:
-                    forward[raw.lower()] = token
-        # Outbound matching ignores case (a case variant is still the name); restore does not.
+                if raw and (low := raw.lower()) not in forward:  # exact key too if lower() resizes
+                    forward |= dict.fromkeys({low, raw} if len(low) != len(raw) else {low}, token)
+        # Out: any case, bar length-changing folds ("STRASSE"; redactor backs up). Restore: exact.
         self._forward = _replacer(forward, fold=True)
         self._to_ids = _replacer({t: e[1] for t, e in self._entries.items()})
         self._to_names = _replacer({t: e[2] or e[1] for t, e in self._entries.items()})
@@ -216,8 +216,7 @@ def _over(cfg: ClientConfig, pack: dict[str, object], limit: int) -> bool:
     text = canonical_json(pack)
     if len(text) > _MAX_PART_CHARS:
         return True
-    message = Message(role="user", parts=[TextPart(text=text)])
-    return count_tokens(cfg, [message], [], [])[0] > limit
+    return count_tokens(cfg, [Message(role="user", parts=[TextPart(text=text)])], [], [])[0] > limit
 
 
 def build_evidence_pack(

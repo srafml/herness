@@ -509,6 +509,16 @@ def test_ut06_84_case_fold_miss_sends_placeholder() -> None:
     assert p.pseudonymize(f"{long_s}am and SAM") == "[ENTITY] and team_001"
 
 
+def test_ut06_84_length_changing_lower_keeps_exact_spelling() -> None:
+    """UT06-84 a name whose lower() changes length still matches in its exact spelling."""
+    name = chr(0x130) + "stanbul Ops"  # "İ".lower() is "i" plus a combining dot
+    assert len(name.lower()) != len(name)
+    p = Pseudonymizer([("team", "t-7", name)])
+    out = p.pseudonymize(f"{name} and {name.lower()} grew")
+    assert out == "team_001 and team_001 grew"
+    assert p.restore(out) == f"{name} and {name} grew"
+
+
 def test_ut06_84_patterns_have_no_groups() -> None:
     """UT06-84 the alternations hold no capture groups (they defeat the regex optimiser)."""
     p = Pseudonymizer(OVERLAP)
