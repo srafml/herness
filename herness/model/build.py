@@ -4,6 +4,7 @@ Stages run in ``STAGE_ORDER`` on one writable build connection. No transaction i
 stages or around ``run_sql_range``: every statement autocommits, so later stage hooks (spec 04
 ``materialize_facts``) start with no open transaction. Only repository SQL runs; nothing from
 the job payload reaches SQL text (TH02-10). ``CURRENT`` changes only inside promotion.
+Stages ``enrich`` / ``score`` and the handler factory live in ``_build_stages`` (T02-19).
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from herness.core.jobs.ports import JobContext
 from herness.core.logging import get_logger
 from herness.core.resilience import fault_point
 from herness.core.types import JobOutcome
+from herness.model import _build_stages as stages
 from herness.model import _build_support as support
 from herness.model import meta
 from herness.model._build_support import STAGE_ORDER
@@ -114,7 +116,7 @@ class _BuildRun:
     layout: DataLayout
     build_id: str
     now: datetime.datetime
-    llm_factory: object | None  # T02-19: impl 03 LlmFactory, passed to run_enrichment
+    llm_factory: object | None  # T03-28: impl 03 LlmFactory, passed to run_enrichment
     stages_done: list[str]
     con: duckdb.DuckDBPyConnection | None = None
     files: list[SqlFile] = dataclasses.field(default_factory=list)
@@ -194,14 +196,26 @@ def _connection(run: _BuildRun, *, create: bool = False) -> duckdb.DuckDBPyConne
     return run.con
 
 
+def _prepare(run: _BuildRun) -> RenderContext:
+    """Scan the lake; set the run's render context and SQL files (U02-99 step 1)."""
+    empty = LakeInventory(root=run.layout.raw, entities={})
+    probe = build_render_context(run.cfg, empty, run.build_id)
+    pairs = [(source, name) for source, names in probe.extra_entities.items() for name in names]
+    inventory = scan_lake(run.layout, extra_entities=pairs)
+    run.context = dataclasses.replace(probe, lake=inventory)
+    run.files = discover_sql_files()
+    return run.context
+
+
 def _sql(run: _BuildRun, lo: int, hi: int) -> StageStatus:
-    assert run.context is not None  # noqa: S101 - set by _stage_build before any range
+    # a resumed run whose stage build was done by an earlier run prepares here
+    context = run.context if run.context is not None else _prepare(run)
     outcome = run_sql_range(
         _connection(run),
         run.files,
         lo,
         hi,
-        context=run.context,
+        context=context,
         should_yield=run.ctx.should_yield,
         heartbeat=run.ctx.heartbeat,
     )
@@ -224,11 +238,7 @@ def _stage_build(run: _BuildRun) -> StageStatus:
     """Stage ``build``: create the file and run 000-299 (U02-99)."""
     con = _connection(run, create=True)
     cfg = run.cfg
-    probe = build_render_context(cfg, LakeInventory(root=run.layout.raw, entities={}), run.build_id)
-    pairs = [(source, name) for source, names in probe.extra_entities.items() for name in names]
-    inventory = scan_lake(run.layout, extra_entities=pairs)
-    run.context = dataclasses.replace(probe, lake=inventory)
-    run.files = discover_sql_files()
+    inventory = _prepare(run).lake
     if _sql(run, 0, 99) == "yield":
         return "yield"
     watermarks = {
@@ -259,9 +269,14 @@ def _stage_build(run: _BuildRun) -> StageStatus:
     return "done"
 
 
-# Stage units by name. T02-19: enrich, score (U02-100, U02-101); T02-20: dq (U02-102);
-# T02-21: promote (U02-103). A payload naming a missing stage is rejected before any work.
-_STAGE_UNITS: Final[Mapping[str, _StageUnit]] = {"build": _stage_build}
+# Stage units by name; enrich and score (U02-100, U02-101) live in `_build_stages`. T02-20: dq
+# (U02-102); T02-21: promote (U02-103). A payload naming a missing stage is rejected early.
+_STAGE_UNITS: Final[Mapping[str, _StageUnit]] = {
+    "build": _stage_build,
+    "enrich": stages.stage_enrich,
+    "score": stages.stage_score,
+}
+make_build_pipeline_handler: Final = stages.make_build_pipeline_handler  # U02-134
 
 
 def _error_label(loc: tuple[int | str, ...], kind: str) -> str:
