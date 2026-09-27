@@ -8,6 +8,8 @@ spec 05 formatter (`herness.harness.tools.format_result`) and `parse_tool_table`
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any
 
@@ -358,20 +360,32 @@ def test_ut11_65_rendering_is_deterministic() -> None:
 
 # ---------------------------------------------------------------- PT11-05 round trip
 
-_TYPES = ["BIGINT", "INTEGER", "DOUBLE", "DECIMAL(18,2)", "VARCHAR"]
+_INT_RANGES = {"SMALLINT": 15, "INTEGER": 31, "BIGINT": 63, "HUGEINT": 127}
+_FLOAT_TYPES = ("DOUBLE", "FLOAT", "REAL")
+_TYPES = [*_INT_RANGES, *_FLOAT_TYPES, "DECIMAL(18,2)", "DECIMAL(38,6)", "VARCHAR"]
+# VARCHAR exclusions are genuine format ambiguities: cells are stripped, and `NULL` is null.
 _TEXT = st.text(alphabet="abcXYZ019 |-_:\n", max_size=20).filter(
     lambda s: s == s.strip() and s != "NULL"
 )
+# Floats: any value incl. +-inf, NaN, subnormals and exponent forms. The format shows 6
+# significant digits (spec 05 §5.4.5), so the stored value is pre-rounded to what the
+# format can carry; nothing else is excluded (NaN is compared as NaN below).
+_FLOATS = st.floats(allow_nan=True, allow_infinity=True).map(lambda v: float(format(v, ".6g")))
 _VALUES: dict[str, st.SearchStrategy[object]] = {
-    "BIGINT": st.integers(-(10**15), 10**15),
-    "INTEGER": st.integers(-(2**31), 2**31 - 1),
-    # values with at most 6 significant digits survive the 6-significant-digit float rule
-    "DOUBLE": st.integers(-99_999, 99_999).map(lambda n: n / 100),
+    **{t: st.integers(-(2**bits), 2**bits - 1) for t, bits in _INT_RANGES.items()},
+    **dict.fromkeys(_FLOAT_TYPES, _FLOATS),
     "DECIMAL(18,2)": st.decimals(
-        min_value=-(10**9), max_value=10**9, places=2, allow_nan=False, allow_infinity=False
+        min_value=-(10**16), max_value=10**16, places=2, allow_nan=False, allow_infinity=False
+    ),
+    "DECIMAL(38,6)": st.decimals(
+        min_value=-(10**32), max_value=10**32, places=6, allow_nan=False, allow_infinity=False
     ),
     "VARCHAR": _TEXT,
 }
+
+
+def _comparable(row: Sequence[object]) -> list[object]:
+    return ["nan" if isinstance(v, float) and math.isnan(v) else v for v in row]
 
 
 @st.composite
@@ -414,4 +428,4 @@ def test_pt11_05_format_then_parse_round_trips(
     assert parsed.query_id == qid
     assert parsed.columns == names
     assert parsed.types == types
-    assert parsed.rows == [list(row) for row in rows]
+    assert [_comparable(r) for r in parsed.rows] == [_comparable(row) for row in rows]
