@@ -64,7 +64,8 @@ SELECT 'work_item_service_null', 'warn', {{ share('null_rows', 'n_rows') }},
     json_object('producer', 'dq900', 'null_rows', null_rows, 'rows', n_rows)
 FROM dq_null;
 
-{#- cast_fail: one row per staging column with values; repeated stats rows are summed. -#}
+{#- cast_fail: one check per staging column with values. Rows are summed per (table, column)
+    defensively, so the check name stays unique if several stats rows ever name one column. -#}
 INSERT INTO meta.dq_result
 WITH dq_cast AS (
     SELECT table_name, column_name, CAST(sum(non_null) AS BIGINT) AS non_null,
