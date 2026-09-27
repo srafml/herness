@@ -250,7 +250,7 @@ def test_it05_03_bad_sql_then_corrected_both_traced(env: Env) -> None:
 # --- IT05-04 and ST08-14 (integration half) ---------------------------------------------------
 
 
-def test_it05_04_repeat_identical_call_nudge_then_partial_guard_stop(env: Env) -> None:
+def test_it05_04_st08_14_repeat_identical_call_nudge_then_partial_guard_stop(env: Env) -> None:
     """IT05-04 / ST08-14 a script repeating an identical call, with the spec 08 policy in
     `HarnessHooks`: first signal nudges, second stops `partial` `repeat_call` with one
     `guard_stop` (trace and `resilience_event` row); one model call per step, the repeats
