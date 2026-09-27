@@ -12,10 +12,109 @@ defaults:
   noise_severities: [critical, major, minor, warning]   # info excluded from noise ratio
   failure_outcomes: [unsuccessful, backed_out]
   compute_timeout_s: 30.0          # interactive compute timeout (DD04-06)
-# The 28 catalog entries (U04-48) are added by T04-08 (#1-#4), T04-09 (#5-#14),
-# T04-10 (#15-#19, #27, #28) and T04-11 (#20-#26). The root model needs at least one entry,
-# so this file loads as a whole only once T04-08 lands.
-metrics: []
+# The 28 catalog entries (U04-48, tables A and B), in table order. T04-08 ships #1-#4;
+# T04-09 adds #5-#14, T04-10 #15-#19, #27 and #28, and T04-11 #20-#26.
+metrics:
+  - name: incident_count
+    description: Count of non-excluded incidents opened in the period.
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: count
+    better: lower
+    aggregation: count
+    min_sample_size: 1
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.opened_at') }} AS period_start,
+             count(*) AS value, count(*) AS numerator, NULL AS denominator,
+             count(*) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.opened_at >= {{ p('window_start') }} AND f.opened_at < {{ p('window_end') }}
+        AND NOT f.excluded
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: p1p2_count
+    description: Count of non-excluded priority 1 and 2 incidents opened in the period.
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: count
+    better: lower
+    aggregation: count
+    min_sample_size: 1
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: null
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.opened_at') }} AS period_start,
+             count(*) AS value, count(*) AS numerator, NULL AS denominator,
+             count(*) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.opened_at >= {{ p('window_start') }} AND f.opened_at < {{ p('window_end') }}
+        AND NOT f.excluded AND f.priority <= 2
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: mttr_hours
+    description: Mean wall-clock hours from opened_at to resolved_at of resolved incidents.
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: hours
+    better: lower
+    aggregation: mean
+    min_sample_size: 10
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: mttr
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.resolved_at') }} AS period_start,
+             avg(f.resolve_h) AS value, sum(f.resolve_h) AS numerator,
+             count(f.resolve_h) AS denominator, count(f.resolve_h) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.resolved_at >= {{ p('window_start') }} AND f.resolved_at < {{ p('window_end') }}
+        AND NOT f.excluded AND f.resolve_h IS NOT NULL
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
+  - name: mttr_p50_hours
+    description: Median wall-clock hours from opened_at to resolved_at of resolved incidents.
+    domain: ops
+    grains: [service, team, org, cluster]
+    unit: hours
+    better: lower
+    aggregation: median
+    min_sample_size: 10
+    owner: sre-analytics
+    estimate: false
+    uses_weights: []
+    usd_model: mttr
+    filters: [priority, service_id, team_id, org_id, cluster_id]
+    enabled: true
+    requires_columns: []
+    sql: |
+      SELECT {{ entity_col('incident', 'f') }} AS entity_id,
+             {{ period_start('f.resolved_at') }} AS period_start,
+             median(f.resolve_h) AS value, NULL AS numerator,
+             count(f.resolve_h) AS denominator, count(f.resolve_h) AS sample_size
+      FROM metrics.incident_fact f {{ entity_join('incident', 'f') }}
+      WHERE f.resolved_at >= {{ p('window_start') }} AND f.resolved_at < {{ p('window_end') }}
+        AND NOT f.excluded AND f.resolve_h IS NOT NULL
+        {{ filter_clause('incident', 'f') }} {{ entity_filter() }}
+      GROUP BY ALL
 scoring:
   as_of: null                     # null = build date in business_timezone
   funding:
@@ -26,10 +125,12 @@ scoring:
     min_peer_group: 5
     trend_weight: 0.5
     min_weight_coverage: 0.5
-    metrics: {mttr_hours: 0.15, repeat_incident_rate: 0.15, change_failure_rate: 0.15,
-              sla_breach_rate: 0.10, reopen_rate: 0.05, reassignment_rate: 0.05,
-              alert_noise_ratio: 0.10, cycle_time_days: 0.10, unplanned_work_ratio: 0.10,
-              epic_predictability: 0.05}
+    # T04-09/10/11: restore the design 04 §7.1 scorecard weights as each metric ships:
+    #   repeat_incident_rate 0.15, sla_breach_rate 0.10, reopen_rate 0.05,
+    #   reassignment_rate 0.05, alert_noise_ratio 0.10 (T04-09); change_failure_rate 0.15
+    #   (T04-10); cycle_time_days 0.10, unplanned_work_ratio 0.10, epic_predictability 0.05
+    #   (T04-11). U04-26 step 8 rejects scorecard names absent from the catalog.
+    metrics: {mttr_hours: 0.15}
   peer_group:
     min_service_peers: 3          # below this, service/work_item peer_group() returns fallback "prior_year"
   levers:

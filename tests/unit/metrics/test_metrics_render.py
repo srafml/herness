@@ -375,10 +375,28 @@ def test_ut04_26_bind_types_cover_spec_names() -> None:
     assert {n for n in BIND_TYPES if n[:2] in {"d_", "s_", "w_"}} - step_binds == set(candidates)
 
 
+SPEC_SCORECARD = {
+    "mttr_hours": 0.15,
+    "repeat_incident_rate": 0.15,
+    "change_failure_rate": 0.15,
+    "sla_breach_rate": 0.10,
+    "reopen_rate": 0.05,
+    "reassignment_rate": 0.05,
+    "alert_noise_ratio": 0.10,
+    "cycle_time_days": 0.10,
+    "unplanned_work_ratio": 0.10,
+    "epic_predictability": 0.05,
+}
+
+
 def test_ut04_26_default_binds_values() -> None:
     """UT04-26 default_binds reads defaults and scoring; pairs are sorted by key."""
     lever = metric(name="reopen_rate", usd_model="reopen", unit="ratio")
     catalog = FakeCatalog([metric(), lever, metric(name="off_metric", enabled=False)])
+    # The design 04 §7.1 scorecard (the shipped file trims it until T04-09/10/11 ship its
+    # metrics), so the bind pairs and lower-better intersection are exercised in full.
+    org = catalog.scoring.org.model_copy(update={"metrics": SPEC_SCORECARD})
+    catalog.scoring = catalog.scoring.model_copy(update={"org": org})
     b = default_binds(catalog)
     assert b["d_exclude_incident_states"] == ["canceled"]
     assert b["d_exclude_close_codes"] == ["Cancelled", "Duplicate", "Not an incident"]

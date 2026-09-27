@@ -84,12 +84,17 @@ def fake_config(monkeypatch: pytest.MonkeyPatch) -> None:
 # --- UT04-13 load_catalog, version ------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, raises=ConfigError, reason="config/metrics.yaml ships `metrics: []` until T04-08"
-)
 def test_ut04_13_shipped_metrics_yaml_loads(fake_config: None) -> None:
-    """UT04-13 the shipped config/metrics.yaml loads (fails until T04-08 adds the entries)."""
-    assert load_catalog(SHIPPED).names()
+    """UT04-13 the shipped config/metrics.yaml loads with no error issue: metrics #1-#4 and a
+    scorecard naming only shipped metrics (T04-09/10/11 restore the other design weights)."""
+    raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
+    shipped = MetricsCatalogConfig.model_validate(raw)
+    assert shipped.version == 1
+    errors = [i for i in validate_catalog(shipped, weights=weights()) if i.severity == "error"]
+    assert errors == []
+    names = ["incident_count", "mttr_hours", "mttr_p50_hours", "p1p2_count"]
+    assert load_catalog(SHIPPED).names() == names
+    assert set(shipped.scoring.org.metrics) <= set(names)
 
 
 def _reordered(value: object) -> object:

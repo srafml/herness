@@ -78,6 +78,7 @@ All paths are repo-relative. Layer L3 per ENG §2.1. `herness.metrics` MUST NOT 
 | `herness/metrics/render.py` | Sandboxed Jinja environment, metric and score template rendering, bind parameter construction | `RenderedQuery`, `make_environment`, `render_metric_query`, `render_named`, `default_binds`, `weight_binds`, `BIND_TYPES` | L3 | `jinja2` | 300 |
 | `herness/metrics/facts.py` | Stage 400 hook | `materialize_facts`, `split_statements`, `FACT_TABLES` | L3 | `duckdb` | 150 |
 | `herness/metrics/compute.py` | Interactive metric API | `MetricRow`, `MetricResult`, `compute_metric`, `metric_series`, `validate_metric_request`; re-exports `peer_group`, `PeerGroupInfo` | L3 | `duckdb` | 340 |
+| `herness/metrics/_request.py` | Private: U04-51 entity-ID and filter normalization behind `validate_metric_request` — split from compute.py for budget (T04-08) | none public (imported by compute.py only) | L3 | none | 110 |
 | `herness/metrics/peers.py` | Peer group resolution | `PeerGroupInfo`, `peer_group` | L3 | `duckdb` | 180 |
 | `herness/metrics/context.py` | Step inputs and outputs shared by step modules (avoids import cycles) | `StepContext`, `StepResult`, `ScoringReport` | L3 | none | 80 |
 | `herness/metrics/scoring.py` | Step runner, validate/metrics/check steps, checkpointing | `ScoringReport`, `run_scoring`, `STEPS`, `run_metrics_step`, `run_check_step`, `missing_required_columns` | L3 | `duckdb` | 390 |
