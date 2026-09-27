@@ -6,6 +6,8 @@ by ``compact`` (TH07-15). Nothing here logs scratchpad content.
 """
 
 import json
+import math
+import re
 from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
@@ -24,10 +26,12 @@ __all__ = [
     "UnmatchedNumeral",
 ]
 
-SCRATCHPAD_MAX_BYTES: Final = 1_048_576  # canonical JSON cap; the compactor enforces it (U07-74)
+SCRATCHPAD_MAX_BYTES: Final = 1_048_576  # canonical JSON cap; the compactor enforces it (U07-76)
 UNKNOWN_TOOL: Final = "unknown"
 COMPACT_ERROR_CHARS: Final = 80
 LEDGER_HEADER: Final = "LEDGER (verbatim from tool results; cite these query_ids and numbers)"
+# Every character str.splitlines breaks on: field text can never start a line of its own.
+_LINE_BREAKS: Final = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]+")
 
 _log = get_logger("harness.memory")
 
@@ -51,6 +55,14 @@ class LedgerEntry(_Model):
     cited: list[NumberRef] = []
     sample: list[dict[str, JsonValue]] = Field(default=[], max_length=5)
     error: str | None = Field(default=None, max_length=200)
+
+    @field_validator("sample")
+    @classmethod
+    def _finite_sample(cls, value: list[dict[str, JsonValue]]) -> list[dict[str, JsonValue]]:
+        if not all(_finite(row) for row in value):
+            msg = "sample values must be finite numbers"
+            raise ValueError(msg)
+        return value
 
     @field_validator("query_id")
     @classmethod
@@ -86,24 +98,29 @@ class UnmatchedNumeral(_Model):
     step: int
 
 
+def _finite(value: object) -> bool:
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        return all(_finite(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_finite(item) for item in value)
+    return True
+
+
+def _flat(text: str) -> str:
+    """One rendered line: line-breaking characters become one space (TH07-07)."""
+    return _LINE_BREAKS.sub(" ", text)
+
+
 def _json(value: object) -> str:
     """Compact, key-sorted JSON; never raises on a non-finite float (render raises nothing)."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _ref_key(ref: NumberRef) -> _RefKey:
-    row_key = _json(ref.row_key) if ref.row_key is not None else ""
+    row_key = _json(ref.row_key) if ref.row_key else ""  # None and {} render alike
     return ref.query_id, ref.column, row_key, str(ref.value)
-
-
-def _union_cited(into: list[NumberRef], new: list[NumberRef]) -> list[NumberRef]:
-    seen = {_ref_key(ref) for ref in into}
-    merged = list(into)
-    for ref in new:
-        if _ref_key(ref) not in seen:
-            seen.add(_ref_key(ref))
-            merged.append(ref)
-    return merged
 
 
 def _merge(old: LedgerEntry, new: LedgerEntry) -> LedgerEntry:
@@ -116,7 +133,7 @@ def _merge(old: LedgerEntry, new: LedgerEntry) -> LedgerEntry:
         sql_head=old.sql_head if old.sql_head is not None else new.sql_head,
         row_count=old.row_count if old.row_count is not None else new.row_count,
         columns=old.columns or new.columns,
-        cited=_union_cited(old.cited, new.cited),
+        cited=old.cited,  # new refs are added through ``cite`` (unique ids)
         sample=old.sample or new.sample,
         error=new.error if new.error is not None else old.error,
     )
@@ -179,12 +196,18 @@ class Scratchpad(_Model):
         return None
 
     def upsert(self, entry: LedgerEntry) -> None:
-        """Add a call, or merge it into the entry of the same ``query_id`` (or tool and step)."""
-        index = self._find(entry)
+        """Add a call, or merge it into the entry of the same ``query_id`` (or tool and step).
+
+        Its cited refs go through ``cite``, so ids stay ``n1..nK`` and unique in the ledger.
+        """
+        bare = entry.model_copy(update={"cited": []}, deep=True)
+        index = self._find(bare)
         if index is None:
-            self.ledger.append(entry.model_copy(deep=True))
+            self.ledger.append(bare)
         else:
-            self.ledger[index] = _merge(self.ledger[index], entry)
+            self.ledger[index] = _merge(self.ledger[index], bare)
+        for ref in entry.cited:
+            self.cite(ref)
 
     def cite(self, ref: NumberRef) -> str:
         """Record a cited number; return its ledger id (``n1..nK``, unique in the ledger)."""
@@ -231,7 +254,7 @@ class Scratchpad(_Model):
         a, b = self.covers_steps
         opening = (
             f'<scratchpad compactions="{self.compactions}" covers_steps="{a}-{b}"'
-            f' build_id="{escape_attr(build_id)}">'
+            f' build_id="{escape_attr(_flat(build_id))}">'
         )
         body = [
             LEDGER_HEADER,
@@ -240,9 +263,10 @@ class Scratchpad(_Model):
             "NOTES",
             *(_notes_lines(self.notes) if self.notes is not None else []),
         ]
-        # The fixed labels hold no escapable characters, so escaping each whole line passes
-        # every dynamic string through escape_content exactly once.
-        return "\n".join([opening, *(escape_content(line) for line in body), "</scratchpad>"])
+        # One body item is one line; the fixed labels hold no line break or escapable
+        # character, so flattening and escaping each whole item treats every dynamic string.
+        lines = (escape_content(_flat(line)) for line in body)
+        return "\n".join([opening, *lines, "</scratchpad>"])
 
     def to_checkpoint(self) -> dict[str, JsonValue]:
         """The JSON value saved under checkpoint key ``scratchpad`` (T08-16, R-21)."""

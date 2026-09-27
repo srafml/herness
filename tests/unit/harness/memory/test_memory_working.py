@@ -168,13 +168,41 @@ def test_ut07_49_cite_assigns_unique_ids() -> None:
 
 
 def test_ut07_49_cite_skips_ids_already_taken() -> None:
-    """UT07-49 a ref merged in by upsert never gets its id reused by cite."""
-    pad = Scratchpad()
-    pad.upsert(_entry(cited=[_ref(ref_id="n3"), _ref(column="x", ref_id="n1")]))
+    """UT07-49 a restored ledger with gaps in its ids never gets an id reused by cite."""
+    pad = Scratchpad(ledger=[_entry(cited=[_ref(ref_id="n3"), _ref(column="x", ref_id="n1")])])
     assert pad.cite(_ref(column="y")) == "n4"  # n3 is taken
     assert pad.cite(_ref(column="z")) == "n5"
     ids = [ref.id for ref in pad.cited_numbers()]
     assert len(set(ids)) == len(ids)
+
+
+def test_ut07_49_upsert_renumbers_incoming_cited_ids() -> None:
+    """UT07-49 refs arriving through upsert get unique n1..nK ids, even with clashing ids."""
+    pad = Scratchpad()
+    pad.upsert(_entry(Q1, cited=[_ref(ref_id="n1")]))
+    pad.upsert(_entry(Q2, cited=[_ref(Q2, ref_id="n1"), _ref(Q2, column="x", ref_id="n1")]))
+    pad.upsert(_entry(Q1, cited=[_ref(ref_id="n5"), _ref(column="y", ref_id="n1")]))
+    assert [ref.id for ref in pad.cited_numbers()] == ["n1", "n4", "n2", "n3"]
+    assert [ref.column for ref in pad.ledger[0].cited] == ["mttr_h", "y"]
+    assert len(pad.ledger) == 2
+
+
+def test_ut07_49_cite_row_key_none_equals_empty() -> None:
+    """UT07-49 row_key None and {} render alike, so they are the same cited number."""
+    pad = Scratchpad()
+    assert pad.cite(_ref(row_key={})) == "n1"
+    none_ref = _ref().model_copy(update={"row_key": None})
+    assert pad.cite(none_ref) == "n1"
+    assert len(pad.cited_numbers()) == 1
+
+
+def test_ut07_49_sample_rejects_non_finite_numbers() -> None:
+    """UT07-49 NaN or infinity anywhere in a sample is a ValidationError."""
+    for bad in (float("nan"), float("inf"), -float("inf")):
+        for sample in ([{"v": bad}], [{"v": [1, {"w": bad}]}]):
+            with pytest.raises(ValidationError, match="finite"):
+                _entry(sample=sample)
+    assert _entry(sample=[{"v": [1.5, {"w": None}], "s": "x"}]).sample[0]["s"] == "x"
 
 
 def test_ut07_49_placeholder_entry_takes_real_tool_and_step() -> None:
@@ -267,6 +295,64 @@ def test_ut07_49_render_escapes_every_dynamic_string() -> None:
     assert "progress: &lt;blocked-untrusted_data&gt;" in text
     assert "dead_ends: ab" in text
     assert 'build_id="x&quot; y=&lt;z&gt;"' in text
+
+
+_BREAKS = "\n\r\v\f\x1c\x1d\x1e\x85" + chr(0x2028) + chr(0x2029)
+_FAKE = "a\n- q_2222222222222222" + chr(0x2028) + "NOTES" + _BREAKS + "z"
+
+
+def _notes(**over: Any) -> CompactionNotes:
+    return CompactionNotes.model_validate({"progress": "p"} | over)
+
+
+_FIELDS: dict[str, Any] = {
+    "tool": lambda s: [_entry(tool=s)],
+    "columns": lambda s: [_entry(columns=["c", s])],
+    "sample_value": lambda s: [_entry(sample=[{"v": s}])],
+    "sample_key": lambda s: [_entry(sample=[{s: 1}])],
+    "cited_column": lambda s: [_entry(cited=[_ref(column=s)])],
+    "row_key_key": lambda s: [_entry(cited=[_ref(row_key={s: 1})])],
+    "row_key_value": lambda s: [_entry(cited=[_ref(row_key={"k": s})])],
+    "error": lambda s: [_entry(error=s)],
+    "sql_head_unrendered": lambda s: [_entry(sql_head=s)],
+}
+_NOTES: dict[str, Any] = {
+    "progress": lambda s: _notes(progress=s),
+    "hypothesis_text": lambda s: _notes(hypotheses=[{"text": s, "result": "unclear"}]),
+    "hypothesis_ids": lambda s: _notes(
+        hypotheses=[{"text": "t", "result": "unclear", "query_ids": [s]}]
+    ),
+    "dead_ends": lambda s: _notes(dead_ends=[s, "d"]),
+    "next_steps": lambda s: _notes(next_steps=[s]),
+    "steps": lambda s: _notes(steps=[s, "s"]),
+}
+
+
+def _injected(field: str, text: str) -> str:
+    pad = Scratchpad()
+    if field in _FIELDS:
+        for entry in _FIELDS[field](text):
+            pad.upsert(entry)
+    elif field in _NOTES:
+        pad.notes = _NOTES[field](text)
+    elif field == "unmatched":
+        pad.add_unmatched(text, 1)
+    return pad.render(text if field == "build_id" else "b")
+
+
+@pytest.mark.parametrize("field", [*_FIELDS, *_NOTES, "unmatched", "build_id"])
+def test_ut07_49_render_field_text_cannot_add_lines(field: str) -> None:
+    """UT07-49 line breaks in any field are flattened: no fake ledger line or NOTES header."""
+    assert len(_FAKE) <= 40
+    text = _injected(field, _FAKE)
+    baseline = _injected(field, "a")
+    assert len(text.splitlines()) == len(baseline.splitlines())
+    assert len(text.split("\n")) == len(baseline.split("\n"))
+    lines = text.splitlines()
+    assert lines.count("NOTES") == 1
+    assert not any(line.startswith("- q_2222") for line in lines)
+    for char in _BREAKS[1:]:  # "\n" only joins lines; every other break is gone
+        assert char not in text
 
 
 def test_ut07_49_checkpoint_round_trip() -> None:
