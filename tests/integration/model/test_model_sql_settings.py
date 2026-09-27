@@ -1,7 +1,9 @@
-"""Setup DDL of the build (IT02-21 partial: U02-107 `000_settings.sql`).
+"""Setup DDL of the build: the U02-107 (`000_settings.sql`) checks of IT02-21.
 
-The full IT02-21 (lake_small pipeline, golden counts) belongs to T02-18; this file checks
-only the schemas and fixed tables the setup stage creates.
+IT02-21 itself, the `lake_small` pipeline against the golden counts and `core.*` snapshot,
+is `test_model_build_pipeline.py::test_it02_21_lake_small_build` (T02-18). This file pins
+the DDL details that snapshot does not show: every schema, the fixed `meta.*`, `enrich.*`
+and `stg.*` tables with their column counts, and idempotent re-runs.
 """
 
 import duckdb
@@ -17,9 +19,9 @@ def harness(build_harness: BuildHarness) -> BuildHarness:
     return build_harness
 
 
-def test_it02_21_settings_schemas_and_tables(harness: BuildHarness) -> None:
-    """IT02-21 (partial, U02-107 only; the lake_small pipeline test is T02-18's):
-    000_settings.sql creates the six schemas and the fixed tables; a re-run is a no-op."""
+def test_it02_21_setup_ddl_schemas_and_tables(harness: BuildHarness) -> None:
+    """IT02-21 (U02-107 DDL details) 000_settings.sql creates the six schemas and the fixed
+    tables; a re-run is a no-op."""
     schemas = {r[0] for r in harness.query("SELECT schema_name FROM information_schema.schemata")}
     assert {"stg", "core", "enrich", "metrics", "score", "meta"} <= schemas
     harness.con.execute("INSERT INTO stg.build_counts VALUES ('n', 1)")
