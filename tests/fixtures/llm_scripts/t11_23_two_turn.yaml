@@ -1,0 +1,8 @@
+# T11-23 (UT11-68, UT11-71): a tool turn, then a text turn filled from the tool result.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: run_sql
+          arguments: {sql: "select team_name, incidents from t"}
+    - final:
+        text: "{{row.team_name}} had {{row.incidents}} incidents"

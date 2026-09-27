@@ -2,7 +2,7 @@
 
 Votes run through the real `aretry_call("llm_local", complete_validated, ...)` over the
 `jev_env` resilience environment (ops store backend, full test config); the model is the
-test-local `FakeLLMClient` (impl 11 U11-42 carry-over), scripted per vote by `seed`.
+test-local `FakeLLMClient` (kept local by T11-23: seed-keyed), scripted per vote by `seed`.
 """
 
 from __future__ import annotations

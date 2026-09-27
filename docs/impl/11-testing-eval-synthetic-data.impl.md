@@ -107,8 +107,10 @@ Line budgets are the production-code limit for the file (ENG §2.4 caps every mo
 | `tests/support/sql_coverage.py` | SQL table coverage check | `tables_created`, `tables_referenced_by_tests` | Tooling | — | 100 |
 | `tests/support/isolation.py` | Truth isolation scan | `TRUTH_TOKENS`, `ISOLATION_ALLOWLIST`, `find_truth_references` | Tooling | — | 80 |
 | `tests/support/fake_clock.py` | Fake clock | `FakeClock`, fixture `fake_clock` | Tooling | `freezegun` | 150 |
-| `tests/support/fake_llm.py` | Fake LLM drivers (owner 11, R-65) | `FakeLLMClient`, `respx_router`, `FakeLLMServer` | Tooling | `respx`, `httpx` | 400 |
+| `tests/support/fake_llm.py` | Fake LLM drivers (owner 11, R-65); `respx_router` keeps its R-65 name but returns a `ScriptRouter` over `httpx2.MockTransport` (the `egress_mock.MockNet` pattern) because the SDKs and egress clients send through `httpx2`, which `respx` cannot intercept (T11-23 spec note) | `FakeLLMClient`, `respx_router`, `ScriptRouter`, `FakeLLMServer`, fixture `fake_llm_registered` | Tooling | `httpx2` | 400 |
+| `tests/support/_fake_llm_wire.py` | Private sibling of `fake_llm` (T11-23 spec note): DD11-02 header keying, tool results rebuilt from the request body, OpenAI/Anthropic JSON and OpenAI SSE bodies shared by `respx_router` and `FakeLLMServer`, split off for the 400-line budget of `fake_llm.py`; imported only by `fake_llm` | none (private) | Tooling | none | 250 |
 | `tests/support/stub_http.py` | Loopback threaded HTTP server base | `StubHTTPServer`, `StubFault` | Tooling | `http.server` | 250 |
+| `tests/support/_stub_http_core.py` | Private sibling of `stub_http` (T11-23 spec note): the 127.0.0.1-only `ThreadingHTTPServer` (bind guard before the socket exists) and its bounded request handler, split off for the 250-line budget of `stub_http.py`, which re-exports `StubRequest`/`StubResponse`; imported only by `stub_http` | none (private) | Tooling | `http.server` | 200 |
 | `tests/support/stub_decider.py` | Stub decider server | `StubDeciderServer` | Tooling | `pyarrow` | 300 |
 | `tests/support/truth.py` | Truth fixtures | `load_truth_labels`, fixtures `truth_7_tiny`, `truth_42_tiny` | Tooling | — | 100 |
 | `tests/support/builds.py` | Build fixtures | `ensure_build`, `BuildHandle`, fixtures `tiny_root`, `tiny_build`, `small_build` | Tooling | — | 350 |

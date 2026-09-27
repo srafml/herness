@@ -1,7 +1,8 @@
 """A test-local scripted LLM client for the LLM decider tests (UT03-58 ... UT03-62, ST03-01).
 
-Carry-over (impl 11 U11-42, program ruling T03-15): switch to
-`tests.support.fake_llm.FakeLLMClient` once it lands (`_judge_fixtures.py` precedent).
+Kept local (T11-23 ruling on the T03-15 carry-over): `tests.support.fake_llm.FakeLLMClient`
+(U11-42) keys replies by (role, dedup key, call index), not by the request `seed`, records no
+requests, and cannot raise arbitrary exceptions or return JSON as text only (`as_text`).
 """
 
 from __future__ import annotations
