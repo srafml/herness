@@ -31,7 +31,6 @@ __all__ = [
     "StubDeciderServer",
     "StubFault",
     "content_hash_of",
-    "load_truth_labels",
 ]
 
 type StubDeciderMode = Literal["oracle", "hash"]
@@ -57,7 +56,7 @@ def content_hash_of(state: str) -> str:
     return hashlib.sha256(state.encode("utf-8")).hexdigest()[:32]
 
 
-def load_truth_labels(path: Path) -> Labels:
+def _load_labels(path: Path) -> Labels:
     """``truth_labels.parquet`` as a read-only ``{(content_hash, question): answer}`` map."""
     columns = pq.read_table(path, columns=_LABEL_COLUMNS).to_pydict()
     rows = zip(*(columns[name] for name in _LABEL_COLUMNS), strict=True)
@@ -174,7 +173,7 @@ class StubDeciderServer(StubHTTPServer):
         self.noise = noise
         self.faults = tuple(faults)
         self._labels: Labels = (  # loaded once, never mutated
-            load_truth_labels(truth_labels) if truth_labels is not None else MappingProxyType({})
+            _load_labels(truth_labels) if truth_labels is not None else MappingProxyType({})
         )
         self._calls = 0
         self._calls_lock = threading.Lock()
