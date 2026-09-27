@@ -205,6 +205,10 @@ from .metrics import purge_metric_samples, record_metric_samples
 from .jobs import SqliteJobsBackend
 
 # isort: split
+# 08 tasks
+from .tasks import TaskSqlMixin
+
+# isort: split
 # 09 ui_reads
 from .ui_reads import (
     UiDecisionRow,
@@ -296,6 +300,8 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "record_metric_samples", "purge_metric_samples",
     # 08 jobs
     "SqliteJobsBackend",
+    # 08 tasks
+    "TaskSqlMixin",
     # 09 ui_reads
     "UiRunRow", "UiTaskRow", "UiEvidenceRow", "UiRecommendationRow", "UiDecisionRow",
     "UiOutcomeRow", "UiFindingRow", "UiMemoryItemRow", "UiResilienceEventRow", "UiSourceHealthRow",

@@ -491,6 +491,9 @@ ignore_imports = [
     # impl 08 U08-96 / T08-11: SqliteJobsBackend inherits WorkerSqlMixin; worker imports only
     # core, so the graph stays acyclic.
     "herness.store.ops.jobs -> herness.store.ops.worker",
+    # impl 08 U08-97 / T08-16: SqliteJobsBackend inherits TaskSqlMixin; tasks imports only core
+    # (and herness.core.jobs), so the graph stays acyclic.
+    "herness.store.ops.jobs -> herness.store.ops.tasks",
     # T08-11: private sibling of area `jobs` (constant SQL), kept apart for the impl 08 §2 line
     # budget of jobs.py; no other module imports it.
     "herness.store.ops.jobs -> herness.store.ops._job_sql",

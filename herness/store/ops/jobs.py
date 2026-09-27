@@ -1,12 +1,12 @@
 """Jobs ops-store area (impl 08 U08-95, R-08): every SQL statement on `job`.
 
-`SqliteJobsBackend` implements the job and worker methods of the `JobsBackend` port (U08-41);
-the worker SQL comes from `WorkerSqlMixin` (U08-96), the one area-to-area import, recorded in
-the `ops-areas-acyclic` contract. The table is impl 02 migration 002 (§4.3.2). Timestamps are
-ts text and JSON is TEXT; every write runs in `run_write` (`BEGIN IMMEDIATE`, `sqlite_write`
-policy, R-10). Every completion and state write is guarded by `lease_owner` and `status`
-(TH08-08). Metrics and events are the caller's (T08-12, the supervisor): nothing here records
-them, so no metric flush can start inside a `run_write` callback.
+`SqliteJobsBackend` implements the `JobsBackend` port (U08-41); the worker SQL comes from
+`WorkerSqlMixin` (U08-96) and the task SQL from `TaskSqlMixin` (U08-97), the area-to-area
+imports recorded in the `ops-areas-acyclic` contract. The table is impl 02 migration 002
+(§4.3.2). Timestamps are ts text and JSON is TEXT; every write runs in `run_write` (`BEGIN
+IMMEDIATE`, `sqlite_write` policy, R-10). Every completion and state write is guarded by
+`lease_owner` and `status` (TH08-08). Metrics and events are the caller's (T08-12, the
+supervisor): nothing here records them, so no metric flush can start inside a callback.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from herness.core.types import GpuClass, JobKind
 
 from . import _job_sql as sql
 from .core import dump_json, load_json, read_all, read_one, run_write
+from .tasks import TaskSqlMixin
 from .worker import WorkerSqlMixin
 
 type _Params = dict[str, object]
@@ -107,8 +108,8 @@ def _reap(rows: str, params: _Params, op: str) -> RequeueResult:
     ]
 
 
-class SqliteJobsBackend(WorkerSqlMixin):
-    """`JobsBackend` job and worker methods (U08-95, U08-96); stateless, thread-safe."""
+class SqliteJobsBackend(WorkerSqlMixin, TaskSqlMixin):
+    """`JobsBackend` job, worker and task methods (U08-95 to U08-97); stateless, thread-safe."""
 
     def insert_job(self, job: NewJob, *, sched_check: SchedCheck | None) -> tuple[str, bool]:
         """Idempotent enqueue (design 08 §5.7): `(job_id, created)`; an active job with the
