@@ -125,10 +125,12 @@ scoring:
     min_peer_group: 5
     trend_weight: 0.5
     min_weight_coverage: 0.5
-    metrics: {mttr_hours: 0.15, repeat_incident_rate: 0.15, change_failure_rate: 0.15,
-              sla_breach_rate: 0.10, reopen_rate: 0.05, reassignment_rate: 0.05,
-              alert_noise_ratio: 0.10, cycle_time_days: 0.10, unplanned_work_ratio: 0.10,
-              epic_predictability: 0.05}
+    # T04-09/10/11: restore the design 04 §7.1 scorecard weights as each metric ships:
+    #   repeat_incident_rate 0.15, sla_breach_rate 0.10, reopen_rate 0.05,
+    #   reassignment_rate 0.05, alert_noise_ratio 0.10 (T04-09); change_failure_rate 0.15
+    #   (T04-10); cycle_time_days 0.10, unplanned_work_ratio 0.10, epic_predictability 0.05
+    #   (T04-11). U04-26 step 8 rejects scorecard names absent from the catalog.
+    metrics: {mttr_hours: 0.15}
   peer_group:
     min_service_peers: 3          # below this, service/work_item peer_group() returns fallback "prior_year"
   levers:

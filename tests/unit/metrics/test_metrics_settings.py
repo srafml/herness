@@ -189,7 +189,8 @@ def test_ut04_19_shipped_sections_validate() -> None:
     assert defaults == MetricsDefaults()
     scoring = ScoringConfig.model_validate(raw["scoring"])
     assert scoring.as_of is None
-    assert sum(scoring.org.metrics.values()) == pytest.approx(1.0)
+    # T04-09/10/11: the design 04 §7.1 weights sum to 1.0 once every scorecard metric ships.
+    assert scoring.org.metrics == {"mttr_hours": 0.15}
     assert set(scoring.levers.templates) == set(typing.get_args(s.UsdModel))
 
 

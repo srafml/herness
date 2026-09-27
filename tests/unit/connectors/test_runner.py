@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from structlog.testing import capture_logs
+from tests.support.config_tree import write_repo_config
 from tests.support.fake_lake import FakeLake
 from tests.support.ops_store import OpsStoreHandle
 from tests.unit.connectors._backfill_data import Source, WindowConnector
@@ -29,6 +30,7 @@ from tests.unit.connectors._runner_data import (
 import herness.connectors.runner as runner_module
 from herness.connectors.base import split_range
 from herness.connectors.runner import SyncResult, SyncRunner
+from herness.core import config
 from herness.core import time as clock
 from herness.core.errors import CircuitOpen, ConfigError
 from herness.store.ops import get_watermark, set_watermark
@@ -103,6 +105,21 @@ def test_ut01_29_to_dict_is_json_safe(
     assert data["watermark_before"] == clock.format_utc(T)
     explicit = result.to_dict(data_root=ops_store.data_root / "raw")
     assert explicit["files"] == ["servicenow/incident/part-0000.parquet"]
+
+
+def test_ut01_29_default_data_root_is_config_paths_data(tmp_path: Path) -> None:
+    """UT01-29 without `data_root`, the runner and `to_dict` use `paths.data` of the loaded
+    repository config (T01-06 carry-over: the shipped config loads since T04-08)."""
+    cfg_dir = write_repo_config(tmp_path)
+    loaded = config.init_config("local", config_dir=cfg_dir, env={})
+    root = loaded.paths.data
+    assert root.is_absolute()
+    assert root.is_relative_to(tmp_path)
+    runner = SyncRunner(FakeConnector(), servicenow_cfg(), clock=lambda: NOW)
+    assert runner.data_root == root
+    part = root / "raw" / _SRC / _ENT / "part-0000.parquet"
+    result = SyncResult(_SRC, _ENT, "incremental", 1, 0, 0, (part,), None, None)
+    assert result.to_dict()["files"] == [f"raw/{_SRC}/{_ENT}/part-0000.parquet"]
 
 
 def test_ut01_29_logs_and_metrics(ops_store: OpsStoreHandle, lake: FakeLake) -> None:
