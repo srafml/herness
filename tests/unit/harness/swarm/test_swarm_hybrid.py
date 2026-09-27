@@ -7,10 +7,12 @@ built at runtime so the detect-secrets baseline does not change.
 
 from __future__ import annotations
 
+import ast
 import re
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -531,3 +533,22 @@ def test_pt06_06_id_fields_round_trip(world: tuple[list[tuple[str, str, str | No
         sent = {"entity_id": p.pseudonymize(eid), "row_key": {"k": p.pseudonymize(eid)}}
         assert eid not in str(sent)
         assert p.restore_obj(sent) == {"entity_id": eid, "row_key": {"k": eid}}
+
+
+def test_ut06_83_module_builds_no_client() -> None:
+    """UT06-83 hybrid.py imports no HTTP or LLM SDK and builds no client (count_tokens only)."""
+    tree = ast.parse(Path(hybrid.__file__).read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+        elif isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+    sdk = {"httpx", "httpx2", "anthropic", "openai"}
+    assert not {m for m in imported if m.split(".")[0] in sdk or m.endswith("client")}
+    calls = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert not {c for c in calls if c.endswith("Client")}
