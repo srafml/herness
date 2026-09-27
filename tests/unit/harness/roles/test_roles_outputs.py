@@ -83,6 +83,11 @@ def test_ut05_93_writer_recommendation_fields() -> None:
     assert WriterRecommendation.model_config.get("frozen") is True
 
 
+def test_ut05_93_recommendation_item_has_no_field_validators() -> None:
+    """UT05-93 guard: only model validators are carried over, so none may be field validators."""
+    assert not RecommendationItem.__pydantic_decorators__.field_validators
+
+
 def _recommendation(**over: object) -> dict[str, object]:
     base: dict[str, object] = {
         "kind": "fund",
@@ -172,6 +177,19 @@ def test_ut05_93_skeptic_check_count_validator() -> None:
     ):
         with pytest.raises(ValidationError, match="exactly one"):
             SkepticOutput.model_validate({**ok, "checks": checks})
+
+
+def test_ut05_93_skeptic_revise_needs_required_actions() -> None:
+    """UT05-93 a revise verdict needs at least one required action (as Challenge)."""
+    ok = {"finding_id": _FND, "checks": _checks(*SKEPTIC_CHECKS), "verdict": "revise"}
+    for actions in ([], None):
+        payload = ok if actions is None else {**ok, "required_actions": actions}
+        with pytest.raises(ValidationError, match="revise verdict needs"):
+            SkepticOutput.model_validate(payload)
+    out = SkepticOutput.model_validate({**ok, "required_actions": ["split by service"]})
+    assert out.required_actions == ["split by service"]
+    for verdict in ("uphold", "reject"):
+        assert SkepticOutput.model_validate({**ok, "verdict": verdict}).required_actions == []
 
 
 def test_ut05_93_skeptic_output_fields() -> None:

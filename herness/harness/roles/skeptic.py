@@ -32,6 +32,9 @@ class SkepticOutput(BaseModel):
         if sorted(c.check for c in self.checks) != sorted(SKEPTIC_CHECKS):
             msg = "checks must hold exactly one CheckResult per SkepticCheck"
             raise ValueError(msg)
+        if self.verdict == "revise" and not self.required_actions:
+            msg = "a revise verdict needs at least one required action"
+            raise ValueError(msg)
         return self
 
 
