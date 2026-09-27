@@ -1,5 +1,5 @@
-record_id,number,opened_at,resolved_at,priority,state,service_id,team_id,reassignment_count,reopen_count,close_code,caused_by_change_id,sla_breached,business_duration_s,customer_impact_minutes
-I1,INC0001,2026-01-05 10:00:00-05,2026-01-05 12:00:00-05,1,closed,S1,T1,1,0,,,true,7200,90
-I2,INC0002,2026-01-20 09:00:00-05,2026-01-20 13:00:00-05,3,closed,S1,T1,0,1,,,false,14400,
-I3,INC0003,2026-02-25 08:00:00-05,2026-02-25 14:00:00-05,2,closed,S1,T1,2,0,,,false,21600,60
-I4,INC0004,2026-03-01 08:00:00-05,,3,canceled,S1,T1,0,0,,,,,
+record_id,number,opened_at,acknowledged_at,resolved_at,priority,state,service_id,team_id,reassignment_count,reopen_count,close_code,caused_by_change_id,sla_breached,business_duration_s,customer_impact_minutes
+I1,INC0001,2026-01-05 10:00:00-05,2026-01-05 10:15:00-05,2026-01-05 12:00:00-05,1,closed,S1,T1,1,0,,,true,7200,90
+I2,INC0002,2026-01-20 09:00:00-05,2026-01-20 09:45:00-05,2026-01-20 13:00:00-05,3,closed,S1,T1,0,1,,,false,14400,
+I3,INC0003,2026-02-25 08:00:00-05,2026-02-25 07:00:00-05,2026-02-25 14:00:00-05,2,closed,S1,T1,2,0,,,false,21600,60
+I4,INC0004,2026-03-01 08:00:00-05,,,3,canceled,S1,T1,0,0,,,,,

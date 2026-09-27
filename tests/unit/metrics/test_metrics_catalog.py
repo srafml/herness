@@ -85,14 +85,31 @@ def fake_config(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_ut04_13_shipped_metrics_yaml_loads(fake_config: None) -> None:
-    """UT04-13 the shipped config/metrics.yaml loads with no error issue: metrics #1-#4 and a
-    scorecard naming only shipped metrics (T04-09/10/11 restore the other design weights)."""
+    """UT04-13 the shipped config/metrics.yaml loads with no error issue: metrics #1-#14 and a
+    scorecard naming only shipped metrics (T04-10/11 restore the other design weights)."""
     raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
     shipped = MetricsCatalogConfig.model_validate(raw)
     assert shipped.version == 1
     errors = [i for i in validate_catalog(shipped, weights=weights()) if i.severity == "error"]
     assert errors == []
-    names = ["incident_count", "mttr_hours", "mttr_p50_hours", "p1p2_count"]
+    names = sorted(
+        [
+            "incident_count",
+            "p1p2_count",
+            "mttr_hours",
+            "mttr_p50_hours",
+            "mttr_business_hours",
+            "mtta_minutes",
+            "customer_impact_minutes",
+            "repeat_incident_rate",
+            "reopen_rate",
+            "reassignment_rate",
+            "sla_breach_rate",
+            "alert_noise_ratio",
+            "toil_hours_est",
+            "incident_cost_usd",
+        ]
+    )
     assert load_catalog(SHIPPED).names() == names
     assert set(shipped.scoring.org.metrics) <= set(names)
 
