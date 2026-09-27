@@ -210,9 +210,12 @@ class Blackboard:
         return rest
 
     def _validate(self, ctx: ToolContext, f: Finding) -> None:
-        """Steps 2-6: markers, numerals, evidence, entity, personal data."""
+        """Steps 2, 6, 3, 4, 5: PII runs before numerals and ids reach a message (ENG §3.4)."""
         if errors := validate_markers(f.claim, f.numbers):
             self._reject(ctx, "markers", "; ".join(errors), _MARKER_HINT)
+        if spans := get_redactor().scan(f.claim):
+            types = ", ".join(sorted({span.type for span in spans}))
+            self._reject(ctx, "pii", f"claim contains personal data ({types})")
         if hits := find_uncited(f.claim, self._allowed):
             tokens = ", ".join(hit.text for hit in hits)
             self._reject(ctx, "numerals", f"numerals outside markers: {tokens}")
@@ -220,9 +223,6 @@ class Blackboard:
             self._reject(ctx, "evidence", f"unknown query_id {missing[0]}", _QUERY_HINT)
         if self._catalog.missing(f.entity_type, [f.entity_id]):
             self._reject(ctx, "entity", f"unknown {f.entity_type} {f.entity_id}")
-        if spans := get_redactor().scan(f.claim):
-            types = ", ".join(sorted({span.type for span in spans}))
-            self._reject(ctx, "pii", f"claim contains personal data ({types})")
 
     def _commit(self, ctx: ToolContext, f: Finding) -> tuple[str, bool]:
         """Step 7 on the writer: duplicate check, revision rule, finding + checkpoint in one tx."""

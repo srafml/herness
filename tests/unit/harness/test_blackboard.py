@@ -7,10 +7,10 @@ with the SQLite jobs backend bound (`bb_env` in `_blackboard_env`).
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import threading
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from typing import get_args
+from typing import Any, get_args
 
 import pytest
 import structlog
@@ -28,18 +28,19 @@ from tests.unit.harness._blackboard_env import (
     verification,
 )
 
-from herness.core.errors import ConfigError, FatalError, StoreBusy, ToolInputError
+from herness.core.errors import ConfigError, HernessError, StoreBusy, ToolInputError
+from herness.core.jobs.ports import CheckpointKey
 from herness.core.jobs.tasks import save_checkpoint
-from herness.core.types import Finding, FindingStatus
+from herness.core.types import FindingStatus
 from herness.harness import blackboard as bbmod
 from herness.harness.blackboard import Blackboard, FindingFilter
 from herness.store.ops import (
     get_findings,
     get_task,
-    insert_finding,
     list_task_findings,
     read_all,
     read_one,
+    run_write,
 )
 
 pytestmark = pytest.mark.unit
@@ -125,21 +126,42 @@ def test_ut06_36_second_post_appends_and_keeps_other_keys(bb_env: BbEnv) -> None
     assert cp["state"]["pending_findings"] == [first, second]  # type: ignore[index]
 
 
-def test_ut06_36_failing_callback_leaves_neither(
-    bb_env: BbEnv, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """UT06-36 rollback: a callback failing after the insert leaves no row and no checkpoint."""
+def _block_checkpoint_updates() -> None:
+    """A trigger failing the checkpoint UPDATE that save_checkpoint runs after `writes`."""
+    sql = (
+        "CREATE TRIGGER t06_08_block BEFORE UPDATE OF checkpoint ON task"
+        " BEGIN SELECT RAISE(ABORT, 'checkpoint blocked'); END"
+    )
+    run_write(lambda conn: conn.execute(sql), op="test_trigger")
 
-    def failing(conn: sqlite3.Connection, f: Finding) -> bool:
-        insert_finding(conn, f)
-        msg = "boom"
-        raise RuntimeError(msg)
 
-    monkeypatch.setattr(bbmod, "insert_finding", failing)
-    with pytest.raises(FatalError):
+def test_ut06_36_failing_checkpoint_write_leaves_neither(bb_env: BbEnv) -> None:
+    """UT06-36 rollback: the checkpoint write fails after the finding insert ran → neither."""
+    save_checkpoint(bb_env.task_id, "loop", {"step": 1})
+    before = checkpoint_of(bb_env.task_id)
+    _block_checkpoint_updates()
+    with pytest.raises(HernessError):
         _post(bb_env)
     assert _count() == 0
-    assert checkpoint_of(bb_env.task_id) is None
+    assert checkpoint_of(bb_env.task_id) == before
+
+
+def test_ut06_36_rollback_probe_detects_split_transactions(
+    bb_env: BbEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT06-36 control: with the insert in its own transaction the same failure leaks a row."""
+
+    def split(
+        task_id: str, key: CheckpointKey, value: Mapping[str, object], *, writes: Any
+    ) -> None:
+        run_write(writes, op="test_split")
+        save_checkpoint(task_id, key, value)
+
+    monkeypatch.setattr(bbmod, "save_checkpoint", split)
+    _block_checkpoint_updates()
+    with pytest.raises(HernessError):
+        _post(bb_env)
+    assert _count() == 1  # what the real (atomic) test above rules out
 
 
 def test_ut06_36_fault_point_after_commit(bb_env: BbEnv, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -318,6 +340,19 @@ def test_st06_05_pii_claim_names_types_only(bb_env: BbEnv) -> None:
     text = " ".join([str(err), err.hint or "", repr(dict(err.context)), repr(logs)])
     for secret in ("Priya", "Raman", "priya@example.com", "incidents"):
         assert secret not in text
+    assert _count() == 0
+
+
+def test_st06_05_pii_checked_before_numerals_and_ids(bb_env: BbEnv) -> None:
+    """ST06-05 an unmarked phone number and email are rejected as PII; no digit is echoed."""
+    claim = "Team t1 had [[n1]] incidents, call +1 415-867-5309 or ops42@example.com about 17"
+    with pytest.raises(ToolInputError) as info:
+        _post(bb_env, claim=claim, entity_id="t9")
+    err = info.value
+    assert err.message == "claim contains personal data (EMAIL, PHONE)"
+    text = " ".join([str(err), err.hint or "", repr(dict(err.context)), repr(dict(err.details))])
+    for fragment in ("415", "867", "5309", "ops42", "17", "t9"):
+        assert fragment not in text
     assert _count() == 0
 
 
