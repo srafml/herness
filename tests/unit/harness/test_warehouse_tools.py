@@ -73,11 +73,15 @@ def _dispatch(ctx: ToolContext, calls: list[ToolCall]) -> list[ToolResult]:
 
 
 def test_ut05_80_register_warehouse_tools_owner_05_idempotent(cfg: None) -> None:
-    """UT05-80 the four part-1 tools register with owner 05 (strict schemas), idempotently."""
+    """UT05-80 the warehouse tools (all eight since T05-18) register with owner 05 (strict
+    schemas), idempotently."""
     del cfg
     wt.register_warehouse_tools()
     wt.register_warehouse_tools()
-    assert tool_registry().names() == ["describe_table", "get_scores", "list_tables", "run_sql"]
+    assert tool_registry().names() == [
+        "describe_table", "get_cluster", "get_metric", "get_record", "get_scores", "list_tables",
+        "run_sql", "semantic_search",
+    ]  # fmt: skip
     other = ToolRegistry()
     wt.register_warehouse_tools(other)
     assert other.names() == tool_registry().names()

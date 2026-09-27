@@ -1,15 +1,17 @@
-"""The spec 05 warehouse tools (impl 05 U05-39-U05-43; design 05 §5.4.2).
+"""The spec 05 warehouse tools (impl 05 U05-39-U05-47; design 05 §5.4.2).
 
-`list_tables`, `describe_table`, `run_sql` and `get_scores` (T05-17); `get_metric`,
-`get_cluster`, `get_record` and `semantic_search` follow in T05-18. Every row a model sees
-comes through `execute_recorded`, so it carries a `query_id` and is recorded as evidence.
-Agent SQL (`run_sql`) always runs under the full `SqlGuard` (`guard=True`); the other tools
-run internal constant SQL (`guard=False`, still guard-checked with `allow_catalog`). The only
-SQL built at call time is the `describe_table` sample, whose identifiers come from the
-build's schema (allow-list) and are DuckDB-quoted. Cells of redact-on-read columns pass
-`redact_text` before the model or `data` sees them (TH05-05); untrusted text is wrapped by
-`format_result`. Tools run in dispatch worker threads and share no mutable state. The SQL
-constants and shared helpers live in the private `_warehouse_tools_sql`.
+`list_tables`, `describe_table`, `run_sql`, `get_scores` (T05-17), `get_metric`, `get_cluster`,
+`get_record` and `semantic_search` (T05-18), and `register_warehouse_tools`. Every row a model
+sees comes through `execute_recorded`, so it carries a `query_id` and is recorded as evidence;
+`get_metric` records the evidence of its spec 04 `MetricResult` instead. Agent SQL (`run_sql`)
+always runs under the full `SqlGuard` (`guard=True`); the other tools run internal constant
+SQL (`guard=False`, still guard-checked with `allow_catalog`). SQL built at call time (the
+`describe_table` sample, the `get_record` row) takes its identifiers from the build's schema
+(allow-list) and DuckDB-quotes them. Cells of redact-on-read columns pass `redact_text` before
+the model or `data` sees them (TH05-05); untrusted text is wrapped (TH05-01). Tools run in
+dispatch worker threads and share no mutable state. `get_metric` lives in the private
+`_warehouse_tools_metric`, `get_cluster` / `get_record` in `_warehouse_tools_read`, the
+shared SQL constants and helpers in `_warehouse_tools_sql`; all are re-exported here.
 """
 
 from __future__ import annotations
@@ -20,9 +22,23 @@ from typing import Final
 from pydantic import JsonValue
 from rapidfuzz import fuzz, process
 
+from herness import enrich
 from herness.core.errors import QueryError, ToolInputError
+from herness.core.redact import redact_text
 from herness.core.types import Tool, ToolContext, ToolResult
 from herness.harness import _warehouse_tools_sql as ws
+from herness.harness._warehouse_tools_metric import GetMetric
+from herness.harness._warehouse_tools_read import (
+    CLUSTER_COUNTS_SQL,
+    CLUSTER_ROW_SQL,
+    CLUSTER_SAMPLE_SQL,
+    LOCATE_RECORD_SQL,
+    RECORD_CLUSTERS_SQL,
+    RECORD_DECISIONS_SQL,
+    RECORD_TEXT_SQL,
+    GetCluster,
+    GetRecord,
+)
 from herness.harness._warehouse_tools_sql import DESCRIBE_COLUMNS_SQL, LIST_TABLES_SQL, SCORES_SQL
 from herness.harness.sql_guard import ALLOWED_SCHEMAS
 from herness.harness.sql_guard import _norm as norm_identifier
@@ -32,23 +48,43 @@ from herness.harness.tools import (
     execute_recorded,
     json_safe,
     tool_registry,
+    wrap_untrusted,
 )
 
 __all__ = [
     "BLOCKED_MARK",
+    "CLUSTER_COUNTS_SQL",
+    "CLUSTER_ROW_SQL",
+    "CLUSTER_SAMPLE_SQL",
     "DESCRIBE_COLUMNS_SQL",
     "LIST_TABLES_SQL",
+    "LOCATE_RECORD_SQL",
+    "RECORD_CLUSTERS_SQL",
+    "RECORD_DECISIONS_SQL",
+    "RECORD_TEXT_SQL",
     "SCORES_SQL",
+    "SNIPPET_SQL",
     "DescribeTable",
+    "GetCluster",
+    "GetMetric",
+    "GetRecord",
     "GetScores",
     "ListTables",
     "RunSql",
+    "SemanticSearch",
     "register_warehouse_tools",
 ]
 
 SAMPLE_LIMIT: Final = 5
 BLOCKED_MARK: Final = "BLOCKED (use enrich.text_redacted)"
 _SCHEMA_ENUM: Final[list[JsonValue]] = ["core", "enrich", "metrics", "score", "meta"]
+SNIPPET_SQL: Final = (
+    "SELECT record_id, substr(text, 1, 300) AS snippet FROM enrich.text_redacted"
+    " WHERE list_contains(CAST($ids AS VARCHAR[]), record_id) ORDER BY record_id"
+)
+MAX_K: Final = 50
+NOT_CITABLE: Final = "similarity values rank results and cannot be cited"
+_ENTITIES: Final = ("incident", "problem", "change")
 
 
 # --- U05-39 list_tables ----------------------------------------------------------------------
@@ -232,13 +268,96 @@ class GetScores:
         return ws.table_result(execute_recorded(ctx, sql, params, guard=False))
 
 
-# --- registration ----------------------------------------------------------------------------
+# --- U05-46 semantic_search -----------------------------------------------------------------
 
-_TOOLS: Final[tuple[Tool, ...]] = (ListTables(), DescribeTable(), RunSql(), GetScores())
+
+def _search_args(kwargs: dict[str, JsonValue]) -> tuple[str, str | None, str | None, int]:
+    """Schema bounds re-checked in code (direct calls): text 3-500, k 1-50, entity, service."""
+    text, k = ws.text(kwargs, "text"), ws.integer(kwargs, "k")
+    entity, service_id = ws.opt_text(kwargs, "entity"), ws.opt_text(kwargs, "service_id")
+    if not 3 <= len(text) <= 500 or not 1 <= k <= MAX_K:  # noqa: PLR2004 - schema bounds
+        msg = f"text must be 3-500 characters and k 1-{MAX_K}"
+        raise ToolInputError(msg)
+    if entity is not None and entity not in _ENTITIES:
+        msg = "entity must be incident, problem, change or null"
+        raise ToolInputError(msg)
+    if service_id is not None and len(service_id) > 200:  # noqa: PLR2004 - schema bound
+        msg = "service_id must be at most 200 characters"
+        raise ToolInputError(msg)
+    return text, entity, service_id, k
+
+
+class SemanticSearch:
+    """`semantic_search`: top-k similar tickets with redacted snippets (U05-46)."""
+
+    name = "semantic_search"
+    description = (
+        "Find tickets similar to a short text: top k (1-50) with redacted snippets, optionally"
+        " one entity (incident, problem, change) or service. Similarity only ranks results."
+    )
+    input_schema: dict[str, JsonValue] = ws.strict_schema(
+        {
+            "text": {"type": "string", "minLength": 3, "maxLength": 500},
+            "entity": {"type": ["string", "null"], "enum": [*_ENTITIES, None]},
+            "service_id": {"type": ["string", "null"], "maxLength": 200},
+            "k": {"type": "integer", "minimum": 1, "maximum": MAX_K},
+        }
+    )
+
+    def __call__(self, ctx: ToolContext, **kwargs: JsonValue) -> ToolResult:
+        text, entity, service_id, k = _search_args(kwargs)
+        query = redact_text(text)  # before embedding: callers pass redacted text (spec 03)
+        if query is None:
+            msg = "query text could not be redacted"
+            raise ToolInputError(msg, hint="rephrase the query")
+        vector: list[float] = enrich.embed_query(query).tolist()
+        hits = ctx.vectors.search_tickets(vector, k, entity=entity, service_id=service_id)[:k]
+        ids: list[JsonValue] = list(dict.fromkeys(h.record_id for h in hits))
+        r = execute_recorded(ctx, SNIPPET_SQL, {"ids": ids}, guard=False)
+        snippets = {str(rid): str(snip) for rid, snip in r.rows if snip is not None}
+        unique = {h.record_id: h for h in reversed(hits)}.values()  # first hit per record wins
+        kept = sorted(
+            (h for h in unique if h.record_id in snippets),
+            key=lambda h: (-h.similarity, h.record_id),
+        )
+        lines = [f"query_id={r.query_id} hits={len(kept)}", NOT_CITABLE]
+        found: list[JsonValue] = []
+        for h in kept:
+            opened, snippet = json_safe(h.opened_at), snippets[h.record_id]
+            day = h.opened_at.strftime("%Y-%m-%dT%H:%M:%SZ") if h.opened_at else "NULL"  # UTC
+            where = f"{day} | {h.service_id or 'NULL'}"
+            lines.append(f"{h.record_id} | {h.similarity:.3f} | {where}")
+            lines.append(
+                wrap_untrusted(snippet, source="enrich.text_redacted", record_id=h.record_id)
+            )
+            hit: dict[str, JsonValue] = {"record_id": h.record_id, "entity": h.entity}
+            hit |= {"service_id": h.service_id, "opened_at": opened, "similarity": h.similarity}
+            found.append(hit | {"snippet": snippet})
+        return ToolResult(
+            ok=True,
+            content="\n".join(lines),
+            data={"hits": found},
+            query_ids=[r.query_id],
+            row_count=len(kept),
+        )
+
+
+# --- registration (U05-47) -------------------------------------------------------------------
+
+_TOOLS: Final[tuple[Tool, ...]] = (
+    ListTables(),
+    DescribeTable(),
+    RunSql(),
+    GetMetric(),
+    GetScores(),
+    GetCluster(),
+    GetRecord(),
+    SemanticSearch(),
+)
 
 
 def register_warehouse_tools(registry: ToolRegistry | None = None) -> None:
-    """Register the spec 05 warehouse tools with owner "05"; idempotent (same instances)."""
+    """Register the eight spec 05 warehouse tools with owner "05"; idempotent (same instances)."""
     target = registry if registry is not None else tool_registry()
     for tool in _TOOLS:
         target.register(tool, owner="05")
