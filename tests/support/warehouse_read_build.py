@@ -33,6 +33,8 @@ PLANTED_NAME = "Priya Raman"
 CLUSTER_ID = "cl_01HZX3K7M2" + "0" * 16
 EMPTY_CLUSTER_ID = "cl_01HZX3K7M2" + "1" * 16
 WORK_ITEM_ID = "jira:issue:PAY-7"
+# also a work item id: `get_record` must resolve it deterministically (incident first)
+DUPLICATE_ID = "sn:incident:5"
 PROBLEM_ID = "sn:problem:1"
 MEMBERS = 8  # sn:incident:0 ... 7 are cluster members
 
@@ -42,6 +44,7 @@ _STATEMENTS = (
     "INSERT INTO core.problem VALUES ('sn:problem:1', 'PRB0001', 'open', 'svc_1',"
     " 'raw root cause')",
     "INSERT INTO core.work_item VALUES ($wid, 'Call $name about $personal login', 'open')",
+    "INSERT INTO core.work_item VALUES ('sn:incident:5', 'duplicate id', 'open')",
     "CREATE TABLE enrich.cluster (cluster_id VARCHAR, label VARCHAR, root_cause_category VARCHAR,"
     " size INTEGER, first_seen TIMESTAMP, last_seen TIMESTAMP, top_terms VARCHAR[],"
     " service_ids VARCHAR[], algorithm_version VARCHAR)",

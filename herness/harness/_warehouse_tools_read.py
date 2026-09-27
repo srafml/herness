@@ -10,7 +10,8 @@ with its `record_id` (TH05-01); redact-on-read cells pass `redact_text` (TH05-05
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Mapping
 from typing import Final
 
 from pydantic import JsonValue
@@ -36,11 +37,13 @@ CLUSTER_SAMPLE_SQL: Final = (
     " JOIN enrich.text_redacted t ON t.record_id = m.record_id WHERE m.cluster_id = $cluster_id"
     " ORDER BY m.membership_prob DESC, m.record_id LIMIT $n"
 )
+# `rank` fixes the resolution order when a record_id appears in more than one table
 LOCATE_RECORD_SQL: Final = (
-    "SELECT 'incident' AS entity FROM core.incident WHERE record_id = $record_id"
-    " UNION ALL SELECT 'change' FROM core.change WHERE record_id = $record_id"
-    " UNION ALL SELECT 'problem' FROM core.problem WHERE record_id = $record_id"
-    " UNION ALL SELECT 'work_item' FROM core.work_item WHERE record_id = $record_id"
+    "SELECT 1 AS rank, 'incident' AS entity FROM core.incident WHERE record_id = $record_id"
+    " UNION ALL SELECT 2, 'change' FROM core.change WHERE record_id = $record_id"
+    " UNION ALL SELECT 3, 'problem' FROM core.problem WHERE record_id = $record_id"
+    " UNION ALL SELECT 4, 'work_item' FROM core.work_item WHERE record_id = $record_id"
+    " ORDER BY rank"
 )
 RECORD_TEXT_SQL: Final = "SELECT text FROM enrich.text_redacted WHERE record_id = $record_id"
 RECORD_DECISIONS_SQL: Final = (
@@ -52,6 +55,8 @@ RECORD_CLUSTERS_SQL: Final = (
     " ORDER BY membership_prob DESC, cluster_id"
 )
 MAX_SAMPLE: Final = 20
+CLUSTER_ID_PATTERN: Final = "^cl_[0-9A-HJKMNP-TV-Z]{26}$"
+RECORD_ID_PATTERN: Final = "^[a-z0-9_]+:[a-z0-9_]+:[^\\s]{1,200}$"
 CELL_CHARS: Final = 300
 TEXT_SOURCE: Final = "enrich.text_redacted"
 _RECORD_TABLES: Final = ("incident", "change", "problem", "work_item")
@@ -69,6 +74,15 @@ def require_tables(ctx: ToolContext, tables: Iterable[str]) -> None:
         if table not in schema.get(schema_name, {}):
             msg = f"table {qualified} is not in this build"
             raise QueryError(msg, hint="call list_tables")
+
+
+def matching(args: Mapping[str, JsonValue], name: str, pattern: str) -> str:
+    """A string argument matching the schema `pattern` (direct calls); the value is not echoed."""
+    value = ws.text(args, name)
+    if re.fullmatch(pattern.strip("^$"), value) is None:
+        msg = f"argument {name} does not match {pattern}"
+        raise ToolInputError(msg)
+    return value
 
 
 def _cell(value: object) -> str:
@@ -110,13 +124,14 @@ class GetCluster:
     )
     input_schema: dict[str, JsonValue] = ws.strict_schema(
         {
-            "cluster_id": {"type": "string", "pattern": "^cl_[0-9A-HJKMNP-TV-Z]{26}$"},
+            "cluster_id": {"type": "string", "pattern": CLUSTER_ID_PATTERN},
             "sample": {"type": "integer", "minimum": 0, "maximum": MAX_SAMPLE},
         }
     )
 
     def __call__(self, ctx: ToolContext, **kwargs: JsonValue) -> ToolResult:
-        cluster_id, sample = ws.text(kwargs, "cluster_id"), ws.integer(kwargs, "sample")
+        cluster_id = matching(kwargs, "cluster_id", CLUSTER_ID_PATTERN)
+        sample = ws.integer(kwargs, "sample")
         if not 0 <= sample <= MAX_SAMPLE:
             msg = f"sample must be 0-{MAX_SAMPLE}"
             raise ToolInputError(msg)
@@ -173,18 +188,18 @@ class GetRecord:
         " its redacted text, the enrichment decisions and its cluster memberships."
     )
     input_schema: dict[str, JsonValue] = ws.strict_schema(
-        {"record_id": {"type": "string", "pattern": "^[a-z0-9_]+:[a-z0-9_]+:[^\\s]{1,200}$"}}
+        {"record_id": {"type": "string", "pattern": RECORD_ID_PATTERN}}
     )
 
     def __call__(self, ctx: ToolContext, **kwargs: JsonValue) -> ToolResult:
-        record_id = ws.text(kwargs, "record_id")
+        record_id = matching(kwargs, "record_id", RECORD_ID_PATTERN)
         require_tables(ctx, _RECORD_SOURCES)
         params: dict[str, JsonValue] = {"record_id": record_id}
         located = execute_recorded(ctx, LOCATE_RECORD_SQL, params, guard=False)
-        if not located.rows or located.rows[0][0] not in _RECORD_TABLES:
+        if not located.rows or located.rows[0][1] not in _RECORD_TABLES:
             msg = f"record not found in build {ctx.build_id}"
             raise ToolInputError(msg)
-        table = str(located.rows[0][0])
+        table = str(located.rows[0][1])
         row = execute_recorded(ctx, _row_sql(ctx, table), params, guard=False)
         lines, record = row_lines(row, record_id=record_id)
         text = execute_recorded(ctx, RECORD_TEXT_SQL, params, guard=False)

@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import subprocess
+import sys
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, cast
@@ -39,7 +41,7 @@ from tests.support.metrics_tiny import (
 
 import herness.enrich
 from herness.core import config as c
-from herness.core.errors import ConfigError, QueryError, ToolInputError
+from herness.core.errors import ConfigError, ModelUnavailable, QueryError, ToolInputError
 from herness.core.resilience import ProcessState
 from herness.core.types import SqlLimits, ToolCall, ToolContext, VectorHit
 from herness.harness import _warehouse_tools_metric as wm
@@ -457,6 +459,43 @@ def test_ut05_86_no_blocked_column_selected(
     assert '"record_id"' in row_sql
 
 
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        ("get_cluster", {"cluster_id": "cl_lower" + "a" * 21, "sample": 1}),
+        ("get_cluster", {"cluster_id": rb.CLUSTER_ID + "\n", "sample": 1}),
+        ("get_cluster", {"cluster_id": "x" + rb.CLUSTER_ID, "sample": 1}),
+        ("get_record", {"record_id": "no-colons"}),
+        ("get_record", {"record_id": "sn:incident:1 OR 1=1"}),
+        ("get_record", {"record_id": "sn:incident:1\n"}),
+        ("get_record", {"record_id": "SN:incident:1"}),
+        ("get_record", {"record_id": "sn:incident:" + "x" * 201}),
+    ],
+)
+def test_ut05_86_id_patterns_checked_on_direct_call(
+    wh: DuckWarehouse, tool: str, args: dict[str, JsonValue]
+) -> None:
+    """UT05-86 (UT05-85) cluster_id and record_id patterns are re-checked on a direct call:
+    ToolInputError naming the pattern, the raw value not echoed, nothing recorded."""
+    ctx = _ctx(wh)
+    instance = next(t for t in wt._TOOLS if t.name == tool)
+    with pytest.raises(ToolInputError, match="does not match") as info:
+        instance(ctx, **args)
+    raw = next(iter(args.values()))
+    assert str(raw) not in info.value.message
+    assert _ops(ctx).evidence == {}
+
+
+def test_ut05_86_duplicate_id_resolves_in_fixed_table_order(wh: DuckWarehouse) -> None:
+    """UT05-86 a record_id present in core.incident and core.work_item resolves to the first
+    table of the fixed order (incident, change, problem, work_item)."""
+    for _ in range(3):
+        result = wt.GetRecord()(_ctx(wh), record_id=rb.DUPLICATE_ID)
+        data: Any = result.data
+        assert data["table"] == "core.incident"
+    assert wt.LOCATE_RECORD_SQL.endswith("ORDER BY rank")
+
+
 def test_ut05_86_unknown_record(wh: DuckWarehouse) -> None:
     """UT05-86 an unknown record is ToolInputError naming the build."""
     with pytest.raises(ToolInputError, match=f"record not found in build {rb.BUILD_ID}"):
@@ -588,6 +627,41 @@ def test_ut05_87_bounds_checked_in_code(
     with pytest.raises(ToolInputError):
         wt.SemanticSearch()(_ctx(wh, vectors=FakeVectors()), **(args | over))
     assert embedded == []
+
+
+def test_ut05_87_embedding_failure_propagates(
+    wh: DuckWarehouse, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT05-87 ModelUnavailable from embed_query propagates unchanged (retryable, tool_store
+    policy); no search, nothing recorded."""
+    failure = ModelUnavailable("bge-m3 load failed")
+
+    def broken(text: str, /) -> np.ndarray:
+        raise failure
+
+    monkeypatch.setattr(herness.enrich, "embed_query", broken, raising=False)
+    vectors = FakeVectors([_hit("sn:incident:1", 0.9)])
+    ctx = _ctx(wh, vectors=vectors)
+    with pytest.raises(ModelUnavailable) as info:
+        wt.SemanticSearch()(ctx, text="disk", entity=None, service_id=None, k=3)
+    assert info.value is failure
+    assert vectors.calls == []
+    assert _ops(ctx).evidence == {}
+
+
+def test_ut05_87_import_loads_neither_torch_nor_embed() -> None:
+    """UT05-87 importing herness.harness.warehouse_tools loads neither torch nor
+    herness.enrich.embed (embed_query is resolved lazily through the herness.enrich facade)."""
+    code = (
+        "import sys, herness.harness.warehouse_tools as wt;"
+        " assert wt.SemanticSearch;"
+        " print(sorted(m for m in ('torch', 'herness.enrich.embed', 'sentence_transformers')"
+        " if m in sys.modules))"
+    )
+    done = subprocess.run(  # noqa: S603 - fixed code, current interpreter
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=120
+    )
+    assert done.stdout.strip() == "[]"
 
 
 def test_ut05_87_redaction_failure_fails_closed(
