@@ -47,6 +47,11 @@ def test_ut00_58_contracts_match_repository() -> None:
     exception = ["herness.core.config -> herness.**.settings"]
     if _exists("herness.core._config_sections"):  # config.py's private sibling (T10-03b)
         exception.append("herness.core._config_sections -> herness.**.settings")
+    if _exists("herness.connectors.mapping_check"):  # impl 01 §2 render_sql exception (T01-12)
+        exception += [
+            f"herness.connectors.mapping_check -> herness.model.{m}"
+            for m in ("sqlfiles", "render_context", "lakeinfo")
+        ]
     assert c1["ignore_imports"] == exception
     c2 = contracts["herness never imports app or tools"]
     assert c2["forbidden_modules"] == [p for p in ("app", "tools") if _exists(p)]
