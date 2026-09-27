@@ -233,6 +233,23 @@ def test_ut05_81_all_blocked_table_has_no_sample(
     assert result.data["sample"] is None
 
 
+def test_ut05_81_fullwidth_lookalike_blocked_column(wh: DuckWarehouse) -> None:
+    """UT05-81 a blocked column spelled with fullwidth lookalike letters
+    (`core.change.description`) is marked BLOCKED and left out of the sample, matched under
+    the guard's NFKC + casefold normalisation; the call succeeds (no internal guard error)."""
+    ctx = _ctx(wh)
+    result = wt.DescribeTable()(ctx, table="core.change")
+    assert result.ok
+    data: Any = result.data
+    marks = {col["name"]: col["blocked"] for col in data["columns"]}
+    assert marks == {"record_id": False, wb.LOOKALIKE_BLOCKED: True, "state": False}
+    assert f"{wb.LOOKALIKE_BLOCKED} | VARCHAR | yes | {wt.BLOCKED_MARK}" in result.content
+    assert data["sample"]["columns"] == ["record_id", "state"]
+    assert "raw change" not in result.content
+    assert "raw change" not in repr(data)
+    assert len(result.query_ids) == 2
+
+
 def test_ut05_81_concurrent_tools_on_cold_warehouse(wh: DuckWarehouse) -> None:
     """UT05-81 six concurrent describe_table / list_tables calls through dispatch on a cold
     warehouse (schema not loaded) all succeed (T05-16 own-cursor carry-over)."""
@@ -325,6 +342,25 @@ def test_ut05_82_run_sql_requires_purpose(wh: DuckWarehouse) -> None:
         wt.RunSql()(ctx, sql=None, purpose="p")
 
 
+def test_ut05_82_redact_on_read_non_text_cell_redacted_as_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT05-82 a non-text cell of a redact-on-read output (e.g. a list) is redacted as its
+    JSON text; NULL stays NULL; other columns are untouched."""
+    wb.patch_redaction(monkeypatch)
+    result = RecordedResult(
+        query_id="q_0123456789abcdef",
+        columns=["titles", "n"],
+        types=["VARCHAR[]", "INTEGER"],
+        rows=[([wb.PERSONAL], 1), (None, 2)],
+        row_count=2,
+        truncated=False,
+        ordered=True,
+        redact_columns=frozenset({"titles"}),
+    )
+    assert ws.redacted(result).rows == [('["[EMAIL]"]', 1), (None, 2)]
+
+
 # --- UT05-84 get_scores ----------------------------------------------------------------------
 
 
@@ -353,14 +389,19 @@ def test_ut05_84_each_kind_ordered_as_specified(wh: DuckWarehouse) -> None:
     ctx = _ctx(wh)
     funding = _rows(_scores(ctx, "funding"))
     assert len(funding) == wb.FUNDING_ROWS
-    assert [r["rank"] for r in funding] == list(range(1, wb.FUNDING_ROWS + 1))
+    ranks = [r["rank"] for r in funding]
+    assert len(set(ranks)) < len(ranks)  # ties on rank: candidate_id breaks them
+    assert _sorted_by(funding, "rank", "candidate_id")
     assert all(r["query_ids"][0].startswith("q_") for r in funding)
     org = _rows(_scores(ctx, "org"))
     assert len(org) == 8
     assert _sorted_by(org, "rank", "entity_id", "metric")
     lever = _rows(_scores(ctx, "action_lever"))
-    assert len(lever) == 6
+    assert len(lever) == wb.LEVER_ROWS
     assert _sorted_by(lever, "delta_usd", "entity_id", "metric", desc="delta_usd")
+    pairs = [(r["delta_usd"], r["entity_id"]) for r in lever]
+    assert len({r["delta_usd"] for r in lever}) < len(lever)  # ties on delta_usd
+    assert len(set(pairs)) < len(pairs)  # and on (delta_usd, entity_id): metric decides
     portfolio = _rows(_scores(ctx, "portfolio"))
     assert len(portfolio) == 10
     assert _sorted_by(portfolio, "scenario", "order_rank", "candidate_id")
@@ -375,7 +416,7 @@ def test_ut05_84_filters_top_and_scenario(wh: DuckWarehouse) -> None:
     """UT05-84 `entity_id`, `top` and (portfolio) `scenario` filter; one recorded query."""
     ctx = _ctx(wh)
     top3 = _scores(ctx, "funding", top=3)
-    assert [r["rank"] for r in _rows(top3)] == [1, 2, 3]
+    assert [r["rank"] for r in _rows(top3)] == [1, 1, 2]
     assert len(top3.query_ids) == 1
     one = _rows(_scores(ctx, "funding", entity_id="cand_05"))
     assert [r["candidate_id"] for r in one] == ["cand_05"]
@@ -421,22 +462,3 @@ def test_ut05_84_bad_arguments_on_direct_call(wh: DuckWarehouse) -> None:
     with pytest.raises(QueryError, match="not in this build"):
         _scores(ctx, "org")
     assert not isinstance(QueryError("x"), ConfigError)
-
-
-def test_ut05_82_redact_on_read_non_text_cell_redacted_as_json(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """UT05-82 a non-text cell of a redact-on-read output (e.g. a list) is redacted as its
-    JSON text; NULL stays NULL; other columns are untouched."""
-    wb.patch_redaction(monkeypatch)
-    result = RecordedResult(
-        query_id="q_0123456789abcdef",
-        columns=["titles", "n"],
-        types=["VARCHAR[]", "INTEGER"],
-        rows=[([wb.PERSONAL], 1), (None, 2)],
-        row_count=2,
-        truncated=False,
-        ordered=True,
-        redact_columns=frozenset({"titles"}),
-    )
-    assert ws.redacted(result).rows == [('["[EMAIL]"]', 1), (None, 2)]

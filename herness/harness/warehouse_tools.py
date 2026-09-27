@@ -25,6 +25,7 @@ from herness.core.types import Tool, ToolContext, ToolResult
 from herness.harness import _warehouse_tools_sql as ws
 from herness.harness._warehouse_tools_sql import DESCRIBE_COLUMNS_SQL, LIST_TABLES_SQL, SCORES_SQL
 from herness.harness.sql_guard import ALLOWED_SCHEMAS
+from herness.harness.sql_guard import _norm as norm_identifier
 from herness.harness.tools import (
     RecordedResult,
     ToolRegistry,
@@ -105,12 +106,13 @@ def _missing_table(ctx: ToolContext, table: str) -> ToolInputError:
 
 
 def _column_lines(r: RecordedResult, blocked: Iterable[str]) -> tuple[list[str], list[JsonValue]]:
-    """One content line and one `data` entry per column; blocked columns marked."""
+    """One content line and one `data` entry per column; blocked columns (normalised names,
+    as the guard compares them) marked."""
     marked = frozenset(blocked)
     lines: list[str] = []
     columns: list[JsonValue] = []
     for name, dtype, nullable, comment in r.rows:
-        is_blocked = str(name).lower() in marked
+        is_blocked = norm_identifier(str(name)) in marked
         description = BLOCKED_MARK if is_blocked else ws.one_line(comment)
         null_text = "yes" if nullable else "no"
         lines.append(f"{ws.one_line(name, 128)} | {dtype} | {null_text} | {description}")
@@ -153,7 +155,9 @@ class DescribeTable:
         content, query_ids = "\n".join([header, *lines]), [cols.query_id]
         data: dict[str, JsonValue] = {"table": table, "columns": columns, "sample": None}
         described = [str(row[0]).lower() for row in cols.rows]
-        shown = [c for c in described if c in allowed and c not in blocked]  # allow-list only
+        shown = [  # allow-list only; blocked compared under the guard's normalisation
+            c for c in described if c in allowed and norm_identifier(c) not in blocked
+        ]
         if shown:
             select = ", ".join(ws.quote(c) for c in shown)
             source = f"{ws.quote(schema_name)}.{ws.quote(table_name)}"

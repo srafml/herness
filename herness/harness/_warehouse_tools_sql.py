@@ -23,6 +23,7 @@ from herness.core.config import get_config
 from herness.core.errors import ToolInputError
 from herness.core.redact import redact_text
 from herness.core.types import ToolResult
+from herness.harness.sql_guard import _norm as norm_identifier
 from herness.harness.tools import RecordedResult, format_result, json_safe
 
 DESCRIPTION_CHARS: Final = 120
@@ -122,8 +123,10 @@ def quote(identifier: str) -> str:
 
 
 def blocked_columns() -> frozenset[str]:
-    """`harness.sql.blocked_columns` of the process config, lower-case."""
-    return frozenset(c.lower() for c in get_config().models.harness.sql.blocked_columns)
+    """`harness.sql.blocked_columns` of the process config, normalised as the guard does
+    (NFKC + casefold, `norm_identifier`), so lookalike identifiers match."""
+    blocked = get_config().models.harness.sql.blocked_columns
+    return frozenset(norm_identifier(c) for c in blocked)
 
 
 # --- table results ---------------------------------------------------------------------------
