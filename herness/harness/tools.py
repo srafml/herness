@@ -15,12 +15,12 @@ from __future__ import annotations
 import json
 import re
 import threading
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import JsonValue
 
@@ -45,6 +45,9 @@ from herness.harness._tools_dispatch import MAX_TOOL_ARGUMENT_CHARS, MAX_TOOL_CA
 from herness.harness._tools_record import json_safe
 from herness.harness._tools_schema import check_tool_schema
 from herness.harness.sql_guard import SqlGuard
+
+if TYPE_CHECKING:  # roles.base imports wrap_untrusted from here
+    from herness.harness.roles.base import RoleSpec
 
 __all__ = [
     "MAX_TOOL_ARGUMENT_CHARS",
@@ -270,15 +273,6 @@ TOOL_OWNERS: Final[Mapping[str, _Owner]] = MappingProxyType(
 )
 
 
-class _RoleLike(Protocol):
-    """What `resolve` reads of a role; `RoleSpec` (T05-19) satisfies it structurally."""
-
-    @property
-    def name(self) -> str: ...
-    @property
-    def allowed_tools(self) -> Collection[str]: ...
-
-
 class ToolRegistry:
     """Process-wide tools by name, only names of `TOOL_OWNERS` (U05-33, design §3.4)."""
 
@@ -312,7 +306,7 @@ class ToolRegistry:
             return sorted(self._tools)
 
     def resolve(
-        self, role: _RoleLike, names: Sequence[str], task_tools: Mapping[str, _AnyTool]
+        self, role: RoleSpec, names: Sequence[str], task_tools: Mapping[str, _AnyTool]
     ) -> list[_AnyTool]:
         """The tools for one task in `sorted(names)` order (duplicates once); task tools win."""
         extra = set(names) - set(role.allowed_tools)
