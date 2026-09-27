@@ -13,7 +13,6 @@ import dataclasses
 import functools
 import hashlib
 import importlib
-import importlib.util
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -195,9 +194,7 @@ def _lookup(name: str, variant: str) -> RoleSpec:
     if variant == "retrospective":
         attr = "WRITER_RETROSPECTIVE"
     full = f"herness.harness.roles.{module}"
-    found: object = None
-    if importlib.util.find_spec(full) is not None:  # skeptic/writer/chat arrive with T05-20
-        found = getattr(importlib.import_module(full), attr, None)
+    found: object = getattr(importlib.import_module(full), attr, None)
     if analyst and callable(found):
         found = found(name.removeprefix("analyst_"))
     if not isinstance(found, RoleSpec):
