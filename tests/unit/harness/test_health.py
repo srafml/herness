@@ -53,8 +53,20 @@ def _config() -> dict[str, Any]:
     }
 
 
-def _registry() -> LLMRegistry:
-    return LLMRegistry(ModelsConfig.model_validate(_config()), profile="local", egress_enabled=True)
+def _config_with_fallback() -> dict[str, Any]:
+    """`_config()` plus a fallback chain off `analyst` and a `deep`-depth override for `chat`."""
+    config = _config()
+    config["models"]["clients"]["analyst_fallback"] = _client("http://127.0.0.1:8104/v1")
+    config["models"]["clients"]["chat_deep"] = _client("http://127.0.0.1:8105/v1")
+    config["models"]["fallback"] = {"analyst": ["analyst", "analyst_fallback"]}
+    config["models"]["depth_overrides"] = {"deep": {"roles": {"chat": "chat_deep"}}}
+    return config
+
+
+def _registry(config: dict[str, Any] | None = None) -> LLMRegistry:
+    return LLMRegistry(
+        ModelsConfig.model_validate(config or _config()), profile="local", egress_enabled=True
+    )
 
 
 class _FakeResponse:
@@ -272,3 +284,105 @@ def test_ut05_123_warehouse_failure_never_leaks_secrets_or_paths(
     assert result["reason"] == "current warehouse unavailable"
     assert "secret:vllm.api_key" not in str(result)
     assert str(warehouse_dir) not in str(result)
+
+
+def test_ut05_123_chain_for_raising_non_config_error_is_degraded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UT05-123 (I1) chain_for raising something other than ConfigError -> degraded, no leak."""
+    _stub_loopback(monkeypatch, {})
+    registry = _registry()
+
+    def boom(role: str, depth: str) -> list[str]:
+        msg = "boom sk-secret"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(registry, "chain_for", boom)
+    result = hh.harness_health(
+        registry, traces_dir=_traces_dir(tmp_path), warehouse_dir=_warehouse_ok(tmp_path)
+    )
+    assert result["status"] == "degraded"
+    assert result["reason"] == "client health unavailable"
+    assert result["clients"] == {}
+    assert "sk-secret" not in str(result)
+
+
+def test_ut05_123_health_with_non_str_value_is_degraded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UT05-123 (I1) a non-str health() value (e.g. None) -> degraded, no exception escapes."""
+    registry = _registry()
+    monkeypatch.setattr(registry, "health", lambda: {"a": None})
+    result = hh.harness_health(
+        registry, traces_dir=_traces_dir(tmp_path), warehouse_dir=_warehouse_ok(tmp_path)
+    )
+    assert result["status"] == "degraded"
+    assert result["reason"] == "client health unavailable"
+    assert result["clients"] == {}
+
+
+def test_ut05_123_route_union_spans_fallback_and_depth_overrides(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UT05-123 (M3) the route union spans fallback chains and depth overrides, not just the
+    standard-depth heads: analyst/chat down but their fallback/override members still up ->
+    degraded, not down.
+    """
+    _stub_loopback(
+        monkeypatch,
+        {
+            "http://127.0.0.1:8101": _FakeResponse(503),  # analyst
+            "http://127.0.0.1:8102": _FakeResponse(503),  # chat
+        },
+    )
+    registry = _registry(_config_with_fallback())
+    result = hh.harness_health(
+        registry, traces_dir=_traces_dir(tmp_path), warehouse_dir=_warehouse_ok(tmp_path)
+    )
+    assert result["status"] == "degraded"
+    assert result["reason"] == "client analyst down; client chat down"
+
+
+def test_ut05_123_route_union_all_members_down_is_down(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UT05-123 (M3) down only once every route-union member - including a fallback-chain and a
+    depth-override member - is down.
+    """
+    _stub_loopback(
+        monkeypatch,
+        {
+            "http://127.0.0.1:8101": _FakeResponse(503),  # analyst
+            "http://127.0.0.1:8102": _FakeResponse(503),  # chat
+            "http://127.0.0.1:8104": _FakeResponse(503),  # analyst_fallback
+            "http://127.0.0.1:8105": _FakeResponse(503),  # chat_deep
+        },
+    )
+    registry = _registry(_config_with_fallback())
+    result = hh.harness_health(
+        registry, traces_dir=_traces_dir(tmp_path), warehouse_dir=_warehouse_ok(tmp_path)
+    )
+    assert result["status"] == "down"
+    assert result["reason"] == "analyst/analyst_fallback/chat/chat_deep clients down"
+
+
+def test_ut05_123_all_route_down_still_lists_other_down_clients(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UT05-123 (M3, builder deviation) all route clients down still names a non-route down
+    client too; status stays down.
+    """
+    _stub_loopback(
+        monkeypatch,
+        {
+            "http://127.0.0.1:8101": _FakeResponse(503),  # analyst (route)
+            "http://127.0.0.1:8102": _FakeResponse(503),  # chat (route)
+            "http://127.0.0.1:8103": _FakeResponse(503),  # extra (not routed)
+        },
+    )
+    registry = _registry()
+    result = hh.harness_health(
+        registry, traces_dir=_traces_dir(tmp_path), warehouse_dir=_warehouse_ok(tmp_path)
+    )
+    assert result["status"] == "down"
+    assert result["reason"] == "analyst/chat clients down; client extra down"

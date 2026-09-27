@@ -51,21 +51,20 @@ def _log_failure(check: str, exc: Exception) -> None:
 def _client_checks(registry: LLMRegistry) -> tuple[dict[str, JsonValue], list[tuple[str, str]]]:
     try:
         clients = registry.health()
+        down = {name for name, value in clients.items() if value.startswith("down")}
+        route: set[str] = set()
+        for role, depth in _ROUTES:
+            with contextlib.suppress(ConfigError):
+                route.update(registry.chain_for(role, depth))
+
+        checks: list[tuple[str, str]] = []
+        if route and route <= down:
+            checks.append(("down", f"{'/'.join(sorted(route))} clients down"))
+            down -= route
+        checks.extend(("degraded", f"client {name} down") for name in sorted(down))
     except Exception as exc:  # noqa: BLE001 - U05-73 "Errors: none escape"
         _log_failure("clients", exc)
         return {}, [("degraded", "client health unavailable")]
-
-    down = {name for name, value in clients.items() if value.startswith("down")}
-    route: set[str] = set()
-    for role, depth in _ROUTES:
-        with contextlib.suppress(ConfigError):
-            route.update(registry.chain_for(role, depth))
-
-    checks: list[tuple[str, str]] = []
-    if route and route <= down:
-        checks.append(("down", f"{'/'.join(sorted(route))} clients down"))
-        down -= route
-    checks.extend(("degraded", f"client {name} down") for name in sorted(down))
     return dict(clients), checks
 
 
@@ -81,7 +80,11 @@ def _traces_check(traces_dir: Path) -> tuple[str, str]:
 
 def _warehouse_check(warehouse_dir: Path) -> tuple[str, str]:
     try:
-        with (warehouse_dir / "CURRENT").open("rb") as current:
+        current_path = warehouse_dir / "CURRENT"
+        if not current_path.is_file():
+            msg = "CURRENT is not a regular file"
+            raise ValueError(msg)  # noqa: TRY301 - folded into this check's own failure path
+        with current_path.open("rb") as current:
             build_id = current.read(_CURRENT_MAX_BYTES).decode("utf-8").strip()
         if BUILD_ID_RE.fullmatch(build_id) is None:
             msg = "invalid build id in CURRENT"
