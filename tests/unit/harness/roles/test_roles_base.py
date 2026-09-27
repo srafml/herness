@@ -6,6 +6,7 @@ Prompt files are T05-21's, so every test points the private prompt resolver at a
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -138,10 +139,16 @@ def test_ut05_89_block_one_optional_sections(prompts: Path) -> None:
 
 
 def test_ut05_89_block_one_too_long(prompts: Path) -> None:
-    """UT05-89 block 1 over 60,000 chars → ConfigError."""
-    (prompts / "demo.md").write_text("x" * 60_001, encoding="utf-8")
+    """UT05-89 block 1 of exactly 60,000 chars is accepted; 60,001 → ConfigError."""
+    common = (prompts / "_common.md").read_text(encoding="utf-8")
+    fill = 60_000 - len(common) - len("\n\n")
+    role_args = {"output_model": None, "allowed_tools": frozenset({"run_sql"})}
+    (prompts / "demo.md").write_text("x" * fill, encoding="utf-8")
+    blocks = _role(**role_args).system_blocks(make_tool_ctx())
+    assert len(blocks[0].text) == 60_000
+    (prompts / "demo.md").write_text("x" * (fill + 1), encoding="utf-8")
     with pytest.raises(ConfigError, match="60,000"):
-        _role(output_model=None).system_blocks(make_tool_ctx())
+        _role(**role_args).system_blocks(make_tool_ctx())
 
 
 def test_ut05_89_real_catalog(tmp_path: Path) -> None:
@@ -186,6 +193,14 @@ def test_ut05_90_render_task_plain_and_no_scratchpad(prompts: Path) -> None:
     assert "untrusted_data" not in part.text
 
 
+def test_ut05_90_render_task_non_ascii(prompts: Path) -> None:
+    """UT05-90 non-ASCII task text is kept as is, not \\u-escaped (like canonical_json)."""
+    del prompts
+    part = _role().render_task({"q": "Störung in Zürich — 東京"}, None).parts[0]
+    assert isinstance(part, TextPart)
+    assert part.text == '## Task\n{\n  "q": "Störung in Zürich — 東京"\n}'
+
+
 def test_ut05_91_prompt_hash_tracks_content(prompts: Path) -> None:
     """UT05-91 prompt_hash is stable for equal content and changes with a file change."""
     first = _role()
@@ -199,6 +214,19 @@ def test_ut05_91_prompt_hash_tracks_content(prompts: Path) -> None:
     assert changed.prompt_hash != first.prompt_hash
     assert first.prompt_hash == again.prompt_hash  # cached per instance
     assert _role().prompt_hash == changed.prompt_hash
+
+
+def test_ut05_91_prompt_hash_algorithm(prompts: Path) -> None:
+    """UT05-91 prompt_hash = 16 hex of SHA-256 over file name and content; a rename changes it."""
+    files = {
+        name: (prompts / name).read_text(encoding="utf-8") for name in ("_common.md", "demo.md")
+    }
+    joined = "\n".join(f"{name}\n{content}" for name, content in files.items())
+    assert _role().prompt_hash == hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
+    (prompts / "other.md").write_text(files["demo.md"], encoding="utf-8")
+    renamed = _role(prompt_files=("_common.md", "other.md"))
+    assert renamed.prompt_text() == _role().prompt_text()
+    assert renamed.prompt_hash != _role().prompt_hash
 
 
 def test_ut05_91_missing_prompt_file(prompts: Path) -> None:

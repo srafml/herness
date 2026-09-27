@@ -151,7 +151,9 @@ class RoleSpec:
         self, task_input: Mapping[str, JsonValue], resume_from: LoopCheckpoint | None
     ) -> Message:
         """The first user message: the task as JSON, plus the resume state when resuming."""
-        body = json.dumps(json.loads(canonical_json(task_input)), indent=2, sort_keys=True)
+        body = json.dumps(
+            json.loads(canonical_json(task_input)), indent=2, sort_keys=True, ensure_ascii=False
+        )
         task = TextPart(text=f"## Task\n{body}")
         if resume_from is None:
             return Message(role="user", parts=[task])

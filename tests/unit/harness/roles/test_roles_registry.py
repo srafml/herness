@@ -179,7 +179,7 @@ def test_ut05_92_tools_resolve_strict(name: str) -> None:
         if owner == "06":
             task_tools[tool_name] = tool
         else:
-            registry.register(tool, owner=owner)  # type: ignore[arg-type]
+            registry.register(tool, owner=owner)
     resolved = registry.resolve(role, sorted(role.allowed_tools), task_tools)
     assert [t.name for t in resolved] == sorted(role.allowed_tools)
 
@@ -219,6 +219,7 @@ def test_ut05_92_judge_output_model() -> None:
         {"choice": -1, "scores": [1], "reasons": []},
         {"choice": 0, "scores": [], "reasons": []},
         {"choice": 0, "scores": [5.5], "reasons": []},
+        {"choice": 0, "scores": [-0.5], "reasons": []},
         {"choice": 0, "scores": [1.0] * 11, "reasons": []},
         {"choice": 0, "scores": [1], "reasons": ["r"] * 11},
         {"choice": 0, "scores": [1], "reasons": [], "extra": 1},
