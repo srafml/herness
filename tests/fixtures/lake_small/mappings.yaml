@@ -1,0 +1,29 @@
+enums:
+  jira.issue_type:
+    Bug: bug
+    Story: story
+    Task: task
+  jira.status_category_key:
+    done: done
+    indeterminate: in_progress
+    new: todo
+  monitoring.severity:
+    crit: critical
+    warn: warning
+  servicenow.change_close_code:
+    successful: successful
+    unsuccessful: unsuccessful
+  servicenow.change_type:
+    emergency: emergency
+    normal: normal
+  servicenow.incident_state:
+    '1': open
+    '2': in_progress
+    '6': resolved
+    '7': closed
+service_overrides:
+- jira_project: PAY
+  role: delivery
+  service_id: servicenow:cmdb_ci:s1
+  team_id: servicenow:sys_user_group:g1
+version: 1

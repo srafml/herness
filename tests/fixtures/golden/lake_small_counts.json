@@ -1,0 +1,14 @@
+{
+ "core.change": 2,
+ "core.event": 3,
+ "core.incident": 4,
+ "core.metric_daily": 3,
+ "core.org": 2,
+ "core.problem": 1,
+ "core.service": 2,
+ "core.service_map": 3,
+ "core.team": 3,
+ "core.work_item": 3,
+ "core.work_item_link": 1,
+ "core.work_item_transition": 1
+}
