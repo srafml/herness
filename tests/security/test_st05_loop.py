@@ -21,8 +21,11 @@ from tests.support.harness_fakes import FakeLedger, RecordingTracer
 from tests.support.ops_store import OpsStoreHandle
 
 from herness.core import config as c
+from herness.core import redact as r
 from herness.core.errors import OutputValidationError
+from herness.core.redact_directory import NameDirectory
 from herness.core.resilience import ProcessState, bind_ops_backend
+from herness.core.settings import RedactionConfig
 from herness.core.types import ToolContext, ToolResult, ToolResultPart
 from herness.harness import hooks as h
 from herness.harness import loop
@@ -46,6 +49,9 @@ def env(
     del ops_store, reset_process_state
     use_test_config(tmp_path / "cfg")
     bind_ops_backend(SqliteResilienceBackend())
+    directory = NameDirectory.from_files(None, (), None)  # test Redactor, as in IT05-04
+    redactor = r.Redactor(RedactionConfig(directory_file=None), bytes(range(32)), directory)
+    monkeypatch.setattr(r._State, "redactor", redactor)
     ls.write_prompts(tmp_path / "prompts", monkeypatch)
     counter = iter(range(1, 10_000))
 
@@ -96,7 +102,7 @@ def test_st05_08_repeating_forever_stops_by_signal(env: dict[str, SyncTool]) -> 
     assert len(client.requests) == 3
     assert result.steps <= MAX_STEPS
     assert len(env["run_sql"].calls) == 1
-    assert [e["step"] for e in ls.events(tracer, "guard_stop")] == [3]
+    assert ls.events(tracer, "guard_stop") == [{"cause": "repeat", "step": 3}]
     assert _charged(ctx) <= ctx.budgets.max_tokens
 
 

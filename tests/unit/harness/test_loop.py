@@ -723,3 +723,108 @@ def test_ut05_130_loop_signals_then_no_progress_and_bound_tracer(
     assert bound.run_id == root.run_id
     assert bound.task_id == "task_1"
     assert root.task_id is None
+
+
+# --- review polish: once-guards, check order, equality boundaries ------------------------------
+
+
+def test_ut05_105_two_steps_past_both_ratios_nudge_and_events_once(
+    env: dict[str, SyncTool],
+) -> None:
+    """UT05-105 two steps past `wrap_up_ratio` (and `BUDGET_WARN_RATIO`): the wrap-up nudge is
+    appended once and each `budget` event (`wrap_up`, `warn`) is emitted exactly once."""
+    ctx = _ctx(env, budgets=ls.budgets(max_tokens=10_000))
+    client = ls.ListClient(
+        [
+            ls.resp(calls=_sql("select 1"), tin=9_000),  # step 1 starts past 90 %
+            ls.resp("cut", stop="max_tokens"),  # step 1: wrap-up, continuation
+            ls.resp("done"),  # step 2: still past both ratios
+            ls.final(),
+        ]
+    )
+    result = _run(client, ctx)
+    assert result.status == "completed"
+    fin = client.requests[-1].messages
+    assert sum(m.parts == [TextPart(text=loop.WRAP_UP_NUDGE)] for m in fin) == 1
+    assert [e["kind"] for e in ls.events(_tracer(ctx), "budget")] == ["wrap_up", "warn"]
+
+
+def test_ut05_105_two_steps_past_warn_ratio_warn_once(env: dict[str, SyncTool]) -> None:
+    """UT05-105 two steps past 75 % but below 90 %: exactly one `warn` event."""
+    ctx = _ctx(env, budgets=ls.budgets(max_tokens=10_000))
+    client = ls.ListClient(
+        [
+            ls.resp(calls=_sql("select 1"), tin=7_600),
+            ls.resp(calls=_sql("select 2", "c2")),
+            ls.resp("done"),
+            ls.final(),
+        ]
+    )
+    _run(client, ctx)
+    assert [e["kind"] for e in ls.events(_tracer(ctx), "budget")] == ["warn"]
+
+
+def test_ut05_109_order_compaction_before_hard_limits(env: dict[str, SyncTool]) -> None:
+    """UT05-109 check order: compaction that stays over the hard limit wins over `max_steps`
+    reached at the same step (`task_tokens`, cause `context`)."""
+    big = Message(role="user", parts=[TextPart(text="x" * 8_000)])
+    hooks = ls.FakeHooks(compact_at=[1], pressure=lambda s: [s.messages[0], big])
+    ctx = _ctx(env, budgets=ls.budgets(max_steps=1))
+    client = ls.ListClient([ls.resp("cut", stop="max_tokens")])
+    result = _run(client, ctx, hooks, profile=_small_profile())
+    assert (result.status, result.stop_reason) == ("partial", "task_tokens")
+    assert ls.events(_tracer(ctx), "guard_stop") == [{"step": 1, "cause": "context"}]
+
+
+def test_ut05_109_order_steps_before_tokens_before_wall_clock(env: dict[str, SyncTool]) -> None:
+    """UT05-109 check order: steps and tokens exhausted together -> `max_steps`; tokens and
+    wall clock exhausted together -> `task_tokens`."""
+    ctx = _ctx(env, budgets=ls.budgets(max_steps=1, max_tokens=1_000))
+    result, stops, _ = _limit_case(env, ctx, [ls.resp("cut", stop="max_tokens", tin=1_500)])
+    assert result.stop_reason == "max_steps"
+    assert stops == [{"step": 1, "cause": "max_steps"}]
+    with FakeClock(clock.now()) as fc:
+
+        def slow(_ctx: ToolContext, **_kw: JsonValue) -> ToolResult:
+            fc.advance(601)
+            return ToolResult(ok=True, content="slow")
+
+        tool_registry().register(SyncTool("list_tables", slow), owner="05")
+        budgets = ls.budgets(max_tokens=1_000, wall_clock_s=600)
+        ctx = _ctx(env, tool_names=("list_tables",), budgets=budgets)
+        replies = [ls.resp(calls=[call("list_tables")], tin=1_500)]
+        result, stops, _ = _limit_case(env, ctx, replies)
+    assert result.stop_reason == "task_tokens"
+    assert stops == [{"step": 1, "cause": "task_tokens"}]
+
+
+def test_ut05_109_equality_boundaries_stop(env: dict[str, SyncTool]) -> None:
+    """UT05-109 boundaries: `step == max_steps`, `tokens_used == max_tokens` and
+    `elapsed == wall_clock_s` each stop the task."""
+    ctx = _ctx(env, budgets=ls.budgets(max_steps=1))  # step 0 is the wrap-up step
+    result, _, _ = _limit_case(env, ctx, [ls.resp("cut", stop="max_tokens")])
+    assert (result.stop_reason, result.steps) == ("max_steps", 1)
+    ctx = _ctx(env, budgets=ls.budgets(max_tokens=1_000))
+    result, _, _ = _limit_case(env, ctx, [ls.resp(calls=_sql("s2"), tin=995, tout=5)])
+    assert result.stop_reason == "task_tokens"
+    assert result.usage.input_tokens + result.usage.output_tokens == 1_000
+    with FakeClock(clock.now()) as fc:
+
+        def slow(_ctx: ToolContext, **_kw: JsonValue) -> ToolResult:
+            fc.advance(600)
+            return ToolResult(ok=True, content="slow")
+
+        tool_registry().register(SyncTool("list_tables", slow), owner="05")
+        ctx = _ctx(env, tool_names=("list_tables",), budgets=ls.budgets(wall_clock_s=600))
+        result, _, _ = _limit_case(env, ctx, [ls.resp(calls=[call("list_tables")])])
+    assert result.stop_reason == "wall_clock"
+
+
+def test_ut05_109_cost_equal_to_cap_does_not_stop(env: dict[str, SyncTool]) -> None:
+    """UT05-109 boundary: task cost equal to `max_cost_usd` does not stop (strict `>`)."""
+    ctx = _ctx(env, budgets=ls.budgets(max_cost_usd=Decimal("0.5")))
+    client = ls.ListClient([ls.resp(calls=_sql("s1"), cost="0.5"), ls.resp("x"), ls.final()])
+    result = _run(client, ctx)
+    assert result.status == "completed"
+    assert result.cost_usd == Decimal("0.5")
+    assert env["run_sql"].calls == [{"sql": "s1"}]
