@@ -134,10 +134,11 @@ class DuckWarehouse:
     def table_comment(self, qualified: str) -> str:
         """The table's comment from `duckdb_tables()`, or `""` when there is none."""
         schema_name, _, table_name = qualified.partition(".")
-        row = self._con.execute(
-            "SELECT comment FROM duckdb_tables() WHERE schema_name = ? AND table_name = ?",
-            [schema_name, table_name],
-        ).fetchone()
+        with self._con.cursor() as cur:  # own cursor: tools call this from worker threads
+            row = cur.execute(
+                "SELECT comment FROM duckdb_tables() WHERE schema_name = ? AND table_name = ?",
+                [schema_name, table_name],
+            ).fetchone()
         return "" if row is None or row[0] is None else str(row[0])
 
     def cache_get(self, query_id: str) -> _CacheValue | None:

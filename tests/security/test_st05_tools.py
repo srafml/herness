@@ -307,6 +307,50 @@ def test_st05_16_malformed_and_oversized_arguments(
     assert payloads[0] == payloads[1] == payloads[4] == {"args": {}}  # blobs never traced
 
 
+def _blob_calls(name: str, prefix: str) -> list[ToolCall]:
+    """A 1 MB call (raw text), a 1 MB call (parsed only) and a depth-75 call named `name`."""
+    huge = "S" * 1_000_000
+    return [
+        ToolCall(
+            id=f"{prefix}raw",
+            name=name,
+            arguments={"n": 1, "tags": [huge]},
+            raw_arguments='{"n": 1, "tags": ["' + huge + '"]}',
+        ),
+        call(name, f"{prefix}parsed", n=2, tags=[huge]),
+        call(name, f"{prefix}deep", n=3, tags=_nested(75)),
+    ]
+
+
+@pytest.mark.parametrize("where", ["beyond_cap", "unknown_name"])
+def test_st05_16_blobs_on_rejected_calls_never_raise_or_trace(cfg: None, where: str) -> None:
+    """ST05-16 / ST05-10 1 MB and depth-75 arguments on call 17+ or on an unknown tool name:
+    ToolInputError results, no exception, and the tracer never receives the blob."""
+    del cfg
+    tool = SyncTool("get_record", schema=N_SCHEMA)
+    if where == "beyond_cap":
+        calls = [call("get_record", f"c{i}", n=i) for i in range(16)]
+        calls += _blob_calls("get_record", "x")
+        expected = "too many tool calls in one message (max 16)"
+    else:
+        calls = _blob_calls("shell", "x")
+        expected = "tool shell not allowed; allowed: get_record"
+    ctx = make_tool_ctx()
+    results = _run(ctx, {"get_record": tool}, calls)
+    rejected = results[-3:]
+    for result in rejected:
+        assert result.error is not None
+        assert result.error.type == "ToolInputError"
+        assert result.error.message == expected
+    tracer = ctx.tracer
+    assert isinstance(tracer, RecordingTracer)
+    assert len(tracer.events) == len(calls)
+    for _t, _s, fields in tracer.events[-3:]:
+        assert fields["payload"] == {"args": {}}
+        assert len(repr(fields)) < 2_000
+    assert len(tool.calls) == (16 if where == "beyond_cap" else 0)
+
+
 # --- ST05-22 ---------------------------------------------------------------------------------
 
 
@@ -331,8 +375,9 @@ def test_st05_22_task_tool_key_must_match_its_name() -> None:
 def test_st05_07_concurrent_selects_on_cold_schema(
     spied_wh: tuple[DuckWarehouse, list[str]],
 ) -> None:
-    """ST05-07 six concurrent SELECTs on a cold warehouse schema all succeed (regression: the
-    shared-connection schema load raced under concurrent dispatch)."""
+    """ST05-07 six concurrent SELECTs on a cold warehouse schema all succeed. T05-13 warehouse
+    regression guard: `DuckWarehouse.schema()` once loaded on the shared connection and raced
+    into a partial schema under concurrent dispatch."""
     wh, _seen = spied_wh
     tools = {"run_sql": _RunSqlStandin()}
     calls = [

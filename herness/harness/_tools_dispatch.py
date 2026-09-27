@@ -65,18 +65,18 @@ def _max_parallel() -> int:
     return get_config().models.harness.tools.max_parallel
 
 
-def _signature(slot: _Slot) -> str | None:
-    """Steps 3-4 input: the call signature, or None after failing the size or JSON check."""
-    call = slot.call
+def _vet(call: ToolCall) -> tuple[str | None, str | None]:
+    """Step 3 on EVERY call: `(signature, None)`, or `(None, error)` when the arguments are
+    too large (checked on the raw text first) or cannot be canonicalised (too deep)."""
+    raw = call.raw_arguments
+    if raw and len(raw) > MAX_TOOL_ARGUMENT_CHARS:
+        return None, "tool arguments too large"
     try:
-        size = len(call.raw_arguments or canonical_json(call.arguments))
-        if size <= MAX_TOOL_ARGUMENT_CHARS:
-            return LoopState.call_signature(call.name, call.arguments)
-        slot.fail(ToolInputError("tool arguments too large"))
+        if not raw and len(canonical_json(call.arguments)) > MAX_TOOL_ARGUMENT_CHARS:
+            return None, "tool arguments too large"
+        return LoopState.call_signature(call.name, call.arguments), None
     except SchemaViolation:  # too deep or not JSON: never parsed further
-        slot.fail(ToolInputError("tool arguments are not valid JSON values"))
-    slot.traced = call.model_copy(update={"arguments": {}})  # never trace a rejected blob
-    return None
+        return None, "tool arguments are not valid JSON values"
 
 
 def _sql_capped(ctx: ToolContext, state: LoopState, slot: _Slot) -> bool:
@@ -97,16 +97,17 @@ def precheck(
 ) -> _Slot:
     """Steps 1-7 for one call; the slot carries its tool only when every check passed."""
     tool = tools.get(call.name)  # the resolved mapping is the only source of tools
-    slot = _Slot(call, call, label="unknown" if tool is None else call.name)
+    sig, bad_args = _vet(call)
+    traced = call if sig is not None else call.model_copy(update={"arguments": {}})
+    slot = _Slot(call, traced, label="unknown" if tool is None else call.name)  # no blob traced
     if index >= MAX_TOOL_CALLS_PER_MESSAGE:
         msg = f"too many tool calls in one message (max {MAX_TOOL_CALLS_PER_MESSAGE})"
         return slot.fail(ToolInputError(msg))
     if tool is None:
         msg = f"tool {call.name} not allowed; allowed: {', '.join(sorted(tools))}"
         return slot.fail(ToolInputError(msg))
-    sig = _signature(slot)
     if sig is None:
-        return slot
+        return slot.fail(ToolInputError(bad_args or "invalid arguments"))
     first = state.check_repeat(sig)
     state.remember_call(sig)  # step 7: a later identical call is a repeat even if this fails
     if first is not None:

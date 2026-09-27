@@ -23,6 +23,7 @@ HINT_MAX_CHARS: Final = 300
 _SUB_ONE: Final = ("items", "not", "if", "then", "else", "contains", "additionalItems")
 _SUB_MANY: Final = ("prefixItems", "anyOf", "oneOf", "allOf")
 _SUB_MAP: Final = ("properties", "$defs", "definitions", "patternProperties")
+_NAME_ECHOING: Final = frozenset({"additionalProperties", "unevaluatedProperties", "propertyNames"})
 _JSON_TYPE: Final = {
     bool: "boolean",
     int: "integer",
@@ -88,7 +89,9 @@ def schema_hint(schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonVal
         return None
     message = error.message
     shown = repr(error.instance)
-    if shown in message:
+    if error.validator in _NAME_ECHOING:  # messages quoting model-supplied property names
+        message = f"{error.validator} failed; property names not shown"
+    elif shown in message:
         kind = _JSON_TYPE.get(type(error.instance), "null")
         message = message.replace(shown, f"<{kind} value>", 1)
     return f"{error.json_path}: {message}"[:HINT_MAX_CHARS]

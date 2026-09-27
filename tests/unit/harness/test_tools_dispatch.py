@@ -186,6 +186,20 @@ def test_ut05_72_hint_bounded_and_value_not_echoed(cfg: None) -> None:
     assert err.hint.startswith("$.n: ")
 
 
+def test_ut05_72_extra_property_names_not_echoed(cfg: None) -> None:
+    """UT05-72 an unexpected property's model-supplied name is not echoed in the hint."""
+    del cfg
+    tool = SyncTool("get_metric", schema=N_SCHEMA)
+    name = "PROBE-NAME-" + "Q" * 40
+    bad = ToolCall(id="c1", name="get_metric", arguments={"n": 1, name: "x"})
+    results = _run(make_tool_ctx(), {"get_metric": tool}, [bad])
+    err = results[0].error
+    assert err is not None
+    assert err.hint == "$: additionalProperties failed; property names not shown"
+    assert "PROBE-NAME" not in results[0].content
+    assert tool.calls == []
+
+
 # --- UT05-73 ---------------------------------------------------------------------------------
 
 
