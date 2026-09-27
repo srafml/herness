@@ -16,7 +16,13 @@ from typing import Final, Literal, NamedTuple
 from pydantic import JsonValue
 
 from herness.core import time as clock
-from herness.core.errors import CircuitOpen, HernessError, RateLimited, RetryableError
+from herness.core.errors import (
+    CircuitOpen,
+    HernessError,
+    JobStateError,
+    RateLimited,
+    RetryableError,
+)
 from herness.core.jobs.ports import JobRow, StopReason, require_jobs_backend
 from herness.core.jobs.scheduler import advance_chain
 from herness.core.jobs.windows import next_window_allowing
@@ -187,7 +193,10 @@ def _apply_error(run: _Run, err: HernessError) -> FinishResult:
     decision = decide_failure(err, run.row, run.now, rng=process_state().rng)
     if decision.action == "done":
         return _apply_done(run, decision.result or {})
-    if decision.action == "requeue" and decision.scheduled_for is not None:
+    if decision.action == "requeue":
+        if decision.scheduled_for is None:  # U08-49 always sets it; never fail silently
+            msg = "requeue decision without scheduled_for"
+            raise JobStateError(msg, job_id=run.row.job_id[:_ID_CHARS])
         return _apply_requeue(run, err, decision.scheduled_for)
     row, error_type = run.row, type(err).__name__
     backend = require_jobs_backend()

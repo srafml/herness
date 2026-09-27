@@ -23,6 +23,7 @@ from herness.core.errors import (
     ConfigError,
     EgressBlocked,
     HernessError,
+    JobStateError,
     ModelUnavailable,
     RateLimited,
     RetryableError,
@@ -133,6 +134,82 @@ def test_ut08_58_decide_failure_table(
     err = _build(cls, variant)
     action = decide_failure(err, _row(kind, attempts), NOW, rng=random.Random(0))
     assert action == _expected(err, kind, attempts)
+
+
+_PARTIAL: dict[str, JsonValue] = {
+    "partial": True,
+    "outcome": "skipped_open_circuit",
+    "skipped_open_circuit": ["source:jira"],
+}
+_OPEN_AT = datetime(2026, 9, 1, 12, 7, tzinfo=UTC)
+# Literal rows (no oracle): error, kind, attempts (max 3), expected action. Backoff is 17 s.
+_LITERAL: list[tuple[str, Callable[[], HernessError], JobKind, int, FailureAction]] = [
+    ("schema-below", lambda: SchemaViolation("x"), "review", 1, FailureAction("failed")),
+    ("budget-below", lambda: errors.BudgetExceeded("x"), "review", 1, FailureAction("failed")),
+    ("output-below", lambda: errors.OutputValidationError("x"), "sync", 1, FailureAction("failed")),
+    (
+        "storebusy-below",
+        lambda: errors.StoreBusy("x"),
+        "review",
+        1,
+        FailureAction("requeue", datetime(2026, 9, 1, 12, 0, 17, tzinfo=UTC)),
+    ),
+    ("storebusy-at-max", lambda: errors.StoreBusy("x"), "review", 3, FailureAction("failed")),
+    (
+        "ratelimited-30s",
+        lambda: RateLimited("x", retry_after=30),
+        "sync",
+        2,
+        FailureAction("requeue", datetime(2026, 9, 1, 12, 0, 30, tzinfo=UTC)),
+    ),
+    (
+        "ratelimited-no-after",
+        lambda: RateLimited("x"),
+        "sync",
+        2,
+        FailureAction("requeue", datetime(2026, 9, 1, 12, 0, 17, tzinfo=UTC)),
+    ),
+    (
+        "circuit-review",
+        lambda: CircuitOpen("x", key="source:jira", retry_at=_OPEN_AT),
+        "review",
+        1,
+        FailureAction("requeue", _OPEN_AT),
+    ),
+    (
+        "circuit-review-at-max",
+        lambda: CircuitOpen("x", key="source:jira", retry_at=_OPEN_AT),
+        "review",
+        3,
+        FailureAction("failed"),
+    ),
+    (
+        "circuit-reconcile",
+        lambda: CircuitOpen("x", key="source:jira", retry_at=_OPEN_AT),
+        "reconcile",
+        3,
+        FailureAction("done", None, _PARTIAL),
+    ),
+]
+
+
+@pytest.mark.usefixtures("jobs_db")
+@pytest.mark.parametrize(
+    ("make", "kind", "attempts", "expected"),
+    [c[1:] for c in _LITERAL],
+    ids=[c[0] for c in _LITERAL],
+)
+def test_ut08_58_literal_rows(
+    make: Callable[[], HernessError],
+    kind: JobKind,
+    attempts: int,
+    expected: FailureAction,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT08-58 hard-coded rows: action and time at now 12:00:00 with a 17 s job backoff."""
+    monkeypatch.setattr(outcomes, "job_backoff_delay", lambda _attempts, *, rng: 17.0)
+    action = decide_failure(make(), _row(kind, attempts), NOW, rng=random.Random(0))
+    assert action == expected
 
 
 @pytest.mark.usefixtures("jobs_db")
@@ -499,6 +576,45 @@ def test_ut08_59_chain_error_is_logged_not_raised(
     (line,) = [entry for entry in logs if entry["event"] == "jobs.schedule.error"]
     assert (line["schedule"], line["error_type"]) == ("nightly", "ConfigError")
     assert _get(row.job_id).status == "done"
+
+
+@pytest.mark.parametrize("first", ["done", "failed"])
+def test_ut08_59_refinishing_a_final_row_is_lease_lost(
+    fake_now: _Clock, monkeypatch: pytest.MonkeyPatch, first: str
+) -> None:
+    """UT08-59 finishing a `done` or `failed` row again: `lease_lost`, row unchanged, no
+    event, metric or chain advance (TH08-08)."""
+    seen: list[JobRow] = []
+    monkeypatch.setattr(outcomes, "advance_chain", seen.append)
+    row = _running(payload={"schedule": "nightly", "fire_at": clock.format_utc(NOW)})
+    outcome = JobOutcome(status="done") if first == "done" else ConfigError("bad")
+    assert _finish(row, outcome) == first
+    seen.clear()
+    before = _get(row.job_id)
+    events = _events()
+    counters = dict(process_state().metric_buffer.counters)
+    histograms = list(process_state().metric_buffer.histograms)
+    fake_now.current = NOW + timedelta(minutes=1)
+    for again in (make() for make in _OUTCOMES):
+        assert _finish(row, again) == "lease_lost"
+    assert _get(row.job_id) == before
+    assert _events() == events
+    assert dict(process_state().metric_buffer.counters) == counters
+    assert list(process_state().metric_buffer.histograms) == histograms
+    assert seen == []
+
+
+def test_ut08_59_requeue_without_time_raises(
+    fake_now: _Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-59 a requeue decision without `scheduled_for` raises instead of failing the job."""
+    monkeypatch.setattr(outcomes, "decide_failure", lambda *_a, **_k: FailureAction("requeue"))
+    row = _running()
+    before = _get(row.job_id)
+    with pytest.raises(JobStateError, match="requeue decision without scheduled_for"):
+        _finish(row, ModelUnavailable("x"))
+    assert _get(row.job_id) == before
+    assert _events() == []
 
 
 def test_ut08_59_fault_point_before_complete(
