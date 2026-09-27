@@ -426,7 +426,8 @@ def test_ut06_83_row_keys_int_ids_and_never_keys() -> None:
                 "entity_id": 10042,
                 "score": 10042,
                 "ok": True,
-                "result_sample": [{"s": PLANTED["sample"]}],
+                "Result_Sample": [{"s": PLANTED["sample"]}],
+                "id": 10042,
                 "nested": [{"text_redacted": PLANTED["enrich"], "notes": PLANTED["notes"]}],
             }
         ],
@@ -445,6 +446,7 @@ def test_ut06_83_row_keys_int_ids_and_never_keys() -> None:
         {
             "by_team": {"team_002": 3, "team_001": 4},
             "entity_id": "work_item_001",
+            "id": "work_item_001",
             "score": 10042,
             "ok": True,
             "nested": [{}],
@@ -456,7 +458,7 @@ def test_ut06_83_row_keys_int_ids_and_never_keys() -> None:
     for planted in PLANTED.values():
         assert planted not in text
     for key in ("result_sample", "text_redacted", "notes", "prior_context", "ticket_text"):
-        assert key not in text
+        assert key not in text.lower()
 
 
 def test_ut06_83_missing_or_malformed_inputs_give_empty_sections() -> None:
@@ -498,6 +500,27 @@ def test_ut06_84_case_variants_pseudonymized_restore_canonical() -> None:
     assert p.restore("TEAM_001") == "TEAM_001"  # restore stays case-sensitive
     first = Pseudonymizer([("team", "a-1", "Core"), ("team", "a-2", "CORE")])
     assert first.pseudonymize("CORE core") == "team_001 team_001"  # first entity wins
+
+
+def test_ut06_84_case_fold_miss_sends_placeholder() -> None:
+    """UT06-84 a case-insensitive match whose lowered text is not a key sends "[ENTITY]"."""
+    p = Pseudonymizer([("team", "t-9", "Sam")])
+    long_s = chr(0x17F)  # re.IGNORECASE matches it to "s"; its .lower() is itself, not "s"
+    assert p.pseudonymize(f"{long_s}am and SAM") == "[ENTITY] and team_001"
+
+
+def test_ut06_84_patterns_have_no_groups() -> None:
+    """UT06-84 the alternations hold no capture groups (they defeat the regex optimiser)."""
+    p = Pseudonymizer(OVERLAP)
+    replacers = (p._forward, p._to_ids, p._to_names)
+    patterns = [
+        cell.cell_contents
+        for fn in replacers
+        for cell in fn.__closure__ or ()
+        if isinstance(cell.cell_contents, re.Pattern)
+    ]
+    assert len(patterns) == 3
+    assert all(pattern.groups == 0 for pattern in patterns)
 
 
 def test_ut06_84_longest_first_whole_token_replacement() -> None:

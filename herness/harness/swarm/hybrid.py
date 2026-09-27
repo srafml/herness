@@ -32,22 +32,23 @@ _ID_KEYS: Final = frozenset({"target_id", "entity_id", "row_key"})  # U06-124 st
 _NEVER: Final = frozenset(
     {"result_sample", "text_redacted", "notes", "prior_context", "ticket_text"}
 )
-_IDK: Final = ("_id", "row_key")  # outbound id-valued keys: *_id and row_key
+_IDK: Final = ("_id", "row_key")  # outbound id-valued keys: "_" + key ends so (id, *_id, row_key)
 _PORTFOLIO_LISTS: Final = ("rows", "selected", "query_ids")
 
 _log = get_logger("harness.swarm")
 
 
-def _replacer(table: Mapping[str, str], flags: int = 0) -> Callable[[str], str]:
+def _replacer(table: Mapping[str, str], *, fold: bool = False) -> Callable[[str], str]:
     """Replace ``table``'s keys by its values: longest first, whole tokens only, single pass."""
     # Leftmost match wins: of "A B" and "B C" in "A B C" the first is replaced, "C" stays text.
     keys = sorted(table, key=lambda s: (-len(s), s))
     if not keys:
         return lambda text: text
-    body = "|".join(f"(?P<g{i}>{re.escape(key)})" for i, key in enumerate(keys))
-    pattern = re.compile(rf"(?<!\w)(?:{body})(?!\w)", flags)
-    values = [table[key] for key in keys]
-    return lambda text: pattern.sub(lambda m: values[int(str(m.lastgroup)[1:])], text)
+    body = "|".join(map(re.escape, keys))  # no groups: keeps the alternation optimised
+    pattern = re.compile(rf"(?<!\w)(?:{body})(?!\w)", re.IGNORECASE if fold else 0)
+    if fold:  # keys are lowered; a lookup miss sends a placeholder, never the raw text
+        return lambda text: pattern.sub(lambda m: table.get(m.group(0).lower(), "[ENTITY]"), text)
+    return lambda text: pattern.sub(lambda m: table[m.group(0)], text)
 
 
 class Pseudonymizer:
@@ -56,8 +57,7 @@ class Pseudonymizer:
     def __init__(self, entities: Sequence[tuple[str, str, str | None]]) -> None:
         self._tokens: dict[tuple[str, str], str] = {}
         self._entries: dict[str, tuple[str, str, str | None]] = {}
-        forward: dict[str, str] = {}  # raw id or name -> token; first entity wins, any case
-        folded: set[str] = set()
+        forward: dict[str, str] = {}  # lowered raw id or name -> token; the first entity wins
         counts: dict[str, int] = {}
         for entity_type, entity_id, name in entities:
             if (entity_type, entity_id) in self._tokens:
@@ -67,11 +67,10 @@ class Pseudonymizer:
             self._tokens[entity_type, entity_id] = token
             self._entries[token] = (entity_type, entity_id, name)
             for raw in (entity_id, name):
-                if raw and raw.lower() not in folded:
-                    folded.add(raw.lower())
-                    forward[raw] = token
+                if raw and raw.lower() not in forward:
+                    forward[raw.lower()] = token
         # Outbound matching ignores case (a case variant is still the name); restore does not.
-        self._forward = _replacer(forward, re.IGNORECASE)
+        self._forward = _replacer(forward, fold=True)
         self._to_ids = _replacer({t: e[1] for t, e in self._entries.items()})
         self._to_names = _replacer({t: e[2] or e[1] for t, e in self._entries.items()})
 
@@ -132,13 +131,14 @@ def _scrub(pseudo: Pseudonymizer, value: object, *, ids: bool = False) -> object
     if isinstance(value, str):
         return _clean(pseudo, value)
     if isinstance(value, Mapping):
-        pairs = [(str(k), v) for k, v in value.items() if k not in _NEVER]
-        return {_clean(pseudo, k): _scrub(pseudo, v, ids=ids or k.endswith(_IDK)) for k, v in pairs}
+        kv = [(str(k), v) for k, v in value.items() if str(k).lower() not in _NEVER]
+        return {
+            _clean(pseudo, k): _scrub(pseudo, v, ids=ids or f"_{k}".endswith(_IDK)) for k, v in kv
+        }
     if isinstance(value, list | tuple):
         return [_scrub(pseudo, item, ids=ids) for item in value]
     if ids and isinstance(value, int) and not isinstance(value, bool):
-        token = pseudo.pseudonymize(str(value))
-        return value if token == str(value) else token
+        return value if (token := pseudo.pseudonymize(str(value))) == str(value) else token
     return value
 
 
