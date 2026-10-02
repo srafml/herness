@@ -4,7 +4,8 @@ Stages run in ``STAGE_ORDER`` on one writable build connection. No transaction i
 stages or around ``run_sql_range``: every statement autocommits, so later stage hooks (spec 04
 ``materialize_facts``) start with no open transaction. Only repository SQL runs; nothing from
 the job payload reaches SQL text (TH02-10). ``CURRENT`` changes only inside promotion.
-Stages ``enrich`` / ``score`` and the handler factory live in ``_build_stages`` (T02-19).
+Stages ``enrich`` / ``score`` and the handler factory live in ``_build_stages`` (T02-19),
+stage ``dq`` in ``_build_dq`` (T02-20).
 """
 
 from __future__ import annotations
@@ -34,9 +35,9 @@ from herness.core.jobs.ports import JobContext
 from herness.core.logging import get_logger
 from herness.core.resilience import fault_point
 from herness.core.types import JobOutcome
+from herness.model import _build_dq, meta
 from herness.model import _build_stages as stages
 from herness.model import _build_support as support
-from herness.model import meta
 from herness.model._build_support import STAGE_ORDER
 from herness.model.errors import BuildSqlError
 from herness.model.lakeinfo import LakeInventory, scan_lake
@@ -269,12 +270,13 @@ def _stage_build(run: _BuildRun) -> StageStatus:
     return "done"
 
 
-# Stage units by name; enrich and score (U02-100, U02-101) live in `_build_stages`. T02-20: dq
-# (U02-102); T02-21: promote (U02-103). A payload naming a missing stage is rejected early.
+# Stage units by name; enrich/score (U02-100, U02-101) live in `_build_stages`, dq (U02-102) in
+# `_build_dq`. T02-21: promote (U02-103). A payload naming a missing stage is rejected early.
 _STAGE_UNITS: Final[Mapping[str, _StageUnit]] = {
     "build": _stage_build,
     "enrich": stages.stage_enrich,
     "score": stages.stage_score,
+    "dq": _build_dq.stage_dq,
 }
 make_build_pipeline_handler: Final = stages.make_build_pipeline_handler  # U02-134
 

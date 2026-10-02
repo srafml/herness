@@ -6,19 +6,21 @@ U02-134 ``make_build_pipeline_handler`` (re-exported by ``build``). ``build`` im
 module; this module reaches ``build`` only inside functions, so there is no import cycle at
 module level. The spec 03 / 04 hooks are imported lazily (impl 02 §2.2 exception: upward
 imports of the build job, listed as ``ignore_imports`` on the layers contract); a hook
-module that is not installed makes the stage fail with ``ConfigError`` on the failure path.
+module that is not installed makes the stage fail with ``ConfigError`` on the failure path;
+any other non-Herness error from a hook becomes ``FatalError`` so the build fails too.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 import duckdb
 
-from herness.core.errors import ConfigError
+from herness.core.errors import ConfigError, FatalError, HernessError
 from herness.model import meta
 from herness.store import warehouse
 
@@ -80,6 +82,18 @@ def _hook(module: str, name: str, stage: str) -> object:
     raise ConfigError(msg)
 
 
+@contextlib.contextmanager
+def _hook_errors(stage: str, passthrough: type[Exception] = HernessError) -> Iterator[None]:
+    """Turn a non-Herness hook error into ``FatalError`` (class name only, cause kept)."""
+    try:
+        yield
+    except (HernessError, passthrough):
+        raise
+    except Exception as exc:
+        msg = f"build stage {stage} failed"
+        raise FatalError(msg, error_type=type(exc).__name__) from exc
+
+
 def _load_run_enrichment() -> _RunEnrichment:
     # T03-28: becomes `from herness.enrich.pipeline import run_enrichment` once impl 03 lands
     return cast("_RunEnrichment", _hook("herness.enrich.pipeline", "run_enrichment", "enrich"))
@@ -115,15 +129,16 @@ def stage_enrich(run: _BuildRun) -> StageStatus:
     run_enrichment = _load_run_enrichment()
     stage = run.payload.enrich_stage
     try:
-        report = run_enrichment(
-            con,
-            run.build_id,
-            depth=run.payload.depth,
-            ctx=run.ctx,
-            prev_warehouse=_prev_warehouse(run),
-            stages=[stage] if stage else None,
-            llm_factory=run.llm_factory,
-        )
+        with _hook_errors("enrich", YieldRequested):
+            report = run_enrichment(
+                con,
+                run.build_id,
+                depth=run.payload.depth,
+                ctx=run.ctx,
+                prev_warehouse=_prev_warehouse(run),
+                stages=[stage] if stage else None,
+                llm_factory=run.llm_factory,
+            )
     except YieldRequested:
         return "yield"
     run.result["enrich"] = report.model_dump(mode="json")
@@ -146,9 +161,11 @@ def stage_score(run: _BuildRun) -> StageStatus:
 
     con = build._connection(run)
     run_scoring = _load_run_scoring()
-    query_ids = materialize_facts(con, run.build_id)
+    with _hook_errors("score"):
+        query_ids = materialize_facts(con, run.build_id)
     con.execute("CHECKPOINT")
-    report = run_scoring(run.build_id, steps=run.payload.score_steps, con=con, ctx=run.ctx)
+    with _hook_errors("score"):
+        report = run_scoring(run.build_id, steps=run.payload.score_steps, con=con, ctx=run.ctx)
     run.result["facts_queries"] = len(query_ids)
     run.result["scoring"] = report.model_dump(mode="json")
     con.execute("CHECKPOINT")
