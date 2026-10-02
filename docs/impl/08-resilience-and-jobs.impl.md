@@ -102,6 +102,9 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/jobs/context.py` | `JobContext` implementations | `ChildJobContext`, `ChildServiceControl`, `InlineJobContext`, `InlineServiceControl` | L0 | none | 360 |
 | `herness/core/jobs/_context_base.py` | Private shared base of the job contexts (split from context.py to stay under 400, ruling w16-s08b) | none (private) | L0 | none | 180 |
 | `herness/core/jobs/supervisor.py` | Worker supervisor | `WorkerOptions`, `Supervisor`, `run_worker` | L0 | `psutil` | 400 |
+| `herness/core/jobs/_supervisor_boot.py` | Private start-up helpers and timings of the supervisor: worker row, GPU lock, crash recovery owners, `lease_expired` events, signals (split from supervisor.py to stay under 400, T08-21) | none (private) | L0 | `psutil` | 180 |
+| `herness/core/jobs/_supervisor_child.py` | Private per-child bookkeeping of the supervisor: spawn, pipe drain, reap, lease heartbeat, stall, preemption, error rebuild (split from supervisor.py, T08-21) | none (private) | L0 | none | 320 |
+| `herness/core/jobs/_supervisor_gpu.py` | Private GPU slot of the supervisor: controller, `herness-gpu` executor, child GPU requests, arbiter step, restart check (split from supervisor.py, T08-21) | none (private) | L0 | none | 260 |
 | `herness/core/jobs/child.py` | Child process entry | `child_main` | L0 | none | 150 |
 | `herness/core/jobs/inline.py` | CLI inline run | `run_inline` | L0 | none | 200 |
 | `herness/core/jobs/status.py` | Status, health, resume enqueue | `StatusSnapshot`, `status_snapshot`, `ComponentHealth`, `health`, `ResumeResult`, `enqueue_resume` | L0 | none | 330 |
@@ -2283,6 +2286,8 @@ All events carry `ts`, `level`, `event`, `component` (`resilience` or `jobs`), t
 | `jobs.window.class_never_allowed` | WARNING | `class` | U08-68 |
 | `jobs.chat.no_cloud_client` | WARNING | `depth` | U08-76 |
 | `jobs.worker.started` / `.stopped` / `.gpu_lock_held` / `.nothing_to_do` / `.config_invalid` | INFO / INFO / ERROR / INFO / ERROR | `worker_id`, `slots`, `exit_code`, `paths` | U08-87 |
+| `jobs.worker.start_failed` | ERROR | `worker_id`, `error_type` (T08-21: any unexpected exception in `run()`; exit code 1, R-46) | U08-87 |
+| `jobs.gpu.restart_failed` | WARNING | `service`, `error_type` (T08-21: the step 7a restart check's `restart_service` raised) | U08-87 |
 | `jobs.gpu.class_requested` | INFO | `worker_id`, `class` | U08-102 |
 | `jobs.supervisor.tick_failed` / `.store_unavailable` | ERROR / CRITICAL | `failed_ticks`, `error_type` | U08-87 |
 
