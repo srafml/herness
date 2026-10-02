@@ -59,12 +59,16 @@ def _wait_idle(gs: GpuSlot) -> None:
         time.sleep(0.01)
 
 
+# A fixed past Wednesday (`reviews` at night, no preload), not "today": the tests do not
+# depend on the wall-clock day or time of day.
+DAY = dt.date(2026, 6, 17)
+
+
 def _local(hour: int) -> dt.datetime:
+    """`hour`:00 on `DAY` in the business time zone (in the past: claims on the real clock
+    also find jobs scheduled for it)."""
     tz = clock.zone(get_config().weights.business_timezone)
-    day = clock.now().astimezone(tz).date()
-    while day.weekday() != 2:  # a Wednesday: `reviews` at night, no preload
-        day += dt.timedelta(days=1)
-    return dt.datetime.combine(day, dt.time(hour), tzinfo=tz).astimezone(dt.UTC)
+    return dt.datetime.combine(DAY, dt.time(hour), tzinfo=tz).astimezone(dt.UTC)
 
 
 def _run(slot_name: str) -> ChildRun:
@@ -207,7 +211,8 @@ def test_cv_t08_21_plan_requests_and_arbiter(slot: GpuSlot, sup_env: SupEnv) -> 
     backend.set_requested_class(WORKER, "none")
     assert slot.plan(night, _worker(), preload=True) is None  # served already; no work
     assert _worker().requested_class is None
-    sup_env.enqueue(kind="build_pipeline")  # a GPU_SLOT_KINDS job of class none
+    due = _local(0)  # due before every instant the arbiter is asked about
+    sup_env.enqueue(kind="build_pipeline", scheduled_for=due)  # GPU_SLOT_KINDS, class none
     assert slot.plan(night, None, preload=True) == ClaimFilter(["none"], None, [])
     assert require_jobs_backend().list_jobs(status="queued", kind="build_pipeline", limit=5)
     for row in require_jobs_backend().list_jobs(status="queued", kind="build_pipeline", limit=5):
@@ -229,7 +234,7 @@ def test_cv_t08_21_plan_requests_and_arbiter(slot: GpuSlot, sup_env: SupEnv) -> 
     assert slot.loaded == "decider"
     assert slot.plan(night, None, preload=True) is None  # no work, no preload: idle
     assert slot.idle()
-    sup_env.enqueue(kind="review", gpu_class="decider")
+    sup_env.enqueue(kind="review", gpu_class="decider", scheduled_for=due)
     found = slot.plan(night, _worker(), preload=True)
     assert found == ClaimFilter(["decider", "none"], None, [])
 
@@ -270,11 +275,11 @@ def test_cv_t08_21_supervisor_gpu_slot_end_to_end(
         return child.done(ok=True)
 
     sup_env.ctx.script = script
-    job_id = sup_env.enqueue(kind="review", gpu_class="reasoning")
+    night = _local(23)
+    job_id = sup_env.enqueue(kind="review", gpu_class="reasoning", scheduled_for=night)
     sup = sup_env.supervisor(gpu_classes=("reasoning", "decider"), concurrency=0)
     assert sup.start() is None
     assert sup.gpu is not None
-    night = _local(23)
     deadline = time.monotonic() + 60
     while sup_env.job(job_id).status != "done":
         assert time.monotonic() < deadline
@@ -306,8 +311,8 @@ def test_cv_t08_21_plan_chat_window_filter(
     monkeypatch.setattr(backend, "claimable_counts", counts)
     slot.swap("reasoning", "setup")
     _wait_idle(slot)
-    sup_env.enqueue(kind="chat", gpu_class="reasoning", priority=75)
     noon, night = _local(12), _local(23)
+    sup_env.enqueue(kind="chat", gpu_class="reasoning", priority=75, scheduled_for=noon)
     assert window_at(noon).spec.name == "chat"
     assert chat_rule(window_at(noon)) == (70, ["chat"])
     found = slot.plan(noon, None, preload=False)

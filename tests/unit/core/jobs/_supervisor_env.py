@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -171,10 +172,11 @@ class SupEnv:
         gpu_class: GpuClass = "none",
         priority: int | None = None,
         max_attempts: int | None = None,
+        scheduled_for: datetime | None = None,
     ) -> str:
         self._n += 1
         payload: dict[str, Any] = {"mode": mode, "n": self._n}
-        return enqueue(kind, payload, gpu_class, priority, max_attempts=max_attempts)
+        return enqueue(kind, payload, gpu_class, priority, scheduled_for, max_attempts=max_attempts)
 
     def job(self, job_id: str) -> JobRow:
         row = require_jobs_backend().get_job(job_id)
