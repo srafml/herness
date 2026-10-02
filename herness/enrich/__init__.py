@@ -1,7 +1,9 @@
 """Enrichment: question set, embeddings, deciders, distillation and clustering (impl 03, L3).
 
 Lazy facade (PEP 562): herness.core.config imports herness.enrich.settings, so an eager
-import of `embed` here would be circular and would load LanceDB with the config."""
+import of `embed` here would be circular and would load LanceDB with the config.
+`herness.enrich.health` is always the function: reach the module with
+`importlib.import_module("herness.enrich.health")` (`import ... as` yields the function)."""
 
 import sys
 import types
@@ -25,15 +27,14 @@ def __getattr__(name: str) -> object:
     return getattr(import_module(f"{__name__}.{home}"), name)
 
 
+def __dir__() -> list[str]:
+    return sorted({*globals(), *__all__})
+
+
 class _Facade(types.ModuleType):
-    """Keeps `health` the function: importing a submodule binds it on the package."""
-
-    @property
-    def health(self) -> object:
-        return __getattr__("health")
-
-    @health.setter
-    def health(self, _module: object) -> None: ...
+    def __setattr__(self, name: str, value: object) -> None:  # drop only the submodule binding
+        if not (name == "health" and isinstance(value, types.ModuleType)):
+            super().__setattr__(name, value)
 
 
 sys.modules[__name__].__class__ = _Facade

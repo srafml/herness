@@ -2939,6 +2939,8 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Security notes | TH03-12; ASVS V14 data deletion. |
 | Tests | UT03-133, UT03-134, ST03-14 |
 
+Spec note (T03-34): step 4 is a soft delete in LanceDB, so after it `purge_record` calls T02-08 (herness.store.vectors.VectorStore.purge_history) on `ticket_embedding` (impl 02 F02-07 step 3: `delete_ids` + `purge_history`); no older table version keeps the record. The vector delete runs last (after steps 6–8, with `shared` read as `content_hash IN (...) AND NOT record_id IN (...)`), so a spec 10 retry after a partial failure still finds hashes held only in vectors. Label rows of pairs involving the record (`record_id` `<id>|…` or `…|<id>`, exact key components) are dropped and their hashes purged even when no pair index part names the pair any more. `hashes_shared` counts only shared hashes the record still held in vectors or labels in this call, so a second call returns zeros. An emptied label part is rewritten with no rows (`LabelStore.read` needs a part); an emptied pair index part is deleted. Errors: a part that is not Parquet or lacks an expected column → `SchemaViolation`; non-busy OS errors inside the reused U03-41 `purge_hashes` and `replace_atomic` raise `FatalError` (as U03-38).
+
 #### U03-146 herness.enrich.health
 
 | Field | Content |
@@ -2956,6 +2958,8 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Complexity and limits | < 5 s (hash check memoized) |
 | Security notes | — |
 | Tests | UT03-135 |
+
+Spec note (T03-34): "no calibration file for any decider version in use" is read as: every decider version in use that is known without loading a model (`primary_decider`, per-question primaries and `escalation_chain`; `laya` = the `CURRENT` version, `openjev`/`jev` = `deciders.<name>.model` when enabled; `llm` is skipped, its version comes from the spec 05 role binding at run time) has a non-empty `CalibrationStore.load` for the current question set version. While `data/cache` does not exist yet, the probe file goes to the data root (health never creates the cache root); the probe is removed in `finally`. The package facade keeps `herness.enrich.health` the function although the submodule has the same name (its module class drops only the import system's submodule binding).
 
 ---
 

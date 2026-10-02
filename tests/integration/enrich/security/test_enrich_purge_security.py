@@ -83,6 +83,7 @@ def test_st03_14_purged_record_remains_nowhere_but_shared_hash_rows(tmp_path: Pa
     fresh = VectorStore(env.paths.vectors_dir()).table("ticket_embedding").to_arrow()
     assert INC1 not in fresh["record_id"].to_pylist()
     assert sorted(fresh["content_hash"].to_pylist()) == sorted([H2, HX])
+    assert INC1 not in env.ids_in_every_version()  # no older table version keeps it
     on_disk = _every_hash_on_disk(env)
     assert {H1, HP} & on_disk == set()
     assert {H2, HX} <= on_disk  # the other record's rows and the shared hash stay

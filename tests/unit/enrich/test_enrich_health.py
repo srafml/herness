@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from tests.support.config_tree import write_full_config
@@ -199,3 +200,42 @@ def test_cv_t03_34_facade_names_the_functions() -> None:
     assert enrich.embed_query is embed_query
     with pytest.raises(AttributeError):
         _ = enrich.nothing_here  # type: ignore[attr-defined]
+
+
+def test_cv_t03_34_facade_health_can_be_patched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CV T03-34 monkeypatch and mock.patch replace `herness.enrich.health` and restore it."""
+    from herness import enrich  # noqa: PLC0415 - checks the facade itself
+
+    def fake() -> tuple[str, str]:
+        return ("ok", "ok")
+
+    with mock.patch("herness.enrich.health", fake):
+        assert enrich.health is fake
+    assert enrich.health is health_module.health
+    monkeypatch.setattr(enrich, "health", fake)
+    assert enrich.health is fake
+    monkeypatch.undo()
+    assert enrich.health is health_module.health
+    assert {"embed_query", "health", "purge_record"} <= set(dir(enrich))
+
+
+def test_ut03_135_probe_removed_when_close_fails(
+    paths: EnrichPaths, verifier: Verifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-135 a failing close after the probe exists -> cache_not_writable, probe removed."""
+    _healthy(paths)
+    cache_root = paths.data_root / "cache"
+    cache_root.mkdir()
+    real_close = health_module.os.close
+    handles: list[int] = []
+
+    def fail(handle: int) -> None:
+        handles.append(handle)
+        real_close(handle)  # release it so the unlink can succeed on Windows
+        raise OSError(5, "io")
+
+    monkeypatch.setattr(health_module.os, "close", fail)
+    assert health_module.health() == ("down", "cache_not_writable")
+    monkeypatch.undo()
+    assert len(handles) == 1
+    assert list(cache_root.iterdir()) == []

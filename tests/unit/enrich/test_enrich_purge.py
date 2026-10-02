@@ -6,6 +6,8 @@ import errno
 from pathlib import Path
 
 import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from structlog.testing import capture_logs
 from tests.unit.enrich._purge_support import (
@@ -59,6 +61,7 @@ def test_ut03_133_shared_hash_keeps_cache_and_other_vector(env: PurgeEnv) -> Non
     assert counts == {**ZEROS, "embeddings_deleted": 1, "hashes_shared": 1}
     assert env.vector_ids() == [(INC2, H1), (INC3, H3)]
     assert env.cache_hashes() == [H1, H3]
+    assert purge_record(INC1) == ZEROS  # hashes_shared too: INC1 holds nothing any more
 
 
 def test_ut03_133_hash_shared_only_through_the_warehouse(env: PurgeEnv) -> None:
@@ -71,6 +74,7 @@ def test_ut03_133_hash_shared_only_through_the_warehouse(env: PurgeEnv) -> None:
 
     assert (counts["embeddings_deleted"], counts["hashes_shared"]) == (1, 1)
     assert env.cache_hashes() == [H1]
+    assert purge_record(INC1) == ZEROS  # CURRENT still lists INC1: nothing is reported
 
 
 def test_ut03_133_shared_hash_keeps_other_label_rows_but_drops_the_records(env: PurgeEnv) -> None:
@@ -113,6 +117,7 @@ def test_ut03_134_unshared_hash_pair_and_labels_removed_then_zeros(env: PurgeEnv
         "hashes_shared": 0,
     }
     assert env.vector_ids() == [(INC2, H2)]
+    assert env.ids_in_every_version() == {INC2}  # no older LanceDB version keeps INC1
     assert env.cache_hashes() == [H2]
     assert env.label_rows("teacher") == [(INC2, H2)]
     assert env.label_rows("human") == []
@@ -226,3 +231,53 @@ def test_ut03_134_corrupt_label_part_is_schema_violation(env: PurgeEnv) -> None:
     with pytest.raises(SchemaViolation) as info:
         purge_record(INC1)
     assert str(env.root) not in str(info.value)
+
+
+def test_ut03_134_pair_label_without_index_row_is_removed(env: PurgeEnv) -> None:
+    """UT03-134 a pair label `<id>|...` or `...|<id>` goes even when the index lost the pair."""
+    other = f"{INC2}|{CHG1}"
+    env.cache([HP, H3, H2])
+    env.labels(
+        "human",
+        [(PAIR, HP, "change_caused_pair"), (f"{INC3}|{INC1}", H3, "change_caused_pair"),
+         (other, H2, "change_caused_pair"), (f"{INC1}x|{CHG1}", H2, "change_caused_pair")],
+    )  # fmt: skip
+
+    counts = purge_record(INC1)
+
+    assert counts["label_rows_deleted"] == 2
+    assert counts["cache_rows_deleted"] == 2  # the pair hashes HP and H3, never shared
+    assert env.label_rows("human") == sorted([(other, H2), (f"{INC1}x|{CHG1}", H2)])
+    assert env.cache_hashes() == [H2]
+
+
+@pytest.mark.parametrize("kind", ["labels", "pairs"])
+def test_ut03_134_part_missing_a_column_is_schema_violation(env: PurgeEnv, kind: str) -> None:
+    """UT03-134 a label or pair part without an expected column -> SchemaViolation."""
+    folder = (
+        env.paths.labels_dir("qs-2026-10-01.1", "human") if kind == "labels"
+        else env.paths.pairs_dir()
+    )  # fmt: skip
+    folder.mkdir(parents=True)
+    pq.write_table(pa.table({"content_hash": [H1]}), folder / "part-x.parquet")
+    with pytest.raises(SchemaViolation):
+        purge_record(INC1)
+
+
+def test_ut03_134_retry_after_failed_cache_purge_finds_vector_hashes(
+    env: PurgeEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-134 a failure after the hashes are read leaves the vectors: a retry finishes."""
+    env.add_vectors([(INC1, H1)])
+    env.cache([H1])
+
+    def busy(*_args: object) -> int:
+        msg = "cache busy"
+        raise StoreBusy(msg)
+
+    monkeypatch.setattr(purge, "purge_hashes", busy)
+    with pytest.raises(StoreBusy):
+        purge_record(INC1)
+    monkeypatch.undo()
+    assert purge_record(INC1) == {**ZEROS, "embeddings_deleted": 1, "cache_rows_deleted": 1}
+    assert env.cache_hashes() == []

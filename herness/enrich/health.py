@@ -10,6 +10,7 @@ import os
 import tempfile
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Final, Literal
 
 from herness.core.config import get_config
@@ -32,8 +33,10 @@ def _cache_writable(paths: EnrichPaths) -> bool:
     if not target.is_dir():
         return False
     handle, probe = tempfile.mkstemp(prefix=".health-", dir=target)
-    os.close(handle)
-    os.unlink(probe)
+    try:
+        os.close(handle)
+    finally:
+        Path(probe).unlink(missing_ok=True)
     return True
 
 

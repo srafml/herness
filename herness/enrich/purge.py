@@ -55,7 +55,7 @@ def _io(what: str) -> Iterator[None]:
     except OSError as exc:
         msg = f"cannot purge {what}"
         raise StoreBusy(msg, error_type=type(exc).__name__) from exc
-    except pa.ArrowInvalid as exc:
+    except (pa.ArrowInvalid, KeyError) as exc:  # not Parquet, or an expected column missing
         msg = f"unreadable {what} part"
         raise SchemaViolation(msg) from exc
 
@@ -126,13 +126,22 @@ def _label_parts(paths: EnrichPaths) -> list[tuple[Path, bool]]:
     ]
 
 
-def _own_label_hashes(parts: list[tuple[Path, bool]], record_id: str) -> set[str]:
-    found: set[str] = set()
+def _pair_key(column: pa.ChunkedArray, record_id: str) -> pa.ChunkedArray:
+    """Pair keys `<id>|...` or `...|<id>` (exact components: an id has no `|`)."""
+    return pc.or_(pc.starts_with(column, f"{record_id}|"), pc.ends_with(column, f"|{record_id}"))
+
+
+def _own_label_hashes(parts: list[tuple[Path, bool]], record_id: str) -> tuple[set[str], set[str]]:
+    """Hashes of the record's own label rows, and of label rows of pairs involving it."""
+    own: set[str] = set()
+    pair: set[str] = set()
     for part, _ in parts:
         with _io("labels"):
             table = pq.read_table(part, columns=["record_id", "content_hash"], partitioning=None)
-        found |= _hashes(table.filter(pc.equal(table["record_id"], record_id))[1].to_pylist())
-    return found
+            ids = table["record_id"]
+            own |= _hashes(table.filter(pc.equal(ids, record_id))[1].to_pylist())
+            pair |= _hashes(table.filter(_pair_key(ids, record_id))[1].to_pylist())
+    return own, pair
 
 
 def _rewrite(part: Path, drop: Callable[[pa.Table], pa.Array], what: str) -> pa.Table:
@@ -143,7 +152,7 @@ def _rewrite(part: Path, drop: Callable[[pa.Table], pa.Array], what: str) -> pa.
     """
     with _io(what):
         table = pq.read_table(part, partitioning=None)
-    mask = pc.fill_null(drop(table), False)
+        mask = pc.fill_null(drop(table), False)
     dropped = table.filter(mask)
     if dropped.num_rows:
         kept = table.filter(pc.invert(mask))
@@ -160,7 +169,8 @@ def _purge_labels(parts: list[tuple[Path, bool]], targets: frozenset[str], recor
     hashes = pa.array(sorted(targets), pa.string())
 
     def drop(table: pa.Table) -> pa.Array:
-        own = pc.equal(table["record_id"], record_id)
+        ids = table["record_id"]
+        own = pc.or_(pc.equal(ids, record_id), _pair_key(ids, record_id))
         return pc.or_(own, pc.is_in(table["content_hash"], value_set=hashes))
 
     removed = 0
@@ -184,7 +194,7 @@ def _pair_hashes(parts: list[Path], record_id: str) -> set[str]:
     for part in parts:
         with _io("pair index"):
             table = pq.read_table(part, partitioning=None)
-        found |= _hashes(table.filter(_pair_drop(record_id)(table))["content_hash"].to_pylist())
+            found |= _hashes(table.filter(_pair_drop(record_id)(table))["content_hash"].to_pylist())
     return found
 
 
@@ -194,9 +204,11 @@ def _shared(
     """Hashes of `hashes` that another record still has in vectors or `CURRENT` (step 5)."""
     ordered = sorted(hashes)
     shared = _query(wh, _WH_SHARED, [record_id, ordered]) if ordered else set()
+    others = f"NOT ({lance_filter_in('record_id', [record_id])})"
     for start in range(0, len(ordered), FILTER_MAX):
-        where = lance_filter_in("content_hash", ordered[start : start + FILTER_MAX])
-        shared |= _hashes(_read(table, where, ["content_hash"])["content_hash"].to_pylist())
+        where = f"({lance_filter_in('content_hash', ordered[start : start + FILTER_MAX])})"
+        found = _read(table, f"{where} AND {others}", ["content_hash"])
+        shared |= _hashes(found["content_hash"].to_pylist())
     return shared
 
 
@@ -204,9 +216,10 @@ def purge_record(record_id: str) -> dict[str, int]:
     """Delete `record_id` from vectors, cache, labels and the pair index (U03-145).
 
     Hashes another live record still has (vectors or `CURRENT` `text_redacted`) keep their
-    cache and other label rows. Idempotent. Runs inside the exclusive `maintenance` job.
-    Raises SchemaViolation for an id outside the U03-33 allowlist (before any IO) and
-    StoreBusy on IO errors.
+    cache and other label rows. Idempotent and retry-safe: the vectors are deleted last, then
+    old table versions are dropped (impl 02 F02-07 step 3). Runs inside the exclusive
+    `maintenance` job. Raises SchemaViolation for an id outside the U03-33 allowlist (before
+    any IO) or an unreadable part, StoreBusy on IO errors (FatalError from `purge_hashes`).
     """
     where = lance_filter_in("record_id", [record_id])  # step 1: SchemaViolation, no IO yet
     paths = EnrichPaths.from_config(get_config())
@@ -216,23 +229,24 @@ def purge_record(record_id: str) -> dict[str, int]:
     labels = _label_parts(paths)
     pairs = _parts([paths.pairs_dir()], "pair index")
     with _current_warehouse() as wh:
-        hashes = _hashes(_read(table, where, ["content_hash"])["content_hash"].to_pylist())
-        hashes |= _query(wh, _WH_HASHES, [record_id])
-        hashes |= _own_label_hashes(labels, record_id)
-        pair_hashes = _pair_hashes(pairs, record_id)
-        embeddings = _lance("count", functools.partial(table.count_rows, where))
-        if embeddings:
-            _lance("delete", functools.partial(table.delete, where))
+        held = _hashes(_read(table, where, ["content_hash"])["content_hash"].to_pylist())
+        own, pair_labels = _own_label_hashes(labels, record_id)
+        held |= own
+        hashes = held | _query(wh, _WH_HASHES, [record_id])
+        pair_hashes = _pair_hashes(pairs, record_id) | pair_labels
         shared = _shared(table, wh, record_id, hashes)
     targets = frozenset((hashes - shared) | pair_hashes)
     counts = {
-        "embeddings_deleted": embeddings,
         "cache_rows_deleted": purge_hashes(paths, targets),
         "label_rows_deleted": _purge_labels(labels, targets, record_id),
         "pair_rows_deleted": sum(
             _rewrite(p, _pair_drop(record_id), "pair index").num_rows for p in pairs
         ),
-        "hashes_shared": len(shared),
+        "hashes_shared": len(shared & held),  # only hashes this call still found it holding
+        "embeddings_deleted": _lance("count", functools.partial(table.count_rows, where)),
     }
+    if counts["embeddings_deleted"]:
+        _lance("delete", functools.partial(table.delete, where))
+    store.purge_history(_TABLE)  # a delete is soft: drop the versions that still hold rows
     _log.info("enrich.purge.completed", **counts)
     return counts

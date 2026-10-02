@@ -71,6 +71,15 @@ class PurgeEnv:
         rows = self.store().table("ticket_embedding").to_arrow().to_pylist()
         return sorted((str(r["record_id"]), str(r["content_hash"])) for r in rows)
 
+    def ids_in_every_version(self) -> set[str]:
+        """`record_id` of every row readable in any LanceDB version (fresh handle, TH02-09)."""
+        table = self.store().table("ticket_embedding")
+        found: set[str] = set()
+        for version in [v["version"] for v in table.list_versions()]:
+            table.checkout(version)
+            found.update(table.to_arrow()["record_id"].to_pylist())
+        return found
+
     def warehouse(self, rows: Iterable[tuple[str, str]]) -> None:
         """A promoted `CURRENT` build whose `enrich.text_redacted` has `(record_id, hash)`."""
         target = build_path(BUILD)
