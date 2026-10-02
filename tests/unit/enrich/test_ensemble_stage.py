@@ -187,14 +187,16 @@ class _Env:
     cache: DecisionCache
     calibration: _SpyCalibration
 
-    def member_rows(self, decider: str, version: str, hashes: list[str]) -> None:
+    def member_rows(
+        self, decider: str, version: str, hashes: list[str], split: dict[str, Any] = _SPLIT
+    ) -> None:
         rows = [
             {"content_hash": ch, "question": qid, "question_fingerprint": _FPS[qid],
              "answer": max(dist, key=dist.__getitem__), "probability": max(dist.values()),
              "distribution": list(dist.items()), "backend_confidence": None, "samples": None,
              "decided_at": _NOW}
             for ch in hashes
-            for qid, dist in (("q_choice", _SPLIT[decider]), ("q_bool", _SAME))
+            for qid, dist in (("q_choice", split[decider]), ("q_bool", _SAME))
         ]  # fmt: skip
         write_part(self.paths.cache_partition(_QSV, decider, version),
                    pa.Table.from_pylist(rows, schema=CACHE_SCHEMA))  # fmt: skip
@@ -421,3 +423,22 @@ def test_ut03_84_calibration_temperature_is_applied(env: _Env) -> None:
     _pool(env, _band(1), _Report())
     choice = next(r for r in env.rows() if r["question"] == "q_choice")
     assert choice["answer"] == "b"
+
+
+# Exactly two of three argmaxes (laya, openjev: "a") equal the pooled argmax "a".
+_TWO_OF_THREE = {"laya": {"a": 0.6, "b": 0.2, "c": 0.2},
+                 "openjev": {"a": 0.5, "b": 0.25, "c": 0.25},
+                 "llm": {"a": 0.2, "b": 0.6, "c": 0.2}}  # fmt: skip
+
+
+def test_ut03_84_agreement_two_thirds_is_not_a_disagreement(env: _Env) -> None:
+    """UT03-84 agreement exactly 2/3 is cached as such and creates no disagreement item."""
+    hashes = [_digest(1), _digest(2)]
+    for decider, version in _MEMBERS:
+        env.member_rows(decider, version, hashes, split=_TWO_OF_THREE)
+    _pool(env, _band(2), _Report())
+    choice = [r for r in env.rows() if r["question"] == "q_choice"]
+    assert len(choice) == 2
+    assert all(r["answer"] == "a" for r in choice)
+    assert all(r["backend_confidence"] == pytest.approx(2 / 3) for r in choice)
+    assert _items() == []  # the rule is agreement < 2/3, not <=
