@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -18,11 +18,11 @@ from tests.unit.harness._blackboard_env import BUILD_ID, FakeWarehouse
 
 from herness.core import time as clock
 from herness.core.config import HernessConfig, get_config
-from herness.core.errors import ConfigError, NotFound, SchemaViolation
+from herness.core.errors import ConfigError, FatalError, NotFound, SchemaViolation
 from herness.core.ids import IdKind, new_id
 from herness.core.jobs.ports import JobRow, bind_jobs_backend
 from herness.core.jobs.tasks import claim_task
-from herness.core.types import Coverage, TaskSpec
+from herness.core.types import Coverage, EntityScope, TaskSpec
 from herness.harness.blackboard import Blackboard
 from herness.harness.findings import EntityCatalog, compute_dedup_key
 from herness.harness.pipelines.settings import resolve_knobs
@@ -257,13 +257,42 @@ def test_ut06_54_chat_kind_rejected(writer_bb: Blackboard, cfg: HernessConfig) -
     _nothing_written()
 
 
+class _TaskInsertError(Exception):
+    """Raised by the patched planner insert after the run row is in the transaction."""
+
+
+def test_ut06_54_run_and_planner_in_one_transaction(
+    writer_bb: Blackboard, cfg: HernessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT06-54 the planner insert fails after insert_run → neither row is kept (one transaction)."""
+    seen: list[int] = []
+
+    def failing_insert_tasks(conn: Any, specs: Any, *, now: datetime) -> None:
+        insert_tasks(conn, specs, now=now)
+        seen.append(conn.execute("SELECT count(*) FROM run").fetchone()[0])
+        raise _TaskInsertError
+
+    monkeypatch.setattr(lifecycle, "insert_tasks", failing_insert_tasks)
+    with pytest.raises(FatalError, match="_TaskInsertError"):  # run_write maps it
+        _create(writer_bb, cfg, RunRequest(kind="org_review"))
+    assert seen == [1]  # the run row was written before the planner insert failed
+    _nothing_written()
+
+
 # --- UT06-55 request_config_hash ---------------------------------------------------------------
 
 
 def test_ut06_55_hash_stable_and_depth_sensitive(cfg: HernessConfig) -> None:
-    """UT06-55 same request twice → equal hash; changed depth → different hash."""
-    req = RunRequest(kind="funding_review", scenarios=["base"], budget_override={"k_samples": 1})
-    same = RunRequest.model_validate(req.model_dump())
+    """UT06-55 same request (with focus) twice → equal hash; changed depth/focus → different."""
+    focus = EntityScope(entity_type="team", entity_ids=["t1", "t2"], period_start=date(2026, 1, 1))
+    req = RunRequest(
+        kind="funding_review",
+        focus=focus,
+        scenarios=["base"],
+        budget_override={"k_samples": 1},
+    )
+    same = RunRequest.model_validate_json(req.model_dump_json())
+    assert same.focus == focus
     first = request_config_hash(cfg, req, "local")
     assert first == request_config_hash(cfg, same, "local")
     assert first.startswith("cfg_")
@@ -271,6 +300,8 @@ def test_ut06_55_hash_stable_and_depth_sensitive(cfg: HernessConfig) -> None:
     deep = req.model_copy(update={"depth": "deep"})
     assert request_config_hash(cfg, deep, "local") != first
     assert request_config_hash(cfg, req, "hybrid") != first
+    other_focus = req.model_copy(update={"focus": focus.model_copy(update={"entity_ids": ["t1"]})})
+    assert request_config_hash(cfg, other_focus, "local") != first
 
 
 def test_ut06_55_hash_ignores_non_behavioural_fields(cfg: HernessConfig) -> None:
@@ -363,6 +394,25 @@ def test_ut06_57_stalled_run_degraded(ops_store: OpsStoreHandle) -> None:
     assert health == {"status": "degraded", "reason": f"stalled run {run_id}"}
     assert sorted(c["status"] for c in jobs.calls) == ["queued", "running"]
     assert all(c["kind"] == "review" and c["limit"] == 50 for c in jobs.calls)
+
+
+def test_ut06_57_exactly_24h_is_not_stalled(ops_store: OpsStoreHandle) -> None:
+    """UT06-57 a run started exactly 24 h ago is not "more than 24 h" old → ok."""
+    del ops_store
+    _run("running", age_h=24)
+    _run("planning", age_h=24 - 1 / 3600)
+    assert swarm_health(list_jobs=_Jobs(), worker_alive=_alive, now=NOW) == {
+        "status": "ok",
+        "reason": "",
+    }
+
+
+def test_ut06_57_just_over_24h_is_stalled(ops_store: OpsStoreHandle) -> None:
+    """UT06-57 a run started 24 h and one second ago with no job → degraded, stalled."""
+    del ops_store
+    run_id = _run("running", age_h=24 + 1 / 3600)
+    health = swarm_health(list_jobs=_Jobs(), worker_alive=_alive, now=NOW)
+    assert health == {"status": "degraded", "reason": f"stalled run {run_id}"}
 
 
 def test_ut06_57_old_run_with_job_is_ok(ops_store: OpsStoreHandle) -> None:
