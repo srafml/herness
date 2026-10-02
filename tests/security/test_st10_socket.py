@@ -96,7 +96,12 @@ sources:
 """
 
 
-def test_st10_55_sdk_base_url_never_allowlisted_hosts_key_admits_it(tmp_path: Path) -> None:
+_ACME_IP = "192.0.2.55"  # TEST-NET-1: the stubbed address of the listed host (no real DNS)
+
+
+def test_st10_55_sdk_base_url_never_allowlisted_hosts_key_admits_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """ST10-55 TH10-48: a Snowflake base_url host is never derived; listing it admits it."""
     cfg_dir = write_config(tmp_path)
     _write(cfg_dir / "sources.yaml", _SNOWFLAKE_NO_HOSTS)
@@ -112,7 +117,18 @@ def test_st10_55_sdk_base_url_never_allowlisted_hosts_key_admits_it(tmp_path: Pa
     assert boot_listed.source_hosts == ("acme.snowflakecomputing.com",)
     es.install_socket_guard(boot_listed)
     assert es._POLICY is not None
+    real_getaddrinfo = socket.getaddrinfo
+
+    def resolver(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
+        """The admitted host resolves locally (no real DNS, hermetic); any other name takes
+        the real audited path, where the guard refuses it before any lookup."""
+        if host == "acme.snowflakecomputing.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_ACME_IP, port))]
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolver)
     es._POLICY.check_getaddrinfo("acme.snowflakecomputing.com", 443)
+    assert es._fresh(_ACME_IP)  # admitted: resolved and its address cached for connect
     with pytest.raises(EgressBlocked):  # the unlisted sibling host is still always blocked
         socket.create_connection(("evil.snowflakecomputing.com", 443), timeout=1)
 
