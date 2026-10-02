@@ -1,8 +1,8 @@
 """Shared connector protocols, lake metadata constants, ``record_id`` and ``split_range``.
 
 Units U01-16 to U01-21 of impl 01. The metadata columns are the spec 02 §3.1 contract that
-``herness.store.lake.LakeWriter`` validates. The ``http_client`` re-export listed in the
-module map is added by T01-14 together with ``herness.connectors.http``.
+``herness.store.lake.LakeWriter`` validates. ``http_client`` is re-exported from
+``herness.connectors.http`` (U01-58, module map; T01-14).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import Final, Protocol, runtime_checkable
 
 import pyarrow as pa
 
+from herness.connectors.http import http_client as http_client  # noqa: PLC0414 - re-export
 from herness.core.errors import ConfigError, SchemaViolation
 
 _UTC_US: Final = pa.timestamp("us", tz="UTC")
