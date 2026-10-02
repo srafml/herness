@@ -29,6 +29,7 @@ from tests.unit.connectors._snowflake_data import (
     naive,
     pem,
     store_credential,
+    store_raw,
     table,
 )
 
@@ -177,7 +178,7 @@ def test_ut01_86_connect_arguments(snowflake_env: SpyBreaker) -> None:
 def test_ut01_86_encrypted_key_with_passphrase(snowflake_env: SpyBreaker) -> None:
     """UT01-86 an encrypted PEM is opened with the credential's `passphrase`."""
     del snowflake_env
-    store_credential(private_key=pem(UNLOCK), passphrase=UNLOCK)
+    store_credential(private_key_pem=pem(UNLOCK), passphrase=UNLOCK)
     server = FakeSnowflake()
     list(connector(server).sync("cost_center", None))
     assert server.connects[0]["private_key"] == der()
@@ -441,7 +442,7 @@ def test_ut01_88_error_mapping(exc: sfe.Error, expected: type[Exception]) -> Non
 
 
 def test_ut01_88_missing_or_bad_credentials_are_config_errors(snowflake_env: SpyBreaker) -> None:
-    """UT01-88 no `auth.credentials`, a credential without `user`/`private_key` or with an
+    """UT01-88 no `auth.credentials`, a credential without `user`/`private_key_pem` or with an
     unreadable key → ConfigError; `connect` is never called."""
     del snowflake_env
     server = FakeSnowflake()
@@ -449,13 +450,13 @@ def test_ut01_88_missing_or_bad_credentials_are_config_errors(snowflake_env: Spy
     with pytest.raises(ConfigError, match=r"snowflake auth\.credentials is required"):
         SnowflakeConnector(section, connect=server.connect).check()
     store_credential(user="")
-    with pytest.raises(ConfigError, match="must hold user and private_key"):
+    with pytest.raises(ConfigError, match="must hold user and private_key_pem"):
         connector(server).check()
     armour = pem().splitlines()
-    store_credential(private_key="\n".join([armour[0], "bm9wZQ==", armour[-1]]))
+    store_credential(private_key_pem="\n".join([armour[0], "bm9wZQ==", armour[-1]]))
     with pytest.raises(ConfigError, match="private key cannot be read"):
         connector(server).check()
-    store_credential(private_key=pem(UNLOCK))  # encrypted, no passphrase
+    store_credential(private_key_pem=pem(UNLOCK))  # encrypted, no passphrase
     with pytest.raises(ConfigError, match="private key cannot be read"):
         connector(server).check()
     assert server.connects == []
@@ -475,3 +476,56 @@ def test_ut01_86_key_not_castable_to_text_is_schema_violation(snowflake_env: Spy
     server = FakeSnowflake(key_tables=[key_table([b"\xff\xfe"], pa.binary())])
     with pytest.raises(SchemaViolation, match="invalid source key"):
         list(connector(server).list_keys("cost_center"))
+
+
+# --- review round 1: §3.13 `key_pair` shape, `%` in the filter ---------------------------------
+
+
+def test_ut01_86_documented_key_pair_secret_shape(snowflake_env: SpyBreaker) -> None:
+    """UT01-86 the §3.13 `key_pair` JSON `{"user", "private_key_pem", "passphrase"?}` connects
+    (plain and encrypted PEM); a credential naming only `private_key` → ConfigError."""
+    del snowflake_env
+    server = FakeSnowflake()
+    store_raw({"user": USER, "private_key_pem": pem()})
+    list(connector(server).sync("cost_center", None))
+    store_raw({"user": USER, "private_key_pem": pem(UNLOCK), "passphrase": UNLOCK})
+    list(connector(server).sync("cost_center", None))
+    assert [c["private_key"] for c in server.connects] == [der(), der()]
+    assert [c["user"] for c in server.connects] == [USER, USER]
+    store_raw({"user": USER, "private_key": pem()})
+    with pytest.raises(ConfigError, match="must hold user and private_key_pem"):
+        connector(server).check()
+    assert len(server.connects) == 2
+
+
+_LIKE = "NAME LIKE 'A%'"
+_FROM = ' FROM "FINANCE"."PUBLIC"."COST_CENTER"'
+
+
+def test_ut01_86_percent_in_filter_reaches_the_server_verbatim(snowflake_env: SpyBreaker) -> None:
+    """UT01-86 a filter with a `%` literal: with bound values (sync with bounds) and without
+    (sync with no bounds, list_keys) the text the server receives after the driver's pyformat
+    binding holds the single `%`, for the EXPLAIN and the SELECT alike."""
+    del snowflake_env
+    server = FakeSnowflake(tables=[table(0, 2)], key_tables=[key_table([1])])
+    conn = connector(server, {"filter": _LIKE})
+    assert len(_rows(list(conn.sync("cost_center", SINCE, UNTIL)))) == 2
+    bounded = (
+        'SELECT "CC_ID", "NAME", "AMOUNT", "UPDATED_AT"' + _FROM + " WHERE"
+        """ "UPDATED_AT" >= '2026-01-01 00:00:00' AND "UPDATED_AT" < '2026-02-01 00:00:00'"""
+        f' AND ({_LIKE}) ORDER BY "UPDATED_AT", "CC_ID"'
+    )
+    assert server.sent[1:] == ["EXPLAIN USING JSON " + bounded, bounded]
+    server.sent.clear()
+    list(conn.sync("cost_center", None))
+    open_sql = (
+        'SELECT "CC_ID", "NAME", "AMOUNT", "UPDATED_AT"'
+        + _FROM
+        + f' WHERE ({_LIKE}) ORDER BY "UPDATED_AT", "CC_ID"'
+    )
+    assert server.sent[1:] == ["EXPLAIN USING JSON " + open_sql, open_sql]
+    server.sent.clear()
+    assert [b.num_rows for b in conn.list_keys("cost_center")] == [1]
+    keys_sql = f'SELECT "CC_ID"{_FROM} WHERE ({_LIKE}) ORDER BY "CC_ID"'
+    assert server.sent[1:] == ["EXPLAIN USING JSON " + keys_sql, keys_sql]
+    assert all(text.count("%") == 1 for text in server.sent[1:])

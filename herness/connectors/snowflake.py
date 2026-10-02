@@ -167,10 +167,10 @@ class SnowflakeConnector:
                 msg = "snowflake auth.credentials is required"
                 raise ConfigError(msg, source=_SOURCE)
             cred = {k: v.get_secret_value() for k, v in resolve_json(s.auth.credentials).items()}
-            if not (cred.get("user") and cred.get("private_key")):
-                msg = "snowflake credential must hold user and private_key"
+            if not (cred.get("user") and cred.get("private_key_pem")):  # §3.13 key_pair
+                msg = "snowflake credential must hold user and private_key_pem"
                 raise ConfigError(msg, source=_SOURCE)
-            der = _der_key(cred["private_key"], cred.get("passphrase"))
+            der = _der_key(cred["private_key_pem"], cred.get("passphrase"))
             session = {"STATEMENT_TIMEOUT_IN_SECONDS": s.statement_timeout_s, "TIMEZONE": "UTC"}
             self._conn = _driver(
                 lambda: self._connect(
@@ -239,7 +239,10 @@ class SnowflakeConnector:
                 yield table
 
     def _where(self, cfg: SnowflakeEntity, bounds: list[str]) -> str:
-        parts = [*bounds, f"({cfg.filter})"] if cfg.filter else bounds
+        """The WHERE clause. The driver applies ``sql % params`` only when a value is bound
+        (``bounds``), so only then is ``%`` in the filter doubled; the server gets it as written."""
+        text = cfg.filter.replace("%", "%%") if bounds and cfg.filter else cfg.filter
+        parts = [*bounds, f"({text})"] if text else bounds
         return f" WHERE {' AND '.join(parts)}" if parts else ""
 
     def sync(

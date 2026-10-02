@@ -18,6 +18,12 @@ list, which is the key listing):
 
 `errors` maps a first word to a queue of exceptions raised by the next `execute` calls of
 that kind; `connect_error` is raised by `connect`.
+
+Client-side binding mirrors the installed driver's pyformat path
+(`SnowflakeCursor._preprocess_pyformat_query`, default `interpolate_empty_sequences=False`):
+when `params` is a non-empty mapping the text sent is `sql % params` (values rendered as
+quoted literals), otherwise `sql` unchanged. A `%` the formatting cannot take raises the
+same raw `TypeError`/`ValueError` the driver raises. `sent` logs the text the server receives.
 """
 
 from __future__ import annotations
@@ -39,6 +45,13 @@ def _kind(sql: str) -> str:
     return sql.lstrip().split(" ", 1)[0].upper()
 
 
+def _bind(sql: str, params: Params) -> str:
+    """The text the driver sends: `sql % params` only when `params` is non-empty."""
+    if not params:
+        return sql
+    return sql % {name: f"'{value}'" for name, value in params.items()}
+
+
 def _key_listing(sql: str) -> bool:
     select_list = sql.split(" FROM ", 1)[0]
     return "," not in select_list
@@ -57,6 +70,7 @@ class FakeSnowflake:
     fetch_error: Exception | None = None
     connect_error: Exception | None = None
     calls: list[tuple[str, Params]] = field(default_factory=list)
+    sent: list[str] = field(default_factory=list)
     connects: list[dict[str, Any]] = field(default_factory=list)
     closed: int = 0
 
@@ -114,6 +128,7 @@ class FakeCursor:
 
     def execute(self, sql: str, params: Params = None) -> Self:
         self.server.calls.append((sql, params))
+        self.server.sent.append(_bind(sql, params))
         kind = _kind(sql)
         queue = self.server.errors.get(kind)
         if queue:

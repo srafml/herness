@@ -75,8 +75,13 @@ def der() -> bytes:
 
 
 def store_credential(**fields: str) -> None:
-    """Store the `secret:snowflake_svc` JSON credential (in-memory keyring expected)."""
-    value = {"user": USER, "private_key": pem()} | fields
+    """Store the `secret:snowflake_svc` JSON credential (in-memory keyring expected), shaped
+    as impl 01 §3.13 `key_pair`: `{"user", "private_key_pem", "passphrase"?}`."""
+    store_raw({"user": USER, "private_key_pem": pem()} | fields)
+
+
+def store_raw(value: dict[str, str]) -> None:
+    """Store ``value`` verbatim as the `secret:snowflake_svc` JSON credential."""
     keyring.set_password(secrets._SERVICE, "snowflake_svc", json.dumps(value))
 
 

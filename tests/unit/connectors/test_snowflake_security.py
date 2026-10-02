@@ -88,8 +88,21 @@ def test_st01_16_errors_carry_no_key_material(snowflake_env: SpyBreaker) -> None
         connector(FakeSnowflake(connect_error=echo)).check()
     _no_key_in(auth.value, body)
     broken = pem().replace(body, body[::-1])
-    store_credential(private_key=broken)
+    store_credential(private_key_pem=broken)
     with pytest.raises(ConfigError) as bad:
         connector(FakeSnowflake()).check()
     _no_key_in(bad.value, body[::-1])
     assert bad.value.__suppress_context__
+
+
+def test_st01_16_scan_guard_explains_the_percent_filter_as_sent(snowflake_env: SpyBreaker) -> None:
+    """ST01-16 (TH01-17) with a `%` literal in the filter and bound window values, the EXPLAIN
+    guard reaches the server (no raw driver formatting error) and explains exactly the SELECT
+    text the server then receives."""
+    del snowflake_env
+    server = FakeSnowflake(tables=[table(0, 1)])
+    since = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+    list(connector(server, {"filter": "NAME LIKE '%A%'"}).sync("cost_center", since))
+    explain, select = server.sent[1:]
+    assert explain == "EXPLAIN USING JSON " + select
+    assert "AND (NAME LIKE '%A%')" in select
