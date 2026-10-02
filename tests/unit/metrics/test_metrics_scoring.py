@@ -7,8 +7,9 @@ the shipped catalog once per module. The steps funding/org/levers/portfolio are 
 """
 
 import ast
+import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from tests.support.metrics_tiny import BUILD_ID, shipped_catalog
 
 from herness.core.errors import ConfigError, SchemaViolation
 from herness.metrics import _scoring_checks, scoring
+from herness.metrics.catalog import MetricCatalog
 from herness.metrics.context import ScoringReport, StepContext
 from herness.metrics.scoring import (
     STEPS,
@@ -625,52 +627,119 @@ def test_ut04_111_bare_string_steps_rejected(tiny: duckdb.DuckDBPyConnection) ->
     assert "metrics.metric_value" not in _tables(tiny)
 
 
-def test_ut04_115_same_build_retry_after_config_change(
-    tiny: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """UT04-115 a check fails, the config is fixed and the job retried on the same build: the
-    checkpoint resets, metrics rewrites, and the check records a new query_id (config_hash is
-    part of its template) instead of a "nondeterministic result" conflict. Uses the real
-    `load_config` and `config_hash`; only the catalog stays the small test catalog (the config
-    hash covers the whole config, the catalog only decides which metrics run)."""
+def _two_configs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Callable[[object], None], str, str]:
+    """Real configs A and B (`load_config` + `config_hash`, B with one `--set`), each with its
+    own catalog: B lowers `change_failure_rate.min_sample_size`, so B's metric queries (and
+    their query_ids) differ from A's. Returns (use(cfg), hash A, hash B)."""
     from herness.core.config import config_hash, load_config  # noqa: PLC0415 - local
 
-    first = load_config("local", config_dir=ROOT / "config", env={})
-    fixed = load_config(
+    cfg_a = load_config("local", config_dir=ROOT / "config", env={})
+    cfg_b = load_config(
         "local",
         overrides=["weights.cost_per_engineer_hour.value=150"],
         config_dir=ROOT / "config",
         env={},
     )
-    assert config_hash(first) != config_hash(fixed)
-    for module in (scoring, _scoring_checks):
-        monkeypatch.setattr(module, "config_hash", config_hash)
-        monkeypatch.setattr(module, "get_config", lambda: first)
+    cat_a = small_catalog()
+    metrics = [
+        m.model_copy(update={"min_sample_size": 1}) if m.name == "change_failure_rate" else m
+        for m in cat_a.config.metrics
+    ]
+    cat_b = MetricCatalog(cat_a.config.model_copy(update={"metrics": metrics}))
+    monkeypatch.setattr(scoring, "config_hash", config_hash)
+    monkeypatch.setattr(
+        scoring, "catalog_from_config", lambda cfg=None: cat_a if cfg is cfg_a else cat_b
+    )
+
+    def use(cfg: object) -> None:
+        monkeypatch.setattr(scoring, "get_config", lambda: cfg)
+
+    use(cfg_a)
+    assert config_hash(cfg_a) != config_hash(cfg_b)
+    return (
+        lambda which: use(cfg_a if which == "A" else cfg_b),
+        config_hash(cfg_a),
+        config_hash(cfg_b),
+    )
+
+
+def _check_qid(con: duckdb.DuckDBPyConnection, name: str) -> str:
+    qid: str = json.loads(_dq(con, name)[0][4])["query_id"]
+    return qid
+
+
+def _inputs_of(con: duckdb.DuckDBPyConnection, qid: str) -> str:
+    row = con.execute(
+        "SELECT json_extract_string(params, '$.template.inputs') FROM meta.evidence"
+        " WHERE query_id = ?",
+        [qid],
+    ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+def _digest(con: duckdb.DuckDBPyConnection, *tables: str) -> str:
+    """The expected `inputs` value, recomputed in Python from the tables' query_ids."""
+    ids = sorted(
+        {r[0] for t in tables for r in con.execute(f"SELECT query_id FROM {t}").fetchall()}  # noqa: S608
+    )
+    return "in_" + hashlib.sha256(",".join(ids).encode()).hexdigest()[:16]
+
+
+def test_ut04_115_partial_steps_across_configs(
+    tiny: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT04-115 one building build: config A full run, config B steps=["metrics"], then A
+    steps=["check"]. The check reads B's metric_value under a new query_id (its `inputs`
+    digest pins the metric rows it read), so there is no "nondeterministic result"; it never
+    records a pass over inputs it did not read. Real `load_config` / `config_hash`."""
+    use, _, _ = _two_configs(monkeypatch)
+    check = "score_metric_ratio_range"
+    run_scoring(BUILD_ID, con=tiny)
+    first = _check_qid(tiny, check)
+    assert _inputs_of(tiny, first) == _digest(tiny, "metrics.metric_value")
+    use("B")
+    run_scoring(BUILD_ID, steps=["metrics"], con=tiny)
+    use("A")
+    report = run_scoring(BUILD_ID, steps=["check"], con=tiny)
+    assert report.steps_done == ["validate", "check"]
+    second = _check_qid(tiny, check)
+    assert second != first
+    assert _inputs_of(tiny, second) == _digest(tiny, "metrics.metric_value")
+    assert _inputs_of(tiny, second) != _inputs_of(tiny, first)
+    fact_check = _check_qid(tiny, "score_fact_duration_negative")  # facts unchanged
+    assert _inputs_of(tiny, fact_check) == _digest(tiny, *_scoring_checks.CHECKS[0][2])
+    use("B")  # the silent variant: under B the check is pinned to the same (B-made) inputs
+    run_scoring(BUILD_ID, steps=["check"], con=tiny)
+    assert _check_qid(tiny, check) == second
+
+
+def test_ut04_115_same_build_retry_after_config_change(
+    tiny: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT04-115 a check fails, the config is fixed and the job retried on the same build: the
+    checkpoint (real `config_hash`) resets, metrics rewrites under new query_ids, and the check
+    records a new query_id over those inputs instead of a "nondeterministic result"."""
+    use, _, hash_b = _two_configs(monkeypatch)
     ctx = FakeJobContext()
     run_scoring(BUILD_ID, steps=["metrics"], con=tiny, ctx=ctx)
     tiny.execute("UPDATE metrics.metric_value SET value = 2 WHERE unit = 'ratio'")
     with pytest.raises(SchemaViolation, match="score_metric_ratio_range"):
         run_scoring(BUILD_ID, con=tiny, ctx=FakeJobContext(state=ctx.saved_states[-1]))
-    failed_qid = json.loads(_dq(tiny, "score_metric_ratio_range")[0][4])["query_id"]
-    for module in (scoring, _scoring_checks):
-        monkeypatch.setattr(module, "get_config", lambda: fixed)
+    failed_qid = _check_qid(tiny, "score_metric_ratio_range")
+    use("B")
     retry = FakeJobContext(state=ctx.saved_states[-1])
     report = run_scoring(BUILD_ID, con=tiny, ctx=retry)
     assert set(report.duration_ms) == {"metrics", "check"}  # stale checkpoint: metrics reran
-    severity, value, _, passed, details = _dq(tiny, "score_metric_ratio_range")[0]
+    severity, value, _, passed, _details = _dq(tiny, "score_metric_ratio_range")[0]
     assert (severity, value, passed) == ("error", 0.0, True)
-    new_qid = json.loads(details)["query_id"]
+    new_qid = _check_qid(tiny, "score_metric_ratio_range")
     assert new_qid != failed_qid
-    hashes = dict(
-        tiny.execute(
-            "SELECT query_id, json_extract_string(params, '$.template.config_hash')"
-            " FROM meta.evidence WHERE query_id IN (?, ?)",
-            [failed_qid, new_qid],
-        ).fetchall()
-    )
-    assert hashes == {failed_qid: config_hash(first), new_qid: config_hash(fixed)}
+    assert _inputs_of(tiny, new_qid) == _digest(tiny, "metrics.metric_value")
     assert retry.saved_states[-1]["scoring"] == {
         "build_id": BUILD_ID,
-        "config_hash": config_hash(fixed),
+        "config_hash": hash_b,
         "steps_done": ["metrics", "check"],
     }

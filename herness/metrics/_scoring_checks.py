@@ -4,13 +4,15 @@ Private sibling of `herness.metrics.scoring` (impl 04 §2 module-map note), whic
 `run_check_step`. Each check is one static segment of `sql/checks.sql.j2`, run through
 `run_recorded(producer="score")`; its single row gives `value` and `n_bad`, and DuckDB derives
 `passed` while inserting the `meta.dq_result` row, so no stored number is computed in Python.
+Every input table carries `query_id`; each check's render context holds `inputs`, a digest of the
+distinct input query_ids, so its query_id pins its exact inputs (a rerun over other inputs records
+new evidence instead of a TH04-06 conflict; U04-59 says context `{}`, see the T04-13 report).
 """
 
 from typing import Final, Literal
 
 import duckdb
 
-from herness.core.config import config_hash, get_config
 from herness.core.logging import get_logger
 from herness.core.resilience.metrics import record_counter
 from herness.metrics.context import StepContext, StepResult
@@ -61,11 +63,21 @@ def existing_tables(con: duckdb.DuckDBPyConnection) -> set[str]:
     return {str(row[0]) for row in con.execute(_TABLES_SQL).fetchall()}
 
 
+def _inputs(con: duckdb.DuckDBPyConnection, tables: tuple[str, ...]) -> str:
+    """`in_` + 16 hex of sha256 over the sorted distinct input query_ids (computed in DuckDB)."""
+    # S608: the table names come from the constant CHECKS table, never from input
+    union = " UNION ".join(f"SELECT query_id FROM {t}" for t in tables)  # noqa: S608
+    digest = "sha256(coalesce(string_agg(query_id, ',' ORDER BY query_id), ''))"
+    sql = f"SELECT substr({digest}, 1, 16) FROM (SELECT DISTINCT query_id FROM ({union}))"  # noqa: S608
+    row = con.execute(sql).fetchone()
+    return f"in_{row[0] if row else ''}"
+
+
 def _run_one(
-    con: duckdb.DuckDBPyConnection, name: str, severity: str, sc: StepContext, cfg_hash: str
+    con: duckdb.DuckDBPyConnection, name: str, severity: str, sc: StepContext, inputs: str
 ) -> bool:
     """Run one check, insert its row and return DuckDB's `passed`."""
-    context: dict[str, str | int | bool] = {"config_hash": cfg_hash}
+    context: dict[str, str | int | bool] = {"inputs": inputs}
     rendered = render_named(f"checks:{name}", context, sc.binds())
     params = {"bind": rendered.bind, "template": rendered.template}
     rq = run_recorded(con, rendered.sql, params, "score", build_id=sc.build_id)
@@ -95,9 +107,6 @@ def run_check_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> StepRe
     failing statement aborts the step's transaction.
     """
     con.execute(_DELETE_SQL, [_NAMES])
-    # config_hash joins the template (hence the query_id): a same-build retry after a config fix
-    # records its own evidence instead of conflicting with the earlier result (TH04-06).
-    cfg_hash = config_hash(get_config())
     present = existing_tables(con)
     failed: list[str] = []
     warnings: list[str] = []
@@ -105,7 +114,7 @@ def run_check_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> StepRe
         if not set(tables) <= present:
             con.execute(_SKIPPED_SQL, [name, severity])
             continue
-        if _run_one(con, name, severity, sc, cfg_hash):
+        if _run_one(con, name, severity, sc, _inputs(con, tables)):
             continue
         if severity == "error":
             failed.append(name)
