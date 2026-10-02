@@ -5,9 +5,11 @@ from __future__ import annotations
 import errno
 from pathlib import Path
 
+import duckdb
 import pytest
 from structlog.testing import capture_logs
 from tests.unit.enrich._purge_support import (
+    BUILD,
     CHG1,
     H1,
     H2,
@@ -20,9 +22,11 @@ from tests.unit.enrich._purge_support import (
     purge_env,
 )
 
-from herness.core.errors import StoreBusy
+from herness.core.errors import SchemaViolation, StoreBusy
 from herness.enrich import purge
 from herness.enrich.purge import purge_record
+from herness.store import _warehouse_rw
+from herness.store.warehouse import build_path
 
 pytestmark = pytest.mark.unit
 
@@ -182,5 +186,43 @@ def test_ut03_134_io_error_is_store_busy(env: PurgeEnv, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(purge.pq, "read_table", boom)
     with pytest.raises(StoreBusy) as info:
+        purge_record(INC1)
+    assert str(env.root) not in str(info.value)
+
+
+def test_ut03_134_lance_conflict_is_store_busy(
+    env: PurgeEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-134 a LanceDB commit conflict on the vector delete -> StoreBusy; row kept."""
+    env.add_vectors([(INC1, H1)])
+    table_class = type(env.store().table("ticket_embedding"))
+
+    def conflict(*_args: object, **_kwargs: object) -> None:
+        msg = "Commit conflict for version 3"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(table_class, "delete", conflict)
+    with pytest.raises(StoreBusy):
+        purge_record(INC1)
+    monkeypatch.undo()
+    assert env.vector_ids() == [(INC1, H1)]
+
+
+def test_ut03_134_unreadable_warehouse_is_store_busy(env: PurgeEnv) -> None:
+    """UT03-134 a `CURRENT` build whose `enrich.text_redacted` cannot be read -> StoreBusy."""
+    target = build_path(BUILD)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    duckdb.connect(str(target)).close()  # a build without the enrich schema
+    _warehouse_rw.write_current(BUILD)
+    with pytest.raises(StoreBusy):
+        purge_record(INC1)
+
+
+def test_ut03_134_corrupt_label_part_is_schema_violation(env: PurgeEnv) -> None:
+    """UT03-134 a label part that is not Parquet -> SchemaViolation naming no path."""
+    folder = env.paths.labels_dir("qs-2026-10-01.1", "human")
+    folder.mkdir(parents=True)
+    (folder / "part-bad.parquet").write_bytes(b"not parquet")
+    with pytest.raises(SchemaViolation) as info:
         purge_record(INC1)
     assert str(env.root) not in str(info.value)
