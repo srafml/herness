@@ -75,8 +75,13 @@ _WINDOW_SQL: Final = """SELECT i.record_id, t.content_hash,
     FROM core.incident AS i
     JOIN enrich.text_redacted AS t ON t.record_id = i.record_id AND t.entity = 'incident'
     WHERE i.opened_at >= ? ORDER BY i.record_id"""
-_SAME: Final = f"""EXISTS (SELECT 1 FROM {_PREV}.enrich.text_redacted AS p
-    WHERE p.record_id = w.record_id AND p.content_hash = w.content_hash)"""  # noqa: S608
+_SAME: Final = f"""EXISTS (SELECT 1 FROM {_PREV}.enrich.text_redacted AS p WHERE p.entity =
+    'incident' AND p.record_id = w.record_id AND p.content_hash = w.content_hash)"""  # noqa: S608
+_PROBES: Final = [f"SELECT {c} FROM {_PREV}.enrich.{t} LIMIT 0" for t, c in (  # noqa: S608
+    ("text_redacted", "record_id, entity, content_hash"),
+    ("cluster_member", "record_id, cluster_id, membership_prob"),
+    ("cluster", "cluster_id, label, root_cause_category, top_terms, algorithm_version"),
+)]  # fmt: skip
 _CHANGED_SQL: Final = f"SELECT w.record_id FROM {_WIN} AS w WHERE NOT {_SAME} ORDER BY 1"  # noqa: S608
 _KEPT_SQL: Final = f"""SELECT m.record_id, m.cluster_id, m.membership_prob
     FROM {_PREV}.enrich.cluster_member AS m JOIN {_WIN} AS w ON w.record_id = m.record_id
@@ -158,8 +163,8 @@ def run_cluster_stage(  # noqa: PLR0913 - U03-105's keyword-only signature is bi
     """Nightly incremental assignment or full recluster (U03-105); writes `enrich.cluster`
     and `enrich.cluster_member`. A full run leaves an `assigned` snapshot for `build_id`.
 
-    FatalError on CUDA OOM; StoreBusy on a LanceDB conflict; ConfigError when the window
-    has too few vectors to cluster; YieldRequested after the assigned snapshot is saved.
+    FatalError on CUDA OOM at the minimum chunk; StoreBusy on a LanceDB conflict; ConfigError
+    on too few window vectors; YieldRequested after the assigned snapshot is saved.
     """
     rerun = _usable(lambda: _assigned(paths, build_id))
     now = clock.now() if rerun is None else rerun[0].meta.created_at  # a rerun keeps its window
@@ -203,13 +208,17 @@ def _usable[T](load: Callable[[], T | None]) -> T | None:
 
 
 def _attach(wh: duckdb.DuckDBPyConnection, path: Path | None) -> bool:
-    """`ATTACH <path> AS cluster_prev (READ_ONLY)`; False (a full recluster) on failure."""
+    """`ATTACH <path> AS cluster_prev (READ_ONLY)` holding the enrich tables the run reads;
+    False (a full recluster) when it cannot attach or lacks them (an older or foreign file)."""
     value = "" if path is None else str(path)
     if not value or any(ord(ch) < _FIRST_PRINTABLE for ch in value):
         return False
     try:  # ATTACH takes no bound parameter: the path is quoted as a string literal
         wh.execute(f"ATTACH '{value.replace("'", "''")}' AS {_PREV} (READ_ONLY)")
+        for probe in _PROBES:
+            wh.execute(probe)
     except duckdb.Error as exc:
+        wh.execute(f"DETACH DATABASE IF EXISTS {_PREV}")
         _log.warning("enrich.cluster.prev_unavailable", error_type=type(exc).__name__)
         return False
     return True

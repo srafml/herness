@@ -25,8 +25,9 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from lancedb.table import Table
 
-from herness.core.errors import ConfigError
+from herness.core.errors import ConfigError, FatalError
 from herness.enrich.cluster import PcaModel, project
+from herness.enrich.gpu import release_cuda
 from herness.enrich.layout import EnrichPaths
 from herness.store.vectors import EMBEDDING_DIM
 from herness.store.vectors import _store_error as store_error
@@ -58,6 +59,7 @@ _READ_ERRORS: Final = (OSError, ValueError, KeyError, TypeError, pa.ArrowExcepti
 _LANCE_ERRORS: Final = (OSError, RuntimeError, ValueError)
 _TABLE: Final = "ticket_embedding"
 _COLUMNS: Final = ["record_id", "content_hash", "vector"]
+MIN_CHUNK = 4_096  # projection chunk floor on CUDA OOM (U03-105 Errors); a value tests lower
 _TS: Final = pa.timestamp("us", tz="UTC")
 
 
@@ -172,9 +174,9 @@ def _read[T](name: str, read: Callable[[], T]) -> T:
     """Run `read`; any IO or format error -> ConfigError naming the file (not its path)."""
     try:
         return read()
-    except _READ_ERRORS as exc:
+    except _READ_ERRORS:
         msg = f"cluster snapshot file {name} is missing or malformed"
-        raise ConfigError(msg, file=name) from exc
+        raise ConfigError(msg, file=name) from None  # the cause's text holds the full path
 
 
 def _read_pca(path: Path) -> PcaModel:
@@ -318,11 +320,22 @@ class VectorSource:
     def project(
         self, pca: PcaModel, where: Sequence[str], device: str
     ) -> tuple[np.ndarray, np.ndarray]:
-        """(sorted window positions with a vector, their unit projections)."""
-        parts = [
-            (pos, project(vectors, pca, device=device, chunk=self.chunk))
-            for pos, vectors in self.batches(where)
-        ]
+        """(sorted window positions with a vector, their unit projections). CUDA OOM:
+        release CUDA, retry at chunk // 2; FatalError below `MIN_CHUNK`."""
+        import torch  # noqa: PLC0415 - lazy: importing this module must never load torch
+
+        parts, chunk = [], self.chunk
+        for pos, vectors in self.batches(where):
+            while True:
+                try:
+                    parts.append((pos, project(vectors, pca, device=device, chunk=chunk)))
+                    break
+                except torch.cuda.OutOfMemoryError:
+                    release_cuda()
+                    chunk //= 2
+                if chunk < MIN_CHUNK:
+                    msg = "cluster stage: cuda out of memory"
+                    raise FatalError(msg) from None
         dims = int(pca.components.shape[0])
         pos = np.concatenate([p for p, _ in parts]) if parts else np.zeros(0, np.int64)
         x = np.concatenate([x for _, x in parts]) if parts else np.zeros((0, dims), np.float32)
