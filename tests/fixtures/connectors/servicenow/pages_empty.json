@@ -1,0 +1,37 @@
+{
+ "interactions": [
+  {
+   "request": {
+    "params": {
+     "sysparm_limit": "1"
+    },
+    "path": "/api/now/table/sys_audit_delete"
+   },
+   "response": {
+    "body": {
+     "error": {
+      "message": "forbidden"
+     }
+    },
+    "headers": {},
+    "status": 403
+   }
+  },
+  {
+   "request": {
+    "params": {
+     "sysparm_offset": "0"
+    },
+    "path": "/api/now/table/incident"
+   },
+   "response": {
+    "body": {
+     "result": []
+    },
+    "headers": {},
+    "status": 200
+   }
+  }
+ ],
+ "kind": "pages"
+}
