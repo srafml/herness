@@ -106,7 +106,9 @@ def _promote(r: _Run) -> JsonValue:
 def _templates(r: _Run) -> JsonValue:
     try:
         con = r.deps.open_current()
-    except NotFoundError:  # no promoted build yet: nothing to EXPLAIN against
+    except NotFoundError as exc:  # no promoted build yet: nothing to EXPLAIN against
+        if exc.kind != "current":  # CURRENT names a missing build: a broken warehouse
+            raise
         _log.info("memory.maintenance.templates_skipped", reason="no_current_build")
         return {"skipped": "no_current_build"}
     try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,9 @@ from herness.core.resilience import ProcessState
 from herness.core.types import JobOutcome
 from herness.harness.memory import _maintenance_vectors as mv
 from herness.harness.memory import maintenance
+from herness.store import warehouse
 from herness.store.errors import NotFoundError
+from herness.store.layout import DataLayout
 from herness.store.ops import core
 from herness.store.ops import memory as ops
 
@@ -65,12 +68,21 @@ def _spy(monkeypatch: pytest.MonkeyPatch, name: str, owner: Any = maintenance) -
     return calls
 
 
+def _only_step5(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace every step but 5 (vector consistency) by a no-op."""
+    only5 = tuple((n, maintenance._vectors if n == "vectors" else (lambda r: 0)) for n in STEPS)
+    monkeypatch.setattr(maintenance, "_STEPS", only5)
+
+
 # --- UT07-84 the full run ---------------------------------------------------------------------
 
 
-def test_ut07_84_repairs_backfills_and_requests_review(env: MaintEnv) -> None:
+def test_ut07_84_repairs_backfills_and_requests_review(
+    env: MaintEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """UT07-84 orphan vectors, a stale status, a pending embedding and an old business rule:
-    one run repairs, backfills and creates the yearly review item."""
+    one run repairs, backfills and creates the yearly review item; step 5 pages by 1,000 and
+    every step heartbeats."""
     ok = seed_item(content="healthy item")
     put_vector(env, ok)
     stale = seed_item(content="stale status")
@@ -81,9 +93,18 @@ def test_ut07_84_repairs_backfills_and_requests_review(env: MaintEnv) -> None:
     rule = seed_item(kind="business_rule", content="rank team Y by MTTR",
                      created_at=NOW - timedelta(days=400))  # fmt: skip
     put_vector(env, rule, kind="business_rule")
+    selects, lists = _spy(monkeypatch, "maintenance_rows", ops), _spy(
+        monkeypatch, "list_ids", env.vectors)  # fmt: skip
     with capture_logs() as logs:
         outcome, ctx = env.run()
     assert outcome.status == "done"
+    pages = [k["limit"] for _, k in selects if k["selector"] == "all_ids_status"]
+    assert pages
+    assert set(pages) == {1_000}
+    assert lists
+    assert {a[1] for a, _ in lists} == {1_000}
+    steps = [n for n in ctx.notes if n and n.startswith("memory_maintenance step")]
+    assert steps == [f"memory_maintenance step {i}" for i in range(1, 8)]
     metas = vector_metas(env)
     assert orphan not in metas
     assert metas[stale].status == "active"
@@ -205,6 +226,25 @@ def test_ut07_84_no_current_build_skips_step3(
     assert calls == []
 
 
+def test_ut07_84_current_naming_missing_build_fails(env: MaintEnv, tmp_path: Path) -> None:
+    """UT07-84 a CURRENT that names a missing build file is a broken warehouse: step 3 raises
+    NotFoundError(kind="build") instead of skipping; steps 1-2 stay saved."""
+    lay = DataLayout.from_root(tmp_path / "data")
+    lay.warehouse.mkdir(parents=True)
+    build_id = warehouse.new_build_id(NOW)
+    (lay.warehouse / "CURRENT").write_text(build_id, encoding="ascii")
+    deps = maintenance.MaintenanceDeps(
+        lifecycle=env.deps.lifecycle, procedural=env.deps.procedural, vectors=env.vectors,
+        embedder=env.deps.embedder, open_current=partial(warehouse.open_readonly, layout=lay),
+    )  # fmt: skip
+    maintenance.configure_maintenance(deps)
+    ctx = FakeCtx()
+    with pytest.raises(NotFoundError) as caught:
+        env.run(ctx)
+    assert (caught.value.kind, caught.value.key) == ("build", build_id)
+    assert ctx.state["step"] == 2
+
+
 # --- step 6 backfill bounds -------------------------------------------------------------------
 
 
@@ -290,10 +330,10 @@ def test_ut07_84_backfill_keeps_flag_when_content_changed(
 
 
 def test_ut07_84_yearly_review_once_per_item(env: MaintEnv) -> None:
-    """UT07-84 a due business rule gets one review item; a second run creates none; recent,
-    inactive and recently reviewed rules are not due."""
-    due = seed_item(kind="business_rule", content="due rule", created_at=NOW - timedelta(days=366))
-    seed_item(kind="business_rule", content="young rule", created_at=NOW - timedelta(days=100))
+    """UT07-84 a rule created exactly 365 days ago is due and gets one review item; a second
+    run creates none; a 364-day-old, an inactive and a recently reviewed rule are not due."""
+    due = seed_item(kind="business_rule", content="due rule", created_at=NOW - timedelta(days=365))
+    seed_item(kind="business_rule", content="young rule", created_at=NOW - timedelta(days=364))
     seed_item(kind="business_rule", status="expired", content="gone",
               created_at=NOW - timedelta(days=500))  # fmt: skip
     seed_item(kind="business_rule", content="reviewed", created_at=NOW - timedelta(days=500),
@@ -423,13 +463,15 @@ def test_ut07_84_rerun_of_finished_job_is_idempotent(
     env: MaintEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT07-84 re-running a finished job (saved step 7, or a fresh run) duplicates no review
-    item and deletes no vector twice."""
+    item and deletes no vector twice; the saved-step-7 resume expires and deletes nothing."""
     seed_item(kind="business_rule", content="idem rule", created_at=NOW - timedelta(days=400))
     put_vector(env, "mem_" + new_ulid())
     first, ctx = env.run()
-    deletes = _spy(monkeypatch, "expire", env.deps.lifecycle)
+    expires = _spy(monkeypatch, "expire", env.deps.lifecycle)
+    deletes = _spy(monkeypatch, "delete", env.vectors)
     again, _ = env.run(FakeCtx(state=ctx.state))
     assert again.status == "done"
+    assert expires == []
     assert deletes == []
     assert again.result == first.result
     fresh, _ = env.run()
@@ -453,8 +495,7 @@ def test_ut07_84_th07_13_step5_never_changes_sqlite(
 ) -> None:
     """UT07-84 TH07-13 vector statuses that disagree are repaired FROM SQLite; no item status
     changes and no SQLite row is deleted; fine items are untouched."""
-    only5 = tuple((n, maintenance._vectors if n == "vectors" else (lambda r: 0)) for n in STEPS)
-    monkeypatch.setattr(maintenance, "_STEPS", only5)
+    _only_step5(monkeypatch)
     rejected = seed_item(status="rejected", content="rejected item")
     put_vector(env, rejected, status="active")
     expired = seed_item(status="expired", content="expired item")
@@ -532,3 +573,35 @@ def test_ut07_84_written_items_stay_consistent(env: MaintEnv) -> None:
                                          "statuses": {"active": 2}}  # fmt: skip
     assert outcome.result["backfill"] == {"embedded": 0, "stopped": False}
     assert memory_rows() == before
+
+
+def test_ut07_84_step5_flag_sets_data_and_flag_list(
+    env: MaintEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-84 step 5 marks a missing or stale vector with `data.embedding_pending = true`
+    and the `embedding_pending` entry in `data.flags` (step 6 not run)."""
+    _only_step5(monkeypatch)
+    missing = seed_item(content="no vector yet")
+    changed = seed_item(content="changed text")
+    put_vector(env, changed, content_hash="old-hash")
+    outcome, _ = env.run()
+    assert outcome.result["vectors"]["flagged"] == 2  # type: ignore[index]
+    for memory_id in (missing, changed):
+        data = row_of(memory_id)["data"]
+        assert data["embedding_pending"] is True
+        assert data["flags"].count("embedding_pending") == 1
+
+
+def test_ut07_84_step5_rereads_sqlite_in_batches_of_500(
+    env: MaintEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-84 TH07-13 step 5 re-reads SQLite in batches within the get_memory_items C2 limit
+    of 500 ids: 501 rows need two batches and no batch is refused."""
+    _only_step5(monkeypatch)
+    reads = _spy(monkeypatch, "get_memory_items", ops)
+    for i in range(501):
+        seed_item(content=f"bulk {i}", pending=True)
+    outcome, _ = env.run()
+    assert outcome.result["vectors"] == {"deleted": 0, "restatused": 0, "flagged": 0,
+                                         "statuses": {"active": 501}}  # fmt: skip
+    assert sorted(len(a[0]) for a, _ in reads) == [1, 500]
