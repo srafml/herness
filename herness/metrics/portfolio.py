@@ -192,15 +192,15 @@ def _candidates(rq: RecordedQuery) -> list[solver.PortfolioCandidate]:
 def _input_query(
     con: duckdb.DuckDBPyConnection, cfg: HernessConfig, build: _Build, persist: bool
 ) -> RecordedQuery:
-    """Render and run the recorded optimizer input query (U04-80 steps 1 and 4); the template
-    params carry the `score.funding` query ids, so changed funding inputs are a new query."""
+    """Run the recorded optimizer input (U04-80 steps 1, 4); keyed on score.funding query ids."""
     build_id, started_at = build
     catalog = catalog_from_config(cfg)
     tz = cfg.weights.business_timezone
     as_of = resolve_as_of(started_at, tz, catalog.scoring.as_of)
     sc = StepContext(build_id, catalog, cfg.weights, as_of, tz, frozenset())
     rendered = render_named("portfolio_input", {}, sc.binds())
-    upstream = [r[0] for r in con.execute(_UPSTREAM).fetchall()]  # U04-80 step 4 amendment
+    funded = FUNDING_TABLE in existing_tables(con)  # else the input query raises QueryError
+    upstream = [r[0] for r in con.execute(_UPSTREAM).fetchall()] if funded else []
     params = {"bind": rendered.bind, "template": {**rendered.template, "upstream": upstream}}
     timeout = None if persist else catalog.defaults.compute_timeout_s
     producer: Producer | None = "score" if persist else None

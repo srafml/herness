@@ -39,7 +39,7 @@ from tests.support.metrics_scoring import patches, save_as_file, small_catalog
 from tests.support.metrics_tiny import BUILD_ID, shipped_catalog
 from tests.support.ops_store import OpsStoreHandle
 
-from herness.core.errors import ConfigError, SchemaViolation
+from herness.core.errors import ConfigError, QueryError, SchemaViolation
 from herness.metrics import compute, portfolio, scoring
 from herness.metrics.evidence import IntoSpec, run_recorded
 from herness.metrics.funding import run_funding_step
@@ -668,3 +668,16 @@ def test_cv_t04_20_input_query_timeout(
     optimize_portfolio("4000", persist=persist, con=con)
     timeout = shipped_catalog().defaults.compute_timeout_s
     assert seen[0] == ("portfolio_input", None if persist else timeout)
+
+
+def test_cv_t04_20_missing_funding_query_error(build: Build, tmp_path: Path) -> None:
+    """CV-T04-20 persist=False on a read-only warehouse without score.funding raises QueryError
+    (U04-80 Errors), never a raw DuckDB error."""
+    con = build()
+    con.execute("DROP TABLE score.funding")
+    ro = _read_only_copy(con, tmp_path / "wh.duckdb")
+    try:
+        with pytest.raises(QueryError):
+            optimize_portfolio("4000", persist=False, con=ro)
+    finally:
+        ro.close()
