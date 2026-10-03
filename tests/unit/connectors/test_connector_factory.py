@@ -21,6 +21,7 @@ import respx
 from tests.support.sync_env import write_sync_config
 
 from herness.connectors.base import Connector, SupportsKeyListing, SupportsToolStreams
+from herness.connectors.dataverse import DataverseConnector
 from herness.connectors.factory import build_connector
 from herness.connectors.files import FilesConnector
 from herness.connectors.mongodb import MongoConnector
@@ -82,7 +83,19 @@ sources:
         key_field: CC_ID
         updated_field: UPDATED_AT
         columns: [CC_ID, UPDATED_AT]
+  dataverse:
+    enabled: true
+    base_url: https://org.example.com
+    hosts: [login.microsoftonline.com]
+    auth:
+      method: msal_client_credentials
+      tenant_id: "00000000-0000-4000-8000-000000000024"
+      credentials: "secret:dataverse_app"
+    entities:
+      project: {{entityset: cr123_projects, key_field: cr123_projectid, select: [cr123_name]}}
 """
+# T01-24: every source is configured above; the "not configured" probe drops this block.
+_NO_DATAVERSE_YAML = SOURCES_YAML.split("  dataverse:\n", 1)[0]
 
 MAPPINGS_YAML = """\
 version: 1
@@ -137,6 +150,7 @@ def cfg(tmp_path: Path) -> c.HernessConfig:
     registry.register("connector", "files")(FilesConnector)
     registry.register("connector", "mongodb")(MongoConnector)
     registry.register("connector", "snowflake")(SnowflakeConnector)
+    registry.register("connector", "dataverse")(DataverseConnector)
     registry.register("connector", "jira")(FakeJira)
     registry.register("connector", "monitoring")(FakeMonitoring)
     registry.register("monitoring_adapter", "prometheus")(FakeAdapter)
@@ -153,7 +167,7 @@ def test_ut01_94_every_registered_connector_builds_without_network(
     with respx.mock(assert_all_called=False) as mock:
         built = {name: build_connector(name, cfg) for name in registry.available("connector")}
     assert not mock.calls
-    assert set(built) == {"files", "jira", "monitoring", "mongodb", "snowflake"}
+    assert set(built) == {"files", "jira", "monitoring", "mongodb", "snowflake", "dataverse"}
     for name, conn in built.items():
         assert conn.name == name
         for member in ("check", "sync", "watermark_field"):
@@ -164,6 +178,7 @@ def test_ut01_94_every_registered_connector_builds_without_network(
     assert isinstance(built["jira"], SupportsKeyListing)
     assert isinstance(built["mongodb"], SupportsKeyListing)
     assert isinstance(built["snowflake"], SupportsKeyListing)
+    assert isinstance(built["dataverse"], SupportsKeyListing)
     assert not isinstance(built["monitoring"], SupportsKeyListing)
 
 
@@ -211,13 +226,17 @@ def test_ut01_94_monitoring_gets_enabled_adapters(cfg: c.HernessConfig) -> None:
 
 
 def test_ut01_94_disabled_unconfigured_or_unregistered(
-    cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch
+    cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """UT01-94 disabled, unconfigured and unregistered sources → ConfigError."""
     with pytest.raises(ConfigError, match="source servicenow is disabled"):
         build_connector("servicenow", cfg)
+    bare_dir = write_sync_config(
+        tmp_path / "bare", _NO_DATAVERSE_YAML.format(inbox="data/inbox"), MAPPINGS_YAML
+    )
+    bare = c.load_config("local", config_dir=bare_dir, env={})
     with pytest.raises(ConfigError, match="source dataverse is not configured"):
-        build_connector("dataverse", cfg)
+        build_connector("dataverse", bare)
     registry.reset_registry()
     monkeypatch.setattr(registry, "_BUILTINS", {})  # independent of later built-in rows
     with pytest.raises(ConfigError, match="unknown connector 'files'"):
@@ -313,6 +332,32 @@ def test_ut01_94_snowflake_resolves_through_the_builtin_table(
     assert conn._clock is _fixed
     assert conn._conn is None
     assert conn.entities == ("cost_center",)
+
+
+_DATAVERSE_ROW = ("connector", "dataverse")
+
+
+def test_ut01_94_dataverse_resolves_through_the_builtin_table(
+    cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-94 the shipped `_BUILTINS` row resolves the real `DataverseConnector`, which
+    satisfies `Connector` and `SupportsKeyListing`; `build_connector("dataverse", cfg)` passes
+    the section and the clock only, and makes no network call (the HTTP layer is lazy)."""
+    row = _shipped_builtins()[_DATAVERSE_ROW]
+    assert row == "herness.connectors.dataverse:DataverseConnector"
+    registry.reset_registry()
+    monkeypatch.setitem(registry._BUILTINS, _DATAVERSE_ROW, row)
+    assert registry.get("connector", "dataverse") is DataverseConnector
+    with respx.mock(assert_all_called=False) as mock:
+        conn = build_connector("dataverse", cfg, clock=_fixed)
+    assert not mock.calls
+    assert isinstance(conn, DataverseConnector)
+    assert isinstance(conn, SupportsKeyListing)
+    assert _conforms(conn) is conn
+    assert conn._settings is cfg.sources.source("dataverse")
+    assert conn._clock is _fixed
+    assert conn._http is None
+    assert conn.entities == ("project",)
 
 
 _MONITORING_ROW = ("connector", "monitoring")
