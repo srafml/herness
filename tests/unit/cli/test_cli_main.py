@@ -242,14 +242,16 @@ def test_ut09_85_options_reach_ctx_obj(probe: list[str]) -> None:
         "synth",
         ("a.b_c=1", "x.y=[1]"),
     )
-    assert (opts.quiet, opts.verbose, opts.json, opts._cfg) == (True, False, False, None)
+    assert (opts.quiet, opts.verbose, opts.json, opts.config_loaded) == (True, False, False, False)
 
 
 def test_ut09_85_config_cached_with_data_dir(cli_env: CliEnv) -> None:
     """UT09-85 config(): `--data-dir` becomes `paths.data`; cached per instance; actor built."""
     cli_env.write_config(admins=["alice"])
     opts = cli.GlobalOptions(config_dir=cli_env.config_dir, data_dir=cli_env.root / "elsewhere")
+    assert not opts.config_loaded
     cfg = opts.config()
+    assert opts.config_loaded
     assert Path(cfg.paths.data) == cli_env.root / "elsewhere"
     assert opts.config() is cfg
     assert opts.actor(need_ref=True).role == "admin"

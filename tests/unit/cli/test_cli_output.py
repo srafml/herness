@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -72,8 +74,28 @@ def test_ut09_63_exit_code_for_class_name() -> None:
         key = getattr(exc, "key", None) if isinstance(exc, e.CircuitOpen) else None
         assert o.exit_code_for_class_name(type(exc).__name__, key=key) == code
     assert o.exit_code_for_class_name("CircuitOpen") == 4
+    assert o.exit_code_for_class_name("DqGateFailed") == 5
+    assert o.exit_code_for_class_name("NotFoundError") == 7
     assert o.exit_code_for_class_name("NoSuchError") == 1
     assert o.exit_code_for_class_name("") == 1
+
+
+_FRESH = """
+import sys
+from herness._cli.output import exit_code_for_class_name as f
+assert "herness.harness.memory.types" not in sys.modules
+names = ["MemoryNotFound", "DqGateFailed", "BuildSqlError", "MigrationError", "NotFoundError"]
+sys.stdout.write(" ".join(str(f(n)) for n in names))
+"""
+
+
+def test_ut09_63_class_names_in_a_fresh_process() -> None:
+    """UT09-63 a fresh interpreter maps class names whose modules it has not imported (I-1)."""
+    done = subprocess.run(  # noqa: S603 - fixed argv, this interpreter
+        [sys.executable, "-c", _FRESH], capture_output=True, text=True, check=False, timeout=120
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "7 5 5 5 7"
 
 
 # --- UT09-64 emit and emit_error ----------------------------------------------------------------
@@ -192,6 +214,17 @@ def test_ut09_64_emit_error_human(capsys: pytest.CaptureFixture[str]) -> None:
     assert "ConfigError" in err
 
 
+def test_ut09_64_verbose_traceback_scrubbed(capsys: pytest.CaptureFixture[str]) -> None:
+    """UT09-64 the --verbose traceback passes through scrub_secrets (no credential text)."""
+    token = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"  # pragma: allowlist secret
+    caught = _raised(e.StoreBusy("busy", details={"code": "x"}))
+    caught.add_note(f"Authorization: Bearer {token}")
+    o.emit_error(GlobalOptions(verbose=True), "status", caught)
+    err = capsys.readouterr().err
+    assert "Traceback" in err
+    assert token not in err
+
+
 class _Model(BaseModel):
     when: date
 
@@ -201,6 +234,8 @@ def test_ut09_64_json_default() -> None:
     stamp = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
     assert o.json_default(Decimal("1.50")) == "1.50"
     assert o.json_default(stamp) == "2026-09-01T12:30:00Z"
+    with pytest.raises(TypeError, match="naive datetime"):
+        o.json_default(datetime(2026, 9, 1, 12, 30))  # noqa: DTZ001 - the naive case itself
     assert o.json_default(date(2026, 9, 1)) == "2026-09-01"
     assert o.json_default(Path("a") / "b") == "a/b"
     assert o.json_default(_Model(when=date(2026, 9, 1))) == {"when": "2026-09-01"}

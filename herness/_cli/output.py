@@ -11,8 +11,7 @@ import json
 import re
 import sys
 import traceback
-import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -24,8 +23,10 @@ from rich.console import Console
 from rich.markup import escape
 from typer._click.exceptions import UsageError
 
+from herness._cli._exit_codes import EXIT_CODES, exit_code_for, exit_code_for_class_name
 from herness.core import errors as e
-from herness.reports.rules import UserInputError, user_message
+from herness.core.secrets import scrub_secrets
+from herness.reports.rules import user_message
 
 if TYPE_CHECKING:
     from herness.cli import GlobalOptions
@@ -35,77 +36,8 @@ __all__ = [
     "exit_code_for_class_name", "json_default",
 ]  # fmt: skip
 
-EXIT_CODES: Final[Mapping[int, str]] = types.MappingProxyType({
-    0: "Success, including a --no-wait enqueue",
-    1: "General failure",
-    2: "Usage error",
-    3: "Configuration error",
-    4: "Source auth or availability failure after retries",
-    5: "Build blocked (DQ error or SQL failure)",
-    6: "Finished with dead tasks or a partial run (report still written)",
-    7: "Not found (run, job, item, memory, build, record)",
-    8: "Store busy or another writer holds the lease",
-    9: "Model or GPU unavailable after the fallback chain",
-    10: "Budget exceeded",
-    11: "Permission denied",
-    12: "Report contract violation",
-    13: "Off-network call blocked",
-    14: "An eval gate failed",
-    130: "Interrupted by Ctrl+C (detached; the job keeps running)",
-})  # fmt: skip
-
-# U09-87 rows 3-13 in table order; CircuitOpen is placed by its key (_circuit_code).
-_TABLE: Final[tuple[tuple[tuple[type[e.HernessError], ...], int], ...]] = (
-    ((e.ConfigError,), 3),
-    ((e.AuthError, e.SourceUnavailable, e.RateLimited), 4),
-    ((e.SchemaViolation,), 5),
-    ((e.NotFound,), 7),
-    ((e.StoreBusy,), 8),
-    ((e.ModelUnavailable, e.ModelRefused), 9),
-    ((e.BudgetExceeded,), 10),
-    ((e.PermissionDenied,), 11),
-    ((e.ReportContractError,), 12),
-    ((e.EgressBlocked,), 13),
-)
-_USAGE: Final = (UsageError, UserInputError)
 _USAGE_FIX: Final = "Run `herness --help`."
 _FORBIDDEN_CODES: Final = frozenset({2, 130})
-
-
-def _circuit_code(key: str | None) -> int:
-    return 9 if key is not None and key.startswith(("model:", "decider:")) else 4
-
-
-def _code_of_class(cls: type, key: str | None) -> int:
-    if issubclass(cls, e.CircuitOpen):
-        return _circuit_code(key)
-    return next((code for classes, code in _TABLE if issubclass(cls, classes)), 1)
-
-
-def exit_code_for(exc: BaseException) -> int:
-    """R-46 exit code of ``exc``; 2 only for the two usage classes (U09-87)."""
-    if isinstance(exc, KeyboardInterrupt):
-        return 130
-    if isinstance(exc, _USAGE):
-        return 2
-    return _code_of_class(type(exc), getattr(exc, "key", None))
-
-
-def _taxonomy() -> dict[str, type]:
-    """Every loaded HernessError subclass by name (a job's ``last_error["class"]``)."""
-    found: dict[str, type] = {}
-    pending: list[type] = [e.HernessError]
-    while pending:
-        cls = pending.pop()
-        found.setdefault(cls.__name__, cls)
-        pending.extend(cls.__subclasses__())
-    return found
-
-
-def exit_code_for_class_name(name: str, *, key: str | None = None) -> int:
-    """The U09-87 table applied to a class name (``key`` for ``CircuitOpen``); unknown -> 1."""
-    cls = _taxonomy().get(name)
-    return 1 if cls is None else _code_of_class(cls, key)
 
 
 # --- terminal-safe text -------------------------------------------------------------------------
@@ -174,6 +106,9 @@ def json_default(value: object) -> object:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            msg = "naive datetime is not serialisable (ISO-8601 UTC needs a time zone)"
+            raise TypeError(msg)
         return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
     if isinstance(value, date):
         return value.isoformat()
@@ -244,5 +179,7 @@ def emit_error(opts: GlobalOptions, command: str, exc: BaseException) -> int:
         return code
     sys.stderr.write(f"Error: {_clean(what)}\nFix: {_clean(fix)}\n")
     if opts.verbose:
-        sys.stderr.write(_clean("".join(traceback.format_exception(exc))))
+        text = "".join(traceback.format_exception(exc))
+        scrubbed = scrub_secrets(None, "emit_error", {"event": text}).get("event")
+        sys.stderr.write(_clean(scrubbed if isinstance(scrubbed, str) else "log.scrub.failed"))
     return code

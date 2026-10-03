@@ -87,6 +87,11 @@ class GlobalOptions:
             self._validated = True
         return self._cfg
 
+    @property
+    def config_loaded(self) -> bool:
+        """True once ``config()`` has loaded the config (and bound the ports)."""
+        return self._cfg is not None
+
     def actor(self, *, need_ref: bool) -> Actor:
         """The CLI actor of this process (U09-89 ``cli_actor``)."""
         return cli_actor(self.config(), need_ref=need_ref)
@@ -280,6 +285,6 @@ def main(argv: Sequence[str] | None = None) -> NoReturn:
     )
     labels = {"command": opts.command.replace(" ", "."), "exit_code": str(code)}
     record_counter("herness_cli_commands_total", component="cli", labels=labels)
-    if opts._cfg is not None:
+    if opts.config_loaded:
         flush_metrics()  # a short-lived process: write the counter before exit
     sys.exit(code)
