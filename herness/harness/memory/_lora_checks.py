@@ -3,15 +3,19 @@
 Private sibling of `lora` (kept apart for the §2 line budget; only `lora` imports it).
 TH07-24: the export path stays at or below the export root with no symlinked or junction
 component. TH07-19: a pair whose redacted question is within the configured cosine of a
-redacted golden question is excluded. TH07-05/TH07-19: a qa_pair reaches the JSONL only when
-its question survives the redactor and the injection scan, and its SQL is exactly one DuckDB
-query that carries no redaction token, trips no injection pattern and is unchanged by the
-redactor and by the known-secret scrub.
+redacted golden question is excluded; goldens fail closed (a blank, unredactable or
+unembeddable golden question raises). TH07-05/TH07-19: a qa_pair reaches the JSONL only when
+its redacted question and its SQL are each clean BEFORE JSON encoding (unchanged by the
+known-secret scrub, no format (Cf) or stray control (Cc) characters, no role-tag markup, no
+injection pattern) and the SQL is exactly one DuckDB query without redaction tokens that the
+redactor leaves unchanged.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final, Protocol
@@ -32,6 +36,11 @@ from herness.harness.memory.settings import LoraConfig
 __all__ = ["Embeds", "contained", "goldens", "near", "redacted", "safe_pair", "scrubbed"]
 
 DENIED: Final = "export path outside data/models/lora_data"
+_ROLE_TAG: Final = re.compile(  # chat-template role markup: <|im_start|>, </user>, <system>
+    r"<\|[^<>]{0,40}\|>|</?\s*(?:system|user|assistant|human|tool|im_start|im_end)\s*>",
+    re.IGNORECASE,
+)
+_CONTROL_OK: Final = frozenset("\t\n\r")
 _log = get_logger("memory")
 
 
@@ -68,6 +77,18 @@ def contained(out_dir: Path, root: Path) -> Path:
     return target
 
 
+def _clean(text: str, deps: _Checks) -> bool:
+    """Scrub-unchanged (checked before encoding, so escaping cannot hide a secret), free of
+    Cf and stray Cc characters, role-tag markup and injection patterns."""
+    bad = any(c not in _CONTROL_OK and unicodedata.category(c) in ("Cc", "Cf") for c in text)
+    return (
+        not bad
+        and not _ROLE_TAG.search(text)
+        and not deps.scanner.scan(text)
+        and (scrubbed(text) == text)
+    )
+
+
 def redacted(text: object, deps: _Checks) -> str | None:
     """`text` through the redactor; None for a non-string, blank text or a redaction failure."""
     if not isinstance(text, str) or not text.strip():
@@ -90,16 +111,15 @@ def _sql_ok(sql: str, deps: _Checks) -> bool:
     except SqlglotError:
         return False
     one_query = len(parsed) == 1 and isinstance(parsed[0], exp.Query)
-    clean = TOKEN_PATTERN.search(sql) is None and not deps.scanner.scan(sql)
-    return one_query and clean and redacted(sql, deps) == sql and scrubbed(sql) == sql
+    return one_query and TOKEN_PATTERN.search(sql) is None and redacted(sql, deps) == sql
 
 
 def safe_pair(question: object, sql: object, deps: _Checks) -> tuple[str, str] | None:
     """(redacted question, sql) when both are safe to export, else None."""
     user = redacted(question, deps)
-    if user is None or not isinstance(sql, str) or deps.scanner.scan(user):
+    if user is None or not isinstance(sql, str) or not _clean(user, deps):
         return None
-    return (user, sql) if _sql_ok(sql, deps) else None
+    return (user, sql) if _clean(sql, deps) and _sql_ok(sql, deps) else None
 
 
 def _unit(vector: np.ndarray) -> np.ndarray:
@@ -112,12 +132,15 @@ def _unit(vector: np.ndarray) -> np.ndarray:
 
 
 def goldens(questions: Sequence[str], deps: _Checks) -> np.ndarray | None:
-    """Each golden question redacted and embedded once, as unit rows; None for none."""
-    if isinstance(questions, str):
-        msg = "golden_questions must be a sequence of questions, not one string"
+    """Each golden question redacted and embedded once, as unit rows; None only for an empty
+    sequence. Fails closed: a blank or non-string entry is a ToolInputError, RedactionFailed
+    and ModelUnavailable propagate (no golden is ever skipped silently)."""
+    entries: Sequence[object] = questions  # checked at runtime, whatever the annotation
+    if isinstance(entries, str) or not all(isinstance(q, str) and q.strip() for q in entries):
+        msg = "golden_questions must be a sequence of non-blank questions"
         raise ToolInputError(msg)
-    texts = [t for t in (redacted(q, deps) for q in questions) if t is not None]
-    return np.stack([_unit(deps.embedder.embed(t)) for t in texts]) if texts else None
+    texts = [found.text for q in questions if (found := deps.redactor.redact(q)) is not None]
+    return np.stack([_unit(deps.embedder.embed(t)) for t in texts]) if questions else None
 
 
 def near(text: str, golden: np.ndarray | None, deps: _Checks) -> bool:

@@ -113,15 +113,11 @@ def _template(template_id: object, run: _Run, conn: sqlite3.Connection) -> _Tpl 
         if rows and rows[0]["kind"] == "sql_template" and rows[0]["status"] == "active":
             d = rows[0]["data"]
             n = [v if isinstance(v := d.get(k), int) else 0 for k in ("passes", "fails")]
-            tpl = _Tpl(str(d.get("fingerprint")), wilson_lower_bound(*n),
+            fp = fp if isinstance(fp := d.get("fingerprint"), str) else ""  # "" -> unsafe
+            tpl = _Tpl(fp, wilson_lower_bound(*n),
                        str(d.get("build_id_last_ok") or ""))  # fmt: skip
         run.cache[template_id] = tpl
     return run.cache[template_id]
-
-
-def _split(fingerprint: str, val_fraction: float) -> str:
-    bucket = int(keyed_hash(fingerprint)[:8], 16) % 10000  # SHA-256 prefix (UT05-124 list)
-    return "val" if bucket < val_fraction * 10000 else "train"
 
 
 def _line(row: ops.MemoryItemRow, run: _Run, conn: sqlite3.Connection) -> _Out:
@@ -131,7 +127,7 @@ def _line(row: ops.MemoryItemRow, run: _Run, conn: sqlite3.Connection) -> _Out:
     if tpl is None or tpl.pass_lb < run.min_pass_lb:
         return run.drop("excluded_low_pass_lb")
     pair = chk.safe_pair(data.get("question"), data.get("sql"), run.deps)
-    if pair is None:
+    if pair is None or not tpl.fingerprint:
         return run.drop("excluded_unsafe")
     if chk.near(pair[0], run.goldens, run.deps):
         return run.drop("excluded_golden")
@@ -145,7 +141,8 @@ def _line(row: ops.MemoryItemRow, run: _Run, conn: sqlite3.Connection) -> _Out:
         return run.drop("excluded_oversize")
     if chk.scrubbed(line) != line:
         return run.drop("excluded_unsafe")
-    split = _split(tpl.fingerprint, run.deps.config.val_fraction)
+    bucket = int(keyed_hash(tpl.fingerprint)[:8], 16) % 10000  # first 8 hex of SHA-256
+    split = "val" if bucket < run.deps.config.val_fraction * 10000 else "train"
     run.fps[split].add(tpl.fingerprint)
     run.used.add(str(data["template_id"]))
     return split, raw

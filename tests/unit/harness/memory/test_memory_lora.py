@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import numpy as np
 import pytest
 from structlog.testing import capture_logs
@@ -25,10 +26,12 @@ from tests.unit.harness.memory._lora_env import (
     PARAPHRASE,
     SQL,
     LoraEnv,
+    _insert,
     export_dirs,
     fingerprints,
     golden,
     make_deps,
+    mid,
     read_lines,
     seed_qa,
     seed_template,
@@ -36,6 +39,7 @@ from tests.unit.harness.memory._lora_env import (
 )
 
 from herness.core.errors import ConfigError, ModelUnavailable, StoreBusy, ToolInputError
+from herness.core.ids import canonical_json
 from herness.core.redact import RedactionFailed
 from herness.harness.memory import lora
 from herness.harness.memory.lora import (
@@ -48,6 +52,7 @@ from herness.harness.memory.lora import (
 from herness.harness.memory.procedural import wilson_lower_bound
 from herness.harness.memory.settings import LoraConfig
 from herness.store import warehouse
+from herness.store.ops import memory as ops
 
 pytestmark = pytest.mark.unit
 
@@ -414,3 +419,87 @@ def test_ut07_80_redaction_failure_drops_pair(ops_store: OpsStoreHandle, tmp_pat
     manifest = json.loads((out / "manifest.json").read_text("utf-8"))
     assert manifest["excluded_unsafe"] == 1
     assert report.train_count + report.val_count == 1
+
+
+# ---------------------------------------------------------------- fix round 1 (review m1-m3, m7)
+
+
+def _independent_digest(ddl: list[str]) -> str:
+    """schema_digest recomputed from the U07-92 step 5 definition, independent of lora.py."""
+    con = duckdb.connect(":memory:")
+    for stmt in ddl:
+        con.execute(stmt)
+    rows = con.execute(
+        "SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns"
+    ).fetchall()
+    con.close()
+    keep = sorted([list(r) for r in rows if r[0] in ("core", "enrich", "metrics", "score")])
+    return hashlib.sha256(canonical_json(keep).encode("utf-8")).hexdigest()[:16]
+
+
+def test_ut07_80_schema_digest_matches_spec_definition(
+    ops_store: OpsStoreHandle, tmp_path: Path
+) -> None:
+    """UT07-80 schema_digest equals the independently computed spec value and covers all four
+    schemas (a `score` change moves it)."""
+    le = make_deps(tmp_path)
+    seed_qa(20, seed_template(10, fingerprints(1)[0]), "Which services breached SLA?")
+    _, out = _run(le)
+    manifest = json.loads((out / "manifest.json").read_text("utf-8"))
+    assert manifest["schema_digest"] == _independent_digest(le.warehouse.ddl)
+    for stmt in (
+        "ALTER TABLE score.service_score ADD COLUMN rank INTEGER",
+        "ALTER TABLE enrich.incident_topic ADD COLUMN weight DOUBLE",
+        "ALTER TABLE metrics.daily_incidents ADD COLUMN team_id VARCHAR",
+    ):
+        before = manifest["schema_digest"]
+        le.warehouse.ddl.append(stmt)
+        _, out = _run(le)
+        manifest = json.loads((out / "manifest.json").read_text("utf-8"))
+        assert manifest["schema_digest"] == _independent_digest(le.warehouse.ddl) != before
+
+
+def test_ut07_80_template_must_be_sql_template_kind(
+    ops_store: OpsStoreHandle, tmp_path: Path
+) -> None:
+    """UT07-80 exclusion: a qa_pair pointing at an active item that is not a `sql_template`
+    (even with template-like data) counts as excluded_low_pass_lb."""
+    le = make_deps(tmp_path)
+    data = {"fingerprint": "f" * 16, "passes": 30, "fails": 0, "build_id_last_ok": "b"}
+    fake = _insert(mid(10), "analysis_recipe", "recipe", data)
+    seed_qa(20, fake, "Which services breached SLA?")
+    report, _ = _run(le)
+    assert (report.train_count + report.val_count, report.excluded_low_pass_lb) == (0, 1)
+
+
+def test_ut07_80_exported_event_is_info(ops_store: OpsStoreHandle, tmp_path: Path) -> None:
+    """UT07-80 `memory.lora.exported` is logged at INFO."""
+    le = make_deps(tmp_path)
+    seed_qa(20, seed_template(10, fingerprints(1)[0]), "Which services breached SLA?")
+    with capture_logs() as logs:
+        _run(le)
+    (ev,) = [e for e in logs if e["event"] == "memory.lora.exported"]
+    assert ev["log_level"] == "info"
+
+
+@pytest.mark.parametrize("fp", [None, "", 7])
+def test_ut07_80_template_without_fingerprint_is_unsafe(
+    ops_store: OpsStoreHandle, tmp_path: Path, fp: Any
+) -> None:
+    """UT07-80 a template with a missing, empty or non-string fingerprint excludes its pairs
+    as excluded_unsafe (never the string "None" as a shared split key)."""
+    le = make_deps(tmp_path)
+    tpl = seed_template(10, "x" * 16)
+    data = dict(ops.get_memory_items([tpl])[0]["data"])
+    if fp is None:
+        data.pop("fingerprint")
+    else:
+        data["fingerprint"] = fp
+    ops.update_memory_item(tpl, data=data)
+    seed_qa(20, tpl, "Which services breached SLA?")
+    keep = seed_qa(21, seed_template(11, fingerprints(1)[0]), "Which teams own services?")
+    _, out = _run(le)
+    ids = [ln["id"] for f in ("train", "val") for ln in read_lines(out / f"{f}.jsonl")]
+    assert ids == [keep]
+    manifest = json.loads((out / "manifest.json").read_text("utf-8"))
+    assert manifest["excluded_unsafe"] == 1
