@@ -33,6 +33,7 @@ from herness.core.resilience.events import record_event
 from herness.core.resilience.faults import fault_point
 from herness.core.resilience.metrics import record_counter, record_histogram
 from herness.core.resilience.policies import job_backoff_delay
+from herness.core.secrets import scrub_secrets
 from herness.core.types import JobKind, JobOutcome
 
 type FinishResult = Literal["done", "queued", "failed", "canceled", "lease_lost"]
@@ -177,8 +178,10 @@ def _apply_yield(run: _Run, stop_reason: StopReason | None) -> FinishResult:
 
 
 def _last_error(err: HernessError, run: _Run) -> dict[str, JsonValue]:
-    """`last_error` (U08-50 step 5): the message is redacted, then cut to 2048 chars."""
-    clean = redact_text(str(err))
+    """`last_error` (U08-50 step 5): known secret values are scrubbed (U10-36), then the
+    message is redacted, then cut to 2048 chars; a failed scrub or redaction withholds it."""
+    scrubbed = scrub_secrets(None, "last_error", {"m": str(err)}).get("m")
+    clean = redact_text(scrubbed) if isinstance(scrubbed, str) else None
     message = MESSAGE_WITHHELD if clean is None else clean[:MESSAGE_MAX_CHARS]
     return {
         "class": type(err).__name__,

@@ -108,6 +108,7 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/jobs/child.py` | Child process entry | `child_main` | L0 | none | 150 |
 | `herness/core/jobs/inline.py` | CLI inline run | `run_inline` | L0 | none | 200 |
 | `herness/core/jobs/status.py` | Status, health, resume enqueue | `StatusSnapshot`, `status_snapshot`, `ComponentHealth`, `health`, `ResumeResult`, `enqueue_resume` | L0 | none | 330 |
+| `herness/core/jobs/_status_views.py` | Private row views of `status_snapshot`: the nested `TypedDict`s of the §3.17 keys and the window and next-job view builders (split from status.py to stay under 330, T08-22) | none (private) | L0 | none | 130 |
 | `herness/store/ops/resilience.py` | SQL for `source_health`, `resilience_event`; backend binding (R-08) | `SqliteResilienceBackend`, `purge_events`, `bind_core_backends` | L1 | none | 320 |
 | `herness/store/ops/metrics.py` | The single `metric_sample` writer and its purge (R-12) | `record_metric_samples`, `purge_metric_samples` | L1 | none | 120 |
 | `herness/store/ops/jobs.py` | SQL for `job` (R-08) | `SqliteJobsBackend` (job methods) | L1 | none | 400 |
@@ -1248,6 +1249,8 @@ Algorithm:
 5. `HernessError` → `a = decide_failure(err, row, now, rng=process_state().rng)`; `last_error = {"class": type(err).__name__, "message": redact_text(str(err))[:2048], "at": ts(now), "attempt": row.attempts}`. `requeue` → `finish_requeue(job_id, owner, a.scheduled_for, last_error)` plus `record_event("retry", detail={target: "job", policy: "job_backoff", attempt, error_type, wait_s})` and WARNING log `jobs.job.rescheduled`. `done` → as step 3 with `a.result`. `failed` → `finish_failed(job_id, owner, last_error, now)`, `record_event("job_failed", ...)`, and `advance_chain` in its failure mode (emits `chain_broken` when the job was part of a schedule).
 6. Any completion statement that updates 0 rows → log WARNING `jobs.job.lease_lost` (`job_id`, `owner`) and return `lease_lost`; nothing else happens.
 
+Note (T08-15b, U10-36, TH10-14): error text is scrubbed of known secret values, then redacted, then cut. The `last_error.message` of step 5 is `redact_text(scrub_secrets(str(err)))[:2048]`, using the impl 10 `herness.core.secrets.scrub_secrets` helper. When the scrub or the redaction fails, the message is withheld: `MESSAGE_WITHHELD` for a job and `""` for a task. The task path (U08-62 `fail_task`, whose `last_error` is shaped as here) applies the same order.
+
 #### U08-51 `herness.core.jobs.cancel`
 
 `cancel(job_id: str) -> Literal["canceled", "cancel_requested", "not_active"]`. One `BEGIN IMMEDIATE`: `queued` → `status = 'canceled'`, `finished_at = now` → `canceled`; `running` → `status = 'canceled'` (lease kept; the supervisor's next heartbeat gets 0 rows and stops the child, design 08 §5.7) → `cancel_requested`; any other status or unknown id → `not_active`. Logs INFO `jobs.job.cancel_requested` with `job_id` and the result (TH08-11). Kind: function. Tests: UT08-60, ST08-11.
@@ -1823,6 +1826,8 @@ Returns `JobOutcome`.
 | Algorithm | 1. `owner = f"{host}:{pid}:cli"`; `row = claim(owner=owner, allowed_classes=["none","reasoning","decider","large"], job_id=job_id)`; `None` → `JobStateError("job not claimable", job_id)`. 2. If `row.gpu_class != "none"` or `row.kind in GPU_SLOT_KINDS` (R-43): enter `GpuLock` (a `ConfigError` → `finish_yield(job_id, owner, now, now)` then re-raise); `controller = GpuController(worker_id=None, ...)`; `controller.detect_loaded_class()`; `controller.swap(row.gpu_class, reason="inline")` when the class is not `none` and differs from the loaded class (a `ModelUnavailable` → `finish_job` with that error, then re-raise). 3. Start a daemon heartbeat thread: every `heartbeat_s`, `heartbeat_job(job_id, owner, now + lease_s)`; `False` → set the stop event with reason `cancel`. 4. Install a SIGINT handler that sets the stop event with reason `shutdown` (Ctrl+C → yield). 5. `res = run_handler(InlineJobContext(...), resolve_handler(row.kind))`. 6. `finish_job(row, owner, res, attempt_started_at, stop_reason)`. 7. `finally`: stop the heartbeat thread, restore the SIGINT handler, release the lock. 8. `res` is a `JobOutcome` → return it; a `HernessError` → raise it. |
 | Tests | IT08-12 |
 
+Spec note (T08-22): no lease heartbeat runs during step 2 (the heartbeat thread starts at step 3), and a swap's `start_timeout_s` can exceed `lease_s`, so a reaper started meanwhile may requeue the job; the run then ends as lease lost in `finish_job`. Step 2 fails safe: apart from a swap `ModelUnavailable` (applied by `finish_job`), any exit from step 2 (the held-lock `ConfigError`, Ctrl+C as `KeyboardInterrupt` before the step 4 SIGINT handler exists, or another error) calls `finish_yield(job_id, owner, now, now)` with no attempt charge and re-raises. The heartbeat thread also catches any `Exception` of a beat (ENG §3.4 thread boundary), logs WARNING `jobs.inline.heartbeat_failed` with the error type only and beats again.
+
 ### 3.17 Status, health and resume
 
 #### U08-91 `herness.core.jobs.status_snapshot`, `StatusSnapshot`
@@ -2289,6 +2294,7 @@ All events carry `ts`, `level`, `event`, `component` (`resilience` or `jobs`), t
 | `jobs.worker.start_failed` | ERROR | `worker_id`, `error_type` (T08-21: any unexpected exception in `run()`; exit code 1, R-46) | U08-87 |
 | `jobs.gpu.restart_failed` | WARNING | `service`, `error_type` (T08-21: the step 7a restart check's `restart_service` raised) | U08-87 |
 | `jobs.gpu.class_requested` | INFO | `worker_id`, `class` | U08-102 |
+| `jobs.inline.heartbeat_failed` | WARNING | `job_id`, `error_type` (T08-22: a lease heartbeat of `run_inline` raised; retried at the next beat) | U08-90 |
 | `jobs.supervisor.tick_failed` / `.store_unavailable` | ERROR / CRITICAL | `failed_ticks`, `error_type` | U08-87 |
 
 ### 8.2 Metrics (`metric_sample`)

@@ -16,7 +16,7 @@ import structlog
 from pydantic import JsonValue
 from tests.unit.core.jobs._queue_env import jobs_db  # noqa: F401 - fixture
 
-from herness.core import errors
+from herness.core import errors, secrets
 from herness.core import time as clock
 from herness.core.errors import (
     CircuitOpen,
@@ -44,6 +44,7 @@ pytestmark = pytest.mark.unit
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 OWNER = "h:1:cli"
 MAX = 3
+KNOWN_WITH_EMAIL = "hunter2-jane.doe@example.com-zz"  # a known value holding an e-mail shape
 
 
 # --- UT08-58: decide_failure table ---------------------------------------------------------
@@ -397,6 +398,35 @@ def test_ut08_59_unredactable_message_is_withheld(
     assert isinstance(message, str)
     assert "alice" not in message
     assert message == outcomes.MESSAGE_WITHHELD
+
+
+def test_ut08_59_unscrubbable_message_is_withheld(
+    fake_now: _Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-59 a failed known-secret scrub (T08-15b) stores the placeholder, never the text."""
+    monkeypatch.setattr(outcomes, "scrub_secrets", lambda *_a: {"event": "log.scrub.failed"})
+    row = _running()
+    assert _finish(row, SchemaViolation("upstream said no")) == "failed"
+    assert (_get(row.job_id).last_error or {})["message"] == outcomes.MESSAGE_WITHHELD
+
+
+def test_ut08_59_message_scrubbed_before_redaction(
+    fake_now: _Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-59 scrub runs before redaction (T08-15b): a known value holding an e-mail shape is
+    masked whole, so no part of it survives as a redaction placeholder."""
+    monkeypatch.setattr(secrets, "_KNOWN", {KNOWN_WITH_EMAIL})
+    monkeypatch.setattr(secrets, "_KNOWN_VERSION", secrets._KNOWN_VERSION + 1)
+    # force a scrub-cache rebuild now and restore the previous cache afterwards
+    monkeypatch.setattr(secrets, "_scrub_version", -1)
+    monkeypatch.setattr(secrets, "_scrub_pattern", None)
+    row = _running()
+    assert _finish(row, SchemaViolation(f"rejected {KNOWN_WITH_EMAIL} today")) == "failed"
+    message = (_get(row.job_id).last_error or {})["message"]
+    assert isinstance(message, str)
+    assert "***" in message
+    assert "-zz" not in message
+    assert "[EMAIL_" not in message
 
 
 def test_ut08_59_fatal_error_fails(fake_now: _Clock) -> None:

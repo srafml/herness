@@ -1,7 +1,8 @@
 """Controller-verification tests of U08-86 (InlineJobContext, InlineServiceControl).
 
-IT08-12 (the spec test of U08-86) needs `run_inline` (T08-22); until then these unit tests
-cover the inline context on a fake `GpuController` and a fake jobs backend.
+IT08-12 (the spec test of U08-86 and U08-90) runs the inline context through the real
+`run_inline` in tests/integration/jobs/test_jobs_inline.py (T08-22); these unit tests cover
+the inline context on a fake `GpuController` and a fake jobs backend.
 """
 
 from __future__ import annotations
