@@ -571,7 +571,7 @@ def test_ut07_63_ten_max_length_targets_fit(env: Env) -> None:
     content = _summary_content()
     assert len(content) <= 2000
     assert content.count("service:") == 10
-    assert "service:" + "a" * 150 + "," in content
+    assert "service:" + "a" * 142 + "," in content  # the label is cut to 150 chars
     assert "k" * 150 not in content
 
 
@@ -604,3 +604,45 @@ def test_ut07_66_step_one_filter_below_default_threshold() -> None:
     assert (adj.similar, adj.delta) == ([], 0.0)
     kept = _adj(0.5, [_prior("worse", target_id="svc_b")], cfg=cfg)
     assert len(kept.similar) == 1
+
+
+# ---------------------------------------------------------------- review round 2
+
+
+def test_ut07_63_redaction_inflated_ids_fit(env: Env) -> None:
+    """UT07-63 ids whose redaction masks are longer than the text still fit content_max."""
+    f = seed_finding()
+    recs = [_draft(i, [f], target_type="work_item", target_id=f"{chr(96 + i)} " + "a@b.io " * 27)
+            for i in range(1, 11)]  # fmt: skip
+    deps = _deps(env)
+    ids = write_recommendations(RUN_ID, recs, deps=deps, now=NOW)
+    assert len(ids) == len(_recs()) == 10
+    content = _summary_content()
+    assert len(content) <= deps.content_max
+    assert "a@b.io" not in content
+
+
+def test_ut07_63_small_content_max(env: Env) -> None:
+    """UT07-63 a content_max of 100 leaves no room for labels: 'for other targets.'."""
+    f = seed_finding()
+    deps = RecommendDeps(conn_factory=core.connection, writer=env.writer, adjust=_keep,
+                         redactor=env.redactor, allowed=(), content_max=100)  # fmt: skip
+    write_recommendations(RUN_ID, [_draft(1, [f]), _draft(2, [f])], deps=deps, now=NOW)
+    content = _summary_content()
+    assert content == f"Run {RUN_ID} (org_review) recorded recommendations for other targets."
+    assert len(content) <= 100
+
+
+def test_ut07_63_personal_data_in_target_is_masked(env: Env) -> None:
+    """UT07-63 a target id with a planted email or name is shown masked; the write passes."""
+    f = seed_finding()
+    recs = [_draft(1, [f], target_id=f"owner {PLANTED_EMAIL}"),
+            _draft(2, [f], target_type="team", target_id=f"lead {PLANTED_NAME}"),
+            _draft(3, [f], target_id="svc_plain")]  # fmt: skip
+    assert len(write_recommendations(RUN_ID, recs, deps=_deps(env), now=NOW)) == 3
+    content = _summary_content()
+    assert PLANTED_EMAIL not in content
+    assert PLANTED_NAME not in content
+    assert "service:owner " in content
+    assert "team:lead " in content
+    assert content.endswith(", service:svc_plain.")

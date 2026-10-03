@@ -1,10 +1,9 @@
 """Run-end recommendations and outcome feedback into confidence (impl 07 U07-78 … U07-80).
 
-Design 07 §5.9 "Run end" and §5.10. `write_recommendations` validates every draft and
-adjusts its confidence outside the write transaction (adjusting embeds), then inserts the
-rows and the run's `run_summary` item in one `run_write`; a resume with the same targets
-returns the same ids. Only `recommendation.confidence` is adjusted (TH07-04); summaries
-cite numbers through markers only (TH07-03). Logs carry ids and counts, never text.
+Design 07 §5.9 "Run end" and §5.10. Drafts are validated and adjusted (which embeds) outside
+the write transaction; rows and the `run_summary` item go in one `run_write`, and a resume with
+the same targets returns the same ids. Only `recommendation.confidence` is adjusted (TH07-04);
+summaries cite numbers through markers only (TH07-03). Logs carry ids and counts, never text.
 """
 
 from __future__ import annotations
@@ -48,7 +47,8 @@ MAX_RECS: Final = 50
 _TOP: Final = 10  # targets in the run_summary text; finding ids in its data
 _QUESTION_MAX: Final = 500
 _SIMILAR_MAX: Final = 20
-_ID_CHARS: Final = 150  # 10 labels of <= 160 chars + head + tail stay under 2,000 (size.content)
+_ID_CHARS: Final = 150  # one redacted target label at most; the total is `content_max`
+_FRAME: Final = len(" for ") + len(" and other targets.") - len(", ")  # text around the labels
 _LOOKUP_CHUNK: Final = 500  # the ops id-list limit (C2)
 _CENT: Final = Decimal("0.01")
 _DELTA_TYPE: Final = (-0.25, 0.15)  # ConfidenceAdjustment field bounds
@@ -78,6 +78,7 @@ class RecommendDeps:
     adjust: Callable[[RecommendationDraft, float], ConfidenceAdjustment]
     redactor: Redactor
     allowed: Sequence[re.Pattern[str]]
+    content_max: int = 2000  # memory.write.max_content_chars (size.content)
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -106,9 +107,8 @@ def _strip(text: str) -> str:
     return _WS.sub(" ", core_numbers.ANY_MARKER_RE.sub(" ", text)).strip()
 
 
-def _text_sims(
-    summary: str, others: Sequence[str], embed: Callable[[str], np.ndarray]
-) -> list[float]:
+def _text_sims(summary: str, others: Sequence[str],
+               embed: Callable[[str], np.ndarray]) -> list[float]:  # fmt: skip
     """Dot products of the stripped summaries; all 0 (logged) when the embedder is down."""
     if not others:
         return []
@@ -145,10 +145,8 @@ def outcome_adjustment(  # noqa: PLR0913 - signature fixed by U07-80
         if sim >= cfg.sim_threshold:
             kept.append((sim, p))
     kept.sort(key=lambda k: (-k[0], k[1]["rec_id"]))  # a fixed summation order too
-    num = den = 0.0
-    for sim, p in kept:
-        weight = sim * _decay(p["measured_at"], now)
-        num, den = num + weight * _VALUE[p["verdict"]], den + weight
+    weights = [(sim * _decay(p["measured_at"], now), _VALUE[p["verdict"]]) for sim, p in kept]
+    num, den = sum(w * v for w, v in weights), sum(w for w, _ in weights)
     lo, hi = max(_DELTA_TYPE[0], cfg.delta_bounds[0]), min(_DELTA_TYPE[1], cfg.delta_bounds[1])
     delta = _clamp(cfg.alpha * num / (den + cfg.k0), lo, hi) if kept else 0.0
     c_lo = max(_CONF_TYPE[0], cfg.confidence_bounds[0])
@@ -194,9 +192,8 @@ def _failed_check(
     return next((name for name, ok in checks if not ok), None)
 
 
-def _validate(
-    run_id: str, ordered: Sequence[RecommendationDraft], deps: RecommendDeps
-) -> list[float]:
+def _validate(run_id: str, ordered: Sequence[RecommendationDraft],
+              deps: RecommendDeps) -> list[float]:  # fmt: skip
     """Step 3 for every draft (first failure raises); returns each draft's base confidence."""
     conn = deps.conn_factory()
     fids = (f for r in ordered for f in r.finding_ids)
@@ -248,12 +245,16 @@ def _redact(redactor: Redactor, text: str) -> str:
 
 
 def _content(run: ops.RunRow, ordered: Sequence[RecommendationDraft], deps: RecommendDeps) -> str:
-    """First 10 targets by rank, ids cut to 150 chars; a redacted label with a numeral is left
-    out (rec_ids keep it): numeral-free and within 2,000 chars (spec note T07-15)."""
-    labels = [_redact(deps.redactor, f"{r.target_type}:{r.target_id[:_ID_CHARS]}")
+    """First 10 targets by rank as redacted labels cut to 150 chars; one with a numeral is left
+    out (rec_ids keep it); labels are added while the text fits `content_max` (spec note)."""
+    labels = [_redact(deps.redactor, f"{r.target_type}:{r.target_id}")[:_ID_CHARS]
               for r in ordered[:_TOP]]  # fmt: skip
-    shown = [t for t in labels if not find_uncited_numerals(t, deps.allowed)]
     text = f"Run {run.run_id} ({run.kind}) recorded recommendations"
+    room, shown = deps.content_max - len(text) - _FRAME, list[str]()
+    for label in (t for t in labels if not find_uncited_numerals(t, deps.allowed)):
+        if (room := room - len(label) - len(", ")) < 0:
+            break
+        shown.append(label)
     text += f" for {', '.join(shown)}" if shown else ""
     if len(shown) < len(labels):
         text += " and other targets" if shown else " for other targets"
