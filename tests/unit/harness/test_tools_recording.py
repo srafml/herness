@@ -359,6 +359,7 @@ _NON_ROW_HASHES = {
     ("memory/tokens.py", "_message_key"),  # per-message token-count cache key (U07-68)
     ("memory/store.py", "embed"),  # embedding LRU cache key (U07-48)
     ("roles/base.py", "prompt_hash"),  # prompt file version hash (U05-49)
+    ("swarm/lifecycle.py", "request_config_hash"),  # run.config_hash (U06-83)
 }
 _HASH_CALLS = frozenset({"sha1", "sha224", "sha256", "sha384", "sha512", "blake2b", "blake2s"})
 _HASH_CALLS |= {"md5", "sha3_256", "sha256_hex", "new"}
