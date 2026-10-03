@@ -5,6 +5,7 @@ Run: pytest -m "integration and slow" tests/bench.
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import sys
 import time
@@ -12,6 +13,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import IO
 
+import psutil
 import pytest
 from tests.support.config_tree import write_full_config
 from tests.support.fake_keyring import MemoryKeyring
@@ -98,6 +100,18 @@ def _await_line(stream: IO[str], token: str) -> bool:
     return any(line.strip() == token for line in stream)
 
 
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    """Kill the peer and its descendants (the venv python.exe launcher spawns the real one)."""
+    try:
+        family = [*psutil.Process(proc.pid).children(recursive=True), psutil.Process(proc.pid)]
+    except psutil.NoSuchProcess:
+        family = []
+    for member in family:
+        with contextlib.suppress(psutil.NoSuchProcess):
+            member.kill()
+    proc.wait(timeout=30)
+
+
 def test_bt08_05_breaker_open_seen_by_other_process(
     bound: None, ops_store: OpsStoreHandle, tmp_path: Path
 ) -> None:
@@ -105,7 +119,8 @@ def test_bt08_05_breaker_open_seen_by_other_process(
     `state()` in B (a second Python process) until open: seen within 5 s."""
     del bound
     argv = [sys.executable, "-c", _PEER, str(tmp_path / "cfg" / "config"), str(ops_store.db_path)]
-    with subprocess.Popen(argv, stdout=subprocess.PIPE, text=True) as peer:  # noqa: S603
+    peer = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)  # noqa: S603
+    try:
         assert peer.stdout is not None
         assert _await_line(peer.stdout, "ready")
         time.sleep(CACHE_AGE_S)  # B is mid-way through a cache lifetime, as a running process is
@@ -114,6 +129,8 @@ def test_bt08_05_breaker_open_seen_by_other_process(
         found = _await_line(peer.stdout, "seen")
         seen = time.monotonic() - opened
         peer.wait(timeout=30)
+    finally:
+        _kill_tree(peer)
     sys.stderr.write(f"BT08-05 open seen by peer after {seen:.3f} s\n")
     assert found
     assert seen <= 5.0

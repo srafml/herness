@@ -9,11 +9,13 @@ Run: pytest -m fault tests/bench/test_jobs_bench.py; pytest -m gpu tests/bench/t
 
 from __future__ import annotations
 
+import contextlib
 import os
 import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from datetime import timedelta
@@ -41,6 +43,7 @@ pytestmark = [pytest.mark.fault, pytest.mark.slow]
 GPU_ENV = "HERNESS_GPU_BENCH"
 SAME_HOST_BUDGET_S = 10.0
 OTHER_OWNER_MARGIN_S = 30.0
+CLAIM_TIMEOUT_S = 120.0
 LEASE_S = 3  # the lease the other-owner case runs with; the budget is LEASE_S + 30 s
 
 _CHILD = """
@@ -66,21 +69,34 @@ def _claim_in_child(
     argv = [sys.executable, "-c", _CHILD, str(tmp_path / "config"), str(ops_store.db_path), host]
     child = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)  # noqa: S603
     assert child.stdout is not None
-    for line in child.stdout:  # the child's stdout also carries log lines
-        parts = line.split()
-        if parts[:1] == ["claimed"]:
-            assert parts[1] != "-", "the child claimed nothing"
-            return child, parts[1]
-    msg = "child exited before claiming"
-    raise AssertionError(msg)
+    # A hung child would block the read forever: the timer kills it, which ends the read.
+    watchdog = threading.Timer(CLAIM_TIMEOUT_S, child.kill)
+    watchdog.start()
+    try:
+        for line in child.stdout:  # the child's stdout also carries log lines
+            parts = line.split()
+            if parts[:1] == ["claimed"]:
+                assert parts[1] != "-", "the child claimed nothing"
+                return child, parts[1]
+        msg = "child exited before claiming"
+        raise AssertionError(msg)  # noqa: TRY301 - the handler below kills the child
+    except BaseException:
+        _kill(child)  # never leak the 600 s sleeper
+        raise
+    finally:
+        watchdog.cancel()
 
 
 def _kill(child: subprocess.Popen[str]) -> None:
     """Kill the child and its descendants (the venv python.exe launcher spawns the real one)."""
-    proc = psutil.Process(child.pid)
-    family = [*proc.children(recursive=True), proc]
+    try:
+        proc = psutil.Process(child.pid)
+        family = [*proc.children(recursive=True), proc]
+    except psutil.NoSuchProcess:
+        family = []
     for member in family:
-        member.kill()
+        with contextlib.suppress(psutil.NoSuchProcess):
+            member.kill()
     psutil.wait_procs(family, timeout=30)
     child.wait(timeout=30)
 
@@ -138,11 +154,13 @@ def gpu(ops_store: OpsStoreHandle) -> Iterator[GpuController]:
     del ops_store
     c.reset_config()
     c.init_config("local", config_dir=REPO / "config", env=dict(os.environ))
-    bind_core_backends()
-    controller = GpuController(worker_id=None, runner=ComposeRunner(), http=LoopbackHttp())
-    controller.detect_loaded_class()
-    yield controller
-    c.reset_config()
+    try:
+        bind_core_backends()
+        controller = GpuController(worker_id=None, runner=ComposeRunner(), http=LoopbackHttp())
+        controller.detect_loaded_class()
+        yield controller
+    finally:
+        c.reset_config()
 
 
 _needs_gpu = pytest.mark.skipif(
@@ -160,6 +178,7 @@ _needs_openjev = pytest.mark.skipif(
 
 def _timed(label: str, bench_id: str, seconds: float, budget_s: float) -> None:
     sys.stderr.write(f"{bench_id} {label} {seconds:.1f} s (target < {budget_s:g} s)\n")
+    assert seconds > 0, "no swap happened: the target class was already loaded"
     assert seconds < budget_s
 
 
