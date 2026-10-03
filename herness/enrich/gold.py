@@ -224,8 +224,7 @@ def _consolidate_question(
     fingerprint = _fingerprint(q)
     known = _keys_of(gold, q.id, fingerprint)
     grouped: dict[str, list[dict[str, object]]] = {}
-    ordered = reviews.sort_by([("labeled_at", "ascending"), ("item_id", "ascending")])
-    for row in ordered.to_pylist():
+    for row in reviews.to_pylist():  # sorted by (labeled_at, item_id) in consolidate_gold
         if row["question"] == q.id and row["question_fingerprint"] == fingerprint:
             grouped.setdefault(str(row["content_hash"]), []).append(row)
     rows: list[dict[str, object]] = []
@@ -251,13 +250,15 @@ def consolidate_gold(
     distinct reviewer whose answer equals one of the two adjudicates (true). Otherwise a new
     item with the original payload is created unless one is pending. A question is frozen
     (``freeze_gold`` with `gold_digest`) once nothing is pending and it has >= ``gold_size``
-    rows, or >= 1,000 (top-up exhausted). Runs under ``data/locks/labels.lock``; raises
+    rows, or >= 1,000 rows with the class top-up exhausted: every class with >= 1 % teacher
+    prevalence has >= 30 gold rows (T03-29 spec note). Runs under ``data/locks/labels.lock``; raises
     ops, IO and lock (StoreBusy) errors.
     """
     lock = store.paths.data_root / "locks" / "labels.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
     with log_lock(lock, timeout_s=_LOCK_TIMEOUT_S):
         gold, reviews = _read_gold(store), store.read("gold_reviews")
+        reviews = reviews.sort_by([("labeled_at", "ascending"), ("item_id", "ascending")])
         fresh: dict[str, pa.Table] = {}
         again: set[tuple[str, str]] = set()
         for q in _questions(qs):
@@ -275,26 +276,33 @@ def consolidate_gold(
             asked[str(payload["question"])] += made
         pending = open_label_counts(qsv=qs.version, purposes=frozenset({PURPOSE}))
         gold = _read_gold(store)
+        teacher = store.read("teacher", columns=["question", "question_fingerprint", "answer"])
         status: dict[str, GoldStatus] = {}
         for q in _questions(qs):
+            rows = gold.filter(pa.array(_mask(gold, q), type=pa.bool_()))
+            n_gold = rows.num_rows
+            exhausted = not _class_needs(teacher, q, rows.column("answer").to_pylist())
+            complete = n_gold >= cfg.distill.gold_size or (n_gold >= EXHAUSTED_MIN and exhausted)
             new = fresh[q.id].num_rows if q.id in fresh else 0
-            status[q.id] = _status(store, q, gold, pending.get(q.id, 0), cfg, (new, asked[q.id]))
+            counts = (new, asked[q.id])
+            status[q.id] = _status(store, q, rows, pending.get(q.id, 0), complete, counts)
         return status
 
 
-def _status(store: LabelStore, q: Question, gold: pa.Table, pending: int,
-            cfg: DecisionsConfig, counts: tuple[int, int]) -> GoldStatus:  # fmt: skip
-    """Freeze ``q`` when complete and log ``enrich.gold.consolidated``."""
+def _mask(gold: pa.Table, q: Question) -> list[bool]:
+    """Rows of ``q`` at its current fingerprint."""
+    pairs = zip(gold.column("question").to_pylist(),
+                gold.column("question_fingerprint").to_pylist(), strict=True)  # fmt: skip
+    return [qid == q.id and fp == _fingerprint(q) for qid, fp in pairs]
+
+
+def _status(store: LabelStore, q: Question, rows: pa.Table, pending: int,
+            complete: bool, counts: tuple[int, int]) -> GoldStatus:  # fmt: skip
+    """Freeze ``q`` when nothing is pending and its gold ``rows`` are complete; log
+    ``enrich.gold.consolidated``."""
     fingerprint = _fingerprint(q)
-    mask = [
-        qid == q.id and fp == fingerprint
-        for qid, fp in zip(gold.column("question").to_pylist(),
-                           gold.column("question_fingerprint").to_pylist(), strict=True)
-    ]  # fmt: skip
-    rows = gold.filter(pa.array(mask, type=pa.bool_()))
     n_gold = rows.num_rows
     frozen = store.is_gold_frozen(q.id, fingerprint)
-    complete = n_gold >= min(cfg.distill.gold_size, EXHAUSTED_MIN)
     if not frozen and pending == 0 and complete:
         store.freeze_gold(q.id, fingerprint, gold_digest(rows), n_gold)
         frozen = True

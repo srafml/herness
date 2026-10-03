@@ -305,6 +305,28 @@ def test_ut03_117_ordered_pool_hash_order() -> None:
     assert text_hash(records[1].text) in hashes
 
 
+def test_ut03_116_allocate_largest_fraction_first() -> None:
+    """UT03-116: shares 3.33 / 6.67 -> the remainder unit goes to the larger fraction (b)."""
+    assert allocate({"a": 100, "b": 400}, 10, min_per=1) == {"a": 3, "b": 7}
+
+
+def test_ut03_117_capped_stratum_fills_from_three_fold_candidates() -> None:
+    """UT03-117: when the prototype cap rejects early candidates, the stratum still fills
+    from the 3 x n_h candidates (a 1 x pool would come up short)."""
+
+    def half_on_zero(content_hash: str) -> int:
+        value = int(content_hash, 16)
+        return 0 if value % 2 else 1 + value % 15
+
+    wh = warehouse([Rec(f"INC-{i:03d}", f"body {i}") for i in range(150)])
+    table = _sample(
+        wh, 50, snapshot=snapshot(), max_proto_share=0.2, vector_reader=proto_reader(half_on_zero)
+    )
+    assert table.num_rows == 50
+    per_proto = Counter(half_on_zero(h) for h in table.column("content_hash").to_pylist())
+    assert per_proto[0] == 10
+
+
 # --- UT03-118: select_active -------------------------------------------------------------------
 
 

@@ -96,12 +96,28 @@ def test_st03_05_gold_hashes_never_sampled_taught_or_trained(tmp_path: Path) -> 
     assert sampled
     assert not set(sampled) & gold
 
-    # teacher parts: the distill job appends the sample's teacher rows (step 5)
-    store.append("teacher", _teacher_rows(sampled))
-    assert not set(store.read("teacher").column("content_hash").to_pylist()) & gold
+    # control: the same draw without the exclusion picks gold hashes, so the pool really
+    # offers them and the teacher parts below would contain them without `exclude_hashes`
+    control = stratified_sample(
+        spy.wh, qs=QS, size=150, exclude_hashes=frozenset(), salt=SALT, snapshot=snapshot(),
+        vector_reader=proto_reader(lambda h: int(h, 16)),
+    )  # fmt: skip
+    leaked = set(control.column("content_hash").to_pylist()) & gold
+    assert len(leaked) >= 10
 
-    # training set: even teacher rows that name gold hashes are dropped
-    teacher = pa.concat_tables([store.read("teacher"), _teacher_rows(seeded[:20])])
+    # teacher parts: the distill job labels the drawn sample and appends it (step 5)
+    other = LabelStore(EnrichPaths(data_root=tmp_path / "ctl", embedding_path="data/e",
+                                   laya_current_file="c"), QSV)  # fmt: skip
+    other.append("teacher", _teacher_rows(control.column("content_hash").to_pylist()))
+    assert set(other.read("teacher").column("content_hash").to_pylist()) & gold == leaked
+    store.append("teacher", _teacher_rows(sampled))
+    parts = set(store.read("teacher").column("content_hash").to_pylist())
+    assert parts == set(sampled)
+    assert not parts & gold
+
+    # training set from those teacher parts; even teacher rows naming gold hashes (as in the
+    # control store) are dropped by `build_training_set`
+    teacher = pa.concat_tables([store.read("teacher"), other.read("teacher")])
     training = build_training_set(teacher, HUMAN_SCHEMA.empty_table(), texts=texts,
                                   questions=QS, gold=gold)  # fmt: skip
     trained = training.train.column("content_hash").to_pylist()

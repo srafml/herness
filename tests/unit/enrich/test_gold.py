@@ -83,11 +83,14 @@ def test_ut03_119_fold_by_hash_parity() -> None:
 # --- UT03-120: request_gold --------------------------------------------------------------------
 
 
-def _teacher_rows(n: int) -> pa.Table:
-    """Training rows: class a 90 %, b 8 %, c 1.5 %, d 0.5 % (d stays under 1 %)."""
-    labels = ["a"] * 180 + ["b"] * 16 + ["c"] * 3 + ["d"] * 1
+def _teacher_rows(
+    n: int, *, labels: list[str] | None = None, hashes: list[str] | None = None
+) -> pa.Table:
+    """Training rows: by default class a 90 %, b 8 %, c 1.5 %, d 0.5 % (d under 1 %)."""
+    labels = labels or ["a"] * 180 + ["b"] * 16 + ["c"] * 3 + ["d"] * 1
     rows = [
-        {"content_hash": f"{i:032x}", "record_id": f"TRN-{i}", "question": "q_c",
+        {"content_hash": hashes[i] if hashes else f"{i:032x}", "record_id": f"TRN-{i}",
+         "question": "q_c",
          "question_fingerprint": FP, "answer": labels[i % len(labels)],
          "distribution": [(labels[i % len(labels)], 1.0)], "decider": "openjev",
          "decider_version": "oj-1", "round": 0, "stratum": "s", "purpose": "initial"}
@@ -298,3 +301,75 @@ def test_ut03_121_follow_up_without_original_item(store: LabelStore) -> None:
     assert status["q_c"] == GoldStatus(n_gold=0, pending=0, frozen=False)
     assert gold_mod.PURPOSE == "gold"
     assert Path(store.paths.data_root / "locks" / "labels.lock").parent.is_dir()
+
+
+# --- fix round 1: exclusion, prevalence threshold, freeze rule ---------------------------------
+
+
+def _gold_table(start: int, n: int, answer: str) -> pa.Table:
+    rows = [
+        {"content_hash": f"{i:032x}", "record_id": f"INC-{i}", "question": "q_c",
+         "question_fingerprint": FP, "answer": answer, "labeled_by": USERS[0],
+         "labeled_at": T0, "item_id": f"rev_{i}", "fold": fold_of(f"{i:032x}"),
+         "adjudicated": False}
+        for i in range(start, start + n)
+    ]  # fmt: skip
+    return pa.Table.from_pylist(rows, schema=GOLD_SCHEMA)
+
+
+def test_ut03_120_training_hashes_never_requested(store: LabelStore) -> None:
+    """UT03-120 / TH03-04: with half the pool in the training sample, no training hash is
+    requested, neither by the draw nor by the class top-up."""
+    records = many(2_400)
+    wh = warehouse(records)
+    training = [r.hash for r in records[::2]]
+    store.append("teacher", _teacher_rows(len(training), hashes=training))
+    args = {"qs": QS, "store": store, "cfg": _cfg(), "teacher_answers": _teacher_answer,
+            "snapshot": None, "vector_reader": no_vectors}  # fmt: skip
+    created = request_gold(wh, **args)  # type: ignore[arg-type]
+    items = _pending()
+    assert created == {"q_c": len(items)}
+    assert Counter(item.payload["answer"] for item in items)["c"] >= 30  # top-up ran
+    assert not {item.payload["content_hash"] for item in items} & set(training)
+
+
+def test_ut03_120_top_up_only_at_one_percent_prevalence(store: LabelStore) -> None:
+    """UT03-120: class c at exactly 1 % prevalence is topped up to 30; class d at 0.9 % is not."""
+    wh = warehouse(many(1_500))
+    labels = ["a"] * 980 + ["c"] * 10 + ["d"] * 9 + ["b"]
+    store.append("teacher", _teacher_rows(1_000, labels=labels))
+
+    def answer(content_hash: str, qid: str) -> str:
+        value = int(content_hash, 16) % 25
+        return {0: "c", 1: "d"}.get(value, "a")
+
+    args = {"qs": QS, "store": store, "cfg": _cfg(), "teacher_answers": answer,
+            "snapshot": None, "vector_reader": no_vectors}  # fmt: skip
+    request_gold(wh, **args)  # type: ignore[arg-type]
+    answers = Counter(item.payload["answer"] for item in _pending())
+    assert answers["c"] >= 30
+    assert answers["d"] < 30
+
+
+def test_ut03_122_no_freeze_while_an_item_is_pending(store: LabelStore) -> None:
+    """UT03-122: gold_size rows but one gold item still pending -> not frozen (yet)."""
+    store.append("gold", _gold_table(1, 100, "a"))
+    item = _gold_item("f" * 32)
+    status = consolidate_gold(store, qs=QS, cfg=_cfg(), now=T0)
+    assert status["q_c"] == GoldStatus(n_gold=100, pending=1, frozen=False)
+    decide_review_item(item.item_id, "rejected", decided_by=USERS[0], now=T0)
+    assert consolidate_gold(store, qs=QS, cfg=_cfg(), now=T0)["q_c"].frozen
+
+
+def test_ut03_122_floor_needs_class_top_up_exhausted(store: LabelStore) -> None:
+    """UT03-122: rejected items leave 1,000 <= n_gold < gold_size; while a >= 1 % class has
+    under 30 gold rows the set is not frozen; once every such class has 30 it is."""
+    store.append("teacher", _teacher_rows(200))  # a 90 %, b 8 %, c 1.5 %, d 0.5 %
+    store.append("gold", _gold_table(0, 1_000, "a"))
+    store.append("gold", _gold_table(1_000, 30, "b"))
+    store.append("gold", _gold_table(1_030, 29, "c"))
+    status = consolidate_gold(store, qs=QS, cfg=_cfg(1_500), now=T0)
+    assert status["q_c"] == GoldStatus(n_gold=1_059, pending=0, frozen=False)
+    store.append("gold", _gold_table(1_059, 1, "c"))  # d (0.5 %) needs nothing
+    status = consolidate_gold(store, qs=QS, cfg=_cfg(1_500), now=T0)
+    assert status["q_c"] == GoldStatus(n_gold=1_060, pending=0, frozen=True)
