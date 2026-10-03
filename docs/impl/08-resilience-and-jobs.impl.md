@@ -108,6 +108,7 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/jobs/child.py` | Child process entry | `child_main` | L0 | none | 150 |
 | `herness/core/jobs/inline.py` | CLI inline run | `run_inline` | L0 | none | 200 |
 | `herness/core/jobs/status.py` | Status, health, resume enqueue | `StatusSnapshot`, `status_snapshot`, `ComponentHealth`, `health`, `ResumeResult`, `enqueue_resume` | L0 | none | 330 |
+| `herness/core/jobs/_status_views.py` | Private row views of `status_snapshot`: the nested `TypedDict`s of the §3.17 keys and the window and next-job view builders (split from status.py to stay under 330, T08-22) | none (private) | L0 | none | 130 |
 | `herness/store/ops/resilience.py` | SQL for `source_health`, `resilience_event`; backend binding (R-08) | `SqliteResilienceBackend`, `purge_events`, `bind_core_backends` | L1 | none | 320 |
 | `herness/store/ops/metrics.py` | The single `metric_sample` writer and its purge (R-12) | `record_metric_samples`, `purge_metric_samples` | L1 | none | 120 |
 | `herness/store/ops/jobs.py` | SQL for `job` (R-08) | `SqliteJobsBackend` (job methods) | L1 | none | 400 |
@@ -2291,6 +2292,7 @@ All events carry `ts`, `level`, `event`, `component` (`resilience` or `jobs`), t
 | `jobs.worker.start_failed` | ERROR | `worker_id`, `error_type` (T08-21: any unexpected exception in `run()`; exit code 1, R-46) | U08-87 |
 | `jobs.gpu.restart_failed` | WARNING | `service`, `error_type` (T08-21: the step 7a restart check's `restart_service` raised) | U08-87 |
 | `jobs.gpu.class_requested` | INFO | `worker_id`, `class` | U08-102 |
+| `jobs.inline.heartbeat_failed` | WARNING | `job_id`, `error_type` (T08-22: a lease heartbeat of `run_inline` raised; retried at the next beat) | U08-90 |
 | `jobs.supervisor.tick_failed` / `.store_unavailable` | ERROR / CRITICAL | `failed_ticks`, `error_type` | U08-87 |
 
 ### 8.2 Metrics (`metric_sample`)
