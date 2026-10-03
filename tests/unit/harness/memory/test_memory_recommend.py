@@ -40,6 +40,7 @@ from herness.harness.memory.recommend import (
 )
 from herness.harness.memory.settings import FeedbackConfig
 from herness.harness.memory.types import MemoryNotFound
+from herness.store import ops
 from herness.store.ops import SimilarityRow, core
 
 pytestmark = pytest.mark.unit
@@ -478,3 +479,52 @@ def test_ut07_66_feedback_bounds_from_config() -> None:
     assert _adj(0.9, [_prior("paid_off")] * 10, cfg=cfg).confidence == 0.6
     worse = _adj(0.1, [_prior("worse")] * 10, cfg=cfg)
     assert (worse.delta, worse.confidence) == (-0.1, 0.2)
+
+
+def _verified_finding(run_id: str) -> str:
+    finding_id = "fnd_" + new_ulid()
+    sql = (
+        "INSERT INTO finding (finding_id, run_id, task_id, author_role, claim, query_ids,"
+        " confidence, status, created_at) VALUES (?, ?, ?, 'analyst', 'c', '[]', 0.8,"
+        " 'verified', ?)"
+    )
+    params = (finding_id, run_id, TASK_ID, clock.format_utc(NOW))
+
+    def seed(c: sqlite3.Connection) -> None:
+        c.execute(sql, params)
+
+    core.run_write(seed, op="test_seed")
+    return finding_id
+
+
+def test_ut07_66_store_priors_lower_confidence(env: Env) -> None:
+    """UT07-66 a stored no_effect outcome on the same target lowers the new confidence."""
+    f = _verified_finding(RUN_ID)
+    (prior_id,) = write_recommendations(RUN_ID, [_draft(1, [f])], deps=_deps(env), now=NOW)
+    params = (prior_id, clock.format_utc(NOW), QID)
+
+    def seed(c: sqlite3.Connection) -> None:
+        c.execute(
+            "INSERT INTO outcome (outcome_id, rec_id, measurement, measured_at, metric,"
+            " query_id, verdict) VALUES ('out_1', ?, 1, ?, 'mttr', ?, 'no_effect')",
+            params,
+        )
+
+    core.run_write(seed, op="test_seed")
+    priors = ops.outcomes_for_similarity()
+
+    def adjust(r: RecommendationDraft, base: float) -> ConfidenceAdjustment:
+        return outcome_adjustment(
+            r, base, priors=priors, embed=_same, related=_never, cfg=CFG, now=NOW
+        )
+
+    other = "run_" + new_ulid()
+    _run(run_id=other)
+    g = _verified_finding(other)
+    (rec_id,) = write_recommendations(other, [_draft(1, [g])], deps=_deps(env, adjust), now=NOW)
+    row = next(r for r in _recs() if r["rec_id"] == rec_id)
+    assert row["confidence"] < 0.8
+    assert row["confidence_basis"]["similar"] == [
+        {"rec_id": prior_id, "sim": 1.0, "verdict": "no_effect", "outcome_query_id": QID}
+    ]
+    assert row["confidence_basis"]["delta"] == pytest.approx(0.5 * -0.5 / 2.0)
