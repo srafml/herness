@@ -4,14 +4,17 @@ Each test builds the empty `metrics_tiny` DDL with the real stage 400 facts
 (`tests.support.metrics_funding.warehouse`) for one hand-computed entity, writes its own
 `score.org` rows and runs `run_levers_step`. `as_of` is 2026-04-01 in America/New_York.
 
-The entity: team T1 "Payments" in org O1 "Ops", owning service S1 (criticality 1). Base
-quantities over the trailing 12 months (hand-computed from the weights of design 04 §10.1):
+The entity: team T1 "Payments" in org O1 "Ops" (child of O0 "Group"), owning service S1
+(criticality 1). Base quantities over the trailing 12 months (hand-computed from the weights of
+design 04 §10.1):
 - incidents I1 (2026-01-18), I2, I3 (P1, 60 impact minutes each, so downtime 10000 USD each);
   I2 resolves after 2 business hours, toil 2 h x 1.5 x 100 USD = 300 USD; I3 is caused by C1.
-  N = 3, sum downtime 30000, sum toil 300, avg total 10100, avg toil 100. A canceled
-  incident and one of another team (T9, no org) do not count.
-- changes C1 (failed: caused I3), C2 (successful), C3 (backed_out) deployed in the window, C4
-  canceled, C5 outside the window: D = 3, F = 2, CC = 10000 (I3), so CC / F = 5000.
+  N = 3, sum downtime 30000, sum toil 300, avg total 10100, avg toil 100. Not counted: the
+  in-window canceled I8 (caused by C3; its fact row is given money so a missing exclusion
+  shows), I7 opened after as_of (caused by C3), and I9 of another team (T9, no org).
+- changes C1 (failed: caused I3), C2 and C6 (successful), C3 (backed_out) deployed in the
+  window, C4 canceled, C5 outside the window: D = 4, F = 2, CC = 10000 (I3 only; I8 is
+  excluded, I7 is after as_of), so CC / F = 5000.
 - events E1-E4 (severity major) in the window; one info event and one outside the window do
   not count: E = 4.
 - observed days = 2026-01-18 .. 2026-04-01 = 73, so the annualization factor 365 / 73 = 5.
@@ -85,12 +88,17 @@ def _rows() -> dict[str, list[dict[str, object]]]:
     i2.update(resolved_at="2026-02-01 12:00:00-05", business_duration_s=7200)
     i3 = incident("I3", opened="2026-03-01 10:00:00-05")
     i3["caused_by_change_id"] = "C1"
-    canceled = incident("I8", opened="2025-01-02 10:00:00-05")
-    canceled["state"] = "canceled"
+    canceled = incident("I8", opened="2026-02-15 10:00:00-05")
+    canceled.update(state="canceled", caused_by_change_id="C3")
+    late = incident("I7", opened="2026-04-05 10:00:00-04")
+    late["caused_by_change_id"] = "C3"
     old = incident("I9", opened="2026-01-20 10:00:00-05")
     old.update(team_id="T9")
     return {
-        "core.org": [{"org_id": "O1", "name": "Ops", "source": "servicenow"}],
+        "core.org": [
+            {"org_id": "O0", "name": "Group", "source": "servicenow"},
+            {"org_id": "O1", "name": "Ops", "parent_org_id": "O0", "source": "servicenow"},
+        ],
         "core.team": [
             {"team_id": "T1", "name": "Payments", "org_id": "O1", "active": True},
             {"team_id": "T9", "name": "Other", "org_id": None, "active": True},
@@ -104,6 +112,7 @@ def _rows() -> dict[str, list[dict[str, object]]]:
             i2,
             i3,
             canceled,
+            late,
             old,
         ],
         "core.change": [
@@ -112,6 +121,7 @@ def _rows() -> dict[str, list[dict[str, object]]]:
             _change("C3", "2026-03-15 12:00:00-05", "backed_out"),
             _change("C4", None, "canceled"),
             _change("C5", "2025-01-10 12:00:00-05", "backed_out"),
+            _change("C6", "2026-03-20 12:00:00-04", "successful"),
         ],
         "core.event": [
             *(_event(f"E{k}", f"2026-03-0{k} 08:00:00-05") for k in range(1, 5)),
@@ -146,6 +156,10 @@ def _ctx(weights: WeightsConfig | None = None, *, top_entities: int = 50) -> Ste
 @pytest.fixture
 def con() -> Iterator[duckdb.DuckDBPyConnection]:
     c = warehouse(_rows())
+    c.execute(
+        "UPDATE metrics.incident_fact SET downtime_usd = 7000, toil_usd = 700, total_usd = 7700"
+        " WHERE record_id = 'I8'"
+    )
     c.execute(_ORG_DDL)
     try:
         yield c
@@ -216,11 +230,11 @@ def test_ut04_92_mttr_delta(con: duckdb.DuckDBPyConnection) -> None:
 def test_ut04_92_mttr_org_entity_uses_closure_and_service_org(
     con: duckdb.DuckDBPyConnection,
 ) -> None:
-    """UT04-92 org O1 sees the same records through org_closure; a lone org has no quartile."""
+    """UT04-92 parent org O0 sees O1's records through org_closure; a lone org has no quartile."""
     kind = "org"
     _org(
         con,
-        "O1",
+        "O0",
         "mttr_hours",
         10.0,
         peer_median=6.0,
@@ -230,10 +244,10 @@ def test_ut04_92_mttr_org_entity_uses_closure_and_service_org(
     )
     run_levers_step(con, _ctx())
     rows = _levers(con)
-    assert list(rows) == [("org", "O1", "mttr_hours", "peer_median")]
-    row = rows["org", "O1", "mttr_hours", "peer_median"]
+    assert list(rows) == [("org", "O0", "mttr_hours", "peer_median")]
+    row = rows["org", "O0", "mttr_hours", "peer_median"]
     assert row["delta_usd"] == Decimal("60600.00")
-    assert row["template_params"]["entity_name"] == "Ops"
+    assert row["template_params"]["entity_name"] == "Group"
 
 
 def test_ut04_92_mttr_zero_value_is_skipped(con: duckdb.DuckDBPyConnection) -> None:
@@ -267,19 +281,29 @@ def test_ut04_96_sla_delta(con: duckdb.DuckDBPyConnection) -> None:
 
 
 def test_ut04_97_cfr_delta(con: duckdb.DuckDBPyConnection) -> None:
-    """UT04-97 cfr: D 3 x (x - t) x (backout 4 h x 100 + CC 10000 / F 2) x 5."""
+    """UT04-97 cfr: D 4 x (x - t) x (backout 4 h x 100 + CC 10000 / F 2) x 5.
+
+    CC holds I3 only: the excluded I8 and I7 (opened after as_of) of failed C3 do not count.
+    """
     got = _delta(con, "cfr", RATE_VALUES, _ctx())
-    assert got == {"peer_median": Decimal("20250.00"), "top_quartile": Decimal("30375.00")}
+    assert got == {"peer_median": Decimal("27000.00"), "top_quartile": Decimal("40500.00")}
+
+
+def test_ut04_97_cc_counts_only_failed_changes(con: duckdb.DuckDBPyConnection) -> None:
+    """UT04-97 C1 not failed: F 1 (C3), CC 0, so D 4 x 0.25 x 400 x 5 = 2000."""
+    con.execute("UPDATE metrics.change_fact SET failed = false WHERE record_id = 'C1'")
+    got = _delta(con, "cfr", RATE_VALUES, _ctx())
+    assert got == {"peer_median": Decimal("2000.00"), "top_quartile": Decimal("3000.00")}
 
 
 def test_ut04_97_cfr_without_failed_changes_uses_backout_only(
     con: duckdb.DuckDBPyConnection,
 ) -> None:
-    """UT04-97 F = 0: the change-caused term is 0; D 2 x 0.25 x 400 x 5 = 1000."""
+    """UT04-97 F = 0: the change-caused term is 0; D 3 x 0.25 x 400 x 5 = 1500."""
     con.execute("UPDATE metrics.change_fact SET failed = false")
     con.execute("DELETE FROM metrics.change_fact WHERE record_id = 'C3'")
     got = _delta(con, "cfr", RATE_VALUES, _ctx())
-    assert got == {"peer_median": Decimal("1000.00"), "top_quartile": Decimal("1500.00")}
+    assert got == {"peer_median": Decimal("1500.00"), "top_quartile": Decimal("2250.00")}
 
 
 def test_ut04_98_noise_delta(con: duckdb.DuckDBPyConnection) -> None:
@@ -313,11 +337,20 @@ def test_ut04_99_zero_sla_penalty_skips_sla(con: duckdb.DuckDBPyConnection) -> N
 
 
 def test_ut04_99_rank_above_top_entities_is_skipped(con: duckdb.DuckDBPyConnection) -> None:
-    """UT04-99 with top_entities 1 only the rank-1 entity gets levers."""
-    _org(con, "T1", "mttr_hours", 10.0, peer_median=6.0, z=1.0, rank=1)
-    _org(con, "T2", "mttr_hours", 10.0, peer_median=6.0, z=1.0, rank=2)
-    run_levers_step(con, _ctx(top_entities=1))
-    assert {k[1] for k in _levers(con)} == {"T1"}
+    """UT04-99 T1 (with facts) at rank 2 gets no lever with top_entities 1, one with 2."""
+    _org(con, "T1", "mttr_hours", 10.0, peer_median=6.0, z=1.0, rank=2)
+    assert run_levers_step(con, _ctx(top_entities=1)).row_counts == {LEVER_TABLE: 0}
+    assert run_levers_step(con, _ctx(top_entities=2)).row_counts == {LEVER_TABLE: 1}
+
+
+@pytest.mark.parametrize("z", [0.0, -0.5])
+def test_ut04_99_non_positive_z_is_skipped(con: duckdb.DuckDBPyConnection, z: float) -> None:
+    """UT04-99 T1 (with facts, improving target) gets no lever when z_score <= 0."""
+    _org(con, "T1", "mttr_hours", 10.0, peer_median=6.0, z=z)
+    assert run_levers_step(con, _ctx()).row_counts == {LEVER_TABLE: 0}
+    con.execute("UPDATE score.org SET z_score = 0.1")
+    # other binds (top 49) so the control run is a new query, not a nondeterministic rerun
+    assert run_levers_step(con, _ctx(top_entities=49)).row_counts == {LEVER_TABLE: 1}
 
 
 def test_ut04_99_metric_without_usd_model_yields_no_row(con: duckdb.DuckDBPyConnection) -> None:
@@ -429,7 +462,7 @@ def test_ut04_100_template_params_keys_are_placeholders(con: duckdb.DuckDBPyConn
     templates = catalog.scoring.levers.templates
     assert {k[2] for k in rows} == set(MODEL_METRIC.values())
     assert len(rows) == 2 * len(MODEL_METRIC)
-    n_basis = {"cfr": 3, "noise": 4}
+    n_basis = {"cfr": 4, "noise": 4}
     for (_, _, metric, kind), row in rows.items():
         model = catalog.get(metric).usd_model
         params: Mapping[str, object] = row["template_params"]
@@ -464,3 +497,24 @@ def test_ut04_100_constants() -> None:
     assert set(MODEL_METRIC) == set(USD_MODELS)
     lever_models = {shipped_catalog().get(m).usd_model for m in MODEL_METRIC.values()}
     assert lever_models == set(USD_MODELS)
+
+
+def test_ut04_100_metric_without_unit_uses_other(
+    con: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT04-100 a lever metric missing from s_metric_units_k gets unit 'other'."""
+    real = StepContext.binds
+
+    def binds(self: StepContext) -> dict[str, object]:
+        out = real(self)
+        keys = list(out["s_metric_units_k"])  # type: ignore[call-overload]
+        vals = list(out["s_metric_units_v"])  # type: ignore[call-overload]
+        pos = keys.index("mttr_hours")
+        out["s_metric_units_k"] = keys[:pos] + keys[pos + 1 :]
+        out["s_metric_units_v"] = vals[:pos] + vals[pos + 1 :]
+        return out
+
+    monkeypatch.setattr(StepContext, "binds", binds)
+    _org(con, "T1", "mttr_hours", 10.0, peer_median=6.0, z=1.0)
+    run_levers_step(con, _ctx())
+    assert [r["template_params"]["unit"] for r in _levers(con).values()] == ["other"]

@@ -103,7 +103,7 @@ cc_e AS (
         FROM ({{ by_entity('chg') }}) x
         JOIN cause k ON k.change_id = x.record_id
         JOIN metrics.incident_fact f ON f.record_id = k.incident_id AND NOT f.excluded
-        WHERE x.failed
+        WHERE x.failed AND f.opened_at < {{ p('as_of_ts') }}
     ) y
     GROUP BY y.entity_type, y.entity_id
 ),
