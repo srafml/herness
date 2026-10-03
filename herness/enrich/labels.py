@@ -173,7 +173,10 @@ class LabelStore:
             if not folder.is_dir():
                 return schema.empty_table()
             dataset = ds.dataset(folder, format="parquet", ignore_prefixes=[".", "_"])
-            for fragment in dataset.get_fragments():
+            fragments = list(dataset.get_fragments())
+            if not fragments:  # e.g. gold/ with only _reviews/ and _frozen/ (T03-32 fix)
+                return schema.empty_table()
+            for fragment in fragments:
                 if not fragment.physical_schema.equals(_schema(kind), check_metadata=False):
                     msg = f"label part schema mismatch: {Path(fragment.path).name}"
                     raise SchemaViolation(msg, question_set_version=self.qsv)
