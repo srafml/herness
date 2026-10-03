@@ -1336,6 +1336,8 @@ Removed (R-33): see U07-51 and U07-52. `review_hooks` no longer exists. Review d
 | Security notes | none |
 | Tests | UT07-37 |
 
+T07-09 spec note (readings applied by the build of U07-51 … U07-56): (1) the `note` passed to `decide_review_item` by `approve` and `reject` is the stripped, redacted note stored in `data.approval_note` / `data.rejection_note`, so the review item never holds more personal data than the memory row; (2) "a review item still `pending`" is decided by calling `decide_review_item` and ignoring `ReviewItemConflict` and `NotFoundError` (both raised before any write), as U07-57 does, since impl 02 has no read by id with `conn`; (3) `expire_item` leaves an `expired` or a `rejected` item unchanged (both are terminal), and a `superseded_by` that does not exist is `ToolInputError` (precondition); (4) `expire` selects each batch with `maintenance_rows(..., conn=conn)` inside its `run_write` and pages by `after`, so a status changed concurrently is never overwritten; (5) `record_use` checks the 200-id limit before deduplication, writes nothing for an empty list and logs `memory.item.used` (DEBUG; run_id, count); (6) `expire_item` does not log `memory.item.expired`: its `reason` is caller text and is never logged (only `expire` logs, with reason `ttl`); (7) only the first 10 well-formed ids of `data.conflicts_with` are read, and the item itself is never superseded.
+
 #### U07-57 MemoryLifecycle.purge
 
 | Field | Content |
