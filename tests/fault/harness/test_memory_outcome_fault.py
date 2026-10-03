@@ -15,6 +15,7 @@ from tests.support.ops_store import OpsStoreHandle
 from tests.unit.harness.memory._outcome_env import (
     OutcomeEnv,
     accepted_rec,
+    all_closed,
     flat,
     improves,
     make_env,
@@ -57,7 +58,8 @@ def test_ft07_04_query_error_fails_job_next_sweep_measures_once(
         run()
     assert outcomes() == []
     assert summaries() == []
-    assert env.opened == 1  # the connection was opened and closed by the failed job
+    assert env.opened == 1
+    assert all_closed(env)  # the failed job still closed its warehouse connection
     first, _ = run()
     assert first.result == {"measured": 1, "skipped": 0, "verdicts": {"paid_off": 1}}
     second, _ = run()

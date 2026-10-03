@@ -144,6 +144,7 @@ class OutcomeEnv:
     catalog: MetricCatalog
     con: duckdb.DuckDBPyConnection
     opened: int = 0
+    cursors: list[duckdb.DuckDBPyConnection] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
 
 
@@ -160,7 +161,8 @@ def make_env(
 
     def open_current() -> duckdb.DuckDBPyConnection:
         box["env"].opened += 1
-        return con.cursor()
+        box["env"].cursors.append(con.cursor())
+        return box["env"].cursors[-1]
 
     def record(ev: Any) -> bool:
         box["env"].evidence.append(ev.query_id)
@@ -236,3 +238,14 @@ def summaries() -> list[dict[str, Any]]:
                    "provenance": core.load_json(r["provenance"], field="p")}
         for r in rows
     ]  # fmt: skip
+
+
+def all_closed(env: OutcomeEnv) -> bool:
+    """True when every connection the handler opened was closed (a closed one cannot run)."""
+    for cur in env.cursors:
+        try:
+            cur.execute("SELECT 1")
+        except duckdb.ConnectionException:
+            continue
+        return False
+    return bool(env.cursors)

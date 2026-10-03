@@ -106,6 +106,7 @@ class _Pair:
     deps: OutcomeDeps
     now: datetime
     w: stats.Windows
+    excluded: frozenset[str]  # TH07-18: ids of treated targets (any target type, conservative)
 
 
 @dataclass(slots=True)
@@ -169,10 +170,7 @@ def _measure(p: _Pair) -> tuple[_Measured, str]:
     kind, entity = _owner(p)
     if entity is None:  # unresolved owner: no series and no control, so inconclusive
         return out, pg.key
-    treated = ops.treated_targets(metric=p.due["metric"], start=_day(p.w.pre[0]),
-                                  end=_day(p.w.post[1]))  # fmt: skip
-    excluded = {target_id for _, target_id in treated}  # TH07-18; any target type (conservative)
-    peers = sorted(set(pg.member_ids) - {entity} - excluded)
+    peers = sorted(set(pg.member_ids) - {entity} - p.excluded)
     zero = timedelta(0)
     if pg.fallback != "prior_year" and len(peers) >= p.deps.outcome.min_peers:
         res = _series(p, kind, [entity, *peers], zero)
@@ -246,8 +244,9 @@ def measure_recommendation(
         return None
     eff = clock.parse_utc(due["effective_at"]).date()
     w = stats.measurement_windows(eff, cast("Literal[1, 2]", m), stats.metric_weeks(cfg, metric))
-    p = _Pair(due, con, deps, now, w)
-    try:
+    treated = ops.treated_targets(metric=metric, start=_day(w.pre[0]), end=_day(w.post[1]))
+    p = _Pair(due, con, deps, now, w, frozenset(target_id for _, target_id in treated))
+    try:  # only spec 04 raises ToolInputError in here (ops errors above propagate)
         got, pg_key = _measure(p)
     except ToolInputError:  # unknown target, or a request the catalog refuses
         _skip(due, "invalid_request")

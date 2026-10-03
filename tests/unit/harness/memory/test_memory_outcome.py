@@ -16,10 +16,12 @@ from pydantic import JsonValue
 from structlog.testing import capture_logs
 from tests.support.ops_store import OpsStoreHandle
 from tests.unit.harness.memory._outcome_env import (
+    EFFECTIVE,
     METRIC,
     NOW,
     OutcomeEnv,
     accepted_rec,
+    all_closed,
     flat,
     improves,
     make_env,
@@ -30,7 +32,7 @@ from tests.unit.harness.memory._outcome_env import (
     summaries,
 )
 
-from herness.core.errors import ConfigError
+from herness.core.errors import ConfigError, ToolInputError
 from herness.harness.memory import outcome
 from herness.harness.memory.outcome_stats import due_weeks, metric_weeks
 from herness.harness.memory.settings import MemoryConfig, OutcomeConfig
@@ -103,6 +105,45 @@ def test_ut07_74_untreated_peers_give_did_peer_median(
     assert row["verdict"] == "paid_off"
     assert row["baseline"] == pytest.approx(10.0, abs=0.05)
     assert row["actual"] == pytest.approx(8.0, abs=0.05)
+
+
+def _step(pre: float, post: float) -> Any:
+    return lambda _sid, week: post if week >= EFFECTIVE.date() else pre
+
+
+def test_ut07_74_control_is_the_weekly_peer_median(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-74 heterogeneous peers: the control is the weekly peer MEDIAN (step 7). Pre
+    (9, 10, 11) and post (10, 14, 9) both have median 10, so did = -2 and rel = 0.2; a single
+    peer (+1, +4 or -1 change) or the mean (+1) would give another did."""
+    del ops_store
+    hours = {"svc_t": improves(), "svc_p1": _step(9.0, 10.0), "svc_p2": _step(10.0, 14.0),
+             "svc_p3": _step(11.0, 9.0)}  # fmt: skip
+    env = make_env(tmp_path, monkeypatch, plant(hours))
+    row = _measure(env, accepted_rec("svc_t"))
+    assert row is not None
+    assert row["details"]["method"] == "did_peer_median"
+    assert row["delta"] == pytest.approx(-2.0, abs=0.01)
+    assert row["details"]["rel"] == pytest.approx(0.2, abs=0.01)
+    assert row["verdict"] == "paid_off"
+
+
+def test_ut07_74_ops_tool_input_error_propagates(
+    env: OutcomeEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-74 only spec 04's ToolInputError (unknown target, refused request) skips a pair;
+    one from the ops layer (treated_targets argument check) propagates and writes nothing."""
+
+    def bad(**_kw: Any) -> set[tuple[str, str]]:
+        msg = "treated_targets: invalid argument"
+        raise ToolInputError(msg)
+
+    rec_id = accepted_rec("svc_t")
+    monkeypatch.setattr(ops, "treated_targets", bad)
+    with pytest.raises(ToolInputError, match="treated_targets"):
+        _measure(env, rec_id)
+    assert outcomes() == []
 
 
 def test_ut07_74_min_peers_above_group_falls_back_to_prior_year(
@@ -313,6 +354,7 @@ def test_ut07_87_sweep_measures_every_due_pair(env: OutcomeEnv) -> None:
         [f"measured {first} m1", f"measured {second} m1"]
     )
     assert env.opened == 1
+    assert all_closed(env)
     assert len(outcomes()) == 2
 
 
