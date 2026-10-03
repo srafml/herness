@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 
 import pytest
 import structlog
-from tests.support.fake_keyring import MemoryKeyring
 from tests.support.ops_store import OpsStoreHandle
 
 from herness.core import redact as r
@@ -57,6 +56,7 @@ pytestmark = pytest.mark.unit
 T0 = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 BIG = "x" * (5 * 1024 * 1024)
 KNOWN_VALUE = "plainvaluewithoutshape"  # a resolved secret value with no credential shape
+KNOWN_WITH_EMAIL = "hunter2-jane.doe@example.com-zz"  # a known value holding an e-mail shape
 
 
 @pytest.fixture
@@ -447,13 +447,21 @@ def test_ut08_70_last_error_redacted(run_id: str, monkeypatch: pytest.MonkeyPatc
     assert json.loads(str(_row(other)["last_error"]))["message"] == ""
 
 
+def _plant_known(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """Make `value` a known secret value for this test only (restored by monkeypatch)."""
+    monkeypatch.setattr(secrets, "_KNOWN", {value})
+    monkeypatch.setattr(secrets, "_KNOWN_VERSION", secrets._KNOWN_VERSION + 1)
+    # force a scrub-cache rebuild now and restore the previous cache afterwards
+    monkeypatch.setattr(secrets, "_scrub_version", -1)
+    monkeypatch.setattr(secrets, "_scrub_pattern", None)
+
+
 def test_ut08_70_last_error_known_secret_masked(
-    run_id: str, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+    run_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT08-70 a known secret value (no credential shape) in the error is scrubbed before
     redaction (T08-15b, U10-36); a scrub failure stores no text (fail closed)."""
-    fake_keyring.store[("herness", "jira.token")] = KNOWN_VALUE
-    assert secrets.resolve("secret:jira.token").get_secret_value() == KNOWN_VALUE
+    _plant_known(monkeypatch, KNOWN_VALUE)
     task = _task(run_id)
     fail_task(task, QueryError(f"upstream rejected credential {KNOWN_VALUE}"), max_task_attempts=3)
     message = json.loads(str(_row(task)["last_error"]))["message"]
@@ -463,6 +471,20 @@ def test_ut08_70_last_error_known_secret_masked(
     other = _task(run_id)
     fail_task(other, QueryError(f"again {KNOWN_VALUE}"), max_task_attempts=3)
     assert json.loads(str(_row(other)["last_error"]))["message"] == ""
+
+
+def test_ut08_70_last_error_scrubs_before_redacting(
+    run_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-70 scrub runs before redaction (T08-15b): a known value holding an e-mail shape is
+    masked whole, so no part of it survives as a redaction placeholder."""
+    _plant_known(monkeypatch, KNOWN_WITH_EMAIL)
+    task = _task(run_id)
+    fail_task(task, QueryError(f"rejected {KNOWN_WITH_EMAIL} today"), max_task_attempts=3)
+    message = json.loads(str(_row(task)["last_error"]))["message"]
+    assert "***" in message
+    assert "-zz" not in message
+    assert "[EMAIL_" not in message
 
 
 # --- UT08-71 release_task -----------------------------------------------------------------------
