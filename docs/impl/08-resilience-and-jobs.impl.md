@@ -68,7 +68,8 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/types/__init__.py` (08 import line) | Re-export of the 08 names (impl 00 U00-44) | the names above | L0 | none | +2 |
 | `herness/core/types/_ownership.py` (08 entries) | `TYPE_OWNERS` entries for the 08 helper types (impl 00 U00-45) | none new | L0 | none | +6 |
 | `herness/core/errors.py` (08 section) | 08 taxonomy subclass (R-19) | `JobStateError` | L0 | none | +12 |
-| `herness/core/resilience/__init__.py` | Lazy re-export of the resilience API | all public names of §3.3–§3.8 | L0 | none | 120 |
+| `herness/core/resilience/__init__.py` | Lazy re-export of the resilience API | all public names of the resilience API modules of §3.3–§3.9 (not `settings`, R-03) | L0 | none | 120 |
+| `herness/core/resilience/_exports.py` | Private export map of the package `__init__` (T08-23 module-map note: split off for the `__init__` line budget): `EXPORTS` maps every public name of the §2 rows of the resilience API modules (all but `settings`, R-03) to its submodule; its `TYPE_CHECKING` block gives type checkers the re-exports; it imports nothing at run time | none (private) | L0 | none | 160 |
 | `herness/core/resilience/settings.py` | Every model of `config/resilience.yaml` (R-03) | `ResilienceSection` and sub-models, `ScheduleSection`, `WindowSpec`, `ScheduledJob`, `ChainStep`, `ResilienceConfig` | L0 | `pydantic` | 390 |
 | `herness/core/resilience/ports.py` | Protocols the resilience code depends on | `ResilienceBackend`, `HealthRow`, `EventRow`, `ChainRegistry`, `ClientInfo`, `GpuStateReader`, `AsyncCompleter`, `DeciderLike`, `TracerLike` | L0 | none | 190 |
 | `herness/core/resilience/_state.py` | The single process-state holder | `ProcessState`, `process_state`, `reset_process_state`, `bind_ops_backend`, `bind_chain_registry` | L0 | none | 140 |
@@ -83,7 +84,8 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/resilience/chain.py` | Repair and model fallback | `complete_validated`, `build_repair_request`, `ModelChain` | L0 | `jsonschema`, `pydantic` | 390 |
 | `herness/core/resilience/deciders.py` | Decider fallback | `DeciderChain` | L0 | none | 170 |
 | `herness/core/resilience/loop_policy.py` | Loop-signal policy | `loop_signal_policy` | L0 | none | 90 |
-| `herness/core/jobs/__init__.py` | Lazy re-export of the jobs API | all public names of §3.9–§3.15 | L0 | none | 90 |
+| `herness/core/jobs/__init__.py` | Lazy re-export of the jobs API | all public names of the jobs modules of §3.2 (`validate`), §3.3 (`ports`) and §3.10–§3.17 | L0 | none | 90 |
+| `herness/core/jobs/_exports.py` | Private export map of the package `__init__` (T08-23 module-map note: split off for the `__init__` line budget): `EXPORTS` maps every public name of the §2 rows of the jobs API modules (`validate`, `ports`, §3.10 to §3.17, plus `SchedCheck` and `SchedulerReport` named by U08-41 and U08-72) to its submodule; its `TYPE_CHECKING` block gives type checkers the re-exports; it imports nothing at run time | none (private) | L0 | none | 230 |
 | `herness/core/jobs/validate.py` | Window coverage and cron checks; the `resilience` owner validator registered with impl 10's start-up validation hook (R-03, R-71) | `validate_windows`, `validate_resilience_config` | L0 | none | 180 |
 | `herness/core/jobs/cron.py` | Cron parser and DST resolution | `CronExpr`, `resolve_local` | L0 | none | 290 |
 | `herness/core/jobs/ports.py` | Jobs backend protocol, row models and the handler-facing protocols (R-02) | `JobsBackend`, `JobRow`, `WorkerRow`, `NewJob`, `bind_jobs_backend`, `JobContext`, `ServiceControl` | L0 | `pydantic` | 300 |
@@ -109,7 +111,7 @@ Design 08 names two files, `herness/core/resilience.py` and `herness/core/jobs.p
 | `herness/core/jobs/inline.py` | CLI inline run | `run_inline` | L0 | none | 200 |
 | `herness/core/jobs/status.py` | Status, health, resume enqueue | `StatusSnapshot`, `status_snapshot`, `ComponentHealth`, `health`, `ResumeResult`, `enqueue_resume` | L0 | none | 330 |
 | `herness/core/jobs/_status_views.py` | Private row views of `status_snapshot`: the nested `TypedDict`s of the §3.17 keys and the window and next-job view builders (split from status.py to stay under 330, T08-22) | none (private) | L0 | none | 130 |
-| `herness/store/ops/resilience.py` | SQL for `source_health`, `resilience_event`; backend binding (R-08) | `SqliteResilienceBackend`, `purge_events`, `bind_core_backends` | L1 | none | 320 |
+| `herness/store/ops/resilience.py` | SQL for `source_health`, `resilience_event`; backend binding (R-08; `bind_core_backends` imports `SqliteJobsBackend` from area `jobs`: `ops-areas-acyclic` ignore entry, T08-23) | `SqliteResilienceBackend`, `purge_events`, `bind_core_backends` | L1 | none | 320 |
 | `herness/store/ops/metrics.py` | The single `metric_sample` writer and its purge (R-12) | `record_metric_samples`, `purge_metric_samples` | L1 | none | 120 |
 | `herness/store/ops/jobs.py` | SQL for `job` (R-08) | `SqliteJobsBackend` (job methods) | L1 | none | 400 |
 | `herness/store/ops/_job_sql.py` | Private sibling of area `jobs` (T08-11 spec note): the constant SQL of U08-95, split off for the 400-line budget of `jobs.py`; imported only by `jobs` (`ops-areas-acyclic` ignore entry) | none (private) | L1 | none | 200 |

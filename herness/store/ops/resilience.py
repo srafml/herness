@@ -4,7 +4,8 @@
 The tables are impl 02 migrations 001 and 002 (§4.3.1, §4.3.2); this area adds no migration.
 Reads use `read_one` / `read_all`; every write runs in `run_write` (`BEGIN IMMEDIATE`, R-10).
 Metric rows are delegated to the single `metric_sample` writer of `herness.store.ops.metrics`
-(U08-100, R-12): the one area-to-area import, recorded in the `ops-areas-acyclic` contract.
+(U08-100, R-12), and `bind_core_backends` (U08-98) builds the `herness.store.ops.jobs` backend:
+the two area-to-area imports, both recorded in the `ops-areas-acyclic` contract.
 """
 
 from __future__ import annotations
@@ -17,10 +18,13 @@ from typing import Final, Literal, cast
 
 from herness.core import time as clock
 from herness.core.errors import SchemaViolation
+from herness.core.jobs import bind_jobs_backend
+from herness.core.resilience import bind_ops_backend
 from herness.core.resilience.ports import EventRow, HealthRow, JsonScalar
 from herness.core.types import BreakerState, MetricSample
 
 from .core import connection, dump_json, load_json, read_all, read_one, run_write
+from .jobs import SqliteJobsBackend
 from .metrics import purge_metric_samples, record_metric_samples
 
 LAST_ERROR_MAX_CHARS: Final = 500  # §4.1.3: redacted, at most 500 chars
@@ -232,3 +236,13 @@ class SqliteResilienceBackend:
         """True while this thread's ops connection has an open transaction, i.e. inside a
         `run_write` callback, where a metric flush would hit the nested-write guard (T08-11)."""
         return connection().in_transaction
+
+
+def bind_core_backends() -> None:
+    """Bind the SQLite resilience and jobs backends to the L0 ports (U08-98, R-04).
+
+    Every composition root calls this after `load_config`; a repeated call replaces both
+    bindings (U08-10), and the atexit metric flush stays registered once.
+    """
+    bind_ops_backend(SqliteResilienceBackend())
+    bind_jobs_backend(SqliteJobsBackend())

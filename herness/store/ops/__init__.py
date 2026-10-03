@@ -194,7 +194,7 @@ from .closed_loop import (
 
 # isort: split
 # 08 resilience
-from .resilience import purge_events
+from .resilience import bind_core_backends, purge_events
 
 # isort: split
 # 08 metrics
@@ -295,7 +295,7 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "outcomes_for_similarity", "rec_memory_ids", "dead_task_count", "run_findings_for_promotion",
     "task_spec", "recent_done_runs",
     # 08 resilience
-    "purge_events",
+    "purge_events", "bind_core_backends",
     # 08 metrics
     "record_metric_samples", "purge_metric_samples",
     # 08 jobs

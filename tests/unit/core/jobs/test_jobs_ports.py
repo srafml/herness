@@ -184,6 +184,8 @@ def test_ut08_63_lazy_exports_resolve() -> None:
     assert jobs.__all__ == tuple(sorted(jobs._EXPORTS))
     for name, submodule in jobs._EXPORTS.items():
         owner = importlib.import_module(f"herness.core.jobs.{submodule}")
-        assert getattr(jobs, name) is getattr(owner, name)
+        # `chat_policy` names its submodule too: the package hands out the callable module.
+        expected = owner if name == submodule else getattr(owner, name)
+        assert getattr(jobs, name) is expected
     with pytest.raises(AttributeError):
         _ = jobs.not_a_name

@@ -3,9 +3,9 @@
 `bootstrap()` ("tests.support.worker_bootstrap:bootstrap") is what the supervisor and every job
 child call first: it loads the config tree named by `HERNESS_TEST_WORKER_CONFIG`, points the ops
 store at `HERNESS_TEST_WORKER_DB`, installs an in-memory keyring and a fixed-key redactor, binds
-the SQLite resilience and jobs backends and registers the fake handlers below. Only these two
-non-secret paths travel through the environment; nothing secret is in argv or the environment
-(TH08-13, ST08-09).
+the SQLite resilience and jobs backends (`bind_core_backends`, U08-98) and registers the fake
+handlers below. Only these two non-secret paths travel through the environment; nothing secret
+is in argv or the environment (TH08-13, ST08-09).
 
 The fake handler of every kind dispatches on `payload["mode"]` (default `done`).
 
@@ -108,14 +108,10 @@ def bootstrap() -> None:
     from herness.core import config as c  # noqa: PLC0415
     from herness.core import redact as r  # noqa: PLC0415
     from herness.core.jobs.handlers import register_handler  # noqa: PLC0415
-    from herness.core.jobs.ports import bind_jobs_backend  # noqa: PLC0415
     from herness.core.redact_directory import NameDirectory  # noqa: PLC0415
-    from herness.core.resilience import bind_ops_backend  # noqa: PLC0415
     from herness.core.settings import RedactionConfig  # noqa: PLC0415
     from herness.core.types import JobKind  # noqa: PLC0415
-    from herness.store.ops import core, reset_connections  # noqa: PLC0415
-    from herness.store.ops.jobs import SqliteJobsBackend  # noqa: PLC0415
-    from herness.store.ops.resilience import SqliteResilienceBackend  # noqa: PLC0415
+    from herness.store.ops import bind_core_backends, core, reset_connections  # noqa: PLC0415
 
     cfg_dir, db = Path(os.environ[ENV_CONFIG]), Path(os.environ[ENV_DB])
     if not isinstance(keyring.get_keyring(), MemoryKeyring):
@@ -126,8 +122,7 @@ def bootstrap() -> None:
     directory = NameDirectory.from_files(None, (), None)
     red_cfg = RedactionConfig(directory_file=None)
     r._State.redactor = r.Redactor(red_cfg, bytes(range(32)), directory)
-    bind_ops_backend(SqliteResilienceBackend())
-    bind_jobs_backend(SqliteJobsBackend())  # type: ignore[arg-type]
+    bind_core_backends()
     for kind in get_args(JobKind.__value__):
         register_handler(kind, fake_handler)
 
