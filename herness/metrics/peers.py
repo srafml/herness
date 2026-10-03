@@ -24,9 +24,9 @@ from herness.metrics.render import default_binds, render_named
 from herness.metrics.windows import default_window, resolve_as_of
 from herness.store.warehouse import open_readonly
 
-__all__ = ["PeerEntityType", "PeerGroupInfo", "peer_group"]
+__all__ = ["PeerGroupInfo", "peer_group"]
 
-type PeerEntityType = Literal["team", "org", "service", "work_item"]
+type _PeerEntityType = Literal["team", "org", "service", "work_item"]
 
 _log: Final = get_logger("metrics")
 
@@ -58,7 +58,7 @@ def _validate(
     catalog: MetricCatalog, entity_type: str, entity_id: object, metric: str | None
 ) -> None:
     """U04-62 preconditions: allowlisted type, printable id, enabled metric of the grains."""
-    if entity_type not in get_args(PeerEntityType.__value__):
+    if entity_type not in get_args(_PeerEntityType.__value__):
         msg = f"bad entity type {str(entity_type)[:32]}; allowed: team, org, service, work_item"
         raise ToolInputError(msg)
     if not isinstance(entity_id, str) or not 0 < len(entity_id) <= _MAX_ID:
@@ -125,7 +125,7 @@ def _info(rq: RecordedQuery, entity_type: str, entity_id: str) -> PeerGroupInfo:
 
 
 def peer_group(
-    entity_type: PeerEntityType,
+    entity_type: _PeerEntityType,
     entity_id: str,
     /,
     *,
