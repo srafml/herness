@@ -1,8 +1,8 @@
 """Private helpers of ``herness.model.build`` (T02-18 size split; impl 02 §2 module-map note).
 
-Build resolution (U02-98 step 3), the orphan deletion that stands in for ``cleanup_builds``
-until T02-21, the DuckDB form of ``build.memory_limit`` (T02-18 spec note: DuckDB rejects
-``%``) and the §8.2 metric samples. Nothing here opens a writable warehouse connection.
+Build resolution (U02-98 step 3), the DuckDB form of ``build.memory_limit`` (T02-18 spec
+note: DuckDB rejects ``%``) and the §8.2 metric samples. Nothing here opens a writable
+warehouse connection.
 """
 
 from __future__ import annotations
@@ -112,20 +112,6 @@ def resolve_build(
     if isinstance(state_id, str) and "build" in done and _status(state_id, layout) == "building":
         return state_id, done
     return warehouse.new_build_id(now), []
-
-
-def delete_orphans(layout: DataLayout, *, protect: str) -> None:
-    """Delete ``building`` files with no ``finished_at`` (crashed, killed or yielded builds).
-
-    T02-21: replace with ``cleanup_builds(mode="pre", protect=frozenset({build_id}), …)``,
-    which adds the unreadable and failed-build rules and the builds pinned by runs.
-    """
-    for info in warehouse.list_builds(layout=layout):
-        orphan = info.status == "building" and info.finished_at is None
-        if not orphan or info.is_current or info.build_id == protect:
-            continue
-        if warehouse.delete_build_files(info.build_id, layout=layout) == "deleted":
-            _log.info("model.build.orphan_deleted", build_id=info.build_id, status=info.status)
 
 
 def _sample(name: str, kind: str, value: float, **labels: str) -> MetricSample:

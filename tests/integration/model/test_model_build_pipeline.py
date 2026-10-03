@@ -366,16 +366,17 @@ def test_it02_27_resolve_build_rules(env: Env) -> None:
 
 def test_it02_21_payload_errors(env: Env, fake_job_context: Callable[..., FakeJobContext]) -> None:
     """IT02-21 (U02-98 step 1) an invalid payload is ConfigError naming fields only, logged
-    `model.build.payload_invalid`; a stage of a later card is rejected before any work."""
+    `model.build.payload_invalid`; every stage of `STAGE_ORDER` is available (T02-21 added
+    `promote`, U02-103), so the full payload validates."""
     with structlog.testing.capture_logs() as logs:
         error = _run(fake_job_context({"stages": ["build"], "build_id": LITERAL}))
     assert isinstance(error, ConfigError)
     assert LITERAL not in str(error)
     assert [e["event"] for e in logs] == ["model.build.payload_invalid"]
-    missing = _run(fake_job_context({"stages": ["build", "enrich", "score", "dq", "promote"]}))
-    assert isinstance(missing, ConfigError)
-    assert str(missing) == "build stage promote is not available"  # T02-21: promote (U02-103)
     assert warehouse.list_builds(layout=env.layout) == []
+    full = fake_job_context({"stages": ["build", "enrich", "score", "dq", "promote"]})
+    assert build._parse_payload(full).stages == list(build.STAGE_ORDER)
+    assert set(build._STAGE_UNITS) == set(build.STAGE_ORDER)
 
 
 def test_it02_21_extra_payload_key_not_echoed(

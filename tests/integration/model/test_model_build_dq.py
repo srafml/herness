@@ -3,7 +3,8 @@
 IT02-29: against the build named by `CURRENT`, a lake with 10 % fewer incidents fails the
 gate with `row_count_drop:core.incident`; the build is `failed` and `CURRENT` unchanged.
 IT02-30: only `warn` checks fail: the gate passes, the warnings are logged and the build is
-not failed (promotion itself is T02-21's stage). IT02-25 / IT02-26 (T02-19 review M5): a
+not failed. Their "promoted" halves (T02-21) run the pipeline to `promote`: the drop blocks
+it, the warn-only build is promoted. IT02-25 / IT02-26 (T02-19 review M5): a
 non-Herness error raised by a spec 03 / 04 hook fails the build as `FatalError`.
 
 The spec 03 / 04 hooks are not on this tree: `run_enrichment` and `run_scoring` are fakes
@@ -291,3 +292,53 @@ def test_it02_26_hook_herness_error_passes_unchanged(
     assert isinstance(error, FatalError)
     assert str(error) == "scoring input missing"
     assert error.__cause__ is None
+
+
+# --- T02-21: the "promoted" halves of IT02-29 / IT02-30 ----------------------------------
+
+
+def test_it02_29_incident_drop_blocks_promotion(
+    env: Env, fake_job_context: Callable[..., FakeJobContext], hooks: None
+) -> None:
+    """IT02-29 (promoted half, T02-21) the pipeline to `promote` with 10 % fewer incidents
+    stops at the gate: `DqGateFailed` naming `row_count_drop:core.incident`, the build is
+    `failed`, `CURRENT` unchanged and nothing is promoted."""
+    write_lake(env.layout.raw, {("servicenow", "incident"): [_incident(f"x{n}") for n in range(6)]})
+    first = _run(fake_job_context({"stages": ["build"]}))
+    assert isinstance(first, JobOutcome), first
+    prev_id = str(first.result["build_id"])
+    write_current(prev_id, layout=env.layout)
+    write_lake(env.layout.raw, {("servicenow", "incident"): [Row("x0", 5, deleted=True)]})
+    with structlog.testing.capture_logs() as logs:
+        error = _run(fake_job_context({"stages": [*DQ_PIPELINE, "promote"]}))
+    assert isinstance(error, DqGateFailed), error
+    assert error.failed_checks == ("row_count_drop:core.incident",)
+    assert warehouse.read_current(layout=env.layout) == prev_id
+    [new] = [b for b in warehouse.list_builds(layout=env.layout) if b.build_id != prev_id]
+    assert new.status == "failed"
+    assert not [e for e in logs if e["event"] == "model.build.promoted"]
+    [failed] = [e for e in logs if e["event"] == "model.build.failed"]
+    assert (failed["stage"], failed["error_class"]) == ("dq", "DqGateFailed")
+
+
+def test_it02_30_warn_failures_only_promote(
+    env: Env, fake_job_context: Callable[..., FakeJobContext], hooks: None
+) -> None:
+    """IT02-30 (promoted half, T02-21) the pipeline to `promote` with only `warn` failures:
+    the gate passes once (stage `dq` ran in this job, so `promote` does not re-run it), the
+    build is `promoted` and named by `CURRENT`, `model.build.promoted` is logged."""
+    with structlog.testing.capture_logs() as logs:
+        outcome = _run(fake_job_context({"stages": [*DQ_PIPELINE, "promote"]}))
+    assert isinstance(outcome, JobOutcome), outcome
+    build_id = str(outcome.result["build_id"])
+    assert outcome.result["promoted"] is True
+    dq = outcome.result["dq"]
+    assert isinstance(dq, dict)
+    assert dq["failed_errors"] == []
+    assert "decision_coverage_incident" in dq["failed_warnings"]  # type: ignore[operator]
+    assert len([e for e in logs if e["event"] == "model.dq.evaluated"]) == 1
+    [promoted] = [e for e in logs if e["event"] == "model.build.promoted"]
+    assert (promoted["build_id"], promoted["previous"]) == (build_id, None)
+    assert warehouse.read_current(layout=env.layout) == build_id
+    [info] = warehouse.list_builds(layout=env.layout)
+    assert (info.status, info.finished_at is not None, info.is_current) == ("promoted", True, True)
