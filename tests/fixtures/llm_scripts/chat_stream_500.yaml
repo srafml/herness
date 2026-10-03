@@ -1,0 +1,15 @@
+# T05-27 (IT05-11, flow F05-12): a chat-style streamed run. Call 0 streams a run_sql tool call;
+# call 1 is a scripted http_500 that the test's TamperingLLMServer turns into a stream that sends
+# the first tokens of the answer and then the server's error event (code 500); the spec 08 retry
+# (call 2) streams the whole answer. A fault does not consume a turn, so the retry gets turn 1.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT count(*) AS incidents FROM core.incident"
+            purpose: incident count
+    - final:
+        text: "There are 40 incidents in the build, spread over four services."
+  faults:
+    - {at: 1, kind: http_500}

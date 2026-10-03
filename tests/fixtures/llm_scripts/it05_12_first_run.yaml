@@ -1,0 +1,26 @@
+# T05-27 (IT05-12, flow F05-06): the first run of the checkpoint/resume crash test. Three
+# run_sql steps; the fault plan kills the worker on the 4th `llm.call` hit, so the turns after
+# the third are never served in the killed run (they let the script run to the end without a
+# plan). Child: tests/support/loop_kill.py.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: run_sql
+          arguments: {sql: "SELECT count(*) AS n FROM core.incident", purpose: step 1}
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT service_id, count(*) AS n FROM core.incident GROUP BY 1 ORDER BY 1"
+            purpose: step 2
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT priority, count(*) AS n FROM core.incident GROUP BY 1 ORDER BY 1"
+            purpose: step 3
+    - tool_calls:
+        - name: run_sql
+          arguments: {sql: "SELECT max(mttr_hours) AS m FROM core.incident", purpose: step 4}
+    - final:
+        text: "Counted incidents by service and priority."
+    - final:
+        output: {answer: "40 incidents"}
