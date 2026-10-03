@@ -309,6 +309,35 @@ def test_ut11_19_heavy_cap_and_consistent_future(tmp_path: Path) -> None:
             assert at is None or at >= opened
 
 
+def test_ut11_19_later_version_stamp_not_before_future_opened(tmp_path: Path) -> None:
+    """UT11-19 with future_ts and later_versions at 1.0, a later version's new
+    `resolved_at`/`closed_at` stamp is never before the shifted `opened_at`, so later
+    versions show exactly the defects of their records."""
+    path = tmp_path / "params.yaml"
+    rates_yaml = {"dirty_rates": {"future_ts": 0.3, "later_versions": 0.3}}
+    path.write_text(json.dumps(rates_yaml), encoding="utf-8")  # JSON is valid YAML
+    params = _params("heavy", path)
+    _, after, reemits, counters = _run("incident", "heavy", 400, seed=11, params=params)
+    assert counters.future_ts == counters.later_versions == 400
+    by_id = {rec["sys_id"]["value"]: rec for rec in after}
+    outputs = {_canon(rec) for rec in after}
+    later = [r for r in reemits if not r.get("__tombstone__") and _canon(r) not in outputs]
+    assert len(later) == 400
+    origs = [by_id[rec["sys_id"]["value"]] for rec in later]
+    assert _observe("incident", later, []) == _observe("incident", origs, [])
+    stamped = 0
+    for rec, orig in zip(later, origs, strict=True):
+        opened = _ts(rec["opened_at"])
+        assert opened is not None
+        for name in ("resolved_at", "closed_at"):
+            if rec[name] != orig[name]:
+                stamped += 1
+                at = _ts(rec[name])
+                assert at is not None
+                assert at >= opened
+    assert stamped > 0
+
+
 def test_ut11_19_counters_add() -> None:
     """UT11-19 per-shard counters sum field by field in the parent."""
     total = DirtyCounters(tombstones=1)
