@@ -18,6 +18,7 @@ from typing import Any, cast
 import duckdb
 import pyarrow as pa
 import pytest
+from structlog.testing import capture_logs
 from tests.support.build_harness import FakeJobContext
 
 from herness.core.config import HernessConfig
@@ -198,8 +199,30 @@ def test_ut03_139_prepare_builds_laya_teachers_and_llm(
     assert built == ["laya", "openjev", "jev", "llm"]
     assert run.primaries == {"q_bool": "laya"}
     assert run.versions == {"laya": "laya-20260901-1", "openjev": "openjev-v1", "llm": "llm-v1"}
-    assert run.warnings == ["jev_unavailable"]
+    assert run.warnings == ["jev_auth"]
     assert factory_calls == ["enrich_decider"]
+
+
+@pytest.mark.parametrize(
+    "error", [ConfigError("deploy.openjev image has no tag or digest"), SchemaViolation("x")]
+)
+def test_ut03_139_prepare_teacher_build_errors_other_than_auth_propagate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """UT03-139 step 2: only `AuthError` (jev without a key) degrades; a ConfigError or
+    SchemaViolation from `build_decider` fails the run (§6)."""
+    monkeypatch.setattr(steps, "get_config", lambda: _cfg(tmp_path, openjev={"enabled": True}))
+
+    def build(name: str, **kw: Any) -> Any:
+        if name == "openjev":
+            raise error
+        msg = "no laya"
+        raise ConfigError(msg)  # laya: degraded by its own rule
+
+    monkeypatch.setattr(steps, "build_decider", build)
+    run = Run(_warehouse(), BUILD, "standard", FakeJobContext(), None, None, False, NOW)
+    with pytest.raises(type(error)):
+        steps.prepare(run)
 
 
 def test_ut03_139_prepare_llm_factory_unavailable_leaves_llm_out(
@@ -259,7 +282,13 @@ def test_ut03_139_migrate_on_question_set_change_only(
     assert seen == [("c", "qs-2026-09-01.1"), ("l", "qs-2026-09-01.1")]
     broken = tmp_path / "broken.duckdb"
     broken.write_bytes(b"not a duckdb file")
-    steps._migrate(_run(tmp_path, prev=broken))  # unreadable previous build: no migration
+    with capture_logs() as logs:
+        steps._migrate(_run(tmp_path, prev=broken))  # unreadable previous build: no migration
+    assert [(e["event"], e["log_level"]) for e in logs] == [
+        ("enrich.pipeline.prev_unavailable", "warning"),
+    ]  # fmt: skip
+    assert "error_class" in logs[0]
+    assert str(broken) not in str(logs)
     steps._migrate(_run(tmp_path, prev=tmp_path / "missing.duckdb"))
     run = _run(tmp_path, prev=_prev_build(tmp_path / "old2.duckdb", "qs-2026-09-01.1"))
     run.wh.execute("DROP SCHEMA enrich CASCADE")
@@ -690,14 +719,14 @@ def test_ut03_139_deep_llm_band_is_where_laya_and_openjev_differ(tmp_path: Path)
     """UT03-139 F03-08 step 3: with OpenJev the LLM gets the disagreements; else the band."""
     run = _run(tmp_path, depth="deep")
     run.band = [_item(1), _item(2), _item(3)]
-    assert pipeline._llm_band(run) == run.band  # OpenJev not up: the whole band
+    assert steps.llm_band(run) == run.band  # OpenJev not up: the whole band
     run.teacher_up = True
     run.versions = {"laya": "l1", "openjev": "o1"}
     h1, h2, h3 = (i.content_hash for i in run.band)
     _cache_rows(run, "laya", "l1", {h1: "true", h2: "true", h3: "true"})
     _cache_rows(run, "openjev", "o1", {h1: "true", h2: "false"})
     _cache_rows(run, "openjev", "old", {h3: "true"})  # another version does not count
-    assert pipeline._llm_band(run) == [_item(2), _item(3)]
+    assert steps.llm_band(run) == [_item(2), _item(3)]
 
 
 def test_ut03_139_deep_reasoning_runs_llm_band_member(

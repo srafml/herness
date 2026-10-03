@@ -63,8 +63,8 @@ class Recorder:
                 self.available.append(kw["available"])
             if name in self.raise_at:
                 raise self.raise_at[name]
-            if name in self.degrade_at:
-                steps.degrade(report, f"{name.replace('-', '_')}_down")
+            if name in self.degrade_at:  # set directly, as stage modules do (`_mark`)
+                report.status, report.note = "degraded", f"{name.replace('-', '_')}_down"
             report.rows += 1
 
         return run_stage
@@ -226,11 +226,33 @@ def test_ut03_139_degraded_stage_note_becomes_report_warning(rec: Recorder) -> N
     assert report.stages["suggest"].status == "degraded"
     assert report.warnings == ["suggest_down"]
     assert report.stages["resolve"].status == "done"
-    events = [e["event"] for e in logs]
-    assert "enrich.stage.degraded" in events
+    degraded = [e for e in logs if e["event"] == "enrich.stage.degraded"]
+    fields = [(e["stage"], e["note"], e["build_id"], e["job_id"], e["log_level"]) for e in degraded]
+    assert fields == [("suggest", "suggest_down", BUILD, "job-0001", "warning")]
     completed = [e for e in logs if e["event"] == "enrich.stage.completed"]
     assert len(completed) == len(STAGE_ORDER)
     assert all("note" not in e and isinstance(e["rows"], int) for e in completed)
+
+
+@pytest.mark.parametrize(
+    ("stages", "depth", "scopes"),
+    [
+        (["ensemble"], "standard", []),
+        (["ensemble"], "deep", ["decider"]),
+        (["reasoning"], "standard", []),
+        (["reasoning", "link"], "deep", []),
+        (["cluster", "reasoning"], "standard", ["decider", "reasoning"]),
+    ],
+)
+def test_ut03_139_decider_scope_only_when_a_gpu_stage_can_work(
+    rec: Recorder, stages: list[str], depth: str, scopes: list[str]
+) -> None:
+    """UT03-139 no class switch for a GPU stage without work: `ensemble` below `deep`, or
+    `reasoning` without `decide-escalate` / `cluster` in the same call."""
+    ctx = FakeJobContext()
+    _run(ctx, stages=stages, depth=depth)
+    assert ctx.gpu_scopes == scopes
+    assert ctx.current_class == "none"
 
 
 def test_ut03_139_metrics_per_stage(rec: Recorder, monkeypatch: pytest.MonkeyPatch) -> None:

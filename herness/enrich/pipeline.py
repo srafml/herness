@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, get_args
 
 import duckdb
-import pyarrow.dataset as ds
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from herness.core import time as clock
@@ -233,8 +232,10 @@ class _Driver:
         self._completed(name, report, fields)
 
     def _completed(self, name: StageName, report: StageReport, fields: dict[str, str]) -> None:
-        if report.status == "degraded" and report.note not in self.run.warnings:
-            self.run.warnings.append(report.note or "degraded")
+        if report.status == "degraded":
+            _log.warning("enrich.stage.degraded", note=report.note, **fields)
+            if report.note not in self.run.warnings:
+                self.run.warnings.append(report.note or "degraded")
         _log.info("enrich.stage.completed", **report.model_dump(exclude={"note"}), **fields)
         labels = {"stage": name}
         record_histogram("herness_enrich_stage_duration_seconds", report.duration_s,
@@ -261,6 +262,17 @@ class _Driver:
 # --- F03-01 steps 9-10: reasoning phase and ensemble pooling ----------------------------------
 
 
+def _gpu_work(drv: _Driver) -> bool:
+    """A selected GPU stage that can work: ensemble only when deep, reasoning only after
+    `decide-escalate` or `cluster` of this call (its only inputs)."""
+    names = {name for name in _GPU_STAGES if drv.runs(name)}
+    if drv.run.depth != "deep":
+        names.discard("ensemble")
+    if not names & {"decide-escalate", "cluster"}:
+        names.discard("reasoning")
+    return bool(names)
+
+
 def _reasoning_due(run: Run) -> bool:
     """Naming candidates, deferred items or (deep) ensemble band rows for the LLM."""
     naming = run.cluster is not None and bool(run.cluster.naming)
@@ -270,7 +282,8 @@ def _reasoning_due(run: Run) -> bool:
 def _reasoning_phase(drv: _Driver) -> None:
     """Step 9: nested `gpu_scope("reasoning")` only when there is LLM work and an LLM."""
     run = drv.run
-    if not drv.runs("reasoning") or not _reasoning_due(run):
+    inputs = drv.runs("decide-escalate") or drv.runs("cluster")  # its only producers
+    if not drv.runs("reasoning") or not inputs or not _reasoning_due(run):
         drv.stage("reasoning", _no_work)
         return
     with contextlib.ExitStack() as scope:
@@ -311,23 +324,8 @@ def _reasoning(run: Run, report: StageReport, *, available: bool) -> None:
     run_llm_escalation(run.deferred, llm=llm, qs=run.qs, cache=run.cache, cap=cap, ctx=run.ctx,
                        report=report)  # fmt: skip
     if llm is not None and run.depth == "deep" and run.band:
-        band = _llm_band(run)[: run.cfg.decisions.ensemble.llm_max_rows]
+        band = steps.llm_band(run)[: run.cfg.decisions.ensemble.llm_max_rows]
         steps.decide_members(run, llm, band, "reasoning")
-
-
-def _llm_band(run: Run) -> list[QueueItem]:
-    """F03-08 step 3: the whole band without OpenJev, else the items Laya and OpenJev differ on."""
-    band = run.band or []
-    dataset = run.cache.dataset()
-    if not run.teacher_up or dataset is None or not {"laya", "openjev"} <= run.versions.keys():
-        return band
-    where = ds.field("content_hash").isin(sorted({i.content_hash for i in band}))
-    columns = ["content_hash", "question", "decider", "decider_version", "answer"]
-    rows = dataset.to_table(columns=columns, filter=where).to_pylist()
-    answer = {(r["decider"], r["content_hash"], r["question"]): r["answer"] for r in rows
-              if run.versions.get(r["decider"]) == r["decider_version"]}  # fmt: skip
-    return [i for i in band if any(answer.get(("laya", i.content_hash, q))
-            != answer.get(("openjev", i.content_hash, q)) for q in i.question_ids)]  # fmt: skip
 
 
 def _ensemble(run: Run, report: StageReport) -> None:
@@ -372,8 +370,7 @@ def run_enrichment(  # noqa: PLR0913 - U03-144's signature is binding
     steps.prepare(run)
     drv = _Driver(run, selected, done, base)
     drv.stage("text", steps.text)
-    gpu = any(drv.runs(name) for name in _GPU_STAGES)
-    with ctx.gpu_scope("decider") if gpu else contextlib.nullcontext():
+    with ctx.gpu_scope("decider") if _gpu_work(drv) else contextlib.nullcontext():
         drv.stage("embed", steps.embed)
         drv.stage("decide-primary", steps.decide_primary)
         drv.stage("decide-escalate", steps.decide_escalate)

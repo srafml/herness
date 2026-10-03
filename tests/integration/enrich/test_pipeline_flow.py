@@ -17,6 +17,7 @@ from tests.support.stub_http import StubFault
 
 from herness.core.errors import ConfigError
 from herness.core.types import JobOutcome
+from herness.enrich import _pipeline_stages
 from herness.enrich.pipeline import STAGE_ORDER, EnrichReport
 from herness.store._warehouse_rw import write_current
 
@@ -125,6 +126,29 @@ def test_it03_01_openjev_down_defers_to_the_llm_in_the_reasoning_scope(
     deciders = {r[0] for r in env.query(build_id, "SELECT DISTINCT decider FROM enrich.decision")}
     assert "llm" in deciders
     assert "openjev" not in deciders
+
+
+def test_it03_01_config_error_building_a_decider_fails_the_build(
+    pipeline_env: PipelineEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT03-01 a ConfigError from `build_decider` (here OpenJev) is not swallowed: the job
+    fails before any stage and the build is marked failed (not promotable)."""
+    env = pipeline_env
+    real = _pipeline_stages.build_decider
+
+    def build(name: str, **kw: Any) -> Any:
+        if name == "openjev":
+            msg = "deploy.openjev image has no tag or digest"
+            raise ConfigError(msg)
+        return real(name, **kw)
+
+    monkeypatch.setattr(_pipeline_stages, "build_decider", build)
+    outcome, ctx = env.job(_PAYLOAD)
+    assert isinstance(outcome, ConfigError)
+    assert (ctx.gpu_scopes, ctx.services.calls) == ([], [])
+    build_id = str(ctx.load_state()["build_id"])
+    assert env.query(build_id, "SELECT status FROM meta.build") == [("failed",)]
+    assert env.calls()["openjev"] == 0
 
 
 def test_it03_04_second_run_unchanged_lake_makes_no_calls(pipeline_env: PipelineEnv) -> None:

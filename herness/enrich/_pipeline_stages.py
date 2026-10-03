@@ -15,14 +15,15 @@ from typing import TYPE_CHECKING, Any, Final
 
 import duckdb
 import numpy as np
+import pyarrow.dataset as ds
 
 from herness.core import redact
 from herness.core import time as clock
 from herness.core.config import get_config
 from herness.core.errors import (
+    AuthError,
     CircuitOpen,
     ConfigError,
-    HernessError,
     ModelUnavailable,
     SchemaViolation,
     StoreBusy,
@@ -84,10 +85,11 @@ def _sql(
 
 
 def degrade(report: StageReport, note: str, exc: BaseException | None = None) -> None:
-    """Mark `report` degraded with the code `note`; log the error class only."""
+    """Mark `report` degraded with the code `note` (the wrapper logs `enrich.stage.degraded`)."""
     report.status, report.note = "degraded", note
-    error_class = None if exc is None else type(exc).__name__
-    _log.warning("enrich.stage.degraded", note=note, error_class=error_class)
+    _log.debug(
+        "enrich.stage.degrade_cause", note=note, error_class=type(exc).__name__ if exc else None
+    )
 
 
 def device() -> Device:
@@ -130,7 +132,8 @@ def _migrate(run: Run) -> None:
     path = str(run.prev).replace("'", "''")
     try:
         run.wh.execute(f"ATTACH '{path}' AS {_PREV} (READ_ONLY)")
-    except duckdb.Error:
+    except duckdb.Error as exc:  # F03-16 skipped: a changed qsv then re-decides everything
+        _log.warning("enrich.pipeline.prev_unavailable", error_class=type(exc).__name__)
         return
     try:
         row = run.wh.execute(
@@ -183,10 +186,9 @@ def _teachers(run: Run) -> None:
         if getattr(run.cfg.models.deciders, name).enabled:
             try:
                 built = build_decider(name, cfg=run.cfg, depth=run.depth, paths=run.paths, llm=None)
-            except HernessError as exc:  # e.g. jev without a key: the chain moves on
-                _log.warning("enrich.decider.unavailable", decider=name,
-                             error_class=type(exc).__name__, deferred=0)  # fmt: skip
-                run.warnings.append(f"{name}_unavailable")
+            except AuthError:  # §6: backend dropped for the run; ConfigError etc. propagate
+                _log.error("enrich.decider.auth_failed", decider=name)
+                run.warnings.append(f"{name}_auth")
                 continue
             run.deciders[name], run.versions[name] = built, built.version
     if run.llm_factory is None:
@@ -316,6 +318,21 @@ def decide_members(run: Run, decider: Decider, items: Sequence[QueueItem], stage
     finally:
         writer.flush()
     return True
+
+
+def llm_band(run: Run) -> list[QueueItem]:
+    """F03-08 step 3: the whole band without OpenJev, else the items Laya and OpenJev differ on."""
+    band = run.band or []
+    dataset = run.cache.dataset()
+    if not run.teacher_up or dataset is None or not {"laya", "openjev"} <= run.versions.keys():
+        return band
+    where = ds.field("content_hash").isin(sorted({i.content_hash for i in band}))
+    columns = ["content_hash", "question", "decider", "decider_version", "answer"]
+    rows = dataset.to_table(columns=columns, filter=where).to_pylist()
+    answer = {(r["decider"], r["content_hash"], r["question"]): r["answer"] for r in rows
+              if run.versions.get(r["decider"]) == r["decider_version"]}  # fmt: skip
+    return [i for i in band if any(answer.get(("laya", i.content_hash, q))
+            != answer.get(("openjev", i.content_hash, q)) for q in i.question_ids)]  # fmt: skip
 
 
 def _window_size(run: Run) -> int:
