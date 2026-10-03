@@ -16,6 +16,7 @@ Optimizer input (U04-79) on that graph, with `cluster_fix_weights()`:
 Σ effort = 23500. With budget 4000 the best set is {E1, E2} (impact 773 + 1546).
 """
 
+import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from decimal import Decimal
 from pathlib import Path
@@ -40,7 +41,7 @@ from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.errors import ConfigError, SchemaViolation
 from herness.metrics import compute, portfolio, scoring
-from herness.metrics.evidence import IntoSpec
+from herness.metrics.evidence import IntoSpec, run_recorded
 from herness.metrics.funding import run_funding_step
 from herness.metrics.portfolio import (
     PortfolioResult,
@@ -600,3 +601,66 @@ def test_cv_t04_20_solved_log_event(build: Build) -> None:
         False,
     )
     assert isinstance(solved[0]["wall_s"], float)
+
+
+def test_cv_t04_20_rescore_after_funding_change(
+    build: Build, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T04-20 (U04-80 step 4 amendment) re-scoring the same build after a weights change
+    that alters score.funding records a new input query keyed by the funding query ids;
+    identical inputs keep the same input query_id."""
+    w = _weights()
+    con = build(w)
+    _step(con, w)
+    before = optimize_portfolio("unconstrained", con=con)
+    assert before.budget_usd == TOTAL_EFFORT
+    rate = w.cost_per_engineer_hour
+    w2 = w.model_copy(
+        update={"cost_per_engineer_hour": rate.model_copy(update={"value": rate.value * 2})}
+    )
+    run_funding_step(con, step_context(w2))
+    cfg = SimpleNamespace(weights=w2, metrics=shipped_catalog().config)
+    monkeypatch.setattr(portfolio, "get_config", lambda: cfg)
+    _step(con, w2)
+    after = optimize_portfolio("unconstrained", con=con)
+    efforts = _efforts(con)
+    assert after.budget_usd == sum((e or Decimal(0) for e in efforts.values()), Decimal(0))
+    assert after.budget_usd != before.budget_usd
+    assert after.query_ids != before.query_ids
+    _check_invariants(after, efforts)
+    stored = _stored(con, "unconstrained")
+    assert [(r[0], r[1], r[2]) for r in stored] == [
+        (r.candidate_id, r.selected, r.order_rank) for r in after.rows
+    ]
+    assert all(r[5] == after.query_ids for r in stored)
+    upstream = con.execute(
+        "SELECT DISTINCT unnest(query_ids) AS q FROM score.funding ORDER BY q"
+    ).fetchall()
+    params = con.execute(
+        "SELECT params FROM meta.evidence WHERE query_id = ?", after.query_ids
+    ).fetchone()
+    assert params is not None
+    assert json.loads(params[0])["template"]["upstream"] == [u[0] for u in upstream]
+    _step(con, w2)
+    assert optimize_portfolio("unconstrained", con=con).query_ids == after.query_ids
+
+
+@pytest.mark.parametrize("persist", [True, False])
+def test_cv_t04_20_input_query_timeout(
+    build: Build, monkeypatch: pytest.MonkeyPatch, persist: bool
+) -> None:
+    """CV-T04-20 the input query runs with the configured compute timeout for persist=False
+    and with none (the build's own budget) for persist=True."""
+    con = build()
+    _step(con)
+    seen: list[tuple[object, object]] = []
+    real = run_recorded
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.append((args[2]["template"]["name"], kwargs.get("timeout_s")))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(portfolio, "run_recorded", spy)
+    optimize_portfolio("4000", persist=persist, con=con)
+    timeout = shipped_catalog().defaults.compute_timeout_s
+    assert seen[0] == ("portfolio_input", None if persist else timeout)
