@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import duckdb
 import pytest
 import structlog
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 from tests.support.build_harness import FakeJobContext
 from tests.support.lake_small import install, load_config
 from tests.support.ops_store import OpsStoreHandle
@@ -34,6 +35,8 @@ from herness.core.resilience import ProcessState
 from herness.core.types import JobOutcome
 from herness.enrich.gpu import YieldRequested
 from herness.metrics import facts
+from herness.metrics import scoring as scoring_module
+from herness.metrics.context import ScoringReport, StepResult
 from herness.model import _build_stages as stages
 from herness.model import build
 from herness.model.build import make_build_pipeline_handler
@@ -419,11 +422,16 @@ def _score_fakes(monkeypatch: pytest.MonkeyPatch, *, real_facts: bool = False) -
     return fakes
 
 
+def _scoring_calls(fakes: ScoreFakes) -> list[tuple[str, object, object]]:
+    """`run_scoring` gets a view of the job context (T02-19b `_build_state.hook_context`)."""
+    return [(build_id, steps, ctx.job) for build_id, steps, ctx in fakes.scoring_args]
+
+
 def test_it02_26_score_uses_hooks_on_build_connection(
     env: Env, fake_job_context: Callable[..., FakeJobContext], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """IT02-26 `materialize_facts` (no open transaction) then `run_scoring(build_id,
-    steps=..., con=<the build connection>, ctx=ctx)`; no 400 file rendered by the runner;
+    steps=..., con=<the build connection>, ctx=<view of ctx>)`; no 400 file rendered;
     the build connection is opened once and never reopened."""
     enrich = _use(monkeypatch, FakeEnrichment())
     fakes = _score_fakes(monkeypatch)
@@ -446,7 +454,7 @@ def test_it02_26_score_uses_hooks_on_build_connection(
     outcome = _done(ctx)
     build_id = str(outcome.result["build_id"])
     assert fakes.order == ["facts", "scoring"]
-    assert fakes.scoring_args == [(build_id, ["compute", "rank"], ctx)]
+    assert _scoring_calls(fakes) == [(build_id, ["compute", "rank"], ctx.job)]
     assert all(con is enrich.calls[0].con for con in fakes.cons)
     assert opened == [True]
     assert "400_facts.sql" not in rendered
@@ -475,7 +483,7 @@ def test_it02_26_score_only_on_existing_build(
     ctx = fake_job_context({"stages": ["score"], "build_id": build_id})
     outcome = _done(ctx)
     assert opened == [False]
-    assert fakes.scoring_args == [(build_id, None, ctx)]
+    assert _scoring_calls(fakes) == [(build_id, None, ctx.job)]
     assert fakes.cons[0] is fakes.cons[1]
     assert outcome.result["facts_queries"] == 5
 
@@ -499,6 +507,103 @@ def test_it02_26_real_facts_hook_on_lake_small(
         t[0] for t in tables
     }
     assert _query(env, build_id, "SELECT count(*) FROM metrics.incident_fact") == [(4,)]
+
+
+def _finished_at(env: Env, build_id: str) -> list[tuple[object, ...]]:
+    return _query(env, build_id, "SELECT status, finished_at IS NULL FROM meta.build")
+
+
+def test_it02_26_score_yield_leaves_build_unfinished(
+    env: Env, fake_job_context: Callable[..., FakeJobContext], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT02-26 (T02-19b) `run_scoring` reporting the `yielded` flag makes the job yield:
+    `score` is not in `stages_done`, the build is not done (no `promoted`, CURRENT
+    untouched) and, like a yielding enrich, `finished_at` of the completed build is NULL."""
+    _use(monkeypatch, FakeEnrichment())
+    build_id = str(_done(fake_job_context({"stages": ["build", "enrich"]})).result["build_id"])
+    assert _finished_at(env, build_id) == [("building", False)]
+
+    def scoring(
+        build_id: str, *, steps: object, con: duckdb.DuckDBPyConnection, ctx: JobContext
+    ) -> ScoringReport:
+        return ScoringReport(
+            build_id=build_id,
+            steps_done=["validate", "metrics"],
+            row_counts={},
+            duration_ms={},
+            flags=["yielded"],
+            warnings=[],
+        )
+
+    monkeypatch.setattr(facts, "materialize_facts", lambda con, build_id, /: ["q0"])
+    monkeypatch.setattr(stages, "_load_run_scoring", lambda: scoring)
+    ctx = fake_job_context({"stages": ["score"], "build_id": build_id})
+    outcome = _done(ctx)
+    assert (outcome.status, outcome.result) == ("yield", {"build_id": build_id})
+    assert ctx.load_state() == {"build_id": build_id, "stages_done": []}
+    assert "stage score done" not in ctx.heartbeats
+    assert _finished_at(env, build_id) == [("building", True)]
+    assert warehouse.read_current(layout=env.layout) is None
+
+
+class AttemptJobContext(FakeJobContext):
+    """`FakeJobContext` whose `load_state` returns the attempt's start state, as the real
+    job contexts do (`row.result["state"]`); saves are only visible to the next attempt."""
+
+    def __init__(self, payload: dict[str, JsonValue], state: dict[str, JsonValue]) -> None:
+        super().__init__(payload, state=state)
+        self._start = dict(state)
+
+    def load_state(self) -> dict[str, JsonValue]:
+        return json.loads(json.dumps(self._start))  # type: ignore[no-any-return]
+
+
+def test_it02_26_scoring_checkpoint_survives_yield_and_resume(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT02-26 (T02-19b, FT04-03-style resume) the real `run_scoring` yields after `metrics`:
+    the job state keeps its `scoring` checkpoint next to the build keys; the next attempt
+    resumes at `score` and `run_scoring` skips `metrics` and runs only `check`."""
+    _use(monkeypatch, FakeEnrichment())
+    ran: list[str] = []
+    payload: dict[str, JsonValue] = {"stages": ["build", "enrich", "score"]}
+    first = AttemptJobContext(payload, {})
+
+    def step(name: str) -> Callable[[duckdb.DuckDBPyConnection, object], StepResult]:
+        def run_step(con: duckdb.DuckDBPyConnection, sc: object) -> StepResult:
+            ran.append(name)
+            first.yield_after = first.yield_checks  # the next should_yield() asks to yield
+            return StepResult(row_counts={}, warnings=[], flags=[], failed_checks=[])
+
+        return run_step
+
+    for name in ("metrics", "check"):
+        monkeypatch.setitem(scoring_module._STEP_FUNCS, name, step(name))
+    outcome = _done(first)
+    build_id = str(outcome.result["build_id"])
+    assert (outcome.status, ran) == ("yield", ["metrics"])
+    state = first.saved_states[-1]
+    assert state["build_id"] == build_id
+    assert state["stages_done"] == ["build", "enrich"]
+    assert isinstance(state["scoring"], dict)
+    assert (state["scoring"]["build_id"], state["scoring"]["steps_done"]) == (build_id, ["metrics"])
+    assert _finished_at(env, build_id) == [("building", True)]
+    second = AttemptJobContext(payload, state)
+    resumed = _done(second)
+    assert (resumed.status, resumed.result["build_id"], ran) == (
+        "done",
+        build_id,
+        ["metrics", "check"],
+    )
+    scored = resumed.result["scoring"]
+    assert isinstance(scored, dict)
+    assert scored["steps_done"] == ["validate", "metrics", "check"]
+    assert scored["flags"] == []
+    final = second.saved_states[-1]
+    assert final["stages_done"] == ["build", "enrich", "score"]
+    assert isinstance(final["scoring"], dict)
+    assert final["scoring"]["steps_done"] == ["metrics", "check"]
+    assert _finished_at(env, build_id) == [("building", False)]
 
 
 def _copy_prev(wh: duckdb.DuckDBPyConnection, prev_id: str, layout: DataLayout) -> None:
