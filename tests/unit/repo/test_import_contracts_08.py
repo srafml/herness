@@ -22,34 +22,10 @@ _CORE_BASE = {
     "herness.core.time",
     "herness.core.numbers",
 }
-# R-03: everything in Herness except herness.core.types and herness.core.errors.
-_SETTINGS_FORBIDDEN = _CORE_BASE | {
-    "herness.core.ids",
-    "herness.core.audit",
-    "herness.core.config",
-    "herness.core.egress",
-    "herness.core.redact",
-    "herness.core.registry",
-    "herness.core.secrets",
-    "herness.core.settings",
-    "herness.core.jobs",
-    "herness.core.resilience._state",
-    "herness.core.resilience.ports",
-    "herness.core.resilience.policies",
-    "herness.core.resilience.classify",
-    "herness.core.resilience.events",
-    "herness.core.resilience.metrics",
-    "herness.core.resilience.breaker",
-    "herness.core.resilience.retry",
-    "herness.core.resilience.faults",
-    "herness.core.resilience.chain",
-    "herness.store",
-    "herness.model",
-    "herness.connectors",
-    "herness.enrich",
-    "herness.metrics",
-    "herness.harness",
-}
+# R-03: herness.core.resilience.settings may import, among Herness modules, only these.
+_SETTINGS_ALLOWED = ("herness.core.types", "herness.core.errors")
+_SETTINGS_PATH = ROOT / "herness" / "core" / "resilience" / "settings.py"
+_SETTINGS_PACKAGE = "herness.core.resilience"
 _TYPES_JOBS_FORBIDDEN = _CORE_BASE | {
     "herness.core.types.decisions",
     "herness.core.types.memory",
@@ -75,6 +51,54 @@ def _imports(path: Path) -> set[str]:
     return found
 
 
+def _child_modules(dotted: str) -> set[str]:
+    """Direct submodules and subpackages of the Herness package `dotted`, from the tree."""
+    folder = ROOT.joinpath(*dotted.split("."))
+    found: set[str] = set()
+    for entry in folder.iterdir():
+        if entry.name.startswith("__"):
+            continue
+        if entry.is_dir() and (entry / "__init__.py").is_file():
+            found.add(f"{dotted}.{entry.name}")
+        elif entry.suffix == ".py":
+            found.add(f"{dotted}.{entry.stem}")
+    return found
+
+
+def _settings_forbidden() -> set[str]:
+    """R-03: every Herness top-level package and core / resilience module but the allowed."""
+    modules = _child_modules("herness") | _child_modules("herness.core")
+    modules |= _child_modules(_SETTINGS_PACKAGE)
+    keep = {"herness.core", _SETTINGS_PACKAGE, f"{_SETTINGS_PACKAGE}.settings"}
+    return modules - keep - set(_SETTINGS_ALLOWED)
+
+
+def _settings_import_allowed(module: str) -> bool:
+    top = module.split(".", 1)[0]
+    if top in sys.stdlib_module_names or top == "pydantic":
+        return True
+    return any(module == ok or module.startswith(f"{ok}.") for ok in _SETTINGS_ALLOWED)
+
+
+def _import_targets(source: str, package: str) -> list[str]:
+    """Every module an import statement names, anywhere in `source` (TYPE_CHECKING blocks and
+    function bodies included); relative imports are resolved against `package`."""
+    targets: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            targets.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                parts = package.split(".")[: len(package.split(".")) - node.level + 1]
+                base = ".".join([*parts, base]) if base else ".".join(parts)
+            if _settings_import_allowed(base):
+                targets.append(base)
+            else:  # `from herness.core import errors` names the submodule
+                targets.extend(f"{base}.{alias.name}" for alias in node.names)
+    return targets
+
+
 def test_ut08_103_contracts_declared() -> None:
     """UT08-103 the core/store, R-03 settings and closed-base contracts name the 08 packages."""
     contracts = _contracts()
@@ -97,9 +121,47 @@ def test_ut08_103_settings_contract_allows_only_types_and_errors() -> None:
     """UT08-103 R-03: resilience settings may import no other Herness module than types/errors."""
     settings = _contracts()[_SETTINGS]
     assert settings["type"] == "forbidden"
-    assert set(settings["forbidden_modules"]) >= _SETTINGS_FORBIDDEN
+    assert set(settings["forbidden_modules"]) >= _settings_forbidden()
     assert "herness.core.types" not in settings["forbidden_modules"]
     assert "herness.core.errors" not in settings["forbidden_modules"]
+
+
+def test_ut08_103_settings_imports_allowlist() -> None:
+    """UT08-103 R-03: every import in herness/core/resilience/settings.py is stdlib, pydantic,
+    herness.core.types(.*) or herness.core.errors (AST allowlist; cannot drift as modules grow)."""
+    source = _SETTINGS_PATH.read_text(encoding="utf-8")
+    for module in _import_targets(source, _SETTINGS_PACKAGE):
+        assert _settings_import_allowed(module), module
+
+
+@pytest.mark.parametrize(
+    ("source", "rejected"),
+    [
+        ("from . import deciders", "herness.core.resilience.deciders"),
+        ("from .ports import X", "herness.core.resilience.ports.X"),
+        ("from ..redact_patterns import X", "herness.core.redact_patterns.X"),
+        ("from herness.core import ids", "herness.core.ids"),
+        ("if TYPE_CHECKING:\n    import herness.core.time", "herness.core.time"),
+        ("def f():\n    import httpx", "httpx"),
+    ],
+)
+def test_ut08_103_settings_allowlist_rejects(source: str, rejected: str) -> None:
+    """UT08-103 the settings allowlist resolves relative, TYPE_CHECKING and local imports."""
+    targets = _import_targets(source, _SETTINGS_PACKAGE)
+    assert rejected in targets
+    assert not _settings_import_allowed(rejected)
+
+
+def test_ut08_103_settings_allowlist_accepts() -> None:
+    """UT08-103 the settings allowlist keeps stdlib, pydantic, types(.*) and errors."""
+    source = (
+        "from __future__ import annotations\nimport re\nfrom pydantic import BaseModel\n"
+        "from herness.core import errors, types\nfrom ..types.jobs import JobSpec\n"
+        "from herness.core.errors import HernessError"
+    )
+    targets = _import_targets(source, _SETTINGS_PACKAGE)
+    assert "herness.core.types.jobs" in targets
+    assert all(_settings_import_allowed(module) for module in targets), targets
 
 
 def test_ut08_103_types_jobs_contract_declared() -> None:
