@@ -136,3 +136,19 @@ coalesce({{ rs.alias(name) }}.to_category, CASE WHEN {{ rs.alias(item_alias) }}.
 {%- macro lkp(keys, vals, key_expr, default_expr) -%}
 coalesce(list_extract({{ vals }}, list_position({{ keys }}, {{ key_expr }})), {{ default_expr }})
 {%- endmacro -%}
+
+{#- BEGIN team_bucket (U04-35; T04-16) -#}
+{#- Criticality bucket of a team (design 04 §5.8 step 2): the minimum core.service.criticality
+    over the services mapped to the team as owner or support; 1-2 hi, 3-4 lo, else none. -#}
+{%- macro team_bucket(team_expr) -%}
+(SELECT CASE WHEN min(tb_sv.criticality) BETWEEN 1 AND 2 THEN 'hi' WHEN min(tb_sv.criticality) BETWEEN 3 AND 4 THEN 'lo' ELSE 'none' END FROM core.service_map tb_sm JOIN core.service tb_sv ON tb_sv.service_id = tb_sm.service_id WHERE tb_sm.team_id = {{ team_expr }} AND tb_sm.role IN ('owner', 'support'))
+{%- endmacro -%}
+{#- END team_bucket -#}
+
+{#- BEGIN observed_days (U04-35; T04-14 + T04-16 shared) -#}
+{#- Days of incident history (impl 04 line-1467 note): greatest(1, least(s_window_days, days
+    from the local date of the first non-excluded incident to as_of)). -#}
+{%- macro observed_days() -%}
+(SELECT greatest(1, least({{ p('s_window_days') }}, date_diff('day', CAST(min(od_f.opened_at) AT TIME ZONE {{ p('tz') }} AS DATE), {{ p('as_of') }}))) FROM metrics.incident_fact od_f WHERE NOT od_f.excluded)
+{%- endmacro -%}
+{#- END observed_days -#}
