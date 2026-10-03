@@ -5,16 +5,16 @@ import dataclasses
 import json
 import math
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from tools.synth.dirty import (
     COST_FIELD,
-    FUTURE_SHIFT,
     DirtyCounters,
     apply_dirty,
     effective_rates,
@@ -35,9 +35,10 @@ _TS_FIELDS = {
 _T0 = datetime(2024, 1, 3, 9, 0, 0, tzinfo=UTC)
 _N = 10_000
 _SIGMAS = 6.0
+_FUTURE_FROM = datetime(2025, 3, 31, tzinfo=UTC)  # span end + 1 year: only future_ts lies beyond
 
 
-def _params(dirty: str) -> SynthParams:
+def _params(dirty: str, params_file: Path | None = None) -> SynthParams:
     return load_params(
         "tiny",
         start=date(2024, 1, 1),
@@ -45,7 +46,7 @@ def _params(dirty: str) -> SynthParams:
         sources=("servicenow", "jira", "monitoring"),
         dirty=dirty,  # type: ignore[arg-type]
         fetch_mode="initial",
-        params_file=None,
+        params_file=params_file,
     )
 
 
@@ -105,41 +106,46 @@ def _records(entity: str, n: int) -> list[dict[str, Any]]:
     ]
 
 
-def _ts(value: dict[str, str]) -> datetime:
-    at = parse_ts(value)
-    assert at is not None
-    return at
+def _ts(value: dict[str, str]) -> datetime | None:
+    """Parsed stamp; `None` when empty or unparseable (a dirty value)."""
+    try:
+        return parse_ts(value)
+    except ValueError:
+        return None
 
 
 def _canon(record: dict[str, Any]) -> str:
     return json.dumps(record, sort_keys=True)
 
 
-def _bad_ts(old: dict[str, str], new: dict[str, str]) -> bool:
-    if new == old:
-        return False
-    value = new["value"]
-    return value in {"", "31/02/2024"} or value.isdigit()
+def _bad(value: dict[str, str]) -> bool:
+    text = value["value"]
+    return text in {"", "31/02/2024"} or text.isdigit()
 
 
-def _observe(
-    entity: str, before: list[Rec], after: list[Rec], reemits: list[Rec]
-) -> dict[str, int]:
-    """Defect counts read off the output records (compared with the untouched inputs)."""
+def _expected_stamps(entity: str, rec: Rec) -> tuple[str, ...]:
+    """Stamps a clean record always fills: all of them, except on incidents by state
+    (2 open: no `resolved_at`/`closed_at`; 6 resolved: no `closed_at`)."""
+    if entity == "incident":
+        return _TS_FIELDS[entity][: {"2": 2, "6": 3}.get(rec["state"]["value"], 4)]
+    return _TS_FIELDS[entity]
+
+
+def _observe(entity: str, after: list[Rec], reemits: list[Rec]) -> dict[str, int]:
+    """Defect counts read off the output records alone (what downstream DQ can see)."""
     seen = dict.fromkeys([f.name for f in dataclasses.fields(DirtyCounters)], 0)
-    for old, new in zip(before, after, strict=True):
+    for rec in after:
         if entity in _TS_FIELDS:
-            seen["bad_timestamp"] += any(_bad_ts(old[f], new[f]) for f in _TS_FIELDS[entity])
-            kind = new["priority" if entity == "incident" else "type"]["value"]
+            seen["bad_timestamp"] += any(_bad(rec[f]) for f in _expected_stamps(entity, rec))
+            kind = rec["priority" if entity == "incident" else "type"]["value"]
             seen["unknown_enum"] += kind in {"P2-ish", "Emergency "}
         if entity == "incident":
-            opened, resolved = new["opened_at"], new["resolved_at"]
-            moved = opened != old["opened_at"] and not _bad_ts(old["opened_at"], opened)
-            seen["future_ts"] += moved and _ts(opened) == _ts(old["opened_at"]) + FUTURE_SHIFT
-            back = resolved != old["resolved_at"] and not _bad_ts(old["resolved_at"], resolved)
-            seen["resolved_before_opened"] += back and _ts(resolved) < _ts(opened)
-            gone = new["business_service"]["value"] == "" and new["cmdb_ci"]["value"] == ""
-            seen["missing_service"] += gone and old["business_service"]["value"] != ""
+            opened, resolved = _ts(rec["opened_at"]), _ts(rec["resolved_at"])
+            seen["future_ts"] += opened is not None and opened > _FUTURE_FROM
+            back = opened is not None and resolved is not None and resolved < opened
+            seen["resolved_before_opened"] += back
+            gone = rec["business_service"]["value"] == "" and rec["cmdb_ci"]["value"] == ""
+            seen["missing_service"] += gone
     outputs = {_canon(rec) for rec in after}
     for extra in reemits:
         if extra.get("__tombstone__"):
@@ -152,13 +158,19 @@ def _observe(
 
 
 def _run(
-    entity: str, dirty: str, n: int, seed: int, month_index: int = 0
+    entity: str,
+    dirty: str,
+    n: int,
+    seed: int,
+    month_index: int = 0,
+    params: SynthParams | None = None,
 ) -> tuple[list[Rec], list[Rec], list[Rec], DirtyCounters]:
     records = _records(entity, n)
     before = copy.deepcopy(records)
     counters = DirtyCounters()
     rng = np.random.default_rng(seed)
-    reemits = apply_dirty(entity, records, month_index, _params(dirty), rng, counters)
+    p = _params(dirty) if params is None else params
+    reemits = apply_dirty(entity, records, month_index, p, rng, counters)
     return before, records, reemits, counters
 
 
@@ -176,9 +188,9 @@ def test_ut11_19_none_leaves_records_unchanged(entity: str) -> None:
 def test_ut11_19_counters_equal_observed_defects(entity: str, dirty: str) -> None:
     """UT11-19 10,000 records per entity: counters equal the defects counted in the output
     and each count lies within 6 sigma of n x the effective rate."""
-    before, after, reemits, counters = _run(entity, dirty, _N, seed=19)
+    _, after, reemits, counters = _run(entity, dirty, _N, seed=19)
     counts = dataclasses.asdict(counters)
-    assert counts == _observe(entity, before, after, reemits)
+    assert counts == _observe(entity, after, reemits)
     rates = effective_rates(_params(dirty))
     applicable = {
         "incident": set(counts),
@@ -226,15 +238,28 @@ def test_ut11_19_reemit_shapes() -> None:
     assert len(later) == counters.later_versions > 0
     for rec in later:
         orig = by_id[rec["sys_id"]["value"]]
-        gap = _ts(rec["sys_updated_on"]) - _ts(orig["sys_updated_on"])
-        assert timedelta(hours=1) <= gap <= timedelta(days=10)
+        new_at, old_at = _ts(rec["sys_updated_on"]), _ts(orig["sys_updated_on"])
+        assert new_at is not None
+        assert old_at is not None
+        assert timedelta(hours=1) <= new_at - old_at <= timedelta(days=10)
         assert {orig["state"]["value"], rec["state"]["value"]} in ({"2", "6"}, {"7"})
+        opened, resolved = _ts(rec["opened_at"]), _ts(rec["resolved_at"])
+        if rec["state"]["value"] == "6":  # newly resolved: stamped, not before opened_at
+            assert resolved is not None
+            assert resolved <= new_at
+            assert opened is None or opened <= resolved
+    # later versions add no observable defect: per type, a copy shows what its record shows
+    origs = [by_id[rec["sys_id"]["value"]] for rec in later]
+    assert _observe("incident", later, []) == _observe("incident", origs, [])
     tombs = [r for r in reemits if r.get("__tombstone__")]
     assert tombs
     for tomb in tombs:
         assert set(tomb) == {"__tombstone__", "key", "deleted_at"}
         assert tomb["key"] in by_id
-        assert _ts(pair(tomb["deleted_at"])) > _ts(by_id[tomb["key"]]["sys_updated_on"])
+        deleted, updated = _ts(pair(tomb["deleted_at"])), _ts(by_id[tomb["key"]]["sys_updated_on"])
+        assert deleted is not None
+        assert updated is not None
+        assert deleted > updated
 
 
 def test_ut11_19_issue_later_version_advances_status() -> None:
@@ -263,6 +288,27 @@ def test_ut11_19_schema_drift_by_month() -> None:
         assert all((COST_FIELD in r["fields"]) is present for r in issues)
 
 
+def test_ut11_19_heavy_cap_and_consistent_future(tmp_path: Path) -> None:
+    """UT11-19 a default rate whose 5 x exceeds 1 is capped at 1.0, so every eligible record
+    is hit; `future_ts` shifts the whole lifecycle, so it adds no resolved-before-opened."""
+    path = tmp_path / "params.yaml"
+    rates_yaml = {"dirty_rates": {"missing_service": 0.3, "future_ts": 0.3}}
+    path.write_text(json.dumps(rates_yaml), encoding="utf-8")  # JSON is valid YAML
+    params = _params("heavy", path)
+    rates = effective_rates(params)
+    assert rates["missing_service"] == rates["future_ts"] == 1.0
+    _, after, reemits, counters = _run("incident", "heavy", 500, seed=9, params=params)
+    assert counters.missing_service == counters.future_ts == 500
+    assert dataclasses.asdict(counters) == _observe("incident", after, reemits)
+    for rec in after:
+        opened = _ts(rec["opened_at"])
+        assert opened is not None
+        assert opened > _FUTURE_FROM
+        for name in ("u_acknowledged_at", "closed_at"):
+            at = _ts(rec[name])
+            assert at is None or at >= opened
+
+
 def test_ut11_19_counters_add() -> None:
     """UT11-19 per-shard counters sum field by field in the parent."""
     total = DirtyCounters(tombstones=1)
@@ -272,6 +318,9 @@ def test_ut11_19_counters_add() -> None:
 
 
 @settings(max_examples=40, deadline=None)
+@example(seed=805, entity="incident", dirty="heavy", month_index=0)
+@example(seed=912, entity="incident", dirty="heavy", month_index=0)
+@example(seed=1453, entity="incident", dirty="heavy", month_index=0)
 @given(
     seed=st.integers(min_value=0, max_value=2**32 - 1),
     entity=st.sampled_from(_ENTITIES),
@@ -282,5 +331,5 @@ def test_pt11_03_counters_equal_observable_defects(
     seed: int, entity: str, dirty: str, month_index: int
 ) -> None:
     """PT11-03 for any seed and entity, counters equal the defects observable in the output."""
-    before, after, reemits, counters = _run(entity, dirty, 300, seed, month_index)
-    assert dataclasses.asdict(counters) == _observe(entity, before, after, reemits)
+    _, after, reemits, counters = _run(entity, dirty, 300, seed, month_index)
+    assert dataclasses.asdict(counters) == _observe(entity, after, reemits)

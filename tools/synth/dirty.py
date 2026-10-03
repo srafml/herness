@@ -1,20 +1,17 @@
 """Dirty-data defects at exact, counted rates (U11-16, design §5.1.6).
 
-`apply_dirty` mutates one shard's source-shaped records in place and returns the extra
-re-emitted records (duplicates, later versions, tombstone markers); `DirtyCounters` counts
-every defect it applies, so the truth file holds exact numbers. Each record draws one
-uniform per defect type in the fixed order of `DEFECTS`; a defect that does not fit the
-record (an open incident has no `resolved_at` to move) is skipped and not counted.
-Timestamp defects never touch `sys_updated_on` (the watermark) and `bad_timestamp` never
-overwrites a field another defect of the same record just set, so every counted defect
-stays observable. Tombstone markers are `{"__tombstone__": True, "key", "deleted_at"}`
-with the source key (ServiceNow `sys_id`, Jira `id`) and a source-format timestamp.
+`apply_dirty` mutates a shard's records in place and returns the re-emits (duplicates,
+later versions, tombstones `{"__tombstone__": True, "key": <sys_id | Jira id>,
+"deleted_at"}`); `DirtyCounters` counts each applied defect. One uniform per defect type
+per record, in `DEFECTS` order; a defect that does not fit a record is skipped, uncounted.
+`sys_updated_on` is never dirtied, `future_ts` shifts the whole incident lifecycle and
+`bad_timestamp` skips fields another defect set: each counted defect is observable alone.
 """
 
 import copy
 import dataclasses
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -57,7 +54,8 @@ _BAD_DATE: Final = "31/02/2024"
 _ENUM_FIELDS: Final = {"incident": ("priority", "P2-ish"), "change_request": ("type", "Emergency ")}
 _BACKDATE_H: Final = (1.0, 48.0)
 _LATER_S: Final = (3_600.0, 10 * 86_400.0)  # later version / deletion: + U(1 h, 10 d)
-_NEXT_STATE: Final = {"1": ("2", "In Progress"), "2": ("6", "Resolved"), "6": ("7", "Closed")}
+# state advance of a later version and the lifecycle stamp it sets
+_NEXT_STATE: Final = {"2": ("6", "Resolved", "resolved_at"), "6": ("7", "Closed", "closed_at")}
 _NEXT_STATUS: Final = {TODO: IN_PROGRESS, IN_PROGRESS: DONE}
 _IMPACT: Final = {"1": ("1", "1 - High"), "2": ("1", "1 - High"), "3": ("2", "2 - Medium")}
 _IMPACT_LOW: Final = ("3", "3 - Low")
@@ -99,18 +97,20 @@ def _jira_time(text: str) -> datetime:
     return datetime.strptime(text, _JIRA_FORMAT).astimezone(UTC)
 
 
+def _parse(value: dict[str, str]) -> datetime | None:
+    """`parse_ts`, `None` for an empty or unparseable (dirty) value."""
+    try:
+        return parse_ts(value)
+    except ValueError:
+        return None
+
+
+def _at(value: dict[str, str]) -> datetime:
+    return cast(datetime, parse_ts(value))  # callers pass non-empty, clean stamps
+
+
 def _later(rng: np.random.Generator, at: datetime) -> datetime:
     return at + timedelta(seconds=float(rng.uniform(*_LATER_S)))
-
-
-def _updated(entity: str, record: Rec) -> datetime | None:
-    if entity == "issue":
-        return _jira_time(record["fields"]["updated"])
-    return parse_ts(record["sys_updated_on"])
-
-
-def _source_key(entity: str, record: Rec) -> str:
-    return str(record["id"]) if entity == "issue" else str(record["sys_id"]["value"])
 
 
 def _drift(entity: str, records: list[Rec], month_index: int) -> None:
@@ -124,11 +124,12 @@ def _drift(entity: str, records: list[Rec], month_index: int) -> None:
 
 
 def _future(rec: Rec, touched: set[str]) -> bool:
-    opened = parse_ts(rec["opened_at"])
-    if opened is None:
+    """`opened_at` + 730 d; the later lifecycle stamps move along, keeping their order."""
+    if not rec["opened_at"]["value"]:
         return False
-    rec["opened_at"] = ts_pair(opened + FUTURE_SHIFT)
-    touched.add("opened_at")
+    for name in (n for n in _TS_FIELDS["incident"] if rec[n]["value"]):
+        rec[name] = ts_pair(_at(rec[name]) + FUTURE_SHIFT)
+        touched.add(name)
     return True
 
 
@@ -137,7 +138,7 @@ def _backdate(rec: Rec, rng: np.random.Generator, touched: set[str]) -> bool:
     if opened is None or not rec["resolved_at"]["value"]:
         return False
     rec["resolved_at"] = ts_pair(opened - timedelta(hours=float(rng.uniform(*_BACKDATE_H))))
-    touched.add("resolved_at")
+    touched.update(("opened_at", "resolved_at"))
     return True
 
 
@@ -146,7 +147,7 @@ def _bad_timestamp(entity: str, rec: Rec, rng: np.random.Generator, touched: set
     if not names:
         return False
     name = names[int(rng.integers(len(names)))]
-    at = parse_ts(rec[name])
+    at = _parse(rec[name])
     epoch_ms = "" if at is None else str(int(at.timestamp() * 1000))
     rec[name] = pair((_BAD_DATE, epoch_ms, "")[int(rng.integers(3))])
     return True
@@ -191,21 +192,22 @@ def _later_version(entity: str, rec: Rec, rng: np.random.Generator) -> Rec:
         fields["status"] = {"name": name, "id": STATUS_IDS[name]}
         fields["status"]["statusCategory"] = {"key": CATEGORIES[name]}
         return out
-    at = parse_ts(out["sys_updated_on"])
-    out["sys_updated_on"] = ts_pair(_later(rng, at) if at else None)
+    at = _later(rng, _at(out["sys_updated_on"]))
+    out["sys_updated_on"] = ts_pair(at)
     state = out["state"]["value"]
-    out["state"] = pair(*_NEXT_STATE[state]) if state in _NEXT_STATE else out["state"]
+    if state in _NEXT_STATE:  # stamp at the new update time, never before opened_at
+        value, label, stamped = _NEXT_STATE[state]
+        opened = _parse(out["opened_at"])
+        out["state"], out[stamped] = pair(value, label), ts_pair(max(at, opened or at))
     return out
 
 
 def _tombstone(entity: str, rec: Rec, rng: np.random.Generator) -> Rec:
-    at = _updated(entity, rec)
-    deleted = _later(rng, at) if at else None
     if entity == "issue":
-        stamp = jira_ts(deleted) if deleted else ""
-    else:
-        stamp = ts_pair(deleted)["value"]
-    return {"__tombstone__": True, "key": _source_key(entity, rec), "deleted_at": stamp}
+        stamp = jira_ts(_later(rng, _jira_time(rec["fields"]["updated"])))
+        return {"__tombstone__": True, "key": str(rec["id"]), "deleted_at": stamp}
+    stamp = ts_pair(_later(rng, _at(rec["sys_updated_on"])))["value"]
+    return {"__tombstone__": True, "key": str(rec["sys_id"]["value"]), "deleted_at": stamp}
 
 
 def _reemits(
