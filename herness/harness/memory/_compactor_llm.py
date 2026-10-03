@@ -1,7 +1,10 @@
-"""Model-call plumbing of ``summarize_notes`` (impl 07 U07-77 steps 2-3, U07-99).
+"""Model-call plumbing of ``summarize_notes`` (impl 07 U07-77 steps 2-3) and the U07-99
+memory prompt resolver.
 
-Size-forced private sibling of ``compactor.py`` (T07-14); only that module imports it. The
-dropped groups reach the model only escaped and wrapped as ``tool_results`` data (R-20).
+Size-forced private sibling of ``compactor.py`` (T07-14). ``memory_prompt`` is the one reader
+of the memory prompt files (impl 05 UT05-94); ``chat.py`` (T07-21) imports it for the chat
+summary and correction prompts. The dropped groups reach the model only escaped and wrapped
+as ``tool_results`` data (R-20).
 """
 
 import asyncio
@@ -32,21 +35,42 @@ from herness.harness.memory.settings import CompactionConfig
 from herness.harness.memory.working import CompactionNotes, Scratchpad
 from herness.harness.tracing import llm_call_fields
 
-__all__ = ["NOTES_SCHEMA", "PROMPT_FILE", "Completer", "chunks", "compaction_prompt", "request"]
+__all__ = [
+    "NOTES_SCHEMA",
+    "PROMPT_FILE",
+    "Completer",
+    "chunks",
+    "compaction_prompt",
+    "memory_prompt",
+    "request",
+]
 
-PROMPT_FILE: Final = "prompts/compaction_notes.md"
+PROMPT_DIR: Final = "prompts"
+PROMPT_FILE: Final = "compaction_notes.md"
 REQUEST_KEY_CHARS: Final = 200
 
 
 @functools.cache
-def compaction_prompt() -> tuple[str, str]:
-    """The U07-99 system prompt and its 16-hex content hash; read once per process."""
+def memory_prompt(file_name: str) -> tuple[str, str]:
+    """A U07-99 prompt by bare file name and its 16-hex content hash; read once per process.
+
+    Raises ``ConfigError`` when the file is missing or the name is not a bare file name.
+    """
+    if not file_name or "/" in file_name or "\\" in file_name or file_name.startswith("."):
+        msg = "prompt file name must be a bare file name"
+        raise ConfigError(msg)
+    path = resources.files("herness.harness.memory").joinpath(PROMPT_DIR, file_name)
     try:
-        text = resources.files("herness.harness.memory").joinpath(PROMPT_FILE).read_text("utf-8")
+        text = path.read_text("utf-8")
     except OSError as exc:
-        msg = f"prompt file {PROMPT_FILE} missing"
+        msg = f"prompt file {file_name} missing"
         raise ConfigError(msg) from exc
     return text, sha256_hex(text)[:16]
+
+
+def compaction_prompt() -> tuple[str, str]:
+    """The compaction notes prompt (U07-99) and its content hash, via ``memory_prompt``."""
+    return memory_prompt(PROMPT_FILE)
 
 
 def _notes_schema() -> dict[str, JsonValue]:

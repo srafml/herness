@@ -22,9 +22,10 @@ from herness.core.settings import RedactionConfig
 
 pytestmark = pytest.mark.unit
 
-# 14 role prompts (R-37 removed verifier_claim.md from the card's 15) plus the impl 07 memory
-# prompts (T07-14: compaction_notes.md); every prompts directory of the harness is scanned.
-_EXPECTED_COUNT = 15
+# 14 role prompts (R-37 removed verifier_claim.md from the card's 15) plus the three impl 07
+# memory prompts (U07-99: compaction_notes.md from T07-14; chat_summary.md and
+# correction_classify.md from T07-21); every prompts directory of the harness is scanned.
+_EXPECTED_COUNT = 17
 _PROMPT_DIRS = (("herness.harness.roles", "prompts"), ("herness.harness.memory", "prompts"))
 _DETECTORS = build_detectors(RedactionConfig())
 _SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]{0,31}://|\bwww\.", re.IGNORECASE)
@@ -80,10 +81,11 @@ def _detect_secrets_hits(path: Path) -> list[str]:
 
 
 def test_st05_21_scans_every_prompt_file() -> None:
-    """ST05-21 the scan covers every file in the role and memory prompts directories (15)."""
+    """ST05-21 the scan covers every file in the role and memory prompts directories (17)."""
     paths = list(_prompt_paths())
     assert len(paths) == _EXPECTED_COUNT
-    assert "compaction_notes.md" in {p.name for p in paths}
+    names = {p.name for p in paths}
+    assert {"compaction_notes.md", "chat_summary.md", "correction_classify.md"} <= names
     assert all(p.suffix == ".md" for p in paths)
 
 

@@ -477,13 +477,13 @@ def test_ut07_62_prompt_file_contract() -> None:
 
 def test_ut07_62_missing_prompt_is_config_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT07-62 (U07-99) a missing prompt file is a ConfigError at compactor construction."""
-    llm_mod.compaction_prompt.cache_clear()
-    monkeypatch.setattr(llm_mod, "PROMPT_FILE", "prompts/missing.md")
+    llm_mod.memory_prompt.cache_clear()
+    monkeypatch.setattr(llm_mod, "PROMPT_FILE", "missing.md")
     try:
         with pytest.raises(ConfigError, match="missing"):
             cs.compactor()
     finally:
-        llm_mod.compaction_prompt.cache_clear()
+        llm_mod.memory_prompt.cache_clear()
 
 
 def test_ut07_62_task_message_of_plain_and_merged_heads() -> None:
