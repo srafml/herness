@@ -22,18 +22,19 @@ from herness.core.resilience.metrics import record_counter
 from herness.metrics._request import normalize_entity_ids, normalize_filters
 from herness.metrics.catalog import METRIC_FLAGS, MetricCatalog, catalog_from_config
 from herness.metrics.evidence import RecordedQuery, run_recorded
+from herness.metrics.peers import PeerGroupInfo, peer_group  # re-export (§2 row, T04-17)
 from herness.metrics.render import render_metric_query
 from herness.metrics.settings import Better, EntityType, FilterKey, MetricDef, Period, Unit
 from herness.metrics.windows import Window, custom_window, default_window, resolve_as_of
 from herness.store.warehouse import open_readonly
 
-# T04-17: re-export `peer_group` and `PeerGroupInfo` from herness.metrics.peers here (§2 row).
-
 __all__ = [
     "MetricResult",
     "MetricRow",
+    "PeerGroupInfo",
     "compute_metric",
     "metric_series",
+    "peer_group",
     "validate_metric_request",
 ]
 

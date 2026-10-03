@@ -14,8 +14,8 @@ from sqlglot import exp
 
 __all__ = ["LEVER_PLACEHOLDERS", "raw_sql_problems", "sql_problems", "template_problems"]
 
-# T04-18: must equal herness.metrics.levers.LEVER_PLACEHOLDERS (U04-71). levers.py does not
-# exist yet and will import the catalog, so the vocabulary is held here until then.
+# U04-71 single source of truth: herness.metrics.levers re-exports this set (levers imports the
+# step modules, which import the catalog, so the catalog checks cannot import levers).
 LEVER_PLACEHOLDERS: Final[frozenset[str]] = frozenset(
     {"entity_name", "metric_label", "current_value", "target_value", "target_kind"}
     | {"unit", "delta_usd", "n_basis", "peer_group", "period"}

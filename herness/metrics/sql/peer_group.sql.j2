@@ -1,0 +1,126 @@
+{#- Peer group of one entity (impl 04 U04-63; design 04 §5.8 step 2, §5.8.1). Context:
+    entity_type, has_metric. The entity id and metric are p() binds, never rendered (TH04-01).
+    Each branch defines cand (id, nk = natural key), found, res (key, fallback) and mem (ids);
+    one output row per member, or one with member_id NULL, ordered by member_id. -#}
+{%- set ID = p('pg_entity_id') -%}
+{%- set IS_CF = "starts_with(" ~ ID ~ ", 'cluster_fix:')" -%}
+WITH
+{% if entity_type in ('team', 'org') %}
+{#- Same natural keys as score.org (U04-67); ent is the entity itself, active or not. -#}
+{% if entity_type == 'team' %}
+cand AS (
+    SELECT DISTINCT t.team_id AS id, 'team:crit_' || {{ team_bucket('t.team_id') }} AS nk
+    FROM core.team t
+    WHERE t.active
+),
+ent AS (
+    SELECT DISTINCT t.team_id AS id, 'team:crit_' || {{ team_bucket('t.team_id') }} AS nk
+    FROM core.team t
+    WHERE t.team_id = {{ ID }}
+),
+{% else %}
+cand AS (
+    SELECT DISTINCT o.org_id AS id,
+           'org:level' || CAST((SELECT max(oc.depth) FROM metrics.org_closure oc
+                                WHERE oc.org_id = o.org_id) AS VARCHAR) AS nk
+    FROM core.org o
+),
+ent AS (SELECT id, nk FROM cand WHERE id = {{ ID }}),
+{% endif %}
+{% if has_metric %}
+{#- Non-NULL t12w x of the natural group plus the entity, as score.org counts them. -#}
+grp AS (
+    SELECT c.id FROM cand c JOIN ent e ON c.nk = e.nk
+    UNION
+    SELECT id FROM ent
+),
+cnt AS (
+    SELECT count(CASE WHEN NOT coalesce(list_contains(mv.flags, 'insufficient_sample'), false)
+                      THEN mv.value END) AS n
+    FROM grp g
+    JOIN metrics.metric_value mv
+        ON mv.entity_id = g.id AND mv.metric = {{ p('pg_metric') }}
+       AND mv.entity_type = '{{ entity_type }}' AND mv.period = 't12w'
+       AND mv.period_start = {{ p('window_start_date') }}
+),
+res AS (
+    SELECT e.nk,
+           CASE WHEN c.n < {{ p('s_min_peer_group') }} THEN '{{ entity_type }}:all'
+                ELSE e.nk END AS key,
+           CASE WHEN c.n < {{ p('s_min_peer_group') }} THEN 'all' END AS fallback
+    FROM ent e
+    CROSS JOIN cnt c
+),
+{% else %}
+res AS (SELECT e.nk, e.nk AS key, CAST(NULL AS VARCHAR) AS fallback FROM ent e),
+{% endif %}
+mem AS (
+    SELECT DISTINCT c.id
+    FROM cand c
+    JOIN res r ON r.fallback IS NOT NULL OR c.nk = r.nk
+    WHERE c.id <> {{ ID }}
+),
+found AS (SELECT EXISTS (SELECT 1 FROM ent) AS ok)
+{% else %}
+cand AS (
+    SELECT DISTINCT s.service_id AS id,
+           'service:crit_' || coalesce(CAST(s.criticality AS VARCHAR), 'none') AS nk
+    FROM core.service s
+),
+{% if entity_type == 'service' %}
+own AS (SELECT id, nk FROM cand WHERE id = {{ ID }}),
+found AS (SELECT EXISTS (SELECT 1 FROM own) AS ok),
+{% else %}
+{#- Owning service: cf (cluster_fix), else wi.service_id, else the best owner map row (mp);
+    a service missing from core.service leaves the item unresolved. -#}
+cf AS (
+    SELECT f.service_id AS sid
+    FROM metrics.incident_fact f
+    WHERE {{ IS_CF }} AND f.cluster_id = substr({{ ID }}, 13) AND NOT f.excluded
+      AND f.service_id IS NOT NULL
+      AND f.opened_at >= {{ p('as_of_ts') }} - to_days({{ p('s_window_days') }})
+      AND f.opened_at < {{ p('as_of_ts') }}
+    GROUP BY f.service_id
+    ORDER BY count(*) DESC, f.service_id
+    LIMIT 1
+),
+wi AS (
+    SELECT w.service_id, w.project, w.components
+    FROM core.work_item w
+    WHERE w.record_id = {{ ID }} AND NOT {{ IS_CF }}
+),
+mp AS (
+    SELECT m.service_id AS sid
+    FROM wi
+    JOIN core.service_map m
+        ON m.role = 'owner' AND m.jira_project = wi.project
+       AND (m.jira_component IS NULL
+            OR list_contains(coalesce(wi.components, []), m.jira_component))
+    WHERE wi.service_id IS NULL AND m.service_id IS NOT NULL
+    ORDER BY m.confidence DESC NULLS LAST, m.service_id
+    LIMIT 1
+),
+own AS (
+    SELECT c.id, c.nk FROM cand c
+    WHERE c.id IN (SELECT sid FROM cf UNION SELECT service_id FROM wi UNION SELECT sid FROM mp)
+),
+found AS (SELECT {{ IS_CF }} OR EXISTS (SELECT 1 FROM wi) AS ok),
+{% endif %}
+mem AS (SELECT DISTINCT c.id FROM cand c JOIN own o ON c.nk = o.nk AND c.id <> o.id),
+res AS (
+    SELECT o.nk AS key,
+           CASE WHEN (SELECT count(*) FROM mem) < {{ p('s_min_service_peers') }}
+                THEN 'prior_year' END AS fallback
+    FROM own o
+{% if entity_type == 'work_item' %}
+    UNION ALL
+    SELECT 'work_item:unresolved', 'prior_year'
+    WHERE NOT EXISTS (SELECT 1 FROM own)
+{% endif %}
+)
+{% endif %}
+SELECT f.ok AS entity_found, r.key, r.fallback, m.id AS member_id
+FROM found f
+LEFT JOIN res r ON f.ok
+LEFT JOIN mem m ON f.ok
+ORDER BY member_id

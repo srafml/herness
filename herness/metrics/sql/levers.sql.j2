@@ -1,0 +1,176 @@
+{#- score.action_lever rows (impl 04 U04-69; design 04 §5.9).
+    One SELECT over persisted tables: every runtime value is a p() bind and prose lives only in
+    Jinja comments, so no SQL comment reaches the recorded SQL. Output columns follow the
+    score.action_lever order without query_ids. Money sums stay DECIMAL (exact, so the result
+    is deterministic) and become DOUBLE only for the delta arithmetic. A model outside the seven
+    usd_models gets no delta and therefore no row (TH04-10); the rationale template comes from
+    config only and template_params holds exactly the LEVER_PLACEHOLDERS keys (U04-71). -#}
+{%- macro in_window(ts) -%}
+{{ ts }} >= {{ p('as_of_ts') }} - INTERVAL 12 MONTH AND {{ ts }} < {{ p('as_of_ts') }}
+{%- endmacro -%}
+{#- Step 3 entity scope of a record CTE with team_id and org_id columns: the team itself, and
+    every ancestor org of the record's org through metrics.org_closure. Only lever entities. -#}
+{%- macro by_entity(name) -%}
+SELECT 'team' AS entity_type, r.team_id AS entity_id, r.*
+FROM {{ name }} r
+WHERE r.team_id IN (SELECT entity_id FROM ents WHERE entity_type = 'team')
+UNION ALL
+SELECT 'org', oc.ancestor_org_id, r.*
+FROM {{ name }} r
+JOIN metrics.org_closure oc ON oc.org_id = r.org_id
+WHERE oc.ancestor_org_id IN (SELECT entity_id FROM ents WHERE entity_type = 'org')
+{%- endmacro -%}
+{%- set NOISE_USD = p('w_triage_minutes') ~ ' / 60 * ' ~ p('w_engineer_hour') -%}
+{%- set BACKOUT_USD = p('w_backout_hours') ~ ' * ' ~ p('w_engineer_hour') -%}
+{#- Step 1: lever rows of score.org (top entities, lever metrics, worse than the peers). -#}
+WITH lev AS (
+    SELECT o.entity_type, o.entity_id, o.metric, o.value AS x, o.peer_group, o.peer_median,
+           {{ lkp(p('s_lever_models_k'), p('s_lever_models_v'), 'o.metric', 'NULL') }} AS model,
+           list_contains({{ p('s_lower_better') }}, o.metric) AS lower_better
+    FROM score.org o
+    WHERE o.rank <= {{ p('s_top_entities') }}
+      AND list_contains({{ p('s_lever_models_k') }}, o.metric)
+      AND o.z_score > 0 AND o.value IS NOT NULL
+),
+{#- Step 2: peer_median and top_quartile targets; keep improving targets only. -#}
+quart AS (
+    SELECT entity_type, peer_group, metric, quantile_cont(value, 0.25) AS q25,
+           quantile_cont(value, 0.75) AS q75
+    FROM score.org
+    GROUP BY entity_type, peer_group, metric
+),
+cand AS (
+    SELECT l.*, 'peer_median' AS target_kind, l.peer_median AS t
+    FROM lev l
+    UNION ALL
+    SELECT l.*, 'top_quartile', CASE WHEN l.lower_better THEN q.q25 ELSE q.q75 END
+    FROM lev l
+    JOIN quart q
+        ON q.entity_type = l.entity_type AND q.peer_group = l.peer_group AND q.metric = l.metric
+),
+tgt AS (
+    SELECT c.*
+    FROM cand c
+    WHERE CASE WHEN c.lower_better THEN c.t < c.x ELSE c.t > c.x END
+),
+ents AS (
+    SELECT DISTINCT entity_type, entity_id FROM tgt
+),
+{#- Step 3: base quantities over the trailing 12 months, per lever entity. -#}
+inc AS (
+    SELECT f.record_id, f.team_id, f.org_id, f.downtime_usd, f.toil_usd, f.total_usd
+    FROM metrics.incident_fact f
+    WHERE NOT f.excluded AND {{ in_window('f.opened_at') }}
+),
+chg AS (
+    SELECT c.record_id, c.team_id, c.org_id, c.deployed, c.failed
+    FROM metrics.change_fact c
+    WHERE {{ in_window('c.actual_end') }}
+),
+ev AS (
+    SELECT e.event_id, ow.team_id, sv.org_id
+    FROM core.event e
+    {{ owner_team('e.service_id', 'ow') }}
+    LEFT JOIN core.service sv ON sv.service_id = e.service_id
+    WHERE list_contains({{ p('d_noise_severities') }}, e.severity)
+      AND {{ in_window('e.ts') }}
+),
+cause AS (
+    SELECT i.caused_by_change_id AS change_id, i.record_id AS incident_id
+    FROM core.incident i
+    WHERE i.caused_by_change_id IS NOT NULL
+    UNION
+    SELECT l.change_id, l.incident_id
+    FROM enrich.incident_change_link l
+    WHERE l.score >= {{ p('d_change_link_min_score') }}
+),
+inc_e AS (
+    SELECT entity_type, entity_id, count(*) AS n, sum(downtime_usd) AS s_down,
+           sum(toil_usd) AS s_toil, sum(total_usd) AS s_total
+    FROM ({{ by_entity('inc') }}) x
+    GROUP BY entity_type, entity_id
+),
+chg_e AS (
+    SELECT entity_type, entity_id, count(*) FILTER (WHERE deployed) AS d,
+           count(*) FILTER (WHERE failed) AS f
+    FROM ({{ by_entity('chg') }}) x
+    GROUP BY entity_type, entity_id
+),
+cc_e AS (
+    SELECT y.entity_type, y.entity_id, sum(y.total_usd) AS cc
+    FROM (
+        SELECT DISTINCT x.entity_type, x.entity_id, f.record_id, f.total_usd
+        FROM ({{ by_entity('chg') }}) x
+        JOIN cause k ON k.change_id = x.record_id
+        JOIN metrics.incident_fact f ON f.record_id = k.incident_id AND NOT f.excluded
+        WHERE x.failed AND f.opened_at < {{ p('as_of_ts') }}
+    ) y
+    GROUP BY y.entity_type, y.entity_id
+),
+ev_e AS (
+    SELECT entity_type, entity_id, count(*) AS e
+    FROM ({{ by_entity('ev') }}) x
+    GROUP BY entity_type, entity_id
+),
+base AS (
+    SELECT n.entity_type, n.entity_id, coalesce(i.n, 0) AS n,
+           CAST(coalesce(i.s_down, 0) AS DOUBLE) AS s_down,
+           CAST(coalesce(i.s_toil, 0) AS DOUBLE) AS s_toil,
+           CAST(i.s_total AS DOUBLE) / nullif(i.n, 0) AS avg_total,
+           CAST(i.s_toil AS DOUBLE) / nullif(i.n, 0) AS avg_toil,
+           coalesce(c.d, 0) AS d, coalesce(c.f, 0) AS f,
+           CAST(coalesce(k.cc, 0) AS DOUBLE) AS cc, coalesce(v.e, 0) AS e
+    FROM ents n
+    LEFT JOIN inc_e i ON i.entity_type = n.entity_type AND i.entity_id = n.entity_id
+    LEFT JOIN chg_e c ON c.entity_type = n.entity_type AND c.entity_id = n.entity_id
+    LEFT JOIN cc_e k ON k.entity_type = n.entity_type AND k.entity_id = n.entity_id
+    LEFT JOIN ev_e v ON v.entity_type = n.entity_type AND v.entity_id = n.entity_id
+),
+{#- Step 4: delta by usd_model; NULL (no row) for a skipped lever or an unknown model. -#}
+dl AS (
+    SELECT t.*, b.n, b.d, b.e,
+           CASE t.model
+               WHEN 'mttr' THEN CASE WHEN t.x <> 0
+                                     THEN (b.s_down + b.s_toil) * (t.x - t.t) / t.x END
+               WHEN 'repeat' THEN b.n * (t.x - t.t) * b.avg_total
+               WHEN 'reopen' THEN b.n * (t.x - t.t) * b.avg_toil * {{ p('w_reopen_factor') }}
+               WHEN 'reassign' THEN b.n * (t.x - t.t) * {{ p('w_reassign_hours') }}
+                                    * {{ p('w_engineer_hour') }}
+               WHEN 'sla' THEN CASE WHEN {{ p('w_sla_penalty') }} <> 0
+                                    THEN b.n * (t.x - t.t) * {{ p('w_sla_penalty') }} END
+               WHEN 'cfr' THEN b.d * (t.x - t.t)
+                               * ({{ BACKOUT_USD }} + CASE WHEN b.f > 0 THEN b.cc / b.f ELSE 0 END)
+               WHEN 'noise' THEN b.e * (t.x - t.t) * {{ NOISE_USD }}
+           END AS delta,
+           CASE t.model WHEN 'cfr' THEN b.d WHEN 'noise' THEN b.e ELSE b.n END AS n_basis
+    FROM tgt t
+    JOIN base b ON b.entity_type = t.entity_type AND b.entity_id = t.entity_id
+),
+{#- Step 5: annualize; keep positive deltas only. -#}
+usd AS (
+    SELECT d.*, CAST(d.delta * 365 / {{ observed_days() }} AS DECIMAL(18, 2)) AS delta_usd
+    FROM dl d
+    WHERE d.delta IS NOT NULL
+)
+{#- Steps 6-8: config template, fixed placeholders, unconfirmed by model. -#}
+SELECT u.entity_type, u.entity_id, u.metric, u.target_kind, u.x AS current_value,
+       u.t AS target_value, u.delta_usd,
+       {{ lkp(p('s_templates_k'), p('s_templates_v'), 'u.model', 'NULL') }} AS rationale_template,
+       json_object(
+           'entity_name', coalesce(tm.name, og.name),
+           'metric_label', u.metric,
+           'current_value', u.x,
+           'target_value', u.t,
+           'target_kind', u.target_kind,
+           'unit', {{ lkp(p('s_metric_units_k'), p('s_metric_units_v'), 'u.metric', "'other'") }},
+           'delta_usd', CAST(u.delta_usd AS VARCHAR),
+           'n_basis', u.n_basis,
+           'peer_group', u.peer_group,
+           'period', 't12w'
+       ) AS template_params,
+       list_contains({{ p('s_unconfirmed_models') }}, u.model) AS unconfirmed
+FROM usd u
+LEFT JOIN core.team tm ON u.entity_type = 'team' AND tm.team_id = u.entity_id
+LEFT JOIN core.org og ON u.entity_type = 'org' AND og.org_id = u.entity_id
+WHERE u.delta_usd > 0
+ORDER BY u.entity_type, u.entity_id, u.metric, u.target_kind
