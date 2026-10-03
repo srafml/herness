@@ -19,9 +19,13 @@ import pytest
 from pydantic import JsonValue
 from tests.support.dispatch_standin import BUILD_ID, make_tool_ctx
 from tests.unit.harness.memory._lifecycle_env import make_lifecycle
-from tests.unit.harness.memory._write_env import NOW, FakeEmbed, unit
+from tests.unit.harness.memory._write_env import NOW, PLANTED_NAME, FakeEmbed, unit
 
+from herness.core import redact
 from herness.core.ids import new_ulid
+from herness.core.redact import Redactor
+from herness.core.redact_directory import NameDirectory
+from herness.core.settings import RedactionConfig
 from herness.core.types import (
     Layer,
     MemoryItem,
@@ -184,4 +188,13 @@ def real_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RealStore:
         MemoryConfig(), conn_factory=core.connection, vectors=base.vectors,
         embedder=Embedder(base.embed, model_name="bge-m3"), redactor=base.redactor,
     )  # fmt: skip
+    monkeypatch.setattr(redact, "get_redactor", lambda: base.redactor)  # the write path's
     return RealStore(recaller, base.writer, env.lifecycle, base.embed)
+
+
+def use_process_redactor(monkeypatch: pytest.MonkeyPatch) -> Redactor:
+    """Make `get_redactor()` return a redactor that masks PLANTED_NAME and emails."""
+    directory = NameDirectory.from_files(None, (PLANTED_NAME,), None)
+    redactor = Redactor(RedactionConfig(directory_file=None), bytes(range(32)), directory)
+    monkeypatch.setattr(redact, "get_redactor", lambda: redactor)
+    return redactor

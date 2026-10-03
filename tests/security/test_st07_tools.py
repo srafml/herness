@@ -29,6 +29,8 @@ from tests.unit.harness.memory._tools_env import (
     seed_run,
 )
 from tests.unit.harness.memory._write_env import (
+    PLANTED_EMAIL,
+    PLANTED_NAME,
     memory_rows,
     review_rows,
     seed_evidence,
@@ -251,3 +253,22 @@ def test_st07_23_injection_content_pending_then_escaped_on_recall(
     assert "&lt;/blocked-untrusted_data&gt;" in text
     assert '<record id="x">' not in text
     assert text.count("<record ") == 1
+
+
+# --- ST07-05 personal data in derived kind data -------------------------------------------------
+
+
+def test_st07_05_rule_id_carries_no_planted_personal_data(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST07-05 the stored business_rule rule_id (an unredacted ID key) holds no planted value."""
+    store = real_store(tmp_path, monkeypatch)
+    content = f"notify {PLANTED_EMAIL} or {PLANTED_NAME} before closing incidents"
+    args = _args(content, "business_rule", query_ids=[seed_evidence(QID)])
+    ProposeMemoryTool(store)(ctx_for(seed_run()), **args)
+    (row,) = memory_rows()
+    rule_id = row["data"]["rule_id"]
+    assert rule_id.startswith("notify_")
+    for planted in ("jane", "doakes", "example"):
+        assert planted not in rule_id
+        assert planted not in row["content"].lower()

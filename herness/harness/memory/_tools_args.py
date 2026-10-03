@@ -16,6 +16,7 @@ from typing import Final, cast, get_args
 
 from pydantic import JsonValue, ValidationError
 
+from herness.core import redact
 from herness.core import time as clock
 from herness.core.errors import ToolInputError
 from herness.core.types import Kind, Layer, MemoryItem, NumberRef, RecallHit
@@ -115,8 +116,9 @@ def kind_data(kind: str, content: str, finding_ids: list[JsonValue]) -> dict[str
             msg = "glossary content must be 'term: definition'"
             raise ToolInputError(msg)
         return {"term": term.strip(), "definition": definition.strip()}
-    if kind == "business_rule":
-        return {"rule_id": slug(content), "applies_to": []}
+    if kind == "business_rule":  # rule_id is an ID_KEYS value the write path does not redact
+        redacted = redact.get_redactor().redact(content)  # RedactionFailed propagates (fail closed)
+        return {"rule_id": slug(redacted.text if redacted else ""), "applies_to": []}
     if kind == "insight":
         return {"finding_ids": list(finding_ids), "valid_from": None, "valid_to": None}
     if kind == "user_correction":

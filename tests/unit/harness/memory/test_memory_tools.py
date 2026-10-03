@@ -24,12 +24,20 @@ from tests.unit.harness.memory._tools_env import (
     make_hit,
     real_store,
     seed_run,
+    use_process_redactor,
 )
-from tests.unit.harness.memory._write_env import memory_rows
+from tests.unit.harness.memory._write_env import PLANTED_EMAIL, PLANTED_NAME, memory_rows
 
+from herness.core import redact
 from herness.core import time as clock
-from herness.core.errors import ConfigError, PolicyViolation, StoreBusy, ToolInputError
+from herness.core.errors import (
+    ConfigError,
+    PolicyViolation,
+    StoreBusy,
+    ToolInputError,
+)
 from herness.core.ids import new_ulid
+from herness.core.redact import RedactionFailed
 from herness.core.types import NumberRef
 from herness.harness._tools_schema import _strict_ok, check_tool_schema
 from herness.harness.memory import _tools_args as ta
@@ -50,6 +58,13 @@ from herness.harness.swarm.tools import NUMBER_REF_SCHEMA
 from herness.harness.tools import ToolRegistry
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _process_redactor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The business_rule slug reads `get_redactor()`; install a test one."""
+    use_process_redactor(monkeypatch)
+
 
 _RECALL_NULLS: dict[str, JsonValue] = {"layers": None, "k": None, "kinds": None, "entity": None}
 _PROPOSE_NULLS: dict[str, JsonValue] = {
@@ -614,3 +629,60 @@ def test_ut07_90_row_key_not_pairs_is_left_to_validation(ops_store: OpsStoreHand
            "row_key": ["team"], "format": None}  # fmt: skip
     with pytest.raises(ToolInputError, match=r"^invalid propose_memory arguments: numbers$"):
         _propose(FakeStore(), ctx_for(seed_run()), "churn: [[n1]] left", numbers=[num])
+
+
+def test_ut07_47_rule_id_slug_is_redacted(ops_store: OpsStoreHandle) -> None:
+    """UT07-47 rule_id is slugged from the redacted content: no planted email or name."""
+    store = FakeStore()
+    content = f"notify {PLANTED_EMAIL} and {PLANTED_NAME} before closing"
+    _propose(store, ctx_for(seed_run()), content, kind="business_rule", query_ids=[QID])
+    rule_id = store.proposals[0][0].data["rule_id"]
+    assert isinstance(rule_id, str)
+    assert rule_id.startswith("notify_")
+    for planted in ("jane", "doakes", "example"):
+        assert planted not in rule_id
+
+
+def test_ut07_47_rule_id_redaction_failure_propagates(
+    ops_store: OpsStoreHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-47 a RedactionFailed while slugging propagates (fail closed); nothing proposed."""
+
+    class _Failing:
+        def redact(self, text: str | None) -> None:
+            msg = "text too long"
+            raise RedactionFailed(msg)
+
+    monkeypatch.setattr(redact, "get_redactor", _Failing)
+    store = FakeStore()
+    with pytest.raises(RedactionFailed):
+        _propose(store, ctx_for(seed_run()), "exclude test tickets", kind="business_rule")
+    assert store.proposals == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "layer"),
+    [("mapping", "semantic"), ("sql_template", "procedural"), ("qa_pair", "procedural"),
+     ("run_summary", "episodic")],
+)  # fmt: skip
+def test_ut07_47_unproposable_kinds_rejected_before_store(
+    ops_store: OpsStoreHandle, kind: str, layer: str
+) -> None:
+    """UT07-47 kinds outside the propose enum fail before the run lookup or any store call."""
+    store = FakeStore()
+    unknown_run = ctx_for("run_" + new_ulid())
+    with pytest.raises(ToolInputError, match=rf"^kind {kind} is not in layer {layer}$"):
+        _propose(store, unknown_run, "some content here", kind=kind, layer=layer)
+    assert store.proposals == []
+
+
+def test_ut07_46_run_row_kind_wins_over_meta(ops_store: OpsStoreHandle) -> None:
+    """UT07-46 a run whose meta has a "kind" key: run_ctx gets the row's kind."""
+    store = FakeStore()
+    run_id = seed_run("org_review", {"kind": "chat", **chat_meta(USER_A)})
+    _recall(store, ctx_for(run_id))
+    _propose(store, ctx_for(run_id), "churn: customers who left")
+    assert store.recalls[0]["run_ctx"].run_kind == "org_review"
+    run_ctx = store.proposals[0][1]
+    assert run_ctx is not None
+    assert run_ctx.run_kind == "org_review"
