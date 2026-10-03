@@ -51,7 +51,11 @@ def _base() -> MetricCatalog:
 
 
 def _catalog(
-    metrics: Mapping[str, float], *, min_peer_group: int = 2, trend_weight: float = 0.5
+    metrics: Mapping[str, float],
+    *,
+    min_peer_group: int = 2,
+    trend_weight: float = 0.5,
+    min_weight_coverage: float = 0.5,
 ) -> MetricCatalog:
     """The shipped catalog with this scorecard (model_copy: no range validation)."""
     cfg = _base().config
@@ -60,7 +64,7 @@ def _catalog(
             "metrics": dict(metrics),
             "min_peer_group": min_peer_group,
             "trend_weight": trend_weight,
-            "min_weight_coverage": 0.5,
+            "min_weight_coverage": min_weight_coverage,
         }
     )
     scoring = cfg.scoring.model_copy(update={"org": org})
@@ -207,9 +211,10 @@ def test_ut04_89_theil_sen_slope_with_outlier(con: duckdb.DuckDBPyConnection) ->
         _mv(con, MTTR, "A", 1000.0 if t == 5 else 2.0 * t + 3, period="week", period_start=week)
         if t < 5:
             _mv(con, MTTR, "B", 50.0 * t, period="week", period_start=week)
-    # outside [w0, w_end): ignored; a NULL weekly value is no point
-    _mv(con, MTTR, "A", -999.0, period="week", period_start=W0 - timedelta(weeks=1))
-    _mv(con, MTTR, "A", 999.0, period="week", period_start=W_END)
+    # Outside [w0, w_end) on B (5 points in the window): either leak would make 6 points and a
+    # non-NULL slope. A NULL weekly value is no point either.
+    _mv(con, MTTR, "B", -999.0, period="week", period_start=W0 - timedelta(weeks=1))
+    _mv(con, MTTR, "B", 999.0, period="week", period_start=W_END)
     _mv(con, MTTR, "B", None, period="week", period_start=W0 + timedelta(weeks=6))
     run_org_step(con, _ctx(_catalog({MTTR: 1.0})))
     rows = _rows(con)
@@ -220,6 +225,19 @@ def test_ut04_89_theil_sen_slope_with_outlier(con: duckdb.DuckDBPyConnection) ->
     b = (1.0 - 2.0) / 1.4826
     assert rows["A", MTTR]["composite"] == pytest.approx(b + 0.5 * 5.0)  # trend_b clipped
     assert rows["B", MTTR]["composite"] == pytest.approx(0.0)
+
+
+def test_ut04_89_trend_weight_comes_from_config(con: duckdb.DuckDBPyConnection) -> None:
+    """UT04-89 the composite uses `scoring.org.trend_weight` (2.0 here), not a fixed 0.5."""
+    for team, x in zip("ABC", (1.0, 2.0, 4.0), strict=True):
+        _mv(con, MTTR, team, x)
+    for t in range(6):
+        _mv(con, MTTR, "A", 0.1 * t, period="week", period_start=W0 + timedelta(weeks=t))
+    run_org_step(con, _ctx(_catalog({MTTR: 1.0}, trend_weight=2.0)))
+    row = _rows(con)["A", MTTR]
+    trend_b = 0.1 * 12 / 1.4826
+    assert row["trend_slope"] == pytest.approx(0.1)
+    assert row["composite"] == pytest.approx(-1.0 / 1.4826 + 2.0 * trend_b)
 
 
 def test_ut04_89_trend_without_spread_is_ignored(con: duckdb.DuckDBPyConnection) -> None:
@@ -242,10 +260,13 @@ def test_ut04_90_low_coverage_and_ranks(con: duckdb.DuckDBPyConnection) -> None:
         _mv(con, EPIC, team, 0.5)
         if team != "D":
             _mv(con, MTTR, team, x)
-    _mv(con, MTTR, "D", None, sample_size=3, flags=["insufficient_sample"])
+    # a non-NULL value flagged insufficient_sample still gives x NULL
+    _mv(con, MTTR, "D", 7.0, sample_size=3, flags=["insufficient_sample"])
     result = run_org_step(con, _ctx(_catalog({MTTR: 0.6, EPIC: 0.4})))
     rows = _rows(con)
     assert result.row_counts == {"score.org": 10}
+    assert rows["D", MTTR]["z_score"] is None
+    assert rows["B", MTTR]["z_score"] == pytest.approx(1.0 / 1.4826)  # group {1, 3, 2} only
     assert rows["E", MTTR]["flags"] == ["low_coverage", "no_data", "no_trend"]
     assert rows["E", MTTR]["sample_size"] == 0
     assert rows["D", MTTR]["flags"] == ["insufficient_sample", "low_coverage", "no_trend"]
@@ -259,6 +280,22 @@ def test_ut04_90_low_coverage_and_ranks(con: duckdb.DuckDBPyConnection) -> None:
     composites = {rows[team, EPIC]["composite"] for team in "ABC"}
     assert len(composites) == 3
     assert all(r["unconfirmed"] is False for r in rows.values())
+
+
+def test_ut04_90_coverage_at_threshold_is_enough(con: duckdb.DuckDBPyConnection) -> None:
+    """UT04-90 covered / total == min_weight_coverage keeps the composite (>=, not >)."""
+    for team, x in zip("ABC", (1.0, 3.0, 2.0), strict=True):
+        _mv(con, MTTR, team, x)
+    _mv(con, EPIC, "B", 0.5)
+    _mv(con, EPIC, "C", 0.5)
+    run_org_step(con, _ctx(_catalog({MTTR: 0.5, EPIC: 0.5}, min_weight_coverage=0.5)))
+    rows = _rows(con)
+    assert rows["A", MTTR]["composite"] == pytest.approx(-1.0 / 1.4826)
+    assert rows["A", EPIC]["flags"] == ["no_data", "no_trend"]
+    run_org_step(con, _ctx(_catalog({MTTR: 0.5, EPIC: 0.5}, min_weight_coverage=0.6)))
+    rows = _rows(con)
+    assert rows["A", MTTR]["composite"] is None
+    assert "low_coverage" in rows["A", MTTR]["flags"]
 
 
 def test_ut04_90_step_records_one_query(con: duckdb.DuckDBPyConnection) -> None:
@@ -304,16 +341,17 @@ def test_ut04_90_query_failure_is_schema_violation(con: duckdb.DuckDBPyConnectio
 
 
 def test_ut04_91_team_buckets() -> None:
-    """UT04-91 teams with crit 1, 2 (support), 3, 5 and none give hi/hi/lo/none/none."""
-    c = _warehouse({"H1": 1, "LO": 3, "N5": 5, "NO": None, "OFF": 1})
+    """UT04-91 crit 1, 2 (support), 4 + 2 (minimum), 3, 5 and none: hi/hi/hi/lo/none/none."""
+    c = _warehouse({"H1": 1, "LO": 3, "MX": 4, "N5": 5, "NO": None, "OFF": 1})
     c.execute("INSERT INTO core.service (service_id, criticality) VALUES ('S2', 2)")
     c.execute(
-        "INSERT INTO core.service_map VALUES ('S2', 'H2', NULL, NULL, NULL, 'support', 'c', 1)"
+        "INSERT INTO core.service_map VALUES ('S2', 'H2', NULL, NULL, NULL, 'support', 'c', 1),"
+        " ('S2', 'MX', NULL, NULL, NULL, 'support', 'c', 1)"
     )
     c.execute("INSERT INTO core.team (team_id, active) VALUES ('H2', true)")
     c.execute("UPDATE core.team SET active = false WHERE team_id = 'OFF'")
     try:
-        for team in ("H1", "H2", "LO", "N5", "NO"):
+        for team in ("H1", "H2", "LO", "MX", "N5", "NO"):
             _mv(c, MTTR, team, 1.0)
         run_org_step(c, _ctx(_catalog({MTTR: 1.0}, min_peer_group=1)))
         groups = {k[0]: r["peer_group"] for k, r in _rows(c).items()}
@@ -321,10 +359,11 @@ def test_ut04_91_team_buckets() -> None:
             "H1": "team:crit_hi",
             "H2": "team:crit_hi",
             "LO": "team:crit_lo",
+            "MX": "team:crit_hi",
             "N5": "team:crit_none",
             "NO": "team:crit_none",
         }
-        run_org_step(c, _ctx(_catalog({MTTR: 1.0}, min_peer_group=3)))
+        run_org_step(c, _ctx(_catalog({MTTR: 1.0}, min_peer_group=4)))
         rows = _rows(c)
         assert {r["peer_group"] for r in rows.values()} == {"team:all"}
         assert all("peer_fallback" in r["flags"] for r in rows.values())
