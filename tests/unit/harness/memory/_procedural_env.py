@@ -13,12 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tests.unit.harness.memory._write_env import NOW, Env, make_writer, memory_rows
+from tests.unit.harness.memory._write_env import NOW, PATTERNS, Env, make_writer, memory_rows
 
 from herness.core import time as clock
 from herness.core.ids import new_ulid
+from herness.harness.memory.policy import InjectionScanner
 from herness.harness.memory.procedural import ProceduralDeps
-from herness.harness.memory.settings import ProceduralConfig, PromoteConfig
+from herness.harness.memory.settings import MemoryConfig, ProceduralConfig, PromoteConfig
 from herness.harness.sql_guard import SqlGuard
 from herness.store.ops import core
 
@@ -65,6 +66,7 @@ def make_deps(tmp_path: Path, cfg: ProceduralConfig | None = None) -> ProcEnv:
         redactor=env.redactor,
         config=cfg or ProceduralConfig(),
         guard=guard(),
+        scanner=InjectionScanner(MemoryConfig(injection_patterns=PATTERNS).injection_patterns),
     )
     return ProcEnv(deps, env)
 

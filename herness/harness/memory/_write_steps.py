@@ -44,6 +44,7 @@ ID_KEYS: Final = frozenset({
     "rec_id", "outcome_id", "query_id", "query_ids", "template_id", "review_item_id",
     "finding_ids", "top_finding_ids", "rec_ids", "run_ids", "fingerprint", "content_hash",
     "service_id", "team_id", "org_id", "jira_project", "rule_id", "conflicts_with",
+    "build_id_last_ok",
 })  # fmt: skip
 _ENTITY_KEEP: Final = frozenset({"type", "id"})
 _FLAGS: Final = frozenset(get_args(Flag.__value__))

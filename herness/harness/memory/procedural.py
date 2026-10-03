@@ -37,7 +37,7 @@ from herness.harness.memory._procedural_sql import (
     strs,
     unsafe_reason,
 )
-from herness.harness.memory.policy import keyed_hash
+from herness.harness.memory.policy import InjectionScanner, keyed_hash
 from herness.harness.memory.settings import ProceduralConfig
 from herness.harness.memory.store import VectorIndex
 from herness.harness.memory.types import MemoryNotFound, PromotionReport
@@ -56,6 +56,7 @@ type Conn = sqlite3.Connection
 
 TTL: Final = timedelta(days=365)
 _LIVE: Final = ("candidate", "active")
+_OPEN: Final = ("candidate", "pending_approval", "active")  # one open template per fingerprint
 _ALL: Final = ("candidate", "pending_approval", "active", "expired", "rejected")
 _QUESTION_MAX, _EXAMPLES_MAX, _RUNS_MAX, _RECENT, _QA_MAX, _PROV_IDS = 500, 10, 50, 3, 200, 20
 _VALIDATION_LIMIT: Final = 2  # consecutive EXPLAIN failures that expire a template
@@ -72,6 +73,7 @@ class ProceduralDeps:
     redactor: Redactor
     config: ProceduralConfig
     guard: SqlGuard
+    scanner: InjectionScanner  # the write pipeline's scanner (same configured patterns)
 
 
 def wilson_lower_bound(passes: int, fails: int, z: float = 1.959963984540054) -> float:
@@ -189,7 +191,8 @@ def _create(ctx: _Ctx, g: _Group, c: Conn, out: _Outcome) -> Row | None:
     data: dict[str, JsonValue] = {
         "fingerprint": fp, "sql_template": p.template, "params": [s.as_json() for s in p.params],
         "question_examples": _json(g.questions[:_EXAMPLES_MAX]), "passes": g.passes,
-        "fails": g.fails, "run_ids": _json([ctx.run_id]), "build_id_last_ok": "",
+        "fails": g.fails, "run_ids": _json([ctx.run_id]),
+        "build_id_last_ok": ctx.build_id or g.build_id,
         "metrics_used": _json(metrics_used(p.template)), "recent": _json(g.results[-_RECENT:]),
         "validation_failures": 0, "qa_ids": [],
     }  # fmt: skip
@@ -202,14 +205,20 @@ def _create(ctx: _Ctx, g: _Group, c: Conn, out: _Outcome) -> Row | None:
 
 
 def _merge(ctx: _Ctx, g: _Group, data: dict[str, JsonValue]) -> None:
-    """Step 5, present template: add this run's counts, run, questions and results."""
+    """Step 5, present template: add this run's counts, run, questions and results.
+
+    A new question example passes the write pipeline's injection scan first (TH07-01);
+    a flagged one is not added (it still reaches a qa_pair only via the write path)."""
     data["passes"] = ints(data, "passes") + g.passes
     data["fails"] = ints(data, "fails") + g.fails
     data["run_ids"] = _json([*strs(data, "run_ids"), ctx.run_id][-_RUNS_MAX:])
     examples = strs(data, "question_examples")
-    examples += [q for q in g.questions if q not in examples]
+    fresh = [q for q in g.questions if q not in examples]
+    examples += [q for q in fresh if not ctx.deps.scanner.scan(q)]
     data["question_examples"] = _json(examples[:_EXAMPLES_MAX])
     data["recent"] = _json([*strs(data, "recent"), *g.results][-_RECENT:])
+    if g.passes:
+        data["build_id_last_ok"] = ctx.build_id or g.build_id
 
 
 def _qa_pairs(ctx: _Ctx, g: _Group, tpl: Row, c: Conn, out: _Outcome) -> list[str]:
@@ -267,7 +276,7 @@ def _fingerprint_tx(ctx: _Ctx, g: _Group, c: Conn) -> _Outcome:
     """Steps 5-8 for one fingerprint inside one run_write."""
     out, fp = _Outcome(), g.parsed.fingerprint
     tpl = ops.find_memory_item(layer="procedural", kind="sql_template", fingerprint=fp,
-                               statuses=_LIVE, conn=c)  # fmt: skip
+                               statuses=_OPEN, conn=c)  # fmt: skip
     expires: str | ops.Unchanged = ops.UNCHANGED
     if tpl is None:
         if g.passes == 0 or (tpl := _create(ctx, g, c, out)) is None:
@@ -281,8 +290,6 @@ def _fingerprint_tx(ctx: _Ctx, g: _Group, c: Conn) -> _Outcome:
     data = dict(tpl["data"])
     if out.updated:
         _merge(ctx, g, data)
-    if g.passes:  # set after the write path, which redacts every non-ID string of `data`
-        data["build_id_last_ok"] = ctx.build_id or g.build_id
     data["qa_ids"] = _json([*strs(data, "qa_ids"), *_qa_pairs(ctx, g, tpl, c, out)][-_QA_MAX:])
     status, lb = _score(ctx, tpl, data, c, out)
     ops.update_memory_item(tpl["memory_id"], status=status, data=data, confidence=lb,
