@@ -26,7 +26,7 @@ from herness.connectors.monitoring import prometheus as prometheus_module
 from herness.connectors.monitoring.base import EVENT_COLUMNS
 from herness.connectors.monitoring.dynatrace import DynatraceAdapter
 from herness.core import registry
-from herness.core.errors import SchemaViolation
+from herness.core.errors import AuthError, SchemaViolation
 from herness.core.resilience import ProcessState
 
 pytestmark = pytest.mark.unit
@@ -303,3 +303,34 @@ def test_ut01_83_registered_builtin() -> None:
     """UT01-83 the registry resolves `monitoring_adapter` `dynatrace` to the adapter."""
     assert registry.get("monitoring_adapter", "dynatrace") is DynatraceAdapter
     assert DynatraceAdapter.tool == "dynatrace"
+
+
+def test_ut01_83_auth_failure_never_echoes_the_token(
+    monkeypatch: pytest.MonkeyPatch, fake_keyring: MemoryKeyring
+) -> None:
+    """UT01-83 HTTP 401 is AuthError whose message and context carry no token (TH01-03)."""
+    del fake_keyring
+    store("dynatrace_key", DT_TOKEN)
+    source = Source([(401, {"error": {"message": DT_TOKEN}})])
+
+    def fake_client(cfg: Any, *, source: str, max_concurrency: int) -> Any:
+        del source, max_concurrency
+        return mock_client(handler, cfg.base_url)
+
+    handler = source
+    monkeypatch.setattr(prometheus_module, "http_client", fake_client)
+    adapter = DynatraceAdapter(settings("dynatrace"), clock=lambda: FETCHED)
+    with pytest.raises(AuthError) as caught:
+        list(adapter.events(SINCE, UNTIL))
+    text = f"{caught.value} {caught.value!r} {dict(caught.value.context)}"
+    assert DT_TOKEN not in text
+    assert "synthetic" not in repr(adapter._http._auth)
+
+
+@pytest.mark.parametrize("tool", ["prometheus", "dynatrace"])
+def test_ut01_83_factory_signature_makes_no_request(tool: str) -> None:
+    """UT01-83 the factory call `get("monitoring_adapter", tool)(settings, clock=clock)`
+    builds an adapter without resolving secrets or opening a client."""
+    adapter = registry.get("monitoring_adapter", tool)(settings(tool), clock=lambda: FETCHED)
+    assert adapter.tool == tool
+    assert "_http" not in vars(adapter)
