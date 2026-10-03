@@ -15,6 +15,7 @@ email pattern, planted raw values and emails, the planted credential and extra s
 from __future__ import annotations
 
 import dataclasses
+import functools
 import re
 from collections.abc import Callable, Iterable
 from typing import Any, Final
@@ -33,11 +34,14 @@ __all__ = [
     "PLANTED_EMAILS",
     "PLANTED_RAW",
     "SENTINEL",
+    "WINDOW",
+    "fragments",
     "pipeline_env",
     "planted_env",
     "planted_lake",
     "reconfigure",
     "scan",
+    "shingles",
 ]
 
 EMAIL_RE: Final = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -122,6 +126,31 @@ def scan(text: str, *, extra: Iterable[str] = ()) -> list[str]:
     if DOMAIN in text:
         hits.append(DOMAIN)
     return hits
+
+
+WINDOW: Final = 32  # fragment size: logs cut events at 200 chars, `last_error` at 2,048
+_PLACEHOLDER_RE: Final = re.compile(r"\[[A-Z][A-Z_]*_[0-9a-f]{6,}\]")
+
+
+@functools.cache
+def shingles(texts: frozenset[str]) -> frozenset[str]:
+    """Every `WINDOW`-character window of each line of `texts` that keeps at least half of
+    its characters outside redaction placeholders (placeholder-only windows are skipped)."""
+    out: set[str] = set()
+    for text in texts:
+        for line in text.splitlines():
+            for i in range(len(line) - WINDOW + 1):
+                window = line[i : i + WINDOW]
+                if len(_PLACEHOLDER_RE.sub("", window).strip()) >= WINDOW // 2:
+                    out.add(window)
+    return frozenset(out)
+
+
+def fragments(text: str, texts: frozenset[str]) -> list[str]:
+    """Windows of `texts` (see `shingles`) found anywhere in `text`: cut ticket fragments."""
+    windows = shingles(texts)
+    found = {text[i : i + WINDOW] for i in range(len(text) - WINDOW + 1)} & windows
+    return sorted(found)
 
 
 def reconfigure(env: PipelineEnv, edit: Callable[[dict[str, Any]], None] | None = None) -> None:

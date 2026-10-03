@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final, cast
@@ -30,6 +30,7 @@ from tests.integration.enrich._pipeline_env import PipelineEnv
 from tests.integration.enrich.security._planted import (
     SENTINEL,
     _planted,
+    fragments,
     pipeline_env,
     planted_env,
     reconfigure,
@@ -105,10 +106,32 @@ def _log_files(root: Path) -> str:
     )
 
 
+def _hits(text: str, texts: frozenset[str]) -> list[str]:
+    """`scan` plus ticket text: the sentinel, whole stored texts and any cut fragment of one
+    (a `WINDOW`-character shingle, so a truncated log field or message is caught too)."""
+    return scan(text, extra=texts | {SENTINEL}) + fragments(text, texts)
+
+
 def _leaks(sinks: dict[str, str], texts: frozenset[str]) -> dict[str, list[str]]:
-    """Leaks per sink: `scan` plus ticket text (the sentinel and the stored ticket texts)."""
-    extra = texts | {SENTINEL}
-    return {name: hits for name, text in sinks.items() if (hits := scan(text, extra=extra))}
+    """Leaks per sink (see `_hits`)."""
+    return {name: hits for name, text in sinks.items() if (hits := _hits(text, texts))}
+
+
+def _fragment(texts: frozenset[str]) -> str:
+    """60 characters of a stored ticket text without sentinel, email or placeholder: missed
+    by whole-value matching, caught only as a fragment."""
+    text = next(t for t in sorted(texts) if "Users report" in t)
+    start = text.index("Users report")
+    fragment = text[start : start + 60]
+    assert SENTINEL not in fragment
+    assert "[" not in fragment
+    assert not scan(fragment, extra=texts | {SENTINEL})  # whole values alone miss it
+    return fragment
+
+
+def _uncontrolled(lines: Iterable[str]) -> str:
+    """`lines` without the positive-control log lines."""
+    return "\n".join(x for x in lines if ".leak.control" not in x and ".leak.fragment" not in x)
 
 
 def _start_logging(root: Path) -> None:
@@ -169,30 +192,35 @@ def test_st03_04_pipeline_logs_review_items_and_files_carry_no_ticket_text(
     _start_logging(env.data_root)
     try:
         outcome, _ = env.job(_PAYLOAD)
+        assert isinstance(outcome, JobOutcome), outcome
+        build_id = str(outcome.result["build_id"])
+        texts = frozenset(str(r[0]) for r in env.query(build_id, "SELECT text FROM "
+                          "enrich.text_redacted WHERE length(text) >= 12"))  # fmt: skip
         log = get_logger("enrich.pipeline")
         planted = f"{SENTINEL} planted ticket text"
         log.info("enrich.leak.control", detail=planted)
         log.info("enrich.leak.secret_control", detail=f"token {known}")
+        fragment = _fragment(texts)
+        log.info("enrich.leak.fragment_control", detail=fragment)
     finally:
         err = capsys.readouterr().err
         reset_logging()
-    assert isinstance(outcome, JobOutcome), outcome
-    build_id = str(outcome.result["build_id"])
-    texts = frozenset(str(r[0]) for r in env.query(build_id, "SELECT text FROM "
-                      "enrich.text_redacted WHERE length(text) >= 12"))  # fmt: skip
     lines = [line for line in err.splitlines() if line.startswith("{")]
     events = {json.loads(line)["event"] for line in lines}
     assert {"enrich.stage.started", "enrich.stage.completed"} <= events  # capture is live
     file_text = _log_files(env.data_root)
     _controls(lines, file_text, planted)
-    clean = [line for line in lines if '"enrich.leak.control"' not in line]
+    cut = [line for line in lines if '"enrich.leak.fragment_control"' in line]
+    assert len(cut) == 1
+    assert fragments(cut[0], texts)  # a 60-character fragment is caught in both log sinks
+    assert fragments(file_text, texts)
     items = _review_items()
     kinds = {(i.kind, str(i.payload.get("purpose", ""))) for i in items}
     assert ("label_check", "ensemble_disagreement") in kinds
     assert any(kind == "mapping_suggestion" for kind, _ in kinds)
     sinks = {
-        "stderr": "\n".join(clean),
-        "log files": "\n".join(x for x in file_text.splitlines() if "enrich.leak.control" not in x),
+        "stderr": _uncontrolled(lines),
+        "log files": _uncontrolled(file_text.splitlines()),
         "review items": _json([i.payload for i in items]),
         "ops.sqlite": ops_dump(ops_store.db_path),
         "job result": json.dumps(outcome.result, default=str),
@@ -292,7 +320,7 @@ def test_st03_04_distill_round_logs_and_review_items_carry_no_ticket_text(
     _start_logging(env.root)
     try:
         report = run_distill(round_kind="initial", ctx=FakeCtx().as_ctx())
-        planted = next(iter(texts))
+        planted = max(sorted(texts), key=len)  # long: its 40-char head is a fragment
         get_logger("enrich.distill").info("enrich.leak.control", detail=planted)
     finally:
         err = capsys.readouterr().err
@@ -303,12 +331,13 @@ def test_st03_04_distill_round_logs_and_review_items_carry_no_ticket_text(
     control = [line for line in lines if '"enrich.leak.control"' in line]
     assert len(control) == 1
     assert planted in control[0]
+    file_text = _log_files(env.root)
+    assert planted in file_text  # the planted line reaches the log files too
     items = _review_items()
     assert {str(i.payload.get("purpose")) for i in items} >= {"spot_check"}
-    file_lines = _log_files(env.root).splitlines()
     sinks = {
-        "stderr": "\n".join(x for x in lines if '"enrich.leak.control"' not in x),
-        "log files": "\n".join(x for x in file_lines if "enrich.leak.control" not in x),
+        "stderr": _uncontrolled(lines),
+        "log files": _uncontrolled(file_text.splitlines()),
         "review items": _json([i.payload for i in items]),
         "ops.sqlite": ops_dump(ops_store.db_path),
         "report": report.model_dump_json(),
@@ -318,3 +347,7 @@ def test_st03_04_distill_round_logs_and_review_items_carry_no_ticket_text(
     assert _leaks(sinks, texts) == {}
     create_review_item("label_check", {"purpose": "gold", "note": planted}, now=_NOW)
     assert _leaks({"ops": ops_dump(ops_store.db_path)}, texts)
+    labels = next(p for p in sorted(env.root.rglob("*.parquet")) if "labels" in p.parts)
+    pq.write_table(pa.table({"note": [planted[:40]]}), labels.parent / "leak-control.parquet")
+    hit = [n for n, text in _lake_files(env.root) if _hits(text, texts)]
+    assert hit == [(labels.parent / "leak-control.parquet").relative_to(env.root).as_posix()]

@@ -40,7 +40,7 @@ from herness.core.types import (
     QuestionSet,
 )
 from herness.enrich.cache import DecisionCache
-from herness.enrich.decide_stage import LLM_CHUNK, run_llm_escalation
+from herness.enrich.decide_stage import run_llm_escalation
 from herness.enrich.deciders.jev_wire import to_wire_questions
 from herness.enrich.deciders.llm import LlmDecider
 from herness.enrich.layout import EnrichPaths
@@ -181,9 +181,11 @@ def _first_label(req: LLMRequest) -> dict[str, object]:
 
 @pytest.mark.xfail(
     strict=True,
-    reason="T03-21 (spec gap, U03-19 shortlist_options has no caller): a > 255-option dynamic "
-    "question reaches the LLM decider unshortlisted; all 1,000 options go into the schema and "
-    "the 1,000-entry vote distribution fails Answer validation (<= 255), aborting decide",
+    raises=ValidationError,
+    reason="T03-21b: shortlist_options (U03-19) has no caller; a > 255-option dynamic question "
+    "reaches the deciders unshortlisted (all 1,000 options in the LLM schema) and the LLM "
+    "decider's Answer validation (distribution <= 255) fails at "
+    "herness/enrich/deciders/llm.py:184, aborting decide",
 )
 def test_st03_11_llm_decider_asks_at_most_64_of_1000_dynamic_options(
     jev_env: ProcessState,
@@ -204,11 +206,11 @@ def test_st03_11_llm_decider_asks_at_most_64_of_1000_dynamic_options(
                          max_concurrency=1)  # fmt: skip
     item = DecisionInput(record_id="INC1", entity="incident", content_hash="1" * 32,
                          text="Team 7 cannot log in", question_ids=("owning_team",))  # fmt: skip
-    try:
-        [out] = decider.decide([item], QuestionSet(version=QSV, questions=(question,)))
-    finally:
-        assert asked
-        assert max(asked) <= 64, asked
+    # the expected failure (ValidationError) comes from `decide` itself; every assertion runs
+    # after it, so an AssertionError can never stand in for it (it fails the xfail instead)
+    [out] = decider.decide([item], QuestionSet(version=QSV, questions=(question,)))
+    assert asked
+    assert max(asked) <= 64, asked
     assert out.error is None
     assert out.answers["owning_team"].answer in (question.options or {})
 
@@ -308,7 +310,7 @@ def test_st03_11_million_deferred_items_capped_at_20000_llm_records(
     answered = run_llm_escalation(_LazyQueue(), llm=cast("LlmDecider", llm), qs=qs, cache=cache,
                                   cap=cap, ctx=FakeCtx().as_ctx(), report=report)  # fmt: skip
     assert (answered, llm.seen) == (cap, cap)
-    assert max(llm.chunks) <= LLM_CHUNK
+    assert max(llm.chunks) <= 500  # U03-87: chunks of 500 (the literal, not LLM_CHUNK)
     assert len(cache.existing_keys("llm", llm.version, qs)) == cap
 
 
