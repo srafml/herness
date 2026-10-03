@@ -23,10 +23,12 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
+from herness.connectors.monitoring.base import EVENT_COLUMNS, METRIC_COLUMNS
 from herness.connectors.rows import to_snake
 from herness.connectors.settings import (
     DataverseSettings,
     MongoSettings,
+    MonitoringSettings,
     ServiceNowSettings,
     SnowflakeSettings,
 )
@@ -51,8 +53,7 @@ STAGING_FILES: Final[Mapping[str, str]] = {
 }
 # files: headers are only known from the files themselves (U01-56 step 6).
 # T01-17: jira needs JIRA_ISSUE_COLUMNS (U01-71), not in the tree yet; skipped until then.
-# T01-19: monitoring needs EVENT_COLUMNS / METRIC_COLUMNS (U01-80); skipped until then.
-_SKIPPED: Final = frozenset({"files", "jira", "monitoring"})
+_SKIPPED: Final = frozenset({"files", "jira"})
 _SERVICENOW_ALWAYS: Final = ("sys_id", "sys_updated_on", "sys_class_name")
 # The virtual column of ``read_parquet(..., filename = true)`` is never a source field.
 _VIRTUAL: Final = frozenset({"filename"})
@@ -115,6 +116,8 @@ def _fetched(section: SourceSettings, entity: str) -> frozenset[str]:
     elif isinstance(section, DataverseSettings):
         d = section.entities[entity]
         names = (*d.select, d.key_field, d.updated_field, *(c + "_display" for c in d.select))
+    elif isinstance(section, MonitoringSettings):  # fixed lake columns (U01-80)
+        names = EVENT_COLUMNS if entity == "event" else METRIC_COLUMNS
     return frozenset(names)
 
 

@@ -326,9 +326,10 @@ def test_ut10_19_c03_registry(cfg_dir: Path, monkeypatch: pytest.MonkeyPatch) ->
         ),
     )
     issues = c.validate(cfg_dir, "local", offline=True)
+    # The `monitoring` connector resolves through the registry built-ins since T01-19; the
+    # splunk adapter (T01-21) does not exist yet.
     assert _shape(issues) == [
         ("C03", "error", "models.deciders.jev"),
-        ("C03", "error", "sources.sources.monitoring"),
         ("C03", "error", "sources.sources.monitoring.adapters.splunk"),
     ]
     assert c.load_config("local", config_dir=cfg_dir).profile == "local"  # C03 not at load

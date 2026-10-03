@@ -20,10 +20,11 @@ import pytest
 import respx
 from tests.support.sync_env import write_sync_config
 
-from herness.connectors.base import Connector, SupportsKeyListing
+from herness.connectors.base import Connector, SupportsKeyListing, SupportsToolStreams
 from herness.connectors.factory import build_connector
 from herness.connectors.files import FilesConnector
 from herness.connectors.mongodb import MongoConnector
+from herness.connectors.monitoring.base import MonitoringConnector
 from herness.connectors.snowflake import SnowflakeConnector
 from herness.core import config as c
 from herness.core import registry
@@ -312,6 +313,47 @@ def test_ut01_94_snowflake_resolves_through_the_builtin_table(
     assert conn._clock is _fixed
     assert conn._conn is None
     assert conn.entities == ("cost_center",)
+
+
+_MONITORING_ROW = ("connector", "monitoring")
+
+
+class _ToolAdapter(FakeAdapter):
+    """Fake adapter with the `MonitoringAdapter` members (T01-19)."""
+
+    tool = "prometheus"
+
+    def check(self) -> None:
+        return None
+
+    def events(self, since: Any, until: Any) -> Iterator[pa.RecordBatch]:
+        return iter(())
+
+    def daily_metrics(self, since: Any, until: Any) -> Iterator[pa.RecordBatch]:
+        return iter(())
+
+
+def test_ut01_94_monitoring_resolves_through_the_builtin_table(
+    cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-94 the shipped `_BUILTINS` row resolves the real `MonitoringConnector` (T01-19):
+    built with the enabled adapters, it satisfies `Connector` and `SupportsToolStreams`, not
+    `SupportsKeyListing`, and construction makes no network call."""
+    row = _shipped_builtins()[_MONITORING_ROW]
+    assert row == "herness.connectors.monitoring.base:MonitoringConnector"
+    registry.reset_registry()
+    monkeypatch.setitem(registry._BUILTINS, _MONITORING_ROW, row)
+    registry.register("monitoring_adapter", "prometheus")(_ToolAdapter)
+    with respx.mock(assert_all_called=False) as mock:
+        conn = build_connector("monitoring", cfg, clock=_fixed)
+    assert not mock.calls
+    assert isinstance(conn, MonitoringConnector)
+    assert isinstance(conn, SupportsToolStreams)
+    assert not isinstance(conn, SupportsKeyListing)
+    assert _conforms(conn) is conn
+    assert conn.tools() == ("prometheus",)
+    assert conn.entities == ("event", "metric_daily")
+    assert conn._clock is _fixed
 
 
 _PROBE = """\

@@ -80,10 +80,27 @@ def test_ut01_58_unqualified_column_counts_only_with_one_source(tmp_path: Path) 
 
 
 def test_ut01_58_skipped_sources_return_empty(tmp_path: Path) -> None:
-    """UT01-58 files, jira (T01-17) and monitoring (T01-19) are skipped: `[]`."""
+    """UT01-58 files and jira (T01-17) are skipped: `[]`."""
     cfg = _cfg(tmp_path, jira=jira(), monitoring=monitoring(), files=files())
-    for source in ("files", "jira", "monitoring"):
+    for source in ("files", "jira"):
         assert check_mapping(source, cfg) == []
+
+
+def test_ut01_58_monitoring_fetches_every_staged_column(tmp_path: Path) -> None:
+    """UT01-58 monitoring (T01-19) is checked against EVENT_COLUMNS / METRIC_COLUMNS: the
+    shipped 130_stg_monitoring.sql reads only fetched columns, so `[]`; a column outside
+    them is an issue."""
+    cfg = _cfg(tmp_path, monitoring=monitoring())
+    assert check_mapping("monitoring", cfg) == []
+    name = STAGING_FILES["monitoring"]
+    glob = "{{ lake.get('monitoring', 'event').glob | sqlstr }}"
+    sql_dir = tmp_path / "mon_sql"
+    sql_dir.mkdir()
+    text = f"SELECT e.ts, e.source_tool, e.priority FROM read_parquet({glob}) AS e;"  # noqa: S608 - fixture
+    (sql_dir / name).write_text(text, encoding="utf-8")
+    assert check_mapping("monitoring", cfg, sql_dir=sql_dir) == [
+        MappingIssue("event", "priority", name)
+    ]
     assert STAGING_FILES["jira"] == "120_stg_jira.sql"
     assert len(STAGING_FILES) == 7
 
