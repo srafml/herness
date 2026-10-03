@@ -480,6 +480,9 @@ sys.stdout.write(type(conn).__module__ + ":" + type(conn).__name__)
 """
 
 
+_FAKE_KEYRING = "tests.support.fake_keyring.MemoryKeyring"  # the child has no host keyring
+
+
 def test_ut01_94_build_connector_files_without_prior_import(tmp_path: Path) -> None:
     """UT01-94 in a fresh interpreter, `build_connector("files", cfg)` resolves the class
     through `_BUILTINS` although `herness.connectors.files` was never imported."""
@@ -490,7 +493,7 @@ def test_ut01_94_build_connector_files_without_prior_import(tmp_path: Path) -> N
         capture_output=True,
         text=True,
         check=False,
-        env=env | {"HERNESS_ENV": "test"},
+        env=env | {"HERNESS_ENV": "test", "PYTHON_KEYRING_BACKEND": _FAKE_KEYRING},
         cwd=Path(__file__).resolve().parents[3],
         timeout=120,
     )
