@@ -528,3 +528,79 @@ def test_ut07_66_store_priors_lower_confidence(env: Env) -> None:
         {"rec_id": prior_id, "sim": 1.0, "verdict": "no_effect", "outcome_query_id": QID}
     ]
     assert row["confidence_basis"]["delta"] == pytest.approx(0.5 * -0.5 / 2.0)
+
+
+# ---------------------------------------------------------------- review round 1
+
+
+def _summary_content() -> str:
+    (item,) = memory_rows()
+    content = item["content"]
+    assert isinstance(content, str)
+    return content
+
+
+def test_ut07_63_numeral_target_left_out_of_summary(env: Env) -> None:
+    """UT07-63 a work_item PROJ-1234 target is written; the run_summary text omits it."""
+    f = seed_finding()
+    recs = [_draft(1, [f], target_type="work_item", target_id="PROJ-1234"), _draft(2, [f])]
+    ids = write_recommendations(RUN_ID, recs, deps=_deps(env), now=NOW)
+    assert sorted(r["target_id"] for r in _recs()) == ["PROJ-1234", "svc_2"]
+    assert _summary_content() == (
+        f"Run {RUN_ID} (org_review) recorded recommendations for service:svc_2 and other targets."
+    )
+    assert memory_rows()[0]["data"]["rec_ids"] == ids
+
+
+def test_ut07_63_only_numeral_targets(env: Env) -> None:
+    """UT07-63 when every target carries a numeral the text names none of them."""
+    f = seed_finding()
+    recs = [_draft(1, [f], target_id="svc 42"), _draft(2, [f], target_id="api-2024")]
+    write_recommendations(RUN_ID, recs, deps=_deps(env), now=NOW)
+    assert _summary_content() == (
+        f"Run {RUN_ID} (org_review) recorded recommendations for other targets."
+    )
+
+
+def test_ut07_63_ten_max_length_targets_fit(env: Env) -> None:
+    """UT07-63 ten 200-char target ids still write; the content stays within 2,000 chars."""
+    f = seed_finding()
+    recs = [_draft(i, [f], target_id=chr(96 + i) * 200) for i in range(1, 12)]
+    ids = write_recommendations(RUN_ID, recs, deps=_deps(env), now=NOW)
+    assert len(ids) == len(_recs()) == 11
+    content = _summary_content()
+    assert len(content) <= 2000
+    assert content.count("service:") == 10
+    assert "service:" + "a" * 150 + "," in content
+    assert "k" * 150 not in content
+
+
+def test_ut07_66_sim_rounded_to_four_places() -> None:
+    """UT07-66 similar[].sim is rounded to 4 decimals (0.75 + 0.25 / 3)."""
+    third = np.array([1 / 3, (8 / 9) ** 0.5])
+
+    def embed(text: str) -> np.ndarray:
+        return np.array([1.0, 0.0]) if "platform" in text else third
+
+    (entry,) = _adj(0.5, [_prior("paid_off")], embed=embed).similar
+    assert entry.sim == 0.8333
+
+
+def _split(text: str) -> np.ndarray:
+    return np.array([1.0, 0.0]) if "platform" in text else np.array([0.0, 1.0])
+
+
+def test_ut07_66_prior_at_threshold_kept() -> None:
+    """UT07-66 a prior with sim exactly sim_threshold is kept (>=)."""
+    adj = _adj(0.5, [_prior("paid_off")], embed=_split, cfg=FeedbackConfig(sim_threshold=0.75))
+    assert [s.sim for s in adj.similar] == [0.75]
+
+
+def test_ut07_66_step_one_filter_below_default_threshold() -> None:
+    """UT07-66 with sim_threshold < 0.6 a prior matching neither kind nor target is dropped."""
+    prior = _prior("worse", kind="org_action", target_id="svc_b")  # 0.35 * 0.5 + 0.25 = 0.425
+    cfg = FeedbackConfig(sim_threshold=0.1)
+    adj = _adj(0.5, [prior], related=lambda a, b: True, cfg=cfg)
+    assert (adj.similar, adj.delta) == ([], 0.0)
+    kept = _adj(0.5, [_prior("worse", target_id="svc_b")], cfg=cfg)
+    assert len(kept.similar) == 1

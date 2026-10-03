@@ -48,12 +48,12 @@ MAX_RECS: Final = 50
 _TOP: Final = 10  # targets in the run_summary text; finding ids in its data
 _QUESTION_MAX: Final = 500
 _SIMILAR_MAX: Final = 20
+_ID_CHARS: Final = 150  # 10 labels of <= 160 chars + head + tail stay under 2,000 (size.content)
 _LOOKUP_CHUNK: Final = 500  # the ops id-list limit (C2)
 _CENT: Final = Decimal("0.01")
 _DELTA_TYPE: Final = (-0.25, 0.15)  # ConfidenceAdjustment field bounds
 _CONF_TYPE: Final = (0.05, 0.95)
-_HALF_LIFE_DAYS: Final = 365.0
-_DAY_S: Final = 86_400.0
+_HALF_LIFE_S: Final = 365 * 86_400.0
 _VALUE: Final = {"paid_off": 1.0, "no_effect": -0.5, "worse": -1.0, "inconclusive": 0.0}
 _WS: Final = re.compile(r"\s+")
 _log = get_logger("memory")
@@ -92,12 +92,8 @@ def recommendation_similarity(
 ) -> tuple[float, float, float, float]:
     """(`s_kind`, `s_target`, `s_text`, `sim`) of design 07 §5.10; `s_text` clamped to [0, 1]."""
     s_kind = 1.0 if (r.kind, r.expected_metric) == (p.kind, p.expected_metric) else 0.0
-    if r.target_id == p.target_id:
-        s_target = 1.0
-    elif related:
-        s_target = 0.5
-    else:
-        s_target = 0.2 if r.target_type == p.target_type else 0.0
+    same_type = 0.2 if r.target_type == p.target_type else 0.0
+    s_target = 1.0 if r.target_id == p.target_id else (0.5 if related else same_type)
     text = _clamp(s_text, 0.0, 1.0) if math.isfinite(s_text) else 0.0
     return s_kind, s_target, text, 0.4 * s_kind + 0.35 * s_target + 0.25 * text
 
@@ -126,8 +122,8 @@ def _text_sims(
 
 def _decay(measured_at: str, now: datetime) -> float:
     """exp(-ln 2 * age_days / 365); an outcome dated after `now` counts as age 0."""
-    age = max(0.0, (now - clock.parse_utc(measured_at)).total_seconds() / _DAY_S)
-    return math.exp(-math.log(2) * age / _HALF_LIFE_DAYS)
+    age = max(0.0, (now - clock.parse_utc(measured_at)).total_seconds())
+    return math.exp(-math.log(2) * age / _HALF_LIFE_S)
 
 
 def outcome_adjustment(  # noqa: PLR0913 - signature fixed by U07-80
@@ -243,29 +239,42 @@ def _question(run: ops.RunRow, redactor: Redactor) -> str | None:
     """`run.meta.request.question`, redacted and cut to 500 chars, or None."""
     request = run.meta.get("request")
     text = request.get("question") if isinstance(request, dict) else None
-    if not isinstance(text, str):
-        return None
+    return _redact(redactor, text)[:_QUESTION_MAX] if isinstance(text, str) else None
+
+
+def _redact(redactor: Redactor, text: str) -> str:
     found = redactor.redact(text)
-    return (text if found is None else found.text)[:_QUESTION_MAX]
+    return text if found is None else found.text
+
+
+def _content(run: ops.RunRow, ordered: Sequence[RecommendationDraft], deps: RecommendDeps) -> str:
+    """First 10 targets by rank, ids cut to 150 chars; a redacted label with a numeral is left
+    out (rec_ids keep it): numeral-free and within 2,000 chars (spec note T07-15)."""
+    labels = [_redact(deps.redactor, f"{r.target_type}:{r.target_id[:_ID_CHARS]}")
+              for r in ordered[:_TOP]]  # fmt: skip
+    shown = [t for t in labels if not find_uncited_numerals(t, deps.allowed)]
+    text = f"Run {run.run_id} ({run.kind}) recorded recommendations"
+    text += f" for {', '.join(shown)}" if shown else ""
+    if len(shown) < len(labels):
+        text += " and other targets" if shown else " for other targets"
+    return text + "."
 
 
 def _summary_item(
     run: ops.RunRow, ordered: Sequence[RecommendationDraft], rec_ids: list[str],
-    question: str | None, dead_tasks: int,
+    dead_tasks: int, deps: RecommendDeps,
 ) -> MemoryProposal:  # fmt: skip
     """The numeral-free `run_summary` proposal of U07-78 step 5."""
-    targets = ", ".join(f"{r.target_type}:{r.target_id}" for r in ordered[:_TOP])
     top = list(dict.fromkeys(f for r in ordered for f in r.finding_ids))[:_TOP]
     data: dict[str, JsonValue] = {
-        "run_kind": run.kind, "question": question, "top_finding_ids": list(top),
+        "run_kind": run.kind, "question": _question(run, deps.redactor), "top_finding_ids": [*top],
         "rec_ids": list(rec_ids), "dead_task_count": dead_tasks,
     }  # fmt: skip
     prov = Provenance(author_type="system", author_role=None, author_ref=None,
                       run_id=run.run_id, task_id=None, via="pipeline")  # fmt: skip
     return MemoryProposal(
         layer="episodic", kind="run_summary", data=data, confidence=1.0, provenance=prov,
-        content=f"Run {run.run_id} ({run.kind}) recorded recommendations for {targets}.",
-    )  # fmt: skip
+        content=_content(run, ordered, deps))  # fmt: skip
 
 
 def _existing_order(row: ops.RecommendationRow) -> tuple[int, str]:
@@ -294,7 +303,6 @@ def write_recommendations(
     bases = _validate(run_id, ordered, deps)
     adjusted = [deps.adjust(r, base) for r, base in zip(ordered, bases, strict=True)]
     rows = [_row(run_id, r, adj, when) for r, adj in zip(ordered, adjusted, strict=True)]
-    question = _question(run, deps.redactor)
     wanted = [(r.kind, r.target_type, r.target_id) for r in ordered]
 
     def tx(conn: sqlite3.Connection) -> tuple[list[str], str | None]:
@@ -307,8 +315,7 @@ def write_recommendations(
             return [e["rec_id"] for e in existing], None
         ops.insert_recommendations(rows, conn=conn)
         rec_ids = [row["rec_id"] for row in rows]
-        dead = ops.dead_task_count(run_id, conn=conn)
-        item = _summary_item(run, ordered, rec_ids, question, dead)
+        item = _summary_item(run, ordered, rec_ids, ops.dead_task_count(run_id, conn=conn), deps)
         key = keyed_hash("run_summary:" + run_id)
         stored = deps.writer.insert_system_item(item, key_hash=key, conn=conn, now=when)
         return rec_ids, stored.memory_id
