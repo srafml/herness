@@ -56,6 +56,8 @@ CLASSIFY_MAX_TOKENS: Final = 300
 CONTENT_MAX_CHARS: Final = 2000
 MESSAGE_MAX_CHARS: Final = 4000  # per message in the summary request (LLM10)
 HISTORY_ROWS: Final = 200
+SESSION_ID_MAX: Final = 64  # U07-93 precondition
+SUMMARY_MAX_CHARS: Final = 6000  # chat_session.summary invariant (set_chat_summary limit)
 SYNC_TIMEOUT_S: Final = 120.0
 NUMBER: Final = "[number]"
 _ID: Final[dict[str, JsonValue]] = {"type": "string", "minLength": 1, "maxLength": 200}
@@ -169,7 +171,7 @@ def _visible(rows: Sequence[ChatMessageRow]) -> list[ChatMessageRow]:
 
 
 def _session(session_id: str) -> ChatSessionRow:
-    session = chat.get_chat_session(session_id)
+    session = chat.get_chat_session(session_id) if len(session_id) <= SESSION_ID_MAX else None
     if session is None:
         raise MemoryNotFound("session", session_id)  # noqa: EM101 - a kind, not a message
     return session
@@ -235,9 +237,8 @@ def _post_process(text: str, deps: ChatDeps) -> str:
     text = ANY_MARKER_RE.sub(NUMBER, text)
     for hit in reversed(find_uncited_numerals(text, deps.allowed)):
         text = text[: hit.start] + NUMBER + text[hit.end :]
-    found = deps.redactor.redact(text)
-    text = text if found is None else found.text
-    limit = deps.cfg.summary_max_chars
+    text = text if (found := deps.redactor.redact(text)) is None else found.text
+    limit = min(deps.cfg.summary_max_chars, SUMMARY_MAX_CHARS)
     if len(text) > limit:
         cut = text[: limit + 1]
         space = max(cut.rfind(" "), cut.rfind("\n"), cut.rfind("\t"))

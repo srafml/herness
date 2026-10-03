@@ -142,6 +142,22 @@ def test_ut07_81_memory_pointers_and_unknown_session(
     assert info.value.kind == "session"
 
 
+def test_ut07_81_overlong_session_id_without_store_call(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-81 a session_id over 64 characters is MemoryNotFound without a store read."""
+    ce = make_deps(tmp_path, ChatLLM())
+
+    def no_read(session_id: str) -> None:
+        raise AssertionError(session_id)
+
+    monkeypatch.setattr(chat, "get_chat_session", no_read)
+    with pytest.raises(MemoryNotFound):
+        session_load("s" * 65, deps=ce.deps)
+    with pytest.raises(MemoryNotFound):
+        session_save_turn("s" * 65, new_run(), deps=ce.deps)
+
+
 # --- UT07-82 session_save_turn ------------------------------------------------------------------
 
 
@@ -179,6 +195,45 @@ def test_ut07_82_sixth_turn_refreshes_summary_and_returns_correction(
     assert req.response_schema is not None
     assert req.system[0].text == llm_mod.memory_prompt("chat_summary.md")[0]
     assert ce.models.asked == [("chat", "fast"), ("chat", "fast")]
+
+
+def test_ut07_82_turn_message_is_latest_user_row_before_the_answer(
+    ops_store: OpsStoreHandle, tmp_path: Path
+) -> None:
+    """UT07-82 step 3 classifies the latest user row before the run's answer, not an older
+    one and not a later one."""
+    ce = make_deps(tmp_path, ChatLLM(correction()))
+    tick, sid = Clock(), session()
+    turn(sid, "first question", tick)
+    user_msg(sid, "older unanswered remark", tick)
+    latest = user_msg(sid, "the owner of payments is wrong", tick)
+    run_id = new_run()
+    answer(sid, latest, tick, run_id=run_id)
+    user_msg(sid, "a later message", tick)
+    memory_id = session_save_turn(sid, run_id, deps=ce.deps)
+    (row,) = memory_rows()
+    assert memory_id == row["memory_id"]
+    assert row["provenance"]["source_message_id"] == latest
+    (body,) = ce.llm.bodies("correction_classification")
+    assert "the owner of payments is wrong" in body
+    assert "older unanswered remark" not in body
+    assert "first question" not in body
+    assert "a later message" not in body
+
+
+def test_ut07_82_summary_clamped_to_store_limit(ops_store: OpsStoreHandle, tmp_path: Path) -> None:
+    """UT07-82 summary_max_chars above 6,000 still stores at most 6,000 characters."""
+    cfg = ChatMemoryConfig(summary_max_chars=8000, summary_every_turns=1)
+    ce = make_deps(tmp_path, ChatLLM(NOT_CORRECTION, _summary("topic " * 1300)), cfg=cfg)
+    tick, sid = Clock(), session()
+    _, run_id = turn(sid, "q", tick)
+    session_save_turn(sid, run_id, deps=ce.deps)
+    stored = chat.get_chat_session(sid)
+    assert stored is not None
+    summary = stored["summary"]
+    assert summary is not None
+    assert 5990 <= len(summary) <= 6000
+    assert summary.endswith("topic")
 
 
 def test_ut07_82_other_turns_skip_the_summary(ops_store: OpsStoreHandle, tmp_path: Path) -> None:
