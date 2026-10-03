@@ -5,7 +5,8 @@ stages or around ``run_sql_range``: every statement autocommits, so later stage 
 ``materialize_facts``) start with no open transaction. Only repository SQL runs; nothing from
 the job payload reaches SQL text (TH02-10). ``CURRENT`` changes only inside promotion.
 Stages ``enrich`` / ``score`` and the handler factory live in ``_build_stages`` (T02-19),
-stage ``dq`` in ``_build_dq`` (T02-20).
+stage ``dq`` in ``_build_dq`` (T02-20), stage ``promote`` and the pre-build cleanup in
+``_build_promote`` (T02-21), the job-state save in ``_build_state`` (T02-19b).
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from herness.core.jobs.ports import JobContext
 from herness.core.logging import get_logger
 from herness.core.resilience import fault_point
 from herness.core.types import JobOutcome
-from herness.model import _build_dq, meta
+from herness.model import _build_dq, _build_promote, _build_state, meta
 from herness.model import _build_stages as stages
 from herness.model import _build_support as support
 from herness.model._build_support import STAGE_ORDER
@@ -126,6 +127,7 @@ class _BuildRun:
     sql_ms: dict[str, int] = dataclasses.field(default_factory=dict)
     row_counts: dict[str, int] = dataclasses.field(default_factory=dict)
     result: dict[str, JsonValue] = dataclasses.field(default_factory=dict)
+    state: dict[str, JsonValue] = dataclasses.field(default_factory=dict)  # latest job state
 
 
 def _elapsed_ms(started: float) -> int:
@@ -271,12 +273,13 @@ def _stage_build(run: _BuildRun) -> StageStatus:
 
 
 # Stage units by name; enrich/score (U02-100, U02-101) live in `_build_stages`, dq (U02-102) in
-# `_build_dq`. T02-21: promote (U02-103). A payload naming a missing stage is rejected early.
+# `_build_dq`, promote (U02-103) in `_build_promote`. A missing stage is rejected early.
 _STAGE_UNITS: Final[Mapping[str, _StageUnit]] = {
     "build": _stage_build,
     "enrich": stages.stage_enrich,
     "score": stages.stage_score,
     "dq": _build_dq.stage_dq,
+    "promote": _build_promote.stage_promote,
 }
 make_build_pipeline_handler: Final = stages.make_build_pipeline_handler  # U02-134
 
@@ -314,12 +317,8 @@ def _write_metrics(run: _BuildRun, status: str) -> None:
     )
 
 
-def _save_state(run: _BuildRun) -> None:
-    run.ctx.save_state({"build_id": run.build_id, "stages_done": list(run.stages_done)})
-
-
 def _yield(run: _BuildRun) -> JobOutcome:
-    _save_state(run)
+    _build_state.save_state(run)
     _write_metrics(run, "yield")
     return JobOutcome(status="yield", result={"build_id": run.build_id})
 
@@ -327,7 +326,8 @@ def _yield(run: _BuildRun) -> JobOutcome:
 def _fail(run: _BuildRun, stage: str, exc: HernessError) -> None:
     """Mark the build failed (best effort), log and write metrics (U02-98 error path)."""
     try:
-        meta.update_build_row(_connection(run), status="failed", finished_at=clock.now())
+        if not _build_promote.keeps_status(run, stage):  # T02-21: a retry resumes promote
+            meta.update_build_row(_connection(run), status="failed", finished_at=clock.now())
     except Exception as mark_exc:  # noqa: BLE001 - the original error must propagate
         error_class = type(mark_exc).__name__
         _log.error("model.build.mark_failed_error", build_id=run.build_id, error_class=error_class)
@@ -356,7 +356,7 @@ def _run_stages(run: _BuildRun) -> JobOutcome:
         if status == "yield":
             return _yield(run)
         run.stages_done.append(name)
-        _save_state(run)
+        _build_state.save_state(run)
         run.durations_ms[name] = duration = _elapsed_ms(started)
         run.ctx.heartbeat(f"stage {name} done")
         _log.info("model.build.stage_done", build_id=run.build_id, stage=name, duration_ms=duration)
@@ -388,9 +388,10 @@ def run_build_pipeline(ctx: JobContext, *, llm_factory: object | None = None) ->
     cfg = get_config()
     layout = data_layout(cfg=cfg)
     now = clock.now()
-    build_id, done = support.resolve_build(payload.build_id, ctx.load_state(), layout, now)
-    support.delete_orphans(layout, protect=build_id)
-    run = _BuildRun(ctx, payload, cfg, layout, build_id, now, llm_factory, done)
+    state = ctx.load_state()
+    build_id, done = support.resolve_build(payload.build_id, state, layout, now, payload.stages)
+    _build_promote.cleanup_before_build(build_id, cfg.sources.build, layout, now)  # step 4
+    run = _BuildRun(ctx, payload, cfg, layout, build_id, now, llm_factory, done, state=state)
     try:
         return _run_stages(run)
     finally:

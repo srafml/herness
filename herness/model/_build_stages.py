@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 import duckdb
 
 from herness.core.errors import ConfigError, FatalError, HernessError
-from herness.model import meta
+from herness.model import _build_state, meta
 from herness.store import warehouse
 
 if TYPE_CHECKING:
@@ -154,22 +154,27 @@ def stage_score(run: _BuildRun) -> StageStatus:
     ``materialize_facts`` opens its own transaction, so it is called with none open; the
     runner never renders 400-499 itself. ``run_scoring`` gets the build connection, which
     stays open (never closed and reopened). The scoring hook is resolved before the facts
-    so a missing hook fails before the long facts step.
+    so a missing hook fails before the long facts step. T02-19b: like ``enrich`` the stage
+    clears ``finished_at``; ``run_scoring`` checkpoints through the build's job state (its
+    ``scoring`` key survives the build's saves) and a report flagged ``yielded`` becomes
+    ``yield``, so ``score`` is not done and nothing after it (``dq``, ``promote``) runs.
     """
     from herness.metrics.facts import materialize_facts  # noqa: PLC0415 - §2.2 lazy upward
     from herness.model import build  # noqa: PLC0415 - build imports this module
 
     con = build._connection(run)
+    meta.update_build_row(con, clear_finished=True)  # a completed unpromoted build resumes
     run_scoring = _load_run_scoring()
     with _hook_errors("score"):
         query_ids = materialize_facts(con, run.build_id)
     con.execute("CHECKPOINT")
     with _hook_errors("score"):
-        report = run_scoring(run.build_id, steps=run.payload.score_steps, con=con, ctx=run.ctx)
+        ctx = _build_state.hook_context(run)
+        report = run_scoring(run.build_id, steps=run.payload.score_steps, con=con, ctx=ctx)
     run.result["facts_queries"] = len(query_ids)
-    run.result["scoring"] = report.model_dump(mode="json")
+    run.result["scoring"] = scored = report.model_dump(mode="json")
     con.execute("CHECKPOINT")
-    return "done"
+    return "yield" if "yielded" in (scored.get("flags") or ()) else "done"
 
 
 def make_build_pipeline_handler(

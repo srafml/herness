@@ -1,8 +1,8 @@
 """Private helpers of ``herness.model.build`` (T02-18 size split; impl 02 §2 module-map note).
 
-Build resolution (U02-98 step 3), the orphan deletion that stands in for ``cleanup_builds``
-until T02-21, the DuckDB form of ``build.memory_limit`` (T02-18 spec note: DuckDB rejects
-``%``) and the §8.2 metric samples. Nothing here opens a writable warehouse connection.
+Build resolution (U02-98 step 3), the DuckDB form of ``build.memory_limit`` (T02-18 spec
+note: DuckDB rejects ``%``) and the §8.2 metric samples. Nothing here opens a writable
+warehouse connection.
 """
 
 from __future__ import annotations
@@ -11,14 +11,14 @@ import dataclasses
 import datetime
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import psutil
 from pydantic import JsonValue
 
 from herness.core import time as clock
-from herness.core.errors import ConfigError
+from herness.core.errors import ConfigError, HernessError
 from herness.core.logging import get_logger
 from herness.core.types import MetricSample
 from herness.model.settings import BuildSettings
@@ -87,45 +87,57 @@ def _status(build_id: str, layout: DataLayout) -> str | None:
     return found[0] if found else None
 
 
+def _not_older_than_current(build_id: str, layout: DataLayout) -> bool:
+    """No ``CURRENT`` (or an unreadable one) or one not newer than ``build_id`` (IDs sort by
+    time): resuming its promotion never moves ``CURRENT`` back to older data."""
+    try:
+        current = warehouse.read_current(layout=layout)
+    except HernessError:  # invalid or dangling pointer: write_current replaces it anyway
+        return True
+    return current is None or current <= build_id
+
+
+def _resumable(
+    build_id: str, layout: DataLayout, done: Sequence[str], stages: Sequence[str]
+) -> bool:
+    """``building``, or ``promoted`` when ``promote`` is the only requested stage left and
+    the build is not older than ``CURRENT``: a promotion that failed after the status update
+    (T02-21 spec note under U02-104)."""
+    status = _status(build_id, layout)
+    left = [stage for stage in stages if stage not in done]
+    promoted = status == "promoted" and left == ["promote"]
+    return status == "building" or (promoted and _not_older_than_current(build_id, layout))
+
+
 def resolve_build(
     build_id: str | None,
     state: Mapping[str, JsonValue],
     layout: DataLayout,
     now: datetime.datetime,
+    stages: Sequence[str] = STAGE_ORDER,
 ) -> tuple[str, list[str]]:
     """The build to work on and its stages already done (U02-98 step 3).
 
-    A payload ``build_id`` must exist (NotFoundError) with status ``building`` (ConfigError);
-    else a state naming a ``building`` build with ``build`` done resumes it; else a new ID.
+    A payload ``build_id`` must exist (NotFoundError) and be resumable (ConfigError); else a
+    state naming a resumable build with ``build`` done resumes it; else a new ID. Resumable
+    is ``building``, or ``promoted`` when only ``promote`` of the payload ``stages`` is left
+    and ``CURRENT`` is absent or not newer than the build.
     """
     if build_id is not None:
         status = _status(build_id, layout)
         if status is None:
             msg = f"build {build_id} does not exist"
             raise NotFoundError(msg, kind="build", key=build_id)
-        if status != "building":
+        done = _done_stages(state, build_id)
+        if not _resumable(build_id, layout, done, stages):
             msg = f"build {build_id} is {status}"
             raise ConfigError(msg)
-        return build_id, _done_stages(state, build_id)
+        return build_id, done
     state_id = state.get("build_id")
     done = _done_stages(state, state_id)
-    if isinstance(state_id, str) and "build" in done and _status(state_id, layout) == "building":
+    if isinstance(state_id, str) and "build" in done and _resumable(state_id, layout, done, stages):
         return state_id, done
     return warehouse.new_build_id(now), []
-
-
-def delete_orphans(layout: DataLayout, *, protect: str) -> None:
-    """Delete ``building`` files with no ``finished_at`` (crashed, killed or yielded builds).
-
-    T02-21: replace with ``cleanup_builds(mode="pre", protect=frozenset({build_id}), …)``,
-    which adds the unreadable and failed-build rules and the builds pinned by runs.
-    """
-    for info in warehouse.list_builds(layout=layout):
-        orphan = info.status == "building" and info.finished_at is None
-        if not orphan or info.is_current or info.build_id == protect:
-            continue
-        if warehouse.delete_build_files(info.build_id, layout=layout) == "deleted":
-            _log.info("model.build.orphan_deleted", build_id=info.build_id, status=info.status)
 
 
 def _sample(name: str, kind: str, value: float, **labels: str) -> MetricSample:
