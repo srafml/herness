@@ -4,7 +4,9 @@ IT02-32: five promoted builds, one pinned by a running run; promoting a new buil
 `keep_last=3` switches `CURRENT`, keeps the newest two others plus the pinned one, deletes
 the rest and retires the previous build. Further IT02-32 cases run the real pipeline on
 `lake_small`: a full pipeline promotes and the next one retires it; a yielded `enrich`
-build survives the `pre` cleanup of another job while its job is queued (T02-21 spec note).
+build survives the `pre` cleanup of another job while its job is queued (T02-21 spec note);
+a failure after the build is marked `promoted` (StoreBusy at `write_current` or in the post
+cleanup after the switch) is resumed by the retry at `promote` (fix round 1).
 The spec 03 / 04 hooks are fakes behind the loader seams of `herness.model._build_stages`.
 """
 
@@ -13,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import pytest
@@ -24,12 +27,14 @@ from tests.support.ops_store import OpsStoreHandle
 from tests.support.promote_builds import add_job, add_run, build_id, make_build, statuses
 
 from herness.core import time as clock
+from herness.core.errors import ConfigError, HernessError, StoreBusy
 from herness.core.jobs.handlers import run_handler
 from herness.core.resilience import ProcessState
 from herness.core.types import JobOutcome
 from herness.enrich.gpu import YieldRequested
 from herness.model import _build_stages as stages
 from herness.model import _build_support as support
+from herness.model import promote
 from herness.model.build import make_build_pipeline_handler
 from herness.model.promote import promote_build
 from herness.model.settings import BuildSettings
@@ -200,3 +205,122 @@ def test_it02_32_yielded_enrich_build_survives_other_jobs_cleanup(
     )
     third = _run(fake_job_context({"stages": ["build"]}))
     assert set(statuses(env.layout)) == {other.result["build_id"], third.result["build_id"]}
+
+
+# --- fix round 1 (review I1): a failure after the status update is resumed by the retry ----
+
+
+def _busy_once(real: Callable[..., Any], when: Callable[..., bool]) -> Callable[..., Any]:
+    """``real`` raising StoreBusy on its first call that matches ``when``."""
+    raised: list[bool] = []
+
+    def flaky(*args: Any, **kwargs: Any) -> Any:
+        if not raised and when(*args, **kwargs):
+            raised.append(True)
+            msg = "CURRENT is being replaced"
+            raise StoreBusy(msg)
+        return real(*args, **kwargs)
+
+    return flaky
+
+
+def _attempt(ctx: FakeJobContext) -> JobOutcome | HernessError:
+    return run_handler(ctx, make_build_pipeline_handler(llm_factory=None))
+
+
+def _always(*_args: Any, **_kwargs: Any) -> bool:
+    return True
+
+
+def test_it02_32_write_current_busy_full_pipeline_retry_resumes(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT02-32 (U02-104 Errors) `write_current` raises StoreBusy once in a full pipeline: the
+    build stays `promoted` (not failed), `CURRENT` unchanged; the retry of the same job
+    resumes at `promote`, re-runs the gate (CURRENT does not name it yet) and promotes."""
+    monkeypatch.setattr(promote, "write_current", _busy_once(promote.write_current, _always))
+    first = FakeJobContext({"stages": FULL})
+    error = _attempt(first)
+    assert isinstance(error, StoreBusy), error
+    state = first.load_state()
+    build = str(state["build_id"])
+    assert state["stages_done"] == ["build", "enrich", "score", "dq"]
+    assert warehouse.read_current(layout=env.layout) is None
+    assert statuses(env.layout) == {build: "promoted"}
+    with structlog.testing.capture_logs() as logs:
+        outcome = _run(FakeJobContext({"stages": FULL}, state=state, attempt=2))
+    assert outcome.result["build_id"] == build
+    assert list(outcome.result["durations_ms"]) == ["promote"]  # type: ignore[arg-type]
+    assert [e["build_id"] for e in logs if e["event"] == "model.dq.evaluated"] == [build]
+    assert warehouse.read_current(layout=env.layout) == build
+    assert statuses(env.layout) == {build: "promoted"}
+
+
+def test_it02_32_write_current_busy_from_stage_promote_retry_resumes(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT02-32 (U02-104 Errors) `--from-stage promote` whose `write_current` raises
+    StoreBusy once: the retry with the same payload resumes the `promoted` build, re-runs
+    the gate and promotes (before fix round 1 it failed with `build … is promoted`)."""
+    prepared = _run(FakeJobContext({"stages": ["build", "enrich", "score", "dq"]}))
+    build = str(prepared.result["build_id"])
+    payload = {"stages": ["promote"], "build_id": build}
+    monkeypatch.setattr(promote, "write_current", _busy_once(promote.write_current, _always))
+    first = FakeJobContext(payload)
+    assert isinstance(_attempt(first), StoreBusy)
+    assert statuses(env.layout) == {build: "promoted"}
+    assert warehouse.read_current(layout=env.layout) is None
+    outcome = _run(FakeJobContext(payload, state=first.load_state(), attempt=2))
+    assert outcome.result["promoted"] is True
+    assert outcome.result["dq"] is not None
+    assert warehouse.read_current(layout=env.layout) == build
+
+
+def test_it02_32_post_cleanup_busy_after_switch_retry_finishes(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT02-32 (U02-104 Errors) the post cleanup raises StoreBusy once after `CURRENT`
+    switched: the build is not marked failed; the retry finishes the promotion (retention
+    and `model.build.promoted`) with no gate re-run, no second switch, no failure."""
+
+    def post(*_args: Any, **kwargs: Any) -> bool:
+        return bool(kwargs.get("mode") == "post")
+
+    monkeypatch.setattr(promote, "cleanup_builds", _busy_once(promote.cleanup_builds, post))
+    first = FakeJobContext({"stages": FULL})
+    with structlog.testing.capture_logs() as first_logs:
+        assert isinstance(_attempt(first), StoreBusy)
+    state = first.load_state()
+    build = str(state["build_id"])
+    assert warehouse.read_current(layout=env.layout) == build
+    assert statuses(env.layout) == {build: "promoted"}
+    assert not [e for e in first_logs if e["event"] == "model.build.mark_failed_error"]
+    with structlog.testing.capture_logs() as logs:
+        outcome = _run(FakeJobContext({"stages": FULL}, state=state, attempt=2))
+    assert outcome.result["build_id"] == build
+    assert outcome.result["promoted"] is True
+    events = [e["event"] for e in logs]
+    assert "model.dq.evaluated" not in events
+    assert "store.warehouse.current_switched" not in events
+    assert "model.build.failed" not in events
+    [cleanup] = [e for e in logs if e["event"] == "model.build.cleanup" and e["mode"] == "post"]
+    assert cleanup["deleted"] == 0
+    [done] = [e for e in logs if e["event"] == "model.build.promoted"]
+    assert (done["build_id"], done["previous"]) == (build, None)
+    assert warehouse.read_current(layout=env.layout) == build
+    assert statuses(env.layout) == {build: "promoted"}
+
+
+def test_it02_32_promoted_build_resume_rules(env: Env) -> None:
+    """IT02-32 (U02-98 step 3, fix round 1) a `promoted` build is resumable only when
+    `promote` is the only requested stage left; with more stages it is ConfigError."""
+    prepared = _run(FakeJobContext({"stages": FULL}))
+    build = str(prepared.result["build_id"])
+    now = clock.now()
+    assert support.resolve_build(build, {}, env.layout, now, ["promote"]) == (build, [])
+    with pytest.raises(ConfigError, match="is promoted"):
+        support.resolve_build(build, {}, env.layout, now, ["dq", "promote"])
+    state = {"build_id": build, "stages_done": ["build", "enrich", "score", "dq"]}
+    assert support.resolve_build(None, state, env.layout, now, FULL)[0] == build
+    new_id, done = support.resolve_build(None, state, env.layout, now, ["build", "enrich"])
+    assert (new_id != build, done) == (True, [])

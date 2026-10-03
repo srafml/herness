@@ -237,3 +237,26 @@ def test_ft02_05_reader_defers_deletion_until_closed(
     deleted = sorted(e["build_id"] for e in logs if e["event"] == "store.warehouse.deleted")
     assert deleted == [old, build_id(2)]
     assert not warehouse.build_path(old, layout=layout).exists()
+
+
+def test_ft02_04_error_before_promote_keeps_building_retry_promotes(lake: Lake) -> None:
+    """FT02-04 (fix round 1, review M1) `pipeline.before_promote action: error:StoreBusy`:
+    the job fails after its gate passed, the build is NOT marked `failed` (U02-98 failure
+    path exception for stage `promote`), so the retry resumes at `promote` and promotes."""
+    first = _result(lake.child("job1"))["build_id"]
+    rule = {"point": "pipeline.before_promote", "action": "error:StoreBusy", "nth": 1}
+    failed = lake.child("job2", [rule])
+    assert failed.returncode not in (0, KILLED_RETURNCODE), failed.stderr[-3000:]
+    assert RESULT_PREFIX not in failed.stdout
+    assert "StoreBusy" in failed.stdout + failed.stderr
+    saved = lake.state("job2")
+    assert saved["stages_done"] == ["build", "enrich", "score", "dq"]
+    build = saved["build_id"]
+    assert statuses(lake.layout)[build] == "building"  # not failed
+    assert lake.current() == first
+
+    result = _result(lake.child("job2"))
+    assert result["build_id"] == build
+    assert list(result["durations_ms"]) == ["promote"]
+    assert lake.current() == build
+    assert statuses(lake.layout) == {build: "promoted", first: "retired"}
