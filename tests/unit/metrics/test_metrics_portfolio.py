@@ -206,10 +206,14 @@ def test_ut04_101_rendered_input_sql_under_evidence_cap(build: Build) -> None:
     """UT04-101 the recorded input SQL fits the 20,000-character Evidence cap."""
     con = build()
     result = optimize_portfolio("4000", persist=False, con=con)
-    row = con.execute("SELECT sql FROM meta.evidence").fetchall()
-    assert all(r[0] != "" for r in row)
     rendered = render_named("portfolio_input", {}, step_context(_weights()).binds())
     assert len(rendered.sql) < 20_000
+    ev = get_evidence(result.query_ids[0])
+    assert ev is not None
+    assert ev.sql.split() == rendered.sql.split()
+    in_meta = "SELECT count(*) FROM meta.evidence WHERE query_id = ? OR params LIKE ?"
+    marker = '%"portfolio_input"%'
+    assert con.execute(in_meta, [ev.query_id, marker]).fetchone() == (0,)  # ops evidence only
     assert result.query_ids[0].startswith("q_")
 
 
