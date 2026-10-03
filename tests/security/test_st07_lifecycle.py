@@ -21,12 +21,19 @@ from tests.unit.harness.memory._lifecycle_env import (
     row_of,
     seed_item,
 )
-from tests.unit.harness.memory._write_env import NOW
+from tests.unit.harness.memory._write_env import NOW, at_cosine, proposal, unit
 
 from herness.harness.memory import lifecycle as lifecycle_mod
 from herness.store.ops import core
 
 pytestmark = pytest.mark.integration
+
+_ENT_A = [{"type": "service", "id": "svc_a"}]
+_ENT_B = [{"type": "service", "id": "svc_b"}]
+
+
+def _glossary(term: str, entities: list[dict[str, str]]) -> dict[str, Any]:
+    return {"term": term, "definition": "see content", "entities": entities}
 
 
 def _snapshot() -> dict[str, list[tuple[Any, ...]]]:
@@ -113,23 +120,40 @@ def test_st07_12_approve_and_reject_record_decided_by_and_audit(
 def test_st07_17_only_listed_active_conflicts_are_superseded(
     ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ST07-17 conflict approval expires exactly the active ids the review payload lists."""
+    """ST07-17 a MemoryWriter conflict: approval expires exactly the ids its payload lists."""
     env = make_lifecycle(tmp_path, monkeypatch)
-    listed_a, listed_b = seed_item(status="active"), seed_item(status="active")
-    listed_pending = seed_item()
-    unlisted = seed_item(status="active")  # same content, never shown to the reviewer
-    conflicts = [listed_a, listed_b, listed_pending]
-    memory_id = seed_item(data={"conflicts_with": conflicts})
-    payload = review_of(row_of(memory_id)["data"]["review_item_id"]).payload
-    assert payload["conflicts_with"] == conflicts
+    embed, writer = env.writer.embed, env.writer.writer
+    embed.overrides["glossary: Alpha owns billing."] = unit(0)
+    embed.overrides["glossary: Gamma owns billing."] = unit(0)
+    embed.overrides["glossary: Beta owns billing."] = at_cosine(0.85)
+    listed = writer.propose(proposal("Alpha owns billing.", data=_glossary("a", _ENT_A)), now=NOW)
+    # as close, but about another entity: never a conflict, never shown to the reviewer
+    unlisted = writer.propose(proposal("Gamma owns billing.", data=_glossary("g", _ENT_B)), now=NOW)
+    new = writer.propose(proposal("Beta owns billing.", data=_glossary("b", _ENT_A)), now=NOW)
+    assert (listed.status, unlisted.status, new.status) == ("active", "active", "pending_approval")
+    assert new.review_item_id is not None
+    payload = review_of(new.review_item_id).payload
+    assert payload["conflicts_with"] == [listed.memory_id]
+    assert row_of(new.memory_id)["data"]["conflicts_with"] == [listed.memory_id]
+    env.lifecycle.approve(new.memory_id, REVIEWER, now=NOW)
+    row = row_of(listed.memory_id)
+    assert row["status"] == "expired"
+    assert (row["data"]["superseded_by"], row["data"]["expired_reason"]) == (
+        new.memory_id, "superseded",
+    )  # fmt: skip
+    assert row_of(unlisted.memory_id)["status"] == "active"
+    assert ([listed.memory_id], "expired") in env.vectors.calls
+    assert all(unlisted.memory_id not in ids for ids, _ in env.vectors.calls)
+
+
+def test_st07_17_listed_but_not_active_ids_are_left_alone(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST07-17 listed ids that are no longer active (pending, rejected) are not superseded."""
+    env = make_lifecycle(tmp_path, monkeypatch)
+    pending, rejected = seed_item(), seed_item(status="rejected")
+    memory_id = seed_item(data={"conflicts_with": [pending, rejected]})
     env.lifecycle.approve(memory_id, REVIEWER, now=NOW)
-    for old in (listed_a, listed_b):
-        row = row_of(old)
-        assert row["status"] == "expired"
-        assert (row["data"]["superseded_by"], row["data"]["expired_reason"]) == (
-            memory_id, "superseded",
-        )  # fmt: skip
-    assert row_of(listed_pending)["status"] == "pending_approval"
-    assert row_of(unlisted)["status"] == "active"
-    assert ([listed_a, listed_b], "expired") in env.vectors.calls
-    assert all(unlisted not in ids for ids, _ in env.vectors.calls)
+    assert row_of(pending)["status"] == "pending_approval"
+    assert row_of(rejected)["status"] == "rejected"
+    assert all(status != "expired" for _, status in env.vectors.calls)

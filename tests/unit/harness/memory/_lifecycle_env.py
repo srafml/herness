@@ -22,6 +22,9 @@ from tests.unit.harness.memory._write_env import (
     memory_rows,
     provenance,
 )
+from tests.unit.harness.memory._write_env import (
+    Env as WriterEnv,
+)
 
 from herness.core import time as clock
 from herness.core.errors import ModelUnavailable
@@ -57,6 +60,7 @@ class Env:
     lifecycle: MemoryLifecycle
     vectors: FakeVectors
     audits: list[tuple[str, str, dict[str, Any]]]
+    writer: WriterEnv
 
 
 def make_lifecycle(
@@ -79,7 +83,7 @@ def make_lifecycle(
         writer=base.writer,
         redactor=base.redactor,
     )
-    return Env(lifecycle, fake, audits)
+    return Env(lifecycle, fake, audits, base)
 
 
 def seed_item(  # noqa: PLR0913 - one keyword per seeded column under test

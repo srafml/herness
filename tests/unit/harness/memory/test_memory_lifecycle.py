@@ -19,17 +19,30 @@ from tests.unit.harness.memory._lifecycle_env import (
 from tests.unit.harness.memory._write_env import NOW, PLANTED_EMAIL, review_rows
 
 from herness.core import time as clock
-from herness.core.errors import PolicyViolation, ToolInputError
+from herness.core.errors import FatalError, PolicyViolation, ToolInputError
 from herness.core.ids import new_ulid
 from herness.harness.memory import lifecycle as lifecycle_mod
 from herness.harness.memory.policy import APPROVAL_FLOOR
 from herness.harness.memory.types import MemoryNotFound
+from herness.store.ops import core, shared
 from herness.store.ops import memory as ops
-from herness.store.ops import shared
 
 pytestmark = pytest.mark.unit
 
 _MISSING = "mem_" + new_ulid()
+
+
+_ITEM_EVENT_KEYS = {
+    "event", "log_level", "component", "memory_id", "kind", "review_item_id",
+    "derived_review_item_id",
+}  # fmt: skip
+
+
+def _stale(logs: list[dict[str, Any]], memory_id: str) -> None:
+    """Exactly one `memory.review.stale` INFO event, carrying only the memory id."""
+    (event,) = _events(logs, "memory.review.stale")
+    assert event == {"event": "memory.review.stale", "log_level": "info", "component": "memory",
+                     "memory_id": memory_id}  # fmt: skip
 
 
 def _events(logs: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
@@ -59,6 +72,7 @@ def test_ut07_32_approve_without_confidence_applies_the_floor(
     assert [(e, a) for e, a, _ in env.audits] == [("review_decision", REVIEWER)]
     assert env.vectors.calls == [([memory_id], "active")]
     (event,) = _events(logs, "memory.item.approved")
+    assert set(event) == _ITEM_EVENT_KEYS  # ids and kind only: no note, content or text
     assert event["memory_id"] == memory_id
     assert event["review_item_id"] == review_id
     assert event["derived_review_item_id"] is None
@@ -119,9 +133,10 @@ def test_ut07_32_not_pending_raises_policy_violation(
     """UT07-32 a non-pending item (active without approved_by included) is refused."""
     env = make_lifecycle(tmp_path, monkeypatch)
     memory_id = seed_item(status=status)
-    with pytest.raises(PolicyViolation, match=r"approve\.not_pending") as info:
+    with capture_logs() as logs, pytest.raises(PolicyViolation, match="not_pending") as info:
         env.lifecycle.approve(memory_id, REVIEWER, now=NOW)
     assert info.value.details["rule"] == "approve.not_pending"
+    _stale(logs, memory_id)
     assert row_of(memory_id)["status"] == status
 
 
@@ -142,8 +157,9 @@ def test_ut07_32_status_is_rechecked_inside_the_transaction(
         return rows
 
     monkeypatch.setattr(lifecycle_mod.ops, "get_memory_items", racing)
-    with pytest.raises(PolicyViolation, match=r"approve\.not_pending"):
+    with capture_logs() as logs, pytest.raises(PolicyViolation, match=r"approve\.not_pending"):
         env.lifecycle.approve(memory_id, REVIEWER, now=NOW)
+    _stale(logs, memory_id)
     assert review_of(row_of(memory_id)["data"]["review_item_id"]).status == "pending"
     assert env.audits == []
 
@@ -351,6 +367,7 @@ def test_ut07_34_reject_rejects_item_and_review_item(
     assert [(e, a) for e, a, _ in env.audits] == [("review_decision", REVIEWER)]
     assert env.vectors.calls == [([memory_id], "rejected")]
     (event,) = _events(logs, "memory.item.rejected")
+    assert set(event) == _ITEM_EVENT_KEYS
     assert (event["memory_id"], event["review_item_id"]) == (memory_id, review_id)
     assert PLANTED_EMAIL not in str(logs)
 
@@ -365,8 +382,9 @@ def test_ut07_34_repeat_and_non_pending(
     env.lifecycle.reject(memory_id, "c" * 32, "again", now=NOW)
     assert row_of(memory_id)["data"]["rejected_by"] == REVIEWER
     active = seed_item(status="active")
-    with pytest.raises(PolicyViolation, match=r"reject\.not_pending"):
+    with capture_logs() as logs, pytest.raises(PolicyViolation, match=r"reject\.not_pending"):
         env.lifecycle.reject(active, REVIEWER, "no", now=NOW)
+    _stale(logs, active)
     with pytest.raises(MemoryNotFound):
         env.lifecycle.reject(_MISSING, REVIEWER, "no", now=NOW)
 
@@ -559,7 +577,9 @@ def test_ut07_32_concurrent_approval_wins_returns_the_item(
     memory_id = seed_item()
     other = "c" * 32
     _race(monkeypatch, lambda: env.lifecycle.approve(memory_id, other, now=NOW))
-    item = env.lifecycle.approve(memory_id, REVIEWER, now=NOW)
+    with capture_logs() as logs:
+        item = env.lifecycle.approve(memory_id, REVIEWER, now=NOW)
+    _stale(logs, memory_id)
     assert (item.status, item.data["approved_by"]) == ("active", other)
     assert [a for _, a, _ in env.audits] == [other]
 
@@ -572,6 +592,88 @@ def test_ut07_34_concurrent_rejection_wins(
     memory_id = seed_item()
     other = "c" * 32
     _race(monkeypatch, lambda: env.lifecycle.reject(memory_id, other, "first", now=NOW))
-    env.lifecycle.reject(memory_id, REVIEWER, "second", now=NOW)
+    with capture_logs() as logs:
+        env.lifecycle.reject(memory_id, REVIEWER, "second", now=NOW)
+    _stale(logs, memory_id)
     assert row_of(memory_id)["data"]["rejected_by"] == other
     assert [a for _, a, _ in env.audits] == [other]
+
+
+# ---------------------------------------------------------------- review round 1
+
+
+def test_ut07_33_self_listed_conflict_is_not_superseded(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-33 an item listing itself in conflicts_with is activated, never expired."""
+    env = make_lifecycle(tmp_path, monkeypatch)
+    memory_id = seed_item()
+    data = {**row_of(memory_id)["data"], "conflicts_with": [memory_id]}
+    core.run_write(lambda c: ops.update_memory_item(memory_id, data=data, conn=c), op="test_seed")
+    assert env.lifecycle.approve(memory_id, REVIEWER, now=NOW).status == "active"
+    assert "expired_reason" not in row_of(memory_id)["data"]
+    assert env.vectors.calls == [([memory_id], "active")]
+
+
+def test_ut07_33_at_most_ten_conflicts_are_superseded(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-33 eleven listed active conflicts: only the first ten expire (conflicts <= 10)."""
+    env = make_lifecycle(tmp_path, monkeypatch)
+    olds = [seed_item(status="active") for _ in range(11)]
+    memory_id = seed_item(data={"conflicts_with": olds})
+    env.lifecycle.approve(memory_id, REVIEWER, now=NOW)
+    assert [row_of(o)["status"] for o in olds] == ["expired"] * 10 + ["active"]
+    assert (olds[:10], "expired") in env.vectors.calls
+
+
+def test_ut07_33_audit_failure_rolls_back_the_whole_approval(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-33 a failing review decision (audit write) rolls back status, conflicts, derived."""
+    env = make_lifecycle(tmp_path, monkeypatch)
+    old = seed_item(status="active")
+    data: dict[str, Any] = {"suggested_action": "weight_change", "conflicts_with": [old]}
+    memory_id = seed_item(kind="user_correction", data=data)
+    review_id = row_of(memory_id)["data"]["review_item_id"]
+    before = len(review_rows())
+
+    def failing(event: str, actor: str, **fields: Any) -> None:
+        msg = "audit write failed"
+        raise OSError(msg)
+
+    monkeypatch.setattr(shared, "audit", failing)
+    with pytest.raises(FatalError, match="OSError"):
+        env.lifecycle.approve(memory_id, REVIEWER, now=NOW)
+    row = row_of(memory_id)
+    assert row["status"] == "pending_approval"
+    assert "approved_by" not in row["data"]
+    assert "derived_review_item_id" not in row["data"]
+    assert row_of(old)["status"] == "active"
+    assert len(review_rows()) == before
+    assert review_of(review_id).status == "pending"
+    assert env.vectors.calls == []
+
+
+def test_ut07_36_expire_item_leaves_a_rejected_item_unchanged(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-36 expire_item on a rejected item: still rejected, no reason, no mirror."""
+    env = make_lifecycle(tmp_path, monkeypatch)
+    memory_id = seed_item(status="rejected")
+    env.lifecycle.expire_item(memory_id, "stale")
+    row = row_of(memory_id)
+    assert (row["status"], row["data"].get("expired_reason")) == ("rejected", None)
+    assert env.vectors.calls == []
+
+
+def test_ut07_37_record_use_logs_nothing_of_the_run_id(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-37 the caller's run_id is neither stored nor logged."""
+    env = make_lifecycle(tmp_path, monkeypatch)
+    memory_id = seed_item(status="active")
+    with capture_logs() as logs:
+        env.lifecycle.record_use([memory_id], "run_untrusted text", now=NOW)
+    assert "run_untrusted" not in str(logs)
+    assert row_of(memory_id)["use_count"] == 1

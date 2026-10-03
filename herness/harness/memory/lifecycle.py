@@ -72,6 +72,7 @@ def _done(row: Row, status: Literal["active", "rejected"], rule: str) -> bool:
     if row["status"] == status and (status != "active" or row["data"].get("approved_by")):
         return True
     if row["status"] != "pending_approval":
+        _log.info("memory.review.stale", memory_id=row["memory_id"])
         raise PolicyViolation(rule, details={"rule": rule})
     return False
 
@@ -96,7 +97,7 @@ def _supersede(row: Row, conn: Conn) -> list[str]:
     ids = [i for i in listed if _is_id(i)] if isinstance(listed, list) else []
     out: list[str] = []
     for old in ops.get_memory_items(ids[:_CONFLICTS_MAX], conn=conn):
-        if old["status"] == "active" and old["memory_id"] != row["memory_id"]:
+        if old["status"] == "active":  # the approved item itself is pending, never listed-active
             data = {**old["data"], "superseded_by": row["memory_id"],
                     "expired_reason": "superseded"}  # fmt: skip
             ops.update_memory_item(old["memory_id"], status="expired", data=data, conn=conn)
@@ -152,6 +153,7 @@ class MemoryLifecycle:
         def tx(conn: Conn) -> tuple[Row, list[str]] | None:
             cur = _load(memory_id, conn)
             if _done(cur, "active", "approve.not_pending"):
+                _log.info("memory.review.stale", memory_id=memory_id)  # a concurrent approval won
                 return None
             data = {**cur["data"], "approved_by": user_ref,
                     "approved_at": clock.format_utc(at), "approval_note": clean}  # fmt: skip
@@ -184,6 +186,7 @@ class MemoryLifecycle:
         def tx(conn: Conn) -> Row | None:
             cur = _load(memory_id, conn)
             if _done(cur, "rejected", "reject.not_pending"):
+                _log.info("memory.review.stale", memory_id=memory_id)  # a concurrent rejection won
                 return None
             data = {**cur["data"], "rejected_by": user_ref,
                     "rejected_at": clock.format_utc(at), "rejection_note": clean}  # fmt: skip
@@ -240,15 +243,17 @@ class MemoryLifecycle:
     def record_use(
         self, memory_ids: Sequence[str], run_id: str, *, now: datetime | None = None
     ) -> None:
-        """Count one use of each distinct live id rendered into a prompt (U07-56)."""
+        """Count one use of each distinct live id rendered into a prompt (U07-56).
+
+        `run_id` is part of the fixed signature; U07-56 stores and logs nothing of it."""
+        del run_id
         ok = not isinstance(memory_ids, str) and len(memory_ids) <= _USE_IDS_MAX
         _check(ok and all(_is_id(i) for i in memory_ids), "memory_ids")
         if ids := list(dict.fromkeys(memory_ids)):
             at = clock.format_utc(now or clock.now())
-            n = core.run_write(
+            core.run_write(
                 lambda conn: ops.touch_memory_items(ids, now=at, conn=conn), op="memory_record_use"
             )
-            _log.debug("memory.item.used", run_id=run_id, count=n)
 
     def _redact(self, text: str) -> str:
         found = self._redactor.redact(text)
