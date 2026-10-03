@@ -500,6 +500,10 @@ ignore_imports = [
     # impl 08 U08-94 / R-12: SqliteResilienceBackend.insert_metric_samples delegates to the
     # single metric_sample writer; metrics imports only core, so the graph stays acyclic.
     "herness.store.ops.resilience -> herness.store.ops.metrics",
+    # impl 08 U08-98 / T08-23: bind_core_backends constructs SqliteJobsBackend; jobs imports
+    # only core and its own private sibling and mixins, never resilience, so the graph stays
+    # acyclic.
+    "herness.store.ops.resilience -> herness.store.ops.jobs",
     # impl 08 U08-96 / T08-11: SqliteJobsBackend inherits WorkerSqlMixin; worker imports only
     # core, so the graph stays acyclic.
     "herness.store.ops.jobs -> herness.store.ops.worker",
@@ -544,7 +548,51 @@ forbidden_modules = [
     "herness.core.jobs",
     "herness.store",
     "herness.model",
+    # T08-23 (UT08-103): the rest of Herness outside herness.core.types / herness.core.errors
+    "herness.core.audit",
+    "herness.core.config",
+    "herness.core.egress",
+    "herness.core.redact",
+    "herness.core.registry",
+    "herness.core.secrets",
+    "herness.core.settings",
+    "herness.core.resilience._state",
+    "herness.core.resilience.ports",
+    "herness.core.resilience.policies",
+    "herness.core.resilience.classify",
+    "herness.core.resilience.events",
+    "herness.core.resilience.metrics",
+    "herness.core.resilience.breaker",
+    "herness.core.resilience.retry",
+    "herness.core.resilience.faults",
+    "herness.core.resilience.chain",
+    "herness.connectors",
+    "herness.enrich",
+    "herness.metrics",
+    "herness.harness",
 ]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "types-jobs-light"
+type = "forbidden"
+# impl 08 §2 / UT08-103 (R-01): herness.core.types.jobs imports only pydantic, stdlib,
+# herness.core.errors, herness.core.ids and herness.core.types.harness. The rest of Herness
+# is closed by "core base is closed"; this adds the base modules and the sibling type
+# submodules (the third-party part is the UT08-103 AST check).
+source_modules = ["herness.core.types.jobs"]
+forbidden_modules = [
+    "herness.core.logging",
+    "herness.core._log_pipeline",
+    "herness.core.time",
+    "herness.core.numbers",
+    "herness.core.types.decisions",
+    "herness.core.types.memory",
+    "herness.core.types.reports",
+    "herness.core.types.swarm",
+    "herness.core.types._ownership",
+]
+# direct imports only: herness.core.ids itself reaches herness.core.time (core base order)
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]

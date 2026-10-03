@@ -1,5 +1,5 @@
 """Fixtures for the impl 08 resilience unit tests: a loaded config, a test redactor,
-`ops_db` (a migrated ops store bound as the resilience backend), `recording_tracer`,
+`ops_db` (a migrated ops store bound by `bind_core_backends`), `recording_tracer`,
 `fake_chain_registry` and `fake_gpu_state` (a `GpuStateReader`, not the §11 `fake_gpu`)."""
 
 from collections.abc import Iterator
@@ -15,10 +15,10 @@ from tests.support.ops_store import OpsStoreHandle
 from herness.core import config as c
 from herness.core import redact as r
 from herness.core.redact_directory import NameDirectory
-from herness.core.resilience import ProcessState, bind_ops_backend
+from herness.core.resilience import ProcessState
 from herness.core.settings import RedactionConfig
 from herness.core.types import GpuClass, ServiceName
-from herness.store.ops.resilience import SqliteResilienceBackend
+from herness.store.ops import bind_core_backends
 
 
 @pytest.fixture
@@ -40,10 +40,9 @@ def test_redactor(monkeypatch: pytest.MonkeyPatch) -> r.Redactor:
 
 @pytest.fixture
 def ops_db(ops_store: OpsStoreHandle, reset_process_state: ProcessState) -> OpsStoreHandle:
-    """A fresh migrated ops store bound as the resilience backend (the `ops_db` of §11;
-    `bind_core_backends`, U08-98, is a later card, so the backend is bound directly)."""
+    """A fresh migrated ops store bound with `bind_core_backends` (the `ops_db` of §11, U08-98)."""
     del reset_process_state
-    bind_ops_backend(SqliteResilienceBackend())
+    bind_core_backends()
     return ops_store
 
 

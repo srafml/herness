@@ -10,6 +10,8 @@ cached for 5 s (worker row and service health in `WorkerGpuState`, breaker rows 
 
 from __future__ import annotations
 
+import sys
+import types
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Final
 
@@ -150,3 +152,13 @@ def chat_next_live_at(now: datetime) -> datetime | None:
         if _live_capable(window):
             return window.start_at
     return None
+
+
+class _CallableModule(types.ModuleType):
+    """The package attribute `chat_policy` is this module (U08-75's function shares the name)."""
+
+    def __call__(self, now: datetime) -> ChatMode:
+        return chat_policy(now)
+
+
+sys.modules[__name__].__class__ = _CallableModule

@@ -14,7 +14,49 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[3]
 _CORE_STORE = "herness.core must not import herness.store or herness.harness"
 _SETTINGS = "resilience-settings-light"
+_TYPES_JOBS = "types-jobs-light"
 _HTTPX_CLIENTS = {"Client", "AsyncClient", "HTTPTransport", "AsyncHTTPTransport"}
+_CORE_BASE = {
+    "herness.core.logging",
+    "herness.core._log_pipeline",
+    "herness.core.time",
+    "herness.core.numbers",
+}
+# R-03: everything in Herness except herness.core.types and herness.core.errors.
+_SETTINGS_FORBIDDEN = _CORE_BASE | {
+    "herness.core.ids",
+    "herness.core.audit",
+    "herness.core.config",
+    "herness.core.egress",
+    "herness.core.redact",
+    "herness.core.registry",
+    "herness.core.secrets",
+    "herness.core.settings",
+    "herness.core.jobs",
+    "herness.core.resilience._state",
+    "herness.core.resilience.ports",
+    "herness.core.resilience.policies",
+    "herness.core.resilience.classify",
+    "herness.core.resilience.events",
+    "herness.core.resilience.metrics",
+    "herness.core.resilience.breaker",
+    "herness.core.resilience.retry",
+    "herness.core.resilience.faults",
+    "herness.core.resilience.chain",
+    "herness.store",
+    "herness.model",
+    "herness.connectors",
+    "herness.enrich",
+    "herness.metrics",
+    "herness.harness",
+}
+_TYPES_JOBS_FORBIDDEN = _CORE_BASE | {
+    "herness.core.types.decisions",
+    "herness.core.types.memory",
+    "herness.core.types.reports",
+    "herness.core.types.swarm",
+    "herness.core.types._ownership",
+}
 
 
 def _contracts() -> dict[str, dict[str, Any]]:
@@ -49,6 +91,26 @@ def test_ut08_103_contracts_declared() -> None:
         assert module in settings["forbidden_modules"]
     closed = contracts["core base is closed"]["forbidden_modules"]
     assert {"herness.core.resilience", "herness.core.jobs"} <= set(closed)
+
+
+def test_ut08_103_settings_contract_allows_only_types_and_errors() -> None:
+    """UT08-103 R-03: resilience settings may import no other Herness module than types/errors."""
+    settings = _contracts()[_SETTINGS]
+    assert settings["type"] == "forbidden"
+    assert set(settings["forbidden_modules"]) >= _SETTINGS_FORBIDDEN
+    assert "herness.core.types" not in settings["forbidden_modules"]
+    assert "herness.core.errors" not in settings["forbidden_modules"]
+
+
+def test_ut08_103_types_jobs_contract_declared() -> None:
+    """UT08-103 herness.core.types.jobs: an import-linter contract keeps it to errors, ids and
+    types.harness among Herness modules (the third-party part is the AST test below)."""
+    contract = _contracts()[_TYPES_JOBS]
+    assert contract["type"] == "forbidden"
+    assert contract["source_modules"] == ["herness.core.types.jobs"]
+    assert set(contract["forbidden_modules"]) >= _TYPES_JOBS_FORBIDDEN
+    allowed = {"herness.core.errors", "herness.core.ids", "herness.core.types.harness"}
+    assert not allowed & set(contract["forbidden_modules"])
 
 
 def test_ut08_103_lint_imports_passes(monkeypatch: pytest.MonkeyPatch) -> None:
