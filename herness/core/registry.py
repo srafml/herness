@@ -40,6 +40,7 @@ _BUILTINS: dict[tuple[RegistryKind, str], str] = {
     ("connector", "mongodb"): "herness.connectors.mongodb:MongoConnector",
     ("connector", "snowflake"): "herness.connectors.snowflake:SnowflakeConnector",
     ("connector", "monitoring"): "herness.connectors.monitoring.base:MonitoringConnector",
+    ("connector", "jira"): "herness.connectors.jira:JiraConnector",
 }
 _entry_points_loaded = False
 

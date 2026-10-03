@@ -23,10 +23,12 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
+from herness.connectors.jira import JIRA_ISSUE_COLUMNS
 from herness.connectors.monitoring.base import EVENT_COLUMNS, METRIC_COLUMNS
 from herness.connectors.rows import to_snake
 from herness.connectors.settings import (
     DataverseSettings,
+    JiraSettings,
     MongoSettings,
     MonitoringSettings,
     ServiceNowSettings,
@@ -52,8 +54,7 @@ STAGING_FILES: Final[Mapping[str, str]] = {
     "dataverse": "170_stg_dataverse.sql",
 }
 # files: headers are only known from the files themselves (U01-56 step 6).
-# T01-17: jira needs JIRA_ISSUE_COLUMNS (U01-71), not in the tree yet; skipped until then.
-_SKIPPED: Final = frozenset({"files", "jira"})
+_SKIPPED: Final = frozenset({"files"})
 _SERVICENOW_ALWAYS: Final = ("sys_id", "sys_updated_on", "sys_class_name")
 # The virtual column of ``read_parquet(..., filename = true)`` is never a source field.
 _VIRTUAL: Final = frozenset({"filename"})
@@ -90,7 +91,8 @@ def check_mapping(
     section = cfg.sources.source(source)
     if source in _SKIPPED:
         return []
-    fetched = {entity: _fetched(section, entity) for entity in section.entities}
+    custom = _jira_custom(cfg) if isinstance(section, JiraSettings) else frozenset()
+    fetched = {entity: _fetched(section, entity) | custom for entity in section.entities}
     name = STAGING_FILES[source]
     required = _required(source, name, _render(source, name, cfg, fetched, sql_dir))
     issues = [
@@ -118,7 +120,14 @@ def _fetched(section: SourceSettings, entity: str) -> frozenset[str]:
         names = (*d.select, d.key_field, d.updated_field, *(c + "_display" for c in d.select))
     elif isinstance(section, MonitoringSettings):  # fixed lake columns (U01-80)
         names = EVENT_COLUMNS if entity == "event" else METRIC_COLUMNS
+    elif isinstance(section, JiraSettings):  # the raw column contract (U01-71, U01-93)
+        names = JIRA_ISSUE_COLUMNS
     return frozenset(names)
+
+
+def _jira_custom(cfg: HernessConfig) -> frozenset[str]:
+    """The configured Jira custom field ids, fetched as columns of their own name."""
+    return frozenset(v for v in cfg.mappings.custom_fields.jira.model_dump().values() if v)
 
 
 def _render(

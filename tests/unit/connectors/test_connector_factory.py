@@ -23,6 +23,7 @@ from tests.support.sync_env import write_sync_config
 from herness.connectors.base import Connector, SupportsKeyListing, SupportsToolStreams
 from herness.connectors.factory import build_connector
 from herness.connectors.files import FilesConnector
+from herness.connectors.jira import JiraConnector
 from herness.connectors.mongodb import MongoConnector
 from herness.connectors.monitoring.base import MonitoringConnector
 from herness.connectors.snowflake import SnowflakeConnector
@@ -313,6 +314,34 @@ def test_ut01_94_snowflake_resolves_through_the_builtin_table(
     assert conn._clock is _fixed
     assert conn._conn is None
     assert conn.entities == ("cost_center",)
+
+
+_JIRA_ROW = ("connector", "jira")
+
+
+def test_ut01_94_jira_resolves_through_the_builtin_table(
+    cfg: c.HernessConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-94 the shipped `_BUILTINS` row resolves the real `JiraConnector` (T01-17), which
+    satisfies `Connector` and `SupportsKeyListing`; `build_connector("jira", cfg)` passes the
+    mapped custom field ids and the clock, and makes no network call or secret lookup (the
+    HTTP fetcher is built on first use)."""
+    row = _shipped_builtins()[_JIRA_ROW]
+    assert row == "herness.connectors.jira:JiraConnector"
+    registry.reset_registry()
+    monkeypatch.setitem(registry._BUILTINS, _JIRA_ROW, row)
+    assert registry.get("connector", "jira") is JiraConnector
+    with respx.mock(assert_all_called=False) as mock:
+        conn = build_connector("jira", cfg, clock=_fixed)
+    assert not mock.calls
+    assert isinstance(conn, JiraConnector)
+    assert isinstance(conn, SupportsKeyListing)
+    assert _conforms(conn) is conn
+    assert conn._custom == ("customfield_10016", "customfield_10014")
+    assert conn._settings is cfg.sources.source("jira")
+    assert conn._clock is _fixed
+    assert conn._http is None
+    assert (conn.entities, conn.watermark_field("issue")) == (("issue",), "updated")
 
 
 _MONITORING_ROW = ("connector", "monitoring")
