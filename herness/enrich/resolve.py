@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib import resources
 from itertools import groupby
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 import duckdb
 import pyarrow as pa
@@ -40,6 +40,9 @@ from herness.enrich.labels import LabelStore, sync_label_checks
 from herness.enrich.questions import PAIR_QUESTIONS, question_fingerprint
 from herness.enrich.review_items import create_if_absent, iter_review_items, open_label_counts
 from herness.enrich.settings import DecidersSettings, DecisionsConfig
+
+if TYPE_CHECKING:
+    from herness.enrich.pipeline import StageReport as _Report
 
 __all__ = [
     "QueueItem", "decision_wide_sql", "escalation_queue", "resolve_frame", "run_resolve",
@@ -97,16 +100,6 @@ SELECT entity, count(*) FILTER (WHERE status = 'final'),
     count(*) FILTER (WHERE status <> 'out_of_scope')
 FROM enrich_resolved GROUP BY entity ORDER BY entity
 """
-
-
-class _Report(Protocol):
-    """Counters the stage mutates.
-
-    T03-xx pipeline: retype to StageReport (U03-142, herness.enrich.pipeline).
-    """
-
-    decided: int
-    escalated: int
 
 
 @dataclass(frozen=True, slots=True)

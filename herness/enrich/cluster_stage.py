@@ -15,7 +15,7 @@ import dataclasses
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 import duckdb
 import numpy as np
@@ -44,6 +44,9 @@ from herness.enrich.embed_stage import FILTER_MAX, lance_filter_in
 from herness.enrich.layout import EnrichPaths
 from herness.enrich.settings import ClusteringSettings
 from herness.store.vectors import VectorStore
+
+if TYPE_CHECKING:
+    from herness.enrich.pipeline import StageReport as _Report
 
 __all__ = [
     "ALGORITHM_BASE",
@@ -112,12 +115,6 @@ _FINAL_SQL: Final = f"""UPDATE enrich.cluster AS c SET label = v.label,
     WHERE c.cluster_id = v.cluster_id"""  # noqa: S608 - fixed names
 
 _log = get_logger("enrich.cluster")
-
-
-class _Report(Protocol):
-    """Counters the stage mutates. T03-28: retype to StageReport (U03-142)."""
-
-    rows: int
 
 
 class _Config(Protocol):  # `DecisionsConfig` satisfies it

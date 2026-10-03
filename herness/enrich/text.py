@@ -15,7 +15,7 @@ import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 import duckdb
 import pyarrow as pa
@@ -24,6 +24,9 @@ from herness.core import redact
 from herness.core import time as clock
 from herness.core.errors import SchemaViolation
 from herness.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from herness.enrich.pipeline import StageReport as _Report
 
 __all__ = ["build_text_redacted", "compose_text", "content_hash", "normalize_text", "pair_text"]
 
@@ -36,17 +39,6 @@ _FIRST_PRINTABLE: Final = 0x20
 _SCHEMA_ERRORS: Final = (duckdb.CatalogException, duckdb.BinderException)
 
 _log = get_logger("enrich.text")
-
-
-class _Report(Protocol):
-    """Counters the stage mutates.
-
-    T03-xx pipeline: retype to StageReport (U03-142, herness.enrich.pipeline).
-    """
-
-    rows: int
-    cache_hits: int
-    failed: int
 
 
 @dataclass(frozen=True)

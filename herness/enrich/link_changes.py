@@ -14,7 +14,7 @@ import re
 from collections.abc import Iterator
 from datetime import datetime
 from importlib import resources
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 import duckdb
 import numpy as np
@@ -32,6 +32,9 @@ from herness.enrich.layout import EnrichPaths
 from herness.enrich.questions import question_fingerprint
 from herness.enrich.settings import DecisionsConfig
 from herness.enrich.text import content_hash, pair_text
+
+if TYPE_CHECKING:
+    from herness.enrich.pipeline import StageReport as _Report
 
 __all__ = ["heuristic_link_score", "link_candidates", "pair_inputs", "run_link_stage"]
 
@@ -54,16 +57,6 @@ _DECIDED_SCHEMA: Final = pa.schema(
 _SCHEMA_ERRORS: Final = (duckdb.CatalogException, duckdb.BinderException)
 
 _log = get_logger("enrich.link")
-
-
-class _Report(Protocol):
-    """Counters the stage mutates.
-
-    T03-xx pipeline: retype to StageReport (U03-142, herness.enrich.pipeline).
-    """
-
-    rows: int
-    decided: int
 
 
 # --- U03-107 -----------------------------------------------------------------------------------

@@ -119,6 +119,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design spec's module t
 | `herness/enrich/distill.py` | `distill` job | `DistillReport`, `run_distill`, `make_distill_handler`, `accept_model`, `rollback_model` (re-exported from `laya_admin`) | L3 | — | 390 |
 | `herness/enrich/laya_admin.py` | Human promotion, rollback, status | `accept_model`, `rollback_model`, `laya_status` | L3 | — | 220 |
 | `herness/enrich/pipeline.py` | `run_enrichment`, stage order, report | `StageName`, `StageReport`, `EnrichReport`, `run_enrichment`, `YieldRequested` (re-export of U03-152) | L3 | `duckdb` | 390 |
+| `herness/enrich/_pipeline_stages.py` | Private sibling of `pipeline` (T03-28 spec note): the F03-01 step bodies other than the reasoning phase and ensemble pooling — `prepare` (steps 1-2: config and decider-ref check, question set, fingerprint registry, dynamic options, cache/label migration on a question-set change, Laya state, primaries, versions, escalation deciders), and stages `text`, `embed`, `decide-primary`, link candidates and `decide-escalate` (OpenJev start/stop, deep band member), `cluster` (too few in-window vectors → degraded `too_few_vectors`), `link`, `suggest`, `resolve` (with `finalize_clusters` and cache compaction) — split off for the 390-line budget of `pipeline.py`, which holds the types, the run state, the stage wrapper, the GPU scopes and steps 9-10; imported only by `pipeline` | none (private) | L3 | `duckdb`, `numpy` | 390 |
 | `herness/enrich/purge.py` | Privacy deletion step | `purge_record` | L3 | `lancedb`, `pyarrow` | 260 |
 | `herness/enrich/health.py` | Component health for `herness doctor` | `health` | L3 | — | 100 |
 
@@ -2918,6 +2919,16 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Complexity and limits | nightly < 20 min per 10k changed records (BT03-10) |
 | Security notes | — |
 | Tests | UT03-139, IT03-01, FT03-01, FT03-04, FT03-06 |
+
+Spec notes (T03-28):
+
+- Module split: `pipeline.py` holds the types, the run state (`Run`), the stage wrapper, the GPU scopes and steps 9-10; the other step bodies live in the private sibling `_pipeline_stages.py` (§2 row). `LlmFactory` (the alias of U03-136) is defined in `pipeline.py` and is public there.
+- Execution order: `STAGE_ORDER` is the identifier and report order (U03-141). The F03-01 steps run `cluster` (step 8) and `reasoning` (step 9) before the pooling of `ensemble` (step 10); the OpenJev band member of `ensemble` runs inside `decide-escalate` (step 7) while OpenJev is up, the LLM member inside `reasoning`. `stages_done` is stored in `STAGE_ORDER` order.
+- Checkpoint and resume: `ctx.save_state` receives the state the context returned on entry with the key `enrich` = {`build_id`, `stages_done`, `started_at`}. A rerun of the same build skips the done stages except producers whose in-memory results a pending stage needs (`embed` → `suggest`; `decide-escalate` → `reasoning`, `ensemble`; `cluster` → `reasoning`, `resolve`; `reasoning` → `resolve`), and keeps the first attempt's `started_at` as `run_started_at` of U03-83, so rows decided before a crash are spot-check candidates. `text`, `link` and `resolve` empty their tables first (a rerun rebuilds them, §4.1), so `enrich.decision` is never inserted twice.
+- Same-night LLM phase: after the teacher answered, the pipeline runs `resolve_frame` again and defers every record still queued (a teacher-primary question answered below its threshold has only `llm` left in its chain), followed by the deferred pair items; otherwise these answers would reach the LLM only on the next run and an unchanged lake would not reach zero decider calls (IT03-04).
+- Cluster stage with too few in-window incident vectors to fit PCA or k-means (fewer than `max(pca_dims, min_cluster_size, min_samples + 1)`): the stage's `ConfigError` becomes `degraded` with note `too_few_vectors`, `cluster_run = "skipped"`; with more vectors the error propagates. A crash between `mark_final`'s two writes leaves the snapshot final but `CURRENT` on the previous one: the rerun ignores the final snapshot (not `assigned`), runs against the old `CURRENT` (incremental, or full when due) and publishes on `finalize_clusters`; no forced recluster is needed.
+- Reasoning: the nested `gpu_scope("reasoning")` is entered whenever there is LLM work and an LLM decider (an off-network LLM profile is not detected yet); `llm_factory("enrich_decider")` is called in step 2 so that `versions["llm"]` is known to every resolution of the run; `llm_factory("cluster_namer")` only when there are naming candidates.
+- `StageReport.note` matches `^[a-z][a-z0-9_]*$` (≤ 200 chars); degraded notes are also added to `EnrichReport.warnings`.
 
 ### 3.25 Privacy deletion and health (`herness/enrich/purge.py`, `herness/enrich/health.py`)
 

@@ -11,7 +11,7 @@ import functools
 import math
 import re
 from collections.abc import Callable, Iterator, Sequence
-from typing import Final, Literal, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple
 
 import duckdb
 import numpy as np
@@ -29,6 +29,9 @@ from herness.enrich.embed import Encoder, embed_texts
 from herness.enrich.gpu import YieldRequested
 from herness.store.vectors import EMBEDDING_DIM, TICKET_EMBEDDING_SCHEMA, VectorStore
 from herness.store.vectors import _store_error as store_error
+
+if TYPE_CHECKING:
+    from herness.enrich.pipeline import StageReport as _Report
 
 __all__ = ["lance_filter_in", "maintain_index", "run_embed_stage"]
 
@@ -74,14 +77,6 @@ _ORPHAN_SQL: Final = f"""WITH {_CORE}
     ORDER BY 1"""  # noqa: S608 - fixed view name
 
 _log = get_logger("enrich.embed")
-
-
-class _Report(Protocol):
-    """Counters the stage mutates. T03-28: retype to StageReport (U03-142)."""
-
-    embedded: int
-    cache_hits: int
-    rows: int
 
 
 # --- U03-33 --------------------------------------------------------------------------------------
