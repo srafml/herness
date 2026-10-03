@@ -25,9 +25,11 @@ _BUILTIN_TARGET = "tests.support._fixture_registry_target:FixtureBuiltin"
 
 @pytest.fixture(autouse=True)
 def _reset() -> Iterator[None]:
+    saved = dict(reg._BUILTINS)
     reg.reset_registry()
     yield
     reg._BUILTINS.clear()
+    reg._BUILTINS.update(saved)  # restore the shipped rows so later modules see them
     reg.reset_registry()
     reset_logging()
 
