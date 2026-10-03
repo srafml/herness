@@ -1,0 +1,17 @@
+# T05-28 (ET05-01): incidents of the first service by id. Two tool calls.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: list_tables
+          arguments: {schema: core}
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT service_id, count(*) AS incidents FROM core.incident GROUP BY 1 ORDER BY 1"
+            purpose: incidents per service
+    - final:
+        text: "The first service by id has [[n1]] incidents."
+    - final:
+        output:
+          text: "The first service by id has [[n1]] incidents."
+          numbers_from: last_tool_result

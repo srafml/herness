@@ -10,6 +10,11 @@ tiny-st` (bge-m3 is not in the test environment), and a stand-in warehouse whose
 at team grain over 13 weeks on a `metrics_tiny`-schema build with `INCIDENTS` synthetic
 incidents over `TEAMS` teams, `SERVICES` services and two years. Run:
 pytest -m "integration and slow" tests/bench.
+
+Spec targets (impl 05 §10.1): "BT05-06 | `semantic_search` k = 20 | 100 queries on `full`
+vectors, CPU embedding | p95 < 300 ms"; "BT05-07 | `get_metric` | every catalog metric, team
+grain, 13 weeks, on `full` | p95 < 2 s". Method: warm-up calls, then the stated calls measured
+`REPEATS` times; the gate is the median of the per-repeat p95s.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from lancedb.query import LanceVectorQueryBuilder
 from lancedb.table import Table
 from tests.support import tools_standin as sd
 from tests.support import warehouse_read_build as rb
+from tests.support.bench_stats import REPEATS, report
 from tests.support.dispatch_standin import use_test_config
 from tests.support.harness_fakes import FakeOps
 from tests.support.make_tiny_st import TINY_ST
@@ -184,19 +190,22 @@ def test_bt05_06_semantic_search_k20_p95(search_ctx: ToolContext) -> None:
     p95 < 300 ms."""
     tool = wt.SemanticSearch()
     tool(search_ctx, text="warm up query", entity=None, service_id=None, k=K)  # model load
-    seconds: list[float] = []
-    for i in range(QUERIES):
-        entity = "incident" if i % 2 else None
-        start = time.perf_counter()
-        result = tool(
-            search_ctx, text=f"disk {i} full on host {i % 17}", entity=entity, service_id=None, k=K
-        )
-        seconds.append(time.perf_counter() - start)
-        assert result.ok
-        assert result.row_count == K
-    p95 = _p95(seconds)
-    sys.stderr.write(f"BT05-06 semantic_search k={K} p95 {p95 * 1000:.1f} ms over {QUERIES}\n")
-    assert p95 < 0.3, f"semantic_search p95 {p95:.3f} s"
+    p95s: list[float] = []
+    for _ in range(REPEATS):
+        seconds: list[float] = []
+        for i in range(QUERIES):
+            entity = "incident" if i % 2 else None
+            start = time.perf_counter()
+            result = tool(
+                search_ctx, text=f"disk {i} full on host {i % 17}", entity=entity,
+                service_id=None, k=K,
+            )  # fmt: skip
+            seconds.append(time.perf_counter() - start)
+            assert result.ok
+            assert result.row_count == K
+        p95s.append(_p95(seconds) * 1000)
+    p95_ms = report("BT05-06", "p95_semantic_search_k20", p95s, "ms", "< 300 ms")
+    assert p95_ms < 300, f"semantic_search p95 {p95_ms:.1f} ms"
 
 
 # --- BT05-07 get_metric ----------------------------------------------------------------------
@@ -255,10 +264,15 @@ def test_bt05_07_get_metric_team_13_weeks_p95(
     handle = cast("DuckWarehouse", rb.MemoryWarehouse(metrics_con, TINY_BUILD_ID))
     ctx = sd.make_ctx(handle, FakeOps(), limits=SqlLimits(timeout_s=30.0))
     tool = wt.GetMetric()
-    seconds: list[float] = []
     first_monday = datetime.date(2024, 7, 1)
-    try:
-        for name in catalog.names():
+    # "every catalog metric, team grain": the metrics that have the team grain (two shipped
+    # metrics, availability_pct and error_rate, are service/org only and refuse team grain).
+    names = [name for name in catalog.names() if "team" in catalog.get(name).grains]
+    assert len(names) >= len(catalog.names()) - 2
+
+    def one_pass() -> list[float]:
+        seconds: list[float] = []
+        for name in names:
             for i in range(CALLS_PER_METRIC):
                 start = first_monday + datetime.timedelta(weeks=2 * i)
                 args: dict[str, Any] = {
@@ -271,11 +285,17 @@ def test_bt05_07_get_metric_team_13_weeks_p95(
                 seconds.append(time.perf_counter() - began)
                 assert result.ok, result.content
                 assert result.row_count
+        return seconds
+
+    p95s: list[float] = []
+    try:
+        for name in names:  # warm-up: one call per metric, outside the samples
+            warm = tool(ctx, name=name, entity_type="team", entity_ids=None, period="week",
+                        start="2024-04-01", end="2024-07-01", filters=None)  # fmt: skip
+            assert warm.ok, warm.content
+        p95s.extend(_p95(one_pass()) * 1000 for _ in range(REPEATS))
     finally:
         c.reset_config()
-    p95 = _p95(seconds)
-    sys.stderr.write(
-        f"BT05-07 get_metric p95 {p95 * 1000:.1f} ms over {len(seconds)} calls"
-        f" ({len(catalog.names())} metrics)\n"
-    )
-    assert p95 < 2.0, f"get_metric p95 {p95:.3f} s"
+    sys.stderr.write(f"BT05-07 {len(names)} metrics x {CALLS_PER_METRIC} calls per repeat\n")
+    p95_ms = report("BT05-07", "p95_get_metric", p95s, "ms", "< 2000 ms")
+    assert p95_ms < 2000, f"get_metric p95 {p95_ms:.1f} ms"

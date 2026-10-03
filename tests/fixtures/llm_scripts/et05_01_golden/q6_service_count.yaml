@@ -1,0 +1,17 @@
+# T05-28 (ET05-01): number of services with incidents. Two tool calls.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: describe_table
+          arguments: {table: core.incident}
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT count(DISTINCT service_id) AS n_services FROM core.incident"
+            purpose: services with incidents
+    - final:
+        text: "Incidents span [[n1]] services."
+    - final:
+        output:
+          text: "Incidents span [[n1]] services."
+          numbers_from: last_tool_result

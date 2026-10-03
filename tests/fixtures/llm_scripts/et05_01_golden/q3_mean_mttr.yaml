@@ -1,0 +1,17 @@
+# T05-28 (ET05-01): mean time to restore over all incidents. Two tool calls.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: describe_table
+          arguments: {table: core.incident}
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT avg(mttr_hours) AS mttr_hours FROM core.incident"
+            purpose: mean time to restore
+    - final:
+        text: "Mean time to restore is [[n1]] hours."
+    - final:
+        output:
+          text: "Mean time to restore is [[n1]] hours."
+          numbers_from: last_tool_result

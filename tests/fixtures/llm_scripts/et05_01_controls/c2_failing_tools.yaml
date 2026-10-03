@@ -1,0 +1,30 @@
+# T05-28 (ET05-01 negative control): three refused queries (blocked columns) before one that
+# works: one tool call of four succeeds. The check must fail on the tool-call success rate.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT description FROM core.incident"
+            purpose: text one
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT short_description FROM core.incident"
+            purpose: text two
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT close_notes FROM core.incident"
+            purpose: text three
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT count(*) AS incidents FROM core.incident"
+            purpose: total incidents
+    - final:
+        text: "The build holds [[n1]] incidents."
+    - final:
+        output:
+          text: "The build holds [[n1]] incidents."
+          numbers_from: last_tool_result
