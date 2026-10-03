@@ -43,6 +43,14 @@ _BUILTINS: dict[tuple[RegistryKind, str], str] = {
     ("connector", "monitoring"): "herness.connectors.monitoring.base:MonitoringConnector",
     ("connector", "servicenow"): "herness.connectors.servicenow:ServiceNowConnector",
     ("connector", "jira"): "herness.connectors.jira:JiraConnector",
+    ("monitoring_adapter", "prometheus"): (
+        "herness.connectors.monitoring.prometheus:PrometheusAdapter"
+    ),
+    ("monitoring_adapter", "dynatrace"): (
+        "herness.connectors.monitoring.dynatrace:DynatraceAdapter"
+    ),
+    ("monitoring_adapter", "datadog"): "herness.connectors.monitoring.datadog:DatadogAdapter",
+    ("monitoring_adapter", "splunk"): "herness.connectors.monitoring.splunk:SplunkAdapter",
 }
 _entry_points_loaded = False
 
