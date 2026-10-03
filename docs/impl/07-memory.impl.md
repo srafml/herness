@@ -2084,6 +2084,8 @@ Few-shot templates are not fetched from memory (R-27): no role prompt is built f
 
 The design also refreshes the summary "at session end"; no spec defines a session-end signal, so only the every-N-turns trigger is implemented (§13 OI-6).
 
+Spec note (T07-21, U07-94): step 4's request is a structured call so it runs through `complete_validated` (U08-35) like the classification: `response_schema = {summary: string, 1 ≤ length ≤ cfg.chat.summary_max_chars}` (`response_schema_name = "chat_summary"`), `max_repairs = 0`, `temperature = 0` where the client supports sampling parameters, `max_output_tokens = min(400, profile.max_output_tokens)`. The window is the last `2 × summary_every_turns` rows of the U07-93 kind (user, or assistant `done`), each cut to 4,000 characters (LLM10); `PRIOR SUMMARY:` (or `none`) and `MESSAGES:` with `role: content` lines are escaped together and wrapped once by `wrap_untrusted("chat", session_id, …)`. "Every marker" means every double-bracket token (`ANY_MARKER_RE`, valid or malformed). A post-processed summary that is blank is not written (`memory.session.summary_failed`, `reason = "empty"`). `set_chat_summary`'s `through_message_id` is the last row of the window. Step 3 skips capture (no model call) when no assistant row carries `run_id`. Step 1: when the 120 s wait expires, `session_save_turn` logs `memory.session.save_timeout` WARNING and returns `None`; the worker thread is not cancelled. SQLite calls inside the async steps run through `asyncio.to_thread` (ENG §2.5).
+
 #### U07-95 herness.harness.memory.chat.capture_correction
 
 | Field | Content |
@@ -2101,6 +2103,8 @@ The design also refreshes the summary "at session end"; no spec defines a sessio
 | Complexity and limits | ≤ 300 output tokens |
 | Security notes | TH07-22 (provenance check of U07-50 step 6d), TH07-23 (chat-derived → pending). |
 | Tests | UT07-83, IT07-03, ST07-22 |
+
+Spec note (T07-21, `ChatDeps`): the units above name `ChatDeps` without defining it. It is a frozen dataclass in `chat.py`: `cfg: ChatMemoryConfig` (`cfg.memory.chat`), `llms: ChatModels` (the `LLMRegistry` subset `model_for`, `client`, `config`; T05-10), `writer: Proposer` (`MemoryWriter.propose`, T07-08), `redactor: Redactor` (impl 10 `get_redactor()`), `allowed: Sequence[re.Pattern[str]] = ()` (the compiled `reports.allowed_numeral_patterns`, as given to `MemoryWriter`), `tracer: TracerLike | None = None` (receives one `llm_call` per response, with the prompt's content hash as `prompt_hash`). Constructing it reads both chat prompts, so a missing file is a `ConfigError` there (U07-99) until `MemoryStore` builds it (U07-97). Both model calls use the chat client `llms.model_for("chat", "fast")` through `complete_validated(max_repairs=0)` over a private wrapper that applies `asyncio.wait_for(…, profile.timeout_s)` (a timeout counts as a model error), emits `llm_call` and raises `ModelRefused` on a refusal; `RequestMeta.role = model_role = "chat"`, `run_id` of the turn. U07-95: the schema is used verbatim with its bounds as JSON Schema keywords (`effective_date` matches `YYYY-MM-DD`, entity `type`/`id` 1–200 chars, `additionalProperties: false`); an empty `statement` falls back to the message content; `capture_correction` takes an extra keyword `now: datetime | None = None` passed to `propose` (rate-limit window). The ownership of the session by `user_ref` is not re-checked in step 1: `propose` step 6(d) rejects it (`provenance.session`, logged as `memory.correction.rejected`). Logs carry ids, counts, status and rule names only.
 
 ### 3.20 Maintenance job (`maintenance.py`)
 
@@ -2207,6 +2211,8 @@ Returns `int` (memory items removed).
 | Tests | UT07-86 |
 
 Spec note (T07-14): `compaction_notes.md` is loaded through `importlib.resources` (`herness.harness.memory` package data, path `prompts/compaction_notes.md`; the wheel ships the whole package) and cached for the process; its 16-hex SHA-256 is the `llm_call` `prompt_hash`. Until `MemoryStore` exists (U07-97), the missing-file `ConfigError` is raised at `ContextCompactor` construction; UT07-62 covers the file's contract until UT07-86 lands.
+
+Spec note (T07-21): the loader is generalised to `_compactor_llm.memory_prompt(file_name)` (bare file name in `herness/harness/memory/prompts/`, cached per process, returns `(text, 16-hex SHA-256 prefix)`; a missing file or a name with a path separator or a leading dot is a `ConfigError`); `compaction_prompt()` delegates to it, so its `prompt_hash` is unchanged. `chat.py` imports `memory_prompt` and never names the directory, so impl 05 UT05-94 still allows exactly two prompt readers; impl 05 ST05-21 now scans 17 prompt files (14 role + 3 memory). UT07-86 covers all three memory prompts.
 
 ## 4. State and data
 
