@@ -373,6 +373,14 @@ def live(
     c.reset_config()
 
 
+def test_ut01_90_default_http_needs_base_url_and_auth() -> None:
+    """UT01-90 a section without `auth` (bypassing validation) raises ConfigError on first
+    use instead of building a client."""
+    section = settings().model_copy(update={"auth": None})
+    with pytest.raises(ConfigError, match="base_url and auth are required"):
+        DataverseConnector(section).check()
+
+
 def test_ut01_90_default_http_uses_msal_scope_and_bearer(
     live: tuple[MockNet, MsalFactory],
 ) -> None:
