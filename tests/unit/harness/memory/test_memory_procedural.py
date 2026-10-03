@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import string
 import threading
@@ -18,6 +19,7 @@ from tests.unit.harness.memory._procedural_env import (
     BUILD,
     LOW,
     OBJECTIVE,
+    SCHEMA,
     incidents_sql,
     make_deps,
     rows,
@@ -38,7 +40,9 @@ from herness.harness.memory.procedural import (
     validate_templates,
     wilson_lower_bound,
 )
+from herness.harness.memory.settings import ProceduralConfig, PromoteConfig
 from herness.harness.memory.types import MemoryNotFound
+from herness.harness.sql_guard import SqlGuard
 from herness.store.ops import memory as ops
 
 pytestmark = pytest.mark.unit
@@ -267,12 +271,52 @@ def test_ut07_78_template_data_and_provenance(ops_store: OpsStoreHandle, tmp_pat
 
 
 def test_ut07_78_fail_in_recent_blocks_promotion(ops_store: OpsStoreHandle, tmp_path: Path) -> None:
-    """UT07-78 a "fail" among the last 3 results keeps a template candidate."""
-    pe = make_deps(tmp_path, LOW)
-    run_id = run_with([(incidents_sql(), True), (incidents_sql(svc="b"), False)])
-    report = promote_procedural(run_id, deps=pe.deps, now=NOW)
+    """UT07-78 only a "fail" in recent[-3:] blocks; three later passes push it out → active."""
+    cfg = ProceduralConfig(
+        promote=PromoteConfig(min_passes=1, min_runs=2, min_pass_lb=0.1), demote_pass_lb=0.05
+    )
+    pe = make_deps(tmp_path, cfg)
+    passes = [(incidents_sql(svc=f"p{i}"), True) for i in range(5)]
+    assert promote_procedural(run_with(passes), deps=pe.deps, now=NOW).promoted == []
+    report = promote_procedural(run_with([(incidents_sql(svc="f"), False)]), deps=pe.deps, now=NOW)
+    (tpl,) = rows("sql_template")
+    data = tpl["data"]
+    assert (data["passes"], data["fails"], len(set(data["run_ids"]))) == (5, 1, 2)
+    assert tpl["confidence"] >= 0.1  # every other gate passes
+    assert data["recent"] == ["pass", "pass", "fail"]
     assert report.promoted == []
-    assert rows("sql_template")[0]["status"] == "candidate"
+    assert tpl["status"] == "candidate"
+    later = [(incidents_sql(svc=f"q{i}"), True) for i in range(3)]
+    report = promote_procedural(run_with(later), deps=pe.deps, now=NOW)
+    assert report.promoted == [tpl["memory_id"]]
+    assert rows("sql_template")[0]["data"]["recent"] == ["pass"] * 3
+
+
+def test_ut07_78_single_run_cannot_promote_alone(ops_store: OpsStoreHandle, tmp_path: Path) -> None:
+    """UT07-78 9 passes in one run (pass_lb 0.70 ≥ 0.7, passes ≥ 3) stay candidate: min_runs 2."""
+    pe = make_deps(tmp_path)
+    nine = [(incidents_sql(svc=f"s{i}"), True) for i in range(9)]
+    report = promote_procedural(run_with(nine), deps=pe.deps, now=NOW)
+    (tpl,) = rows("sql_template")
+    assert tpl["data"]["passes"] == 9
+    assert tpl["confidence"] >= pe.deps.config.promote.min_pass_lb
+    assert report.promoted == []
+    assert tpl["status"] == "candidate"
+
+
+def test_ut07_78_min_passes_gate(ops_store: OpsStoreHandle, tmp_path: Path) -> None:
+    """UT07-78 4 passes < min_passes 5 (other gates pass) stay candidate; the 5th promotes."""
+    cfg = ProceduralConfig(
+        promote=PromoteConfig(min_passes=5, min_runs=1, min_pass_lb=0.1), demote_pass_lb=0.05
+    )
+    pe = make_deps(tmp_path, cfg)
+    four = [(incidents_sql(svc=f"s{i}"), True) for i in range(4)]
+    assert promote_procedural(run_with(four), deps=pe.deps, now=NOW).promoted == []
+    (tpl,) = rows("sql_template")
+    assert tpl["confidence"] >= 0.1
+    assert tpl["status"] == "candidate"
+    report = promote_procedural(run_with([(incidents_sql(), True)]), deps=pe.deps, now=NOW)
+    assert report.promoted == [tpl["memory_id"]]
 
 
 def test_ut07_78_active_template_expires_on_low_pass_lb(
@@ -428,6 +472,20 @@ def test_ut07_79_success_resets_failures(ops_store: OpsStoreHandle, tmp_path: Pa
     validate_templates(con=_warehouse(), deps=pe.deps, now=NOW)
     validate_templates(con=_warehouse(with_table=False), deps=pe.deps, now=NOW)
     assert rows("sql_template")[0]["status"] == "active"
+
+
+def test_ut07_79_guard_rejection_alone_fails_validation(
+    ops_store: OpsStoreHandle, tmp_path: Path
+) -> None:
+    """UT07-79 SQL that EXPLAINs fine but the guard rejects (blocked column) fails, then expires."""
+    pe = _active_template(tmp_path)
+    assert validate_templates(con=_warehouse(), deps=pe.deps, now=NOW) == (1, 0)
+    strict = SqlGuard(SCHEMA, blocked_columns=("metrics.daily_incidents.incidents",))
+    deps = dataclasses.replace(pe.deps, guard=strict)
+    assert validate_templates(con=_warehouse(), deps=deps, now=NOW) == (0, 0)
+    assert rows("sql_template")[0]["data"]["validation_failures"] == 1
+    assert validate_templates(con=_warehouse(), deps=deps, now=NOW) == (0, 1)
+    assert rows("sql_template")[0]["status"] == "expired"
 
 
 def test_ut07_79_guard_failure_counts(ops_store: OpsStoreHandle, tmp_path: Path) -> None:
