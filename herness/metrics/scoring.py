@@ -2,8 +2,7 @@
 
 `run_scoring` runs the design 04 §3.3 steps on the build pipeline's writable connection, one
 transaction per step, checkpointed through the job context (design 04 §6). Every stored number
-comes from a recorded SELECT (`run_recorded`); Python only renders, orders and copies.
-The check step lives in the private sibling `_scoring_checks` (module budget).
+comes from a recorded SELECT; Python only renders, orders and copies. Check step: `_scoring_checks`.
 """
 
 import datetime
@@ -23,6 +22,7 @@ from herness.metrics.catalog import MetricCatalog, catalog_from_config, validate
 from herness.metrics.context import ScoringReport, StepContext, StepResult
 from herness.metrics.evidence import IntoSpec, run_recorded
 from herness.metrics.facts import FACT_TABLES
+from herness.metrics.portfolio import run_portfolio_step
 from herness.metrics.render import render_metric_query
 from herness.metrics.settings import Period, WeightsConfig
 from herness.metrics.windows import default_window, resolve_as_of
@@ -183,7 +183,7 @@ _STEP_FUNCS: dict[str, StepFn | None] = {
     "funding": None,  # T04-21: run_funding_step (herness.metrics.funding, T04-15)
     "org": None,  # T04-21: run_org_step (herness.metrics.org, T04-17)
     "levers": None,  # T04-21: run_levers_step (herness.metrics.levers, T04-18)
-    "portfolio": None,  # T04-21: run_portfolio_step (herness.metrics.portfolio, T04-20)
+    "portfolio": run_portfolio_step,
     "check": run_check_step,
 }
 

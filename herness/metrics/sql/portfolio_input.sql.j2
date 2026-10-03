@@ -1,0 +1,84 @@
+{#- Optimizer input rows (impl 04 U04-79; design 04 §5.10).
+    One row per score.funding candidate, ordered by candidate_id. A work item takes team_id
+    from core.work_item and the remaining story points of its subtree (NULL when none is
+    non-NULL); a cluster fix takes the owner team of its owning service (the most frequent
+    service of the cluster's non-excluded incidents in the funding window, ties lowest ID;
+    U04-65 step 6) and w_cf_effort_hours / w_hours_per_point points. descendants and blockers
+    are sorted candidate IDs; noncandidate_blockers counts the open blocking work items that
+    are not candidates. Prose lives only in Jinja comments, so no SQL comment is recorded. -#}
+WITH fc AS (
+    SELECT f.candidate_id, f.candidate_type, f.effort_cost_usd, f.priority,
+           CAST(f.addressable_pain_usd * f.confidence * f.strategic_weight AS DECIMAL(18, 2))
+               AS expected_impact_usd
+    FROM score.funding f
+),
+wi AS (
+    SELECT c.candidate_id, w.key, w.team_id
+    FROM fc c
+    JOIN core.work_item w ON w.record_id = c.candidate_id
+    WHERE c.candidate_type <> 'cluster_fix'
+),
+cf_owner AS (
+    SELECT c.candidate_id, f.service_id
+    FROM fc c
+    JOIN metrics.incident_fact f ON 'cluster_fix:' || f.cluster_id = c.candidate_id
+    WHERE c.candidate_type = 'cluster_fix' AND NOT f.excluded AND f.service_id IS NOT NULL
+      AND f.opened_at >= {{ p('as_of_ts') }} - to_days({{ p('s_window_days') }})
+      AND f.opened_at < {{ p('as_of_ts') }}
+    GROUP BY c.candidate_id, f.service_id
+    QUALIFY row_number() OVER (
+        PARTITION BY c.candidate_id ORDER BY count(*) DESC, f.service_id) = 1
+),
+cf AS (
+    SELECT o.candidate_id, ow.team_id
+    FROM cf_owner o
+    {{ owner_team('o.service_id', 'ow') }}
+),
+pts AS (
+    SELECT wc.ancestor_record_id AS k, sum(w.story_points) AS points
+    FROM metrics.work_item_closure wc
+    JOIN core.work_item w ON w.record_id = wc.record_id
+    WHERE w.status_category <> 'done' AND wc.ancestor_record_id IN (SELECT candidate_id FROM wi)
+    GROUP BY wc.ancestor_record_id
+),
+dsc AS (
+    SELECT wc.ancestor_record_id AS k, list_sort(list(wc.record_id)) AS descendants
+    FROM metrics.work_item_closure wc
+    WHERE wc.depth >= 1
+      AND wc.ancestor_record_id IN (SELECT candidate_id FROM wi)
+      AND wc.record_id IN (SELECT candidate_id FROM wi)
+    GROUP BY wc.ancestor_record_id
+),
+blk AS (
+    SELECT b.candidate_id AS k, list_sort(list_distinct(list(a.candidate_id))) AS blockers
+    FROM wi b
+    JOIN core.work_item_link l ON l.link_type = 'blocks' AND l.to_key = b.key
+    JOIN wi a ON a.key = l.from_key
+    GROUP BY b.candidate_id
+),
+nb AS (
+    SELECT b.candidate_id AS k, count(DISTINCT w.record_id) AS n
+    FROM wi b
+    JOIN core.work_item_link l ON l.link_type = 'blocks' AND l.to_key = b.key
+    JOIN core.work_item w ON w.key = l.from_key
+    WHERE w.status_category <> 'done' AND w.record_id NOT IN (SELECT candidate_id FROM fc)
+    GROUP BY b.candidate_id
+)
+SELECT c.candidate_id, c.candidate_type,
+       CASE WHEN c.candidate_type = 'cluster_fix' THEN cf.team_id ELSE wi.team_id END
+           AS team_id,
+       c.effort_cost_usd, c.expected_impact_usd, c.priority,
+       CAST(CASE WHEN c.candidate_type = 'cluster_fix'
+                 THEN {{ p('w_cf_effort_hours') }} / {{ p('w_hours_per_point') }}
+                 ELSE pts.points END AS DOUBLE) AS points,
+       CAST(coalesce(dsc.descendants, []) AS VARCHAR[]) AS descendants,
+       CAST(coalesce(blk.blockers, []) AS VARCHAR[]) AS blockers,
+       CAST(coalesce(nb.n, 0) AS BIGINT) AS noncandidate_blockers
+FROM fc c
+LEFT JOIN wi ON wi.candidate_id = c.candidate_id
+LEFT JOIN cf ON cf.candidate_id = c.candidate_id
+LEFT JOIN pts ON pts.k = c.candidate_id
+LEFT JOIN dsc ON dsc.k = c.candidate_id
+LEFT JOIN blk ON blk.k = c.candidate_id
+LEFT JOIN nb ON nb.k = c.candidate_id
+ORDER BY c.candidate_id
