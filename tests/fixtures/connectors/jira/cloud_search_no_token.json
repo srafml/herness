@@ -1,0 +1,150 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search/jql",
+        "json": {
+          "jql": "updated >= \"2026/09/01 10:00\" AND updated < \"2026/09/02 09:59\" AND (project = SYN) ORDER BY updated ASC, id ASC",
+          "fields": [
+            "issuetype",
+            "parent",
+            "project",
+            "components",
+            "labels",
+            "status",
+            "created",
+            "resolutiondate",
+            "summary",
+            "description",
+            "updated",
+            "issuelinks",
+            "customfield_10016",
+            "customfield_10014"
+          ],
+          "maxResults": 100
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issues": [
+            {
+              "id": "10001",
+              "key": "SYN-1",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 1",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 1"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:06:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 1.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10002",
+              "key": "SYN-2",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 2",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 2"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:07:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 2.0,
+                "customfield_10014": "SYN-0"
+              }
+            }
+          ],
+          "isLast": false
+        }
+      }
+    }
+  ]
+}
