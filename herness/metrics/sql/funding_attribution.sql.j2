@@ -1,0 +1,200 @@
+{#- Funding attribution (impl 04 U04-64; design 04 §5.4, §5.5).
+    Paths from records (incidents, noise events, failed changes) to funding candidates, with a
+    tier, weight `w` and quality `q`; two allocation passes; pass 2 is the stored result.
+    Every runtime value is a p() bind; prose lives only in Jinja comments, so no SQL comment
+    reaches the recorded SQL. No free-form column is selected (TH04-04); the root-cause
+    decision value is only compared with the cluster's root_cause_category, never output.
+    Records are keyed by (record_kind, record_id) so IDs of different kinds never mix. -#}
+{%- macro in_window(ts) -%}
+{{ ts }} >= {{ p('as_of_ts') }} - to_days({{ p('s_window_days') }}) AND {{ ts }} < {{ p('as_of_ts') }}
+{%- endmacro -%}
+{#- Path columns, in this order everywhere: candidate_id, record_id, record_kind, tier, weight,
+    quality. Paths with no positive weight carry no attribution and are dropped. -#}
+{%- macro path(candidate, record, kind, tier, weight, quality) -%}
+SELECT {{ candidate }} AS candidate_id, {{ record }} AS record_id, {{ kind }} AS record_kind, CAST({{ tier }} AS INTEGER) AS tier, CAST({{ weight }} AS DOUBLE) AS weight, CAST({{ quality }} AS DOUBLE) AS quality
+{%- endmacro -%}
+{#- U04-64 step 12, applied to a union of path CTE names:
+    (a) per (record, candidate) the lowest tier, then the highest w (then highest q, lowest
+        candidate, so the pick is deterministic);
+    (b) per record only rows at its minimum tier;
+    (c) leaf-most: drop candidate P of a record when a remaining candidate C of the same
+        record is a candidate descendant of P;
+    (d) share = w / sum(w) per record, pain = share * usd (DOUBLE). -#}
+{%- macro allocate(names) -%}
+(SELECT c.candidate_id, c.record_id, c.record_kind, c.tier, c.weight,
+        c.weight / sum(c.weight) OVER (PARTITION BY c.record_kind, c.record_id) AS share,
+        c.weight / sum(c.weight) OVER (PARTITION BY c.record_kind, c.record_id) * r.usd AS pain,
+        c.quality
+ FROM (
+    SELECT b.*
+    FROM (
+        SELECT a.*, list(a.candidate_id) OVER (PARTITION BY a.record_kind, a.record_id) AS peers
+        FROM (
+            SELECT y.*
+            FROM (
+                SELECT x.*
+                FROM ({% for n in names %}{% if not loop.first %} UNION ALL {% endif %}SELECT * FROM {{ n }}{% endfor %}) x
+                WHERE x.weight > 0
+                QUALIFY row_number() OVER (
+                    PARTITION BY x.record_kind, x.record_id, x.candidate_id
+                    ORDER BY x.tier, x.weight DESC, x.quality DESC, x.candidate_id) = 1
+            ) y
+            QUALIFY y.tier = min(y.tier) OVER (PARTITION BY y.record_kind, y.record_id)
+        ) a
+    ) b
+    WHERE NOT EXISTS (
+        SELECT 1 FROM cand_desc d
+        WHERE d.parent_id = b.candidate_id AND list_contains(b.peers, d.child_id))
+ ) c
+ JOIN rec_cost r ON r.record_kind = c.record_kind AND r.record_id = c.record_id)
+{%- endmacro -%}
+WITH cand AS (
+    SELECT w.record_id AS candidate_id, w.key, w.project, w.components, w.service_id
+    FROM core.work_item w
+    WHERE w.type IN ('initiative', 'epic', 'feature')
+      AND w.status_category IN ('todo', 'in_progress')
+),
+cand_services AS (
+    SELECT s.candidate_id, s.service_id, max(s.confidence) AS confidence
+    FROM (
+        SELECT c.candidate_id, c.service_id, CAST(1.0 AS DOUBLE) AS confidence
+        FROM cand c
+        WHERE c.service_id IS NOT NULL
+        UNION ALL
+        SELECT c.candidate_id, m.service_id, CAST(m.confidence AS DOUBLE)
+        FROM cand c
+        JOIN core.service_map m ON m.jira_project = c.project
+        WHERE m.service_id IS NOT NULL
+          AND (m.jira_component IS NULL
+               OR list_contains(coalesce(c.components, []), m.jira_component))
+    ) s
+    GROUP BY s.candidate_id, s.service_id
+),
+cand_desc AS (
+    SELECT DISTINCT wc.ancestor_record_id AS parent_id, wc.record_id AS child_id
+    FROM metrics.work_item_closure wc
+    WHERE wc.depth >= 1
+      AND wc.record_id IN (SELECT candidate_id FROM cand)
+      AND wc.ancestor_record_id IN (SELECT candidate_id FROM cand)
+),
+inc AS (
+    SELECT f.record_id, f.number, f.service_id, f.cluster_id, f.membership_prob, f.total_usd
+    FROM metrics.incident_fact f
+    WHERE NOT f.excluded AND {{ in_window('f.opened_at') }}
+),
+rec_cost AS (
+    SELECT i.record_id, 'incident' AS record_kind, i.service_id,
+           CAST(i.total_usd AS DOUBLE) AS usd
+    FROM inc i
+    UNION ALL
+    SELECT e.event_id, 'event', e.service_id,
+           {{ p('w_triage_minutes') }} / 60.0 * {{ p('w_engineer_hour') }}
+    FROM core.event e
+    WHERE {{ in_window('e.ts') }}
+      AND list_contains({{ p('d_noise_severities') }}, e.severity)
+      AND e.incident_id IS NULL
+    UNION ALL
+    SELECT cf.record_id, 'change', cf.service_id,
+           {{ p('w_backout_hours') }} * {{ p('w_engineer_hour') }}
+    FROM metrics.change_fact cf
+    JOIN core.change ch ON ch.record_id = cf.record_id
+    WHERE cf.failed
+      AND list_contains({{ p('d_failure_outcomes') }}, ch.outcome)
+      AND {{ in_window('cf.actual_end') }}
+),
+mention AS (
+    SELECT l.from_key AS item_key, l.to_key AS incident_number
+    FROM core.work_item_link l
+    WHERE l.link_type = 'mentions_incident'
+    UNION
+    SELECT l.to_key, l.from_key
+    FROM core.work_item_link l
+    WHERE l.link_type = 'mentions_incident'
+),
+t1 AS (
+    SELECT DISTINCT * FROM (
+        {{ path('wc.candidate_record_id', 'i.record_id', "'incident'", 1, 1.0, 1.0) }}
+        FROM mention mn
+        JOIN inc i ON i.number = mn.incident_number
+        JOIN core.work_item w ON w.key = mn.item_key
+        JOIN metrics.work_item_closure wc
+          ON wc.record_id = w.record_id AND wc.ancestor_record_id = w.record_id
+        WHERE wc.candidate_record_id IS NOT NULL)
+),
+t1_counts AS (
+    SELECT t.candidate_id, i.cluster_id, count(DISTINCT t.record_id) AS n
+    FROM t1 t
+    JOIN inc i ON i.record_id = t.record_id
+    WHERE i.cluster_id IS NOT NULL
+    GROUP BY t.candidate_id, i.cluster_id
+),
+t2c AS (
+    {{ path('tc.candidate_id', 'i.record_id', "'incident'", 2,
+            p('s_cluster_weight') ~ ' * i.membership_prob', 'i.membership_prob') }}
+    FROM t1_counts tc
+    JOIN inc i ON i.cluster_id = tc.cluster_id
+    WHERE tc.n >= {{ p('s_min_direct_links') }}
+),
+rc_dec AS (
+    SELECT d.record_id, d.answer AS category, d.probability
+    FROM enrich.decision d
+    WHERE d.question = 'root_cause'
+      AND d.record_id IN (SELECT candidate_id FROM cand)
+    QUALIFY row_number() OVER (
+        PARTITION BY d.record_id
+        ORDER BY d.decided_at DESC NULLS LAST, d.probability DESC NULLS LAST, d.decider) = 1
+),
+services AS (
+    SELECT cs.candidate_id, list(cs.service_id) AS service_ids
+    FROM cand_services cs
+    GROUP BY cs.candidate_id
+),
+t2r AS (
+    {{ path('dc.record_id', 'i.record_id', "'incident'", 2,
+            p('s_root_cause_weight') ~ ' * i.membership_prob * dc.probability',
+            'i.membership_prob * dc.probability') }}
+    FROM inc i
+    JOIN enrich.cluster cl ON cl.cluster_id = i.cluster_id
+    JOIN rc_dec dc ON dc.category = cl.root_cause_category
+    JOIN services sv ON sv.candidate_id = dc.record_id
+    WHERE list_has_any(cl.service_ids, sv.service_ids)
+),
+t3 AS (
+    {{ path('cs.candidate_id', 'r.record_id', 'r.record_kind', 3,
+            p('s_service_weight') ~ ' * cs.confidence', '0.5 * cs.confidence') }}
+    FROM rec_cost r
+    JOIN cand_services cs ON cs.service_id = r.service_id
+),
+pass1 AS {{ allocate(['t1', 't2c', 't2r', 't3']) }},
+cf_linked AS (
+    SELECT i.cluster_id, sum(a.pain) AS linked
+    FROM pass1 a
+    JOIN inc i ON i.record_id = a.record_id
+    WHERE a.record_kind = 'incident' AND a.tier <= 2
+    GROUP BY i.cluster_id
+),
+cf AS (
+    SELECT i.cluster_id, count(*) AS n, CAST(sum(i.total_usd) AS DOUBLE) AS pain
+    FROM inc i
+    WHERE i.cluster_id IS NOT NULL
+    GROUP BY i.cluster_id
+),
+cf_qualified AS (
+    SELECT c.cluster_id
+    FROM cf c
+    LEFT JOIN cf_linked k ON k.cluster_id = c.cluster_id
+    WHERE c.n >= {{ p('w_cf_min_incidents') }}
+      AND c.pain * 365 / {{ observed_days() }} >= {{ p('w_cf_min_pain') }}
+      AND (CASE WHEN c.pain = 0 THEN 0 ELSE coalesce(k.linked, 0) / c.pain END)
+          < {{ p('w_cf_max_linked_share') }}
+),
+t2f AS (
+    {{ path("'cluster_fix:' || i.cluster_id", 'i.record_id', "'incident'", 2,
+            p('s_cluster_weight') ~ ' * i.membership_prob', 'i.membership_prob') }}
+    FROM inc i
+    JOIN cf_qualified q ON q.cluster_id = i.cluster_id
+),
+pass2 AS {{ allocate(['t1', 't2c', 't2r', 't2f', 't3']) }}
+SELECT a.candidate_id, a.record_id, a.record_kind, a.tier, a.weight, a.share,
+       CAST(a.pain AS DECIMAL(18, 2)) AS pain_usd, a.quality
+FROM pass2 a
