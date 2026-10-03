@@ -9,11 +9,11 @@ from typing import Any
 
 import pytest
 import yaml
-from tests.support.sync_env import init_sync_config
+from tests.support.sync_env import init_sync_config, write_sync_config
 from tests.unit.connectors._settings_data import files, jira, monitoring, servicenow
 
 from herness.connectors.mapping_check import STAGING_FILES, MappingIssue, check_mapping
-from herness.core.config import HernessConfig
+from herness.core.config import HernessConfig, init_config
 from herness.core.errors import ConfigError
 
 pytestmark = pytest.mark.unit
@@ -80,10 +80,36 @@ def test_ut01_58_unqualified_column_counts_only_with_one_source(tmp_path: Path) 
 
 
 def test_ut01_58_skipped_sources_return_empty(tmp_path: Path) -> None:
-    """UT01-58 files and jira (T01-17) are skipped: `[]`."""
-    cfg = _cfg(tmp_path, jira=jira(), monitoring=monitoring(), files=files())
-    for source in ("files", "jira"):
-        assert check_mapping(source, cfg) == []
+    """UT01-58 files is skipped (headers are only known from the files): `[]`."""
+    cfg = _cfg(tmp_path, monitoring=monitoring(), files=files())
+    assert check_mapping("files", cfg) == []
+
+
+_JIRA_MAPPINGS = """version: 1
+custom_fields:
+  jira: {story_points: customfield_10016, team: customfield_10001}
+"""
+
+
+def test_ut01_58_jira_checked_against_raw_column_contract(tmp_path: Path) -> None:
+    """UT01-58 jira (T01-17) is checked against `JIRA_ISSUE_COLUMNS` plus the configured
+    custom field ids: the shipped 120_stg_jira.sql reads only fetched columns, so `[]`; a
+    column outside them, or an unconfigured custom field, is an issue."""
+    sources = yaml.safe_dump({"version": 1, "sources": {"jira": jira()}})
+    cfg_dir = write_sync_config(tmp_path / "root", sources, _JIRA_MAPPINGS)
+    cfg = init_config("local", config_dir=cfg_dir, env={})
+    assert check_mapping("jira", cfg) == []
+    name = STAGING_FILES["jira"]
+    glob = "{{ lake.get('jira', 'issue').glob | sqlstr }}"
+    sql_dir = tmp_path / "jira_sql"
+    sql_dir.mkdir()
+    cols = "j.key, j.changelog, j.remotelinks, j.customfield_10016, j.customfield_10001"
+    text = f"SELECT {cols}, j.priority, j.customfield_10099 FROM read_parquet({glob}) AS j;"  # noqa: S608 - fixture
+    (sql_dir / name).write_text(text, encoding="utf-8")
+    assert check_mapping("jira", cfg, sql_dir=sql_dir) == [
+        MappingIssue("issue", "customfield_10099", name),
+        MappingIssue("issue", "priority", name),
+    ]
 
 
 def test_ut01_58_monitoring_fetches_every_staged_column(tmp_path: Path) -> None:

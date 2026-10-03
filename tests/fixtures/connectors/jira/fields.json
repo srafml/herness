@@ -1,0 +1,92 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/field"
+      },
+      "response": {
+        "status": 200,
+        "json": [
+          {
+            "id": "summary",
+            "name": "Summary",
+            "custom": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "customfield_10016",
+            "name": "Story Points",
+            "custom": true,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "customfield_10026",
+            "name": "Story point estimate",
+            "custom": true,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "customfield_10001",
+            "name": "Team",
+            "custom": true,
+            "schema": {
+              "type": "team"
+            }
+          },
+          {
+            "id": "customfield_10014",
+            "name": "Epic Link",
+            "custom": true,
+            "schema": {
+              "type": "any"
+            }
+          },
+          {
+            "id": "customfield_10100",
+            "name": "Estimated cost USD",
+            "custom": true,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "customfield_10101",
+            "name": "Budget",
+            "custom": true,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "customfield_10102",
+            "name": "Budget owner",
+            "custom": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "customfield_10103",
+            "name": "Cost center",
+            "custom": false,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "customfield_10104",
+            "name": "Sprint",
+            "custom": true
+          }
+        ]
+      }
+    }
+  ]
+}

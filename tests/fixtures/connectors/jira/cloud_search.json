@@ -1,0 +1,2314 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search/jql",
+        "json": {
+          "jql": "updated >= \"2026/09/01 10:00\" AND updated < \"2026/09/02 09:59\" AND (project = SYN) ORDER BY updated ASC, id ASC",
+          "fields": [
+            "issuetype",
+            "parent",
+            "project",
+            "components",
+            "labels",
+            "status",
+            "created",
+            "resolutiondate",
+            "summary",
+            "description",
+            "updated",
+            "issuelinks",
+            "customfield_10016",
+            "customfield_10014"
+          ],
+          "maxResults": 100
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issues": [
+            {
+              "id": "10001",
+              "key": "SYN-1",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 1",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 1"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:06:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 1.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10002",
+              "key": "SYN-2",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 2",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 2"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:07:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 2.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10003",
+              "key": "SYN-3",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 3",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 3"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:08:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 3.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10004",
+              "key": "SYN-4",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 4",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 4"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:09:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 4.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10005",
+              "key": "SYN-5",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 5",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 5"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:10:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 5.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10006",
+              "key": "SYN-6",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 6",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 6"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:11:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 6.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10007",
+              "key": "SYN-7",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 7",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 7"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:12:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 7.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10008",
+              "key": "SYN-8",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 8",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 8"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:13:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 0.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10009",
+              "key": "SYN-9",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 9",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 9"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:14:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 1.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10010",
+              "key": "SYN-10",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 10",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 10"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:15:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 2.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10011",
+              "key": "SYN-11",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 11",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 11"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:16:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 3.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10012",
+              "key": "SYN-12",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 12",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 12"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:17:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 4.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10013",
+              "key": "SYN-13",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 13",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 13"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:18:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 5.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10014",
+              "key": "SYN-14",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 14",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 14"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:19:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 6.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10015",
+              "key": "SYN-15",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 15",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 15"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:20:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 7.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10016",
+              "key": "SYN-16",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 16",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 16"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:21:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 0.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10017",
+              "key": "SYN-17",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 17",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 17"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:22:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 1.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10018",
+              "key": "SYN-18",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 18",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 18"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:23:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 2.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10019",
+              "key": "SYN-19",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 19",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 19"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:24:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 3.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10020",
+              "key": "SYN-20",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 20",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 20"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:25:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 4.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10021",
+              "key": "SYN-21",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 21",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 21"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:26:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 5.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10022",
+              "key": "SYN-22",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 22",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 22"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:27:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 6.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10023",
+              "key": "SYN-23",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 23",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 23"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:28:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 7.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10024",
+              "key": "SYN-24",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 24",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 24"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:29:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 0.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10025",
+              "key": "SYN-25",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 25",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 25"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:30:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 1.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10026",
+              "key": "SYN-26",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 26",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 26"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:31:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 2.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10027",
+              "key": "SYN-27",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 27",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 27"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:32:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 3.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10028",
+              "key": "SYN-28",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 28",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 28"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:33:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 4.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10029",
+              "key": "SYN-29",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 29",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 29"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:34:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 5.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10030",
+              "key": "SYN-30",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 30",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 30"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:35:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 6.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10031",
+              "key": "SYN-31",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 31",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 31"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:36:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 7.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10032",
+              "key": "SYN-32",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 32",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 32"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:37:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 0.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10033",
+              "key": "SYN-33",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 33",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 33"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:38:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 1.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10034",
+              "key": "SYN-34",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 34",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 34"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:39:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 2.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10035",
+              "key": "SYN-35",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 35",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 35"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:40:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 3.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10036",
+              "key": "SYN-36",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 36",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 36"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:41:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 4.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10037",
+              "key": "SYN-37",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 37",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 37"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:42:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 5.0,
+                "customfield_10014": "SYN-0"
+              }
+            }
+          ],
+          "nextPageToken": "synthetic-next-page-token-1",
+          "isLast": false
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search/jql",
+        "json": {
+          "jql": "updated >= \"2026/09/01 10:00\" AND updated < \"2026/09/02 09:59\" AND (project = SYN) ORDER BY updated ASC, id ASC",
+          "fields": [
+            "issuetype",
+            "parent",
+            "project",
+            "components",
+            "labels",
+            "status",
+            "created",
+            "resolutiondate",
+            "summary",
+            "description",
+            "updated",
+            "issuelinks",
+            "customfield_10016",
+            "customfield_10014"
+          ],
+          "maxResults": 100,
+          "nextPageToken": "synthetic-next-page-token-1"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issues": [
+            {
+              "id": "10038",
+              "key": "SYN-38",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 38",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 38"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:43:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 6.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10039",
+              "key": "SYN-39",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 39",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 39"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:44:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 7.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10040",
+              "key": "SYN-40",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 40",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 40"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:45:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 0.0,
+                "customfield_10014": "SYN-0"
+              }
+            }
+          ],
+          "isLast": true
+        }
+      }
+    }
+  ]
+}
