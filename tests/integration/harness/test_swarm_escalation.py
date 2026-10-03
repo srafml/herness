@@ -23,8 +23,10 @@ from tests.unit.harness._blackboard_env import BUILD_ID, FakeWarehouse
 from herness.core.config import HernessConfig, get_config
 from herness.core.errors import PolicyViolation, SchemaViolation
 from herness.core.jobs import queue
+from herness.core.jobs.outcomes import finish_job
 from herness.core.jobs.ports import bind_jobs_backend
-from herness.core.types import EntityScope
+from herness.core.resilience import bind_ops_backend
+from herness.core.types import EntityScope, JobOutcome
 from herness.harness.blackboard import Blackboard
 from herness.harness.findings import EntityCatalog
 from herness.harness.swarm import escalation
@@ -44,12 +46,14 @@ from herness.store.ops import (
     upsert_assistant_placeholder,
 )
 from herness.store.ops.jobs import SqliteJobsBackend
+from herness.store.ops.resilience import SqliteResilienceBackend
 
 pytestmark = pytest.mark.integration
 
 test_redactor = env_mod.test_redactor  # fixture
 NOW = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
 USER_REF = "0" * 32
+OWNER = "h:1:cli"
 QUESTION = "Why did incidents rise for team Falcon?"
 
 
@@ -57,6 +61,7 @@ QUESTION = "Why did incidents rise for team Falcon?"
 def store(ops_store: OpsStoreHandle, test_redactor: object) -> HernessConfig:
     del ops_store, test_redactor
     bind_jobs_backend(SqliteJobsBackend())
+    bind_ops_backend(SqliteResilienceBackend())  # finish_job records resilience events
     return get_config()
 
 
@@ -283,6 +288,33 @@ def test_it06_33_escalate_creates_run_and_one_job(
     assert len(events) == 1
     assert events[0]["log_level"] == "info"
     assert QUESTION not in repr(events)
+
+
+@pytest.mark.usefixtures("promoted")
+def test_it06_33_escalate_retry_after_finished_job(
+    bb: Blackboard, store: HernessConfig, chat: tuple[str, str]
+) -> None:
+    """IT06-33 a retry after the review job finished returns the stored run and job.
+
+    The idem key dedups only queued or running jobs, so only the lookup by escalation source
+    keeps a finished escalation from being enqueued again.
+    """
+    session_id, message_id = chat
+    run_id, job_id = _escalate(bb, store, session_id, message_id)
+    row = queue.claim(owner=OWNER, allowed_classes=["reasoning"], job_id=job_id)
+    assert row is not None
+    finished = finish_job(
+        row, OWNER, JobOutcome(status="done", result={}), attempt_started_at=NOW, stop_reason=None
+    )
+    assert finished == "done"
+    assert queue.get(job_id).status == "done"
+    with structlog.testing.capture_logs() as logs:
+        assert _escalate(bb, store, session_id, message_id) == (run_id, job_id)
+    key = f"escalate:{session_id}:{message_id}"
+    rows = read_all("SELECT job_id FROM job WHERE kind = 'review' AND idem_key = ?", (key,))
+    assert [r["job_id"] for r in rows] == [job_id]
+    assert len(read_all("SELECT run_id FROM run", ())) == 1
+    assert [e for e in logs if e["event"] == "harness.chat.escalated"] == []
 
 
 @pytest.mark.usefixtures("promoted")
