@@ -12,6 +12,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -59,11 +60,13 @@ class WorkerEnv:
         gpu_class: GpuClass = "none",
         priority: int | None = None,
         max_attempts: int | None = None,
+        scheduled_for: datetime | None = None,
     ) -> str:
-        """Enqueue one fake job; every call has its own payload (no dedupe)."""
+        """Enqueue one fake job; every call has its own payload (no dedupe). `scheduled_for`
+        defaults to now (`clock.now()` at submit)."""
         self._n += 1
         payload: dict[str, Any] = {"mode": mode, "n": self._n}
-        return enqueue(kind, payload, gpu_class, priority, max_attempts=max_attempts)
+        return enqueue(kind, payload, gpu_class, priority, scheduled_for, max_attempts=max_attempts)
 
     def configure(self, **jobs: Any) -> None:
         """Change `resilience.jobs` timings in the config tree and bootstrap again."""

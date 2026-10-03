@@ -41,12 +41,17 @@ def gpu_env(
     return worker_env
 
 
+# A fixed past weekday, not "today": the tests do not depend on the wall-clock time of day.
+CHAT_DAY = dt.date(2026, 6, 17)
+
+
 def _chat_noon() -> dt.datetime:
-    """Today 12:00 in the business time zone: inside the `chat` window."""
+    """12:00 on `CHAT_DAY` in the business time zone: inside the `chat` window. It lies in the
+    past, so jobs scheduled for it are also due for a claim made on the real clock."""
     tz = clock.zone(get_config().weights.business_timezone)
-    local = dt.datetime.combine(clock.now().astimezone(tz).date(), dt.time(12), tzinfo=tz)
-    at = local.astimezone(dt.UTC)
+    at = dt.datetime.combine(CHAT_DAY, dt.time(12), tzinfo=tz).astimezone(dt.UTC)
     assert window_at(at).spec.name == "chat"
+    assert at < clock.now()
     return at
 
 
@@ -66,13 +71,13 @@ def test_it08_13_chat_window_claims_chat_and_high_priority_only(gpu_env: WorkerE
     """IT08-13 chat window; queued `review` priority 40 and 75 and `chat` priority 75: the
     arbiter swaps to `reasoning`, the chat job and the priority-75 review are claimed and
     done, and the priority-40 review stays queued."""
-    low = gpu_env.enqueue(kind="review", gpu_class="reasoning", priority=40)
-    high = gpu_env.enqueue(kind="review", gpu_class="reasoning", priority=75)
-    chat = gpu_env.enqueue(kind="chat", gpu_class="reasoning", priority=75)
+    noon = _chat_noon()  # the jobs are due at the tick instant, whatever the real time of day
+    low = gpu_env.enqueue(kind="review", gpu_class="reasoning", priority=40, scheduled_for=noon)
+    high = gpu_env.enqueue(kind="review", gpu_class="reasoning", priority=75, scheduled_for=noon)
+    chat = gpu_env.enqueue(kind="chat", gpu_class="reasoning", priority=75, scheduled_for=noon)
     sup = gpu_env.supervisor(gpu_classes=("reasoning", "decider", "large"), concurrency=0)
     assert sup.start() is None
     assert sup.gpu is not None
-    noon = _chat_noon()
     _drive_at(
         sup, noon, lambda: gpu_env.job(chat).status == "done" and gpu_env.job(high).status == "done"
     )
@@ -85,7 +90,7 @@ def test_it08_13_chat_window_claims_chat_and_high_priority_only(gpu_env: WorkerE
     assert gpu_env.job(low).status == "queued"
     assert gpu_env.job(low).attempts == 0
     counts = require_jobs_backend().claimable_counts(
-        now=clock.now(),
+        now=noon,
         classes=["reasoning"],
         exclusive_kinds=[],
         min_priority=70,
