@@ -94,8 +94,8 @@ def _bootstrap(config_dir: Path, db_path: Path, prompts_dir: Path) -> None:
     r._State.redactor = r.Redactor(
         RedactionConfig(directory_file=None), bytes(range(32)), directory
     )
-    ws.redact_text = wb.fake_redact  # type: ignore[assignment] # the stand-in's stub redactor
-    rec.redact_text = wb.fake_redact  # type: ignore[assignment]
+    setattr(ws, "redact_text", wb.fake_redact)  # noqa: B010 - the stand-in stub redactor
+    setattr(rec, "redact_text", wb.fake_redact)  # noqa: B010 - as in wb.patch_redaction
     base._prompts_root = lambda: prompts_dir
     wt.register_warehouse_tools()
 

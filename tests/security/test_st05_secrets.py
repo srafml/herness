@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -31,9 +31,10 @@ from tests.support.fake_llm import respx_router
 from tests.support.harness_fakes import FakeOps
 
 from herness.core import config as c
-from herness.core import egress, egress_clients, secrets
+from herness.core import egress, secrets
 from herness.core import redact as r
 from herness.core.errors import AuthError, ConfigError, HernessError, ModelUnavailable
+from herness.core.logging import configure_logging, get_logger, reset_logging
 from herness.core.redact_directory import NameDirectory
 from herness.core.settings import RedactionConfig
 from herness.core.types import LLMRequest, Message, RequestMeta, TextPart
@@ -189,42 +190,125 @@ def test_st05_15_anthropic_key_only_in_x_api_key_header(
     _absent(repr(logs), "log events")
 
 
-def _echo(status: int) -> Any:
-    """A model server that echoes the presented key in its error body."""
+def _echo(status: int, header: str) -> Any:
+    """A model server that echoes the presented key (request header `header`) in its body."""
 
     def handle(request: httpx2.Request) -> httpx2.Response:
-        presented = request.headers.get("authorization", "")
-        body = {"error": {"message": f"key rejected: {presented}", "type": "auth"}}
+        presented = request.headers.get(header, "")
+        body = {"type": "error", "error": {"message": f"key rejected: {presented}", "type": "auth"}}
         return httpx2.Response(status, json=body, request=request)
 
     return handle
 
 
-@pytest.mark.parametrize(
-    ("status", "error"),
-    [(401, AuthError), (403, AuthError), (400, ConfigError), (500, ModelUnavailable)],
-)
+def _serve_echo(monkeypatch: pytest.MonkeyPatch, status: int, header: str) -> None:
+    """Every `httpx2` pool transport built from now on answers with the echoing server (the
+    loopback and egress-guard transports above it stay real)."""
+    transport = httpx2.MockTransport(_echo(status, header))
+    monkeypatch.setattr(httpx2, "AsyncHTTPTransport", lambda *_a, **_kw: transport)
+
+
+def _anthropic_cfg() -> ClientConfig:
+    clients = yaml.safe_load((ROOT / "config" / "models.yaml").read_text(encoding="utf-8"))
+    return ClientConfig.model_validate(
+        {"name": "claude-opus", **clients["models"]["clients"]["claude-opus"]}
+    )
+
+
+def _assert_clean_error(err: HernessError, provider: str, status: int, logs: object) -> None:
+    for text in (str(err), repr(err), repr(err.args), json.dumps(err.context, default=str)):
+        _absent(text, f"{provider} exception {status}")
+    _absent(repr(logs), "log events")
+    cause = type(err.__cause__).__name__
+    assert err.message == f"{provider} call failed: {cause} HTTP {status}"
+
+
+_STATUSES = [(401, AuthError), (403, AuthError), (400, ConfigError), (500, ModelUnavailable)]
+
+
+@pytest.mark.parametrize(("status", "error"), _STATUSES)
 def test_st05_15_error_echoing_key_is_dropped_from_exception(
     keys: MemoryKeyring,
     monkeypatch: pytest.MonkeyPatch,
     status: int,
     error: type[HernessError],
 ) -> None:
-    """ST05-15 a model server answering an error whose body echoes the presented key: the
-    translated exception's message, repr, args and context hold no key; nothing logged does."""
+    """ST05-15 an OpenAI-compatible server answering an error whose body echoes the presented
+    key: the translated exception's message, repr, args and context hold no key; nothing
+    logged does."""
     del keys
-    monkeypatch.setattr(
-        egress_clients.httpx2,
-        "AsyncHTTPTransport",
-        lambda **_kw: httpx2.MockTransport(_echo(status)),
-    )
+    _serve_echo(monkeypatch, status, "authorization")
     with capture_logs() as logs, pytest.raises(error) as info:
         asyncio.run(OpenAICompatClient(_local_30b()).acomplete(_request("local-30b")))
-    err = info.value
-    for text in (str(err), repr(err), repr(err.args), json.dumps(err.context, default=str)):
-        _absent(text, f"exception {status}")
-    _absent(repr(logs), "log events")
-    assert err.message == f"openai call failed: {type(err.__cause__).__name__} HTTP {status}"
+    _assert_clean_error(info.value, "openai", status, logs)
+
+
+@pytest.mark.parametrize(("status", "error"), _STATUSES)
+def test_st05_15_anthropic_error_echoing_key_is_dropped_from_exception(
+    hybrid: None,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    error: type[HernessError],
+) -> None:
+    """ST05-15 the Anthropic API (through the real egress guard) answering an error whose body
+    echoes `x-api-key`: the translated exception's message, repr, args and context hold no
+    key; nothing logged does."""
+    del hybrid
+    _serve_echo(monkeypatch, status, "x-api-key")
+    with capture_logs() as logs, pytest.raises(error) as info:
+        asyncio.run(AnthropicClient(_anthropic_cfg()).acomplete(_request("claude-opus")))
+    _assert_clean_error(info.value, "anthropic", status, logs)
+
+
+def _logged_exception(
+    capsys: pytest.CaptureFixture[str], call: Callable[[], object], error: type[HernessError]
+) -> str:
+    """Run `call`, log its translated error with `log.exception` through the real pipeline
+    (configured now, after `capsys` started, with the secret scrubber); the captured output."""
+    configure_logging("INFO", scrubber=secrets.scrub_secrets)
+    try:
+        with pytest.raises(error) as info:
+            call()
+        try:
+            raise info.value
+        except HernessError:
+            get_logger("st05_15").exception("st05_15.call_failed", client="probe")
+    finally:
+        out = "".join(capsys.readouterr())
+        reset_logging()
+    return out
+
+
+def test_st05_15_logged_exception_chain_has_no_key(
+    keys: MemoryKeyring, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ST05-15 `log.exception` of a translated OpenAI-compatible error whose cause echoes the
+    key, through the real logging pipeline: the event and the rendered cause chain are logged
+    (positive control), the key is not."""
+    del keys
+    _serve_echo(monkeypatch, 401, "authorization")
+    adapter = OpenAICompatClient(_local_30b())
+    out = _logged_exception(
+        capsys, lambda: asyncio.run(adapter.acomplete(_request("local-30b"))), AuthError
+    )
+    assert '"event":"st05_15.call_failed"' in out
+    assert "key rejected" in out  # the SDK cause and its body were rendered
+    _absent(out, "logged exception")
+
+
+def test_st05_15_anthropic_logged_exception_chain_has_no_key(
+    hybrid: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ST05-15 the same for the Anthropic adapter (cause echoing `x-api-key`)."""
+    del hybrid
+    _serve_echo(monkeypatch, 401, "x-api-key")
+    adapter = AnthropicClient(_anthropic_cfg())
+    out = _logged_exception(
+        capsys, lambda: asyncio.run(adapter.acomplete(_request("claude-opus"))), AuthError
+    )
+    assert '"event":"st05_15.call_failed"' in out
+    assert "key rejected" in out
+    _absent(out, "logged exception")
 
 
 def test_st05_15_resolved_key_is_a_secret_str(keys: MemoryKeyring) -> None:

@@ -16,7 +16,7 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from tests.support import loop_standin as ls
@@ -31,7 +31,7 @@ from herness.core import redact as r
 from herness.core.redact_directory import NameDirectory
 from herness.core.resilience import ModelChain, ProcessState, bind_ops_backend
 from herness.core.settings import RedactionConfig
-from herness.core.types import AgentResult
+from herness.core.types import AgentResult, ServiceName
 from herness.eval.scripted import load_scripts
 from herness.harness import hooks as h
 from herness.harness import loop
@@ -81,10 +81,10 @@ class _Registry:
 
 
 class _Gpu:
-    def loaded_class(self) -> str:
+    def loaded_class(self) -> Literal["reasoning"]:
         return "reasoning"
 
-    def service_healthy(self, name: str) -> bool:
+    def service_healthy(self, name: ServiceName) -> bool:
         del name
         return True
 

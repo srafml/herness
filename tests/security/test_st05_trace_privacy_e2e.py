@@ -32,7 +32,7 @@ from tests.support.harness_fakes import FakeOps
 from herness.core import config as c
 from herness.core import redact as r
 from herness.core import secrets
-from herness.core.logging import configure_logging, reset_logging
+from herness.core.logging import configure_logging, get_logger, reset_logging
 from herness.core.redact_directory import NameDirectory
 from herness.core.settings import RedactionConfig
 from herness.core.types import LLMResponse, ReasoningPart, ToolContext, ToolResult, Usage
@@ -67,7 +67,6 @@ def run_env(
     fake_keyring.store[("herness", "vllm.api_key")] = PLANTED
     c.reset_config()
     c.init_config("local", config_dir=write_full_config(tmp_path), env={})
-    configure_logging("INFO", scrubber=secrets.scrub_secrets)
     secrets.resolve("secret:vllm.api_key")  # the secret joins known_values
     directory = NameDirectory.from_files(None, (NAME,), None)
     redactor = r.Redactor(RedactionConfig(directory_file=None), bytes(range(32)), directory)
@@ -114,7 +113,9 @@ def test_st05_14_scripted_run_sentinels_absent_from_trace_and_logs(
 ) -> None:
     """ST05-14 end-to-end scripted run with sentinel email, name and secret in ticket text and
     memory, payload rate 1.0: the model saw them, yet they are absent from the trace file and
-    from the logs above DEBUG, and the trace has no `opaque` key."""
+    from the logs above DEBUG, and the trace has no `opaque` key. Logging is configured here,
+    after `capsys` started, so its handler writes into the captured stderr."""
+    configure_logging("INFO", scrubber=secrets.scrub_secrets)
     tracer = Tracer.for_run(RUN_ID, build_id=rb.BUILD_ID, run_kind="eval")
     view = tracer.bind(task_id="task_1", role="analyst_general")
     assert view.is_sampled("task_1")  # eval rate 1.0: every payload is written
@@ -148,6 +149,9 @@ def test_st05_14_scripted_run_sentinels_absent_from_trace_and_logs(
     for sentinel in SENTINELS:
         assert sentinel not in text
     assert '"opaque"' not in text
+    get_logger("st05_14").info("st05_14.control", note="positive control")
     logs = "".join(capsys.readouterr())
+    assert '"event":"core.logging.configured"' in logs  # the capture sees the pipeline
+    assert '"event":"st05_14.control"' in logs
     for sentinel in SENTINELS:
         assert sentinel not in logs
