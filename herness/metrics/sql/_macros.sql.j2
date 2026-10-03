@@ -136,3 +136,11 @@ coalesce({{ rs.alias(name) }}.to_category, CASE WHEN {{ rs.alias(item_alias) }}.
 {%- macro lkp(keys, vals, key_expr, default_expr) -%}
 coalesce(list_extract({{ vals }}, list_position({{ keys }}, {{ key_expr }})), {{ default_expr }})
 {%- endmacro -%}
+
+{#- BEGIN observed_days (U04-35; T04-14 + T04-16 shared) -#}
+{#- Days of incident history: design 04 §5.5 with s_window_days in place of 365 (impl 04 §3.9),
+    one scalar subquery over the non-excluded metrics.incident_fact rows. -#}
+{%- macro observed_days() -%}
+(SELECT greatest(1, least({{ p('s_window_days') }}, date_diff('day', CAST(min(odf.opened_at) AT TIME ZONE {{ p('tz') }} AS DATE), {{ p('as_of') }}))) FROM metrics.incident_fact odf WHERE NOT odf.excluded)
+{%- endmacro -%}
+{#- END observed_days -#}

@@ -549,11 +549,24 @@ def test_st04_04_shipped_templates_select_no_text_column() -> None:
     facts = ROOT / "herness" / "model" / "sql" / "400_facts.sql"
     assert facts.is_file()
     templates.append(facts)
+    assert set(_INPUT_ONLY) <= {p.name for p in templates}
     for path in templates:
+        sql = path.read_text(encoding="utf-8")
+        for allowed in _INPUT_ONLY.get(path.name, ()):
+            assert sql.count(allowed) == 1, (path, allowed)
+            sql = sql.replace(allowed, "")
         # Only the text-column rule applies here: macros, checks and the facts stage carry
         # `;`, `--` or `/*` legitimately (they are not catalog templates).
-        problems = checks.raw_sql_problems(path.read_text(encoding="utf-8"))
+        problems = checks.raw_sql_problems(sql)
         assert [p for p in problems if p.startswith("sql uses text column")] == [], path
+
+
+# U04-64 step 10 compares the root-cause decision category with the cluster's
+# root_cause_category; that one exact expression is input-only (renamed, never output: the
+# score.funding_attribution columns are pinned by UT04-75), so the raw scan skips it.
+_INPUT_ONLY: dict[str, tuple[str, ...]] = {
+    "funding_attribution.sql.j2": ("d.answer AS category",),
+}
 
 
 # --- UT04-117 SCORE_UNITS ---------------------------------------------------------------------
