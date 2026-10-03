@@ -324,3 +324,27 @@ def test_it02_32_promoted_build_resume_rules(env: Env) -> None:
     assert support.resolve_build(None, state, env.layout, now, FULL)[0] == build
     new_id, done = support.resolve_build(None, state, env.layout, now, ["build", "enrich"])
     assert (new_id != build, done) == (True, [])
+
+
+def test_it02_32_promoted_build_older_than_current_not_resumed(ops_store: OpsStoreHandle) -> None:
+    """IT02-32 (fix round 2, review M5) a `promoted` build older than `CURRENT` is never
+    resumed for promotion (that would move `CURRENT` back to older data): a payload
+    `build_id` is ConfigError, a saved state starts a new build. A promoted build not older
+    than `CURRENT`, or with an invalid `CURRENT`, still resumes (the I1 recovery)."""
+    layout = DataLayout.from_root(ops_store.data_root)
+    older, current, newer = build_id(1), build_id(2), build_id(3)
+    for build in (older, current, newer):
+        make_build(layout, build, "promoted")
+    write_current(current, layout=layout)
+    now = clock.now()
+    with pytest.raises(ConfigError, match=f"^build {older} is promoted$"):
+        support.resolve_build(older, {}, layout, now, ["promote"])
+    state = {"build_id": older, "stages_done": ["build", "enrich", "score", "dq"]}
+    new_id, done = support.resolve_build(None, state, layout, now, FULL)
+    assert (new_id not in (older, current, newer), done) == (True, [])
+    for build in (current, newer):
+        assert support.resolve_build(build, {}, layout, now, ["promote"]) == (build, [])
+        resumed = {**state, "build_id": build}
+        assert support.resolve_build(None, resumed, layout, now, FULL)[0] == build
+    (layout.warehouse / "CURRENT").write_text("not-a-build-id\n", encoding="ascii")
+    assert support.resolve_build(older, {}, layout, now, ["promote"]) == (older, [])
