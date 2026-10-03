@@ -196,7 +196,7 @@ def _build[R](
         for row in rows:
             source_key, updated_at, payload, fields = item(tool, row)
             batch = batcher.add(source_key, updated_at, payload, fields)
-    except (_RowError, SchemaViolation, AttributeError):
+    except (_RowError, SchemaViolation, AttributeError, OverflowError):  # 9999-12-31 + 1 day
         raise _violation(tool) from None
     return cast("pa.RecordBatch", batch)  # the last add fills the buffer and flushes
 
@@ -220,7 +220,8 @@ def metric_batch(
 
 
 def _same(batch: pa.RecordBatch, column: str, value: str) -> bool:
-    return bool(pc.all(pc.equal(batch.column(column), value)).as_py() is not False)
+    col = batch.column(column)  # a null never matches: null metadata is rejected
+    return col.null_count == 0 and bool(pc.all(pc.equal(col, value)).as_py())
 
 
 def _checked(tool: str, entity: str, batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:

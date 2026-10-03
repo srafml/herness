@@ -199,6 +199,13 @@ def test_ut01_79_metric_batch_violations(tool: str, rows: list[Any]) -> None:
         metric_batch(tool, rows, fetched_at=FETCHED)
 
 
+def test_ut01_79_metric_date_overflow_is_schema_violation() -> None:
+    """UT01-79 date 9999-12-31 (day end past datetime.max) raises SchemaViolation, not
+    OverflowError."""
+    with pytest.raises(SchemaViolation, match=r"^monitoring row$"):
+        metric_batch("datadog", [metric_row(datetime.date(9999, 12, 31))], fetched_at=FETCHED)
+
+
 def test_ut01_79_metric_batch_too_many_rows() -> None:
     """UT01-79 more than `batch_rows` metric rows raise SchemaViolation."""
     rows = [metric_row(DAY - datetime.timedelta(days=i)) for i in range(3)]

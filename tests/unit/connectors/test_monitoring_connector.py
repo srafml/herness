@@ -203,6 +203,23 @@ def test_ut01_79_adapter_rows_must_carry_their_tool(batch: pa.RecordBatch) -> No
         list(conn.sync_tool("prometheus", "event", SINCE, NOW))
 
 
+def _nulled(column: str, mask: list[bool]) -> pa.RecordBatch:
+    good = event_batch("prometheus", [event_row("a"), event_row("b")], fetched_at=FETCHED)
+    i = good.schema.get_field_index(column)
+    values = [None if m else v for m, v in zip(mask, good.column(i).to_pylist(), strict=True)]
+    return good.set_column(i, pa.field(column, pa.string()), pa.array(values, pa.string()))
+
+
+@pytest.mark.parametrize("column", ["_source", "_entity", "source_tool"])
+@pytest.mark.parametrize("mask", [[True, True], [False, True]], ids=["all_null", "part_null"])
+def test_ut01_79_null_metadata_rejected(column: str, mask: list[bool]) -> None:
+    """UT01-79 an adapter batch whose `_source`, `_entity` or `source_tool` column is all or
+    partly null raises SchemaViolation (a null never matches the expected value)."""
+    conn = _conn(_Rogue("prometheus", _nulled(column, mask)))
+    with pytest.raises(SchemaViolation, match=r"^monitoring row$"):
+        list(conn.sync_tool("prometheus", "event", SINCE, NOW))
+
+
 def test_ut01_79_metric_batch_for_event_entity_rejected() -> None:
     """UT01-79 a metric batch returned for the `event` entity is rejected."""
     prom = FakeAdapter("prometheus")
