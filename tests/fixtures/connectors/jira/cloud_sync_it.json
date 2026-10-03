@@ -1,0 +1,618 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search/jql",
+        "json": {
+          "jql": "updated >= \"2026/09/01 10:00\" AND updated < \"2026/09/02 09:59\" AND (project = SYN) ORDER BY updated ASC, id ASC",
+          "fields": [
+            "issuetype",
+            "parent",
+            "project",
+            "components",
+            "labels",
+            "status",
+            "created",
+            "resolutiondate",
+            "summary",
+            "description",
+            "updated",
+            "issuelinks",
+            "customfield_10016",
+            "customfield_10060",
+            "customfield_10050"
+          ],
+          "maxResults": 100
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issues": [
+            {
+              "id": "10001",
+              "key": "SYN-1",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 1",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 1"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:06:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 1.0,
+                "customfield_10050": 1000.0,
+                "customfield_10060": "Synthetic Team"
+              }
+            },
+            {
+              "id": "10002",
+              "key": "SYN-2",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 2",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 2"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:07:00.000+0000",
+                "issuelinks": [
+                  {
+                    "id": "30001",
+                    "type": {
+                      "name": "Blocks"
+                    },
+                    "outwardIssue": {
+                      "key": "SYN-1"
+                    }
+                  }
+                ],
+                "customfield_10016": 2.0,
+                "customfield_10050": 2000.0,
+                "customfield_10060": "Synthetic Team"
+              }
+            },
+            {
+              "id": "10003",
+              "key": "SYN-3",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 3",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 3"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:08:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 3.0,
+                "customfield_10050": 3000.0,
+                "customfield_10060": "Synthetic Team"
+              }
+            }
+          ],
+          "nextPageToken": "synthetic-next-page-token-1",
+          "isLast": false
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/changelog/bulkfetch",
+        "json": {
+          "issueIdsOrKeys": [
+            "10001",
+            "10002",
+            "10003"
+          ],
+          "maxResults": 1000
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issueChangeLogs": [
+            {
+              "issueId": "10001",
+              "changeHistories": [
+                {
+                  "id": "10001001",
+                  "author": {
+                    "accountId": "synthetic-account-1",
+                    "displayName": "Synthetic Person"
+                  },
+                  "created": "2026-08-01T10:01:00.000+0000",
+                  "items": [
+                    {
+                      "field": "status",
+                      "fieldtype": "jira",
+                      "from": "2",
+                      "fromString": "In Progress",
+                      "to": "3",
+                      "toString": "In Review"
+                    }
+                  ]
+                },
+                {
+                  "id": "10001002",
+                  "author": {
+                    "accountId": "synthetic-account-2",
+                    "displayName": "Synthetic Person"
+                  },
+                  "created": "2026-08-01T10:02:00.000+0000",
+                  "items": [
+                    {
+                      "field": "status",
+                      "fieldtype": "jira",
+                      "from": "3",
+                      "fromString": "In Review",
+                      "to": "4",
+                      "toString": "Done"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "issueId": "10002",
+              "changeHistories": [
+                {
+                  "id": "10002000",
+                  "author": {
+                    "accountId": "synthetic-account-0",
+                    "displayName": "Synthetic Person"
+                  },
+                  "created": "2026-08-01T10:00:00.000+0000",
+                  "items": [
+                    {
+                      "field": "status",
+                      "fieldtype": "jira",
+                      "from": "1",
+                      "fromString": "To Do",
+                      "to": "2",
+                      "toString": "In Progress"
+                    }
+                  ]
+                },
+                {
+                  "id": "10002001",
+                  "author": {
+                    "accountId": "synthetic-account-1",
+                    "displayName": "Synthetic Person"
+                  },
+                  "created": "2026-08-01T10:01:00.000+0000",
+                  "items": [
+                    {
+                      "field": "status",
+                      "fieldtype": "jira",
+                      "from": "2",
+                      "fromString": "In Progress",
+                      "to": "3",
+                      "toString": "In Review"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "nextPageToken": "synthetic-changelog-token-1"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/changelog/bulkfetch",
+        "json": {
+          "issueIdsOrKeys": [
+            "10001",
+            "10002",
+            "10003"
+          ],
+          "maxResults": 1000,
+          "nextPageToken": "synthetic-changelog-token-1"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issueChangeLogs": [
+            {
+              "issueId": "10001",
+              "changeHistories": [
+                {
+                  "id": "10001000",
+                  "author": {
+                    "accountId": "synthetic-account-0",
+                    "displayName": "Synthetic Person"
+                  },
+                  "created": "2026-08-01T10:00:00.000+0000",
+                  "items": [
+                    {
+                      "field": "status",
+                      "fieldtype": "jira",
+                      "from": "1",
+                      "fromString": "To Do",
+                      "to": "2",
+                      "toString": "In Progress"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "issueId": "10003",
+              "changeHistories": [
+                {
+                  "id": "10003000",
+                  "author": {
+                    "accountId": "synthetic-account-0",
+                    "displayName": "Synthetic Person"
+                  },
+                  "created": "2026-08-01T10:00:00.000+0000",
+                  "items": [
+                    {
+                      "field": "labels",
+                      "fieldtype": "jira",
+                      "from": null,
+                      "fromString": null,
+                      "to": null,
+                      "toString": "synthetic 0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/issue/10001/remotelink"
+      },
+      "response": {
+        "status": 200,
+        "json": [
+          {
+            "id": 20010,
+            "self": "https://jira.example.test/rest/api/3/issue/SYN-1/remotelink",
+            "application": {
+              "type": "com.example.desk",
+              "name": "Synthetic desk"
+            },
+            "relationship": "mentioned in",
+            "object": {
+              "url": "https://servicedesk.example.test/incident?number=INC0012350",
+              "title": "INC0012350 synthetic outage",
+              "icon": {
+                "title": "Synthetic desk"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/issue/10002/remotelink"
+      },
+      "response": {
+        "status": 200,
+        "json": []
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/issue/10003/remotelink"
+      },
+      "response": {
+        "status": 200,
+        "json": [
+          {
+            "id": 20030,
+            "self": "https://jira.example.test/rest/api/3/issue/SYN-3/remotelink",
+            "application": {
+              "type": "com.example.desk",
+              "name": "Synthetic desk"
+            },
+            "relationship": "mentioned in",
+            "object": {
+              "url": "https://servicedesk.example.test/incident?number=INC0012370",
+              "title": "INC0012370 synthetic outage",
+              "icon": {
+                "title": "Synthetic desk"
+              }
+            }
+          },
+          {
+            "id": 20031,
+            "self": "https://jira.example.test/rest/api/3/issue/SYN-3/remotelink",
+            "application": {
+              "type": "com.example.desk",
+              "name": "Synthetic desk"
+            },
+            "relationship": "mentioned in",
+            "object": {
+              "url": "https://servicedesk.example.test/incident?number=INC0012371",
+              "title": "INC0012371 synthetic outage",
+              "icon": {
+                "title": "Synthetic desk"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search/jql",
+        "json": {
+          "jql": "updated >= \"2026/09/01 10:00\" AND updated < \"2026/09/02 09:59\" AND (project = SYN) ORDER BY updated ASC, id ASC",
+          "fields": [
+            "issuetype",
+            "parent",
+            "project",
+            "components",
+            "labels",
+            "status",
+            "created",
+            "resolutiondate",
+            "summary",
+            "description",
+            "updated",
+            "issuelinks",
+            "customfield_10016",
+            "customfield_10060",
+            "customfield_10050"
+          ],
+          "maxResults": 100,
+          "nextPageToken": "synthetic-next-page-token-1"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issues": [
+            {
+              "id": "10004",
+              "key": "SYN-4",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "In Progress",
+                  "statusCategory": {
+                    "key": "indeterminate"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 4",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 4"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:09:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 4.0,
+                "customfield_10050": 4000.0,
+                "customfield_10060": "Synthetic Team"
+              }
+            }
+          ],
+          "isLast": true
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/changelog/bulkfetch",
+        "json": {
+          "issueIdsOrKeys": [
+            "10004"
+          ],
+          "maxResults": 1000
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issueChangeLogs": [
+            {
+              "issueId": "10004",
+              "changeHistories": [
+                {
+                  "id": "10004000",
+                  "author": {
+                    "accountId": "synthetic-account-0",
+                    "displayName": "Synthetic Person"
+                  },
+                  "created": "2026-08-01T10:00:00.000+0000",
+                  "items": [
+                    {
+                      "field": "status",
+                      "fieldtype": "jira",
+                      "from": "1",
+                      "fromString": "To Do",
+                      "to": "2",
+                      "toString": "In Progress"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/issue/10004/remotelink"
+      },
+      "response": {
+        "status": 200,
+        "json": []
+      }
+    }
+  ]
+}

@@ -1,10 +1,12 @@
-"""Cassette replay, settings and seam stubs for the Jira tests (T01-17).
+"""Cassette replay, settings and fetch stubs for the Jira tests (T01-17, T01-18).
 
 The cassettes come from ``tests.support.jira_pages`` (committed under
 ``tests/fixtures/connectors/jira/``). ``Replay`` answers them in order through an
 ``httpx2.MockTransport`` client handed to ``SourceHttp`` (connectors never build clients;
 tests may, T01-14 pattern) and records every request; a request that differs from the
-recorded one (method, path or JSON body) fails the test.
+recorded one (method, path, JSON body or GET query) fails the test. ``Seams`` replaces
+``jira_changelog.fetch_changelogs`` / ``fetch_remote_links`` where a test is about search
+paging rather than the changelog calls.
 """
 
 from __future__ import annotations
@@ -20,9 +22,10 @@ import pytest
 from tests.support import jira_pages
 from tests.unit.connectors._http_data import mock_client
 
-from herness.connectors import jira as jira_module
+from herness.connectors import jira_changelog
 from herness.connectors.http import SourceHttp
 from herness.connectors.jira import JiraConnector
+from herness.connectors.jira_changelog import ChangelogState
 from herness.connectors.settings import JiraSettings
 
 BASE = jira_pages.BASE_URL
@@ -42,22 +45,28 @@ def cassette(name: str) -> list[dict[str, Any]]:
 
 @dataclass
 class Replay:
-    """Answers ``interactions`` in order; ``seen`` holds ``(method, path, json body)``."""
+    """Answers ``interactions`` in order; ``seen`` holds ``(method, path, json body)`` and
+    ``queries`` the query parameters of each request."""
 
     interactions: list[dict[str, Any]]
     seen: list[tuple[str, str, Any]] = field(default_factory=list)
     headers: list[httpx2.Headers] = field(default_factory=list)
+    queries: list[dict[str, str]] = field(default_factory=list)
 
     def __call__(self, request: httpx2.Request) -> httpx2.Response:
         body = json.loads(request.content) if request.content else None
+        query = dict(request.url.params)
         self.seen.append((request.method, request.url.path, body))
         self.headers.append(request.headers)
+        self.queries.append(query)
         assert self.interactions, "unexpected extra request"
         want = self.interactions.pop(0)
         recorded = want["request"]
         assert (request.method, request.url.path) == (recorded["method"], recorded["path"])
         if "json" in recorded or request.method == "GET":
             assert body == recorded.get("json")
+        if request.method == "GET":
+            assert query == recorded.get("params", {})
         reply = want["response"]
         content = json.dumps(reply["json"]).encode()
         return httpx2.Response(reply["status"], content=iter([content]))
@@ -71,6 +80,17 @@ def pages(*bodies: object, path: str = jira_pages.CLOUD_SEARCH) -> Replay:
             for b in bodies
         ]
     )
+
+
+def gets(*bodies: object, path: str, status: int = 200) -> list[dict[str, Any]]:
+    """Interactions answering ``bodies`` in order to GETs on ``path`` without a query."""
+    request = {"method": "GET", "path": path}
+    return [{"request": request, "response": {"status": status, "json": b}} for b in bodies]
+
+
+def source_http(replay: Replay) -> SourceHttp:
+    """A ``SourceHttp`` replaying ``replay`` (no auth, fixed clock)."""
+    return SourceHttp(mock_client(replay, BASE), breaker_key="jira", auth=None, clock=lambda: NOW)
 
 
 def settings(**extra: Any) -> JiraSettings:
@@ -91,7 +111,7 @@ def connector(
     replay: Replay, *, custom: Sequence[str] = jira_pages.CUSTOM_FIELD_IDS, **extra: Any
 ) -> JiraConnector:
     """A connector whose ``SourceHttp`` replays ``replay`` (no auth, fixed clock)."""
-    http = SourceHttp(mock_client(replay, BASE), breaker_key="jira", auth=None, clock=lambda: NOW)
+    http = source_http(replay)
     return JiraConnector(settings(**extra), custom_field_ids=custom, http=http, clock=lambda: NOW)
 
 
@@ -105,15 +125,23 @@ def history(hid: str, created: str, **extra: Any) -> dict[str, Any]:
 
 @dataclass
 class Seams:
-    """Stand-ins for the T01-18 seams: two histories per issue, one remote link per issue."""
+    """Stand-ins for ``fetch_changelogs`` (two histories per issue) and
+    ``fetch_remote_links`` (one remote link per issue); ``states`` holds the state passed."""
 
     changelog_calls: list[tuple[str, list[str]]] = field(default_factory=list)
     link_calls: list[tuple[str, list[str]]] = field(default_factory=list)
+    states: list[ChangelogState] = field(default_factory=list)
 
     def changelogs(
-        self, http: object, *, flavor: str, issues: Sequence[Mapping[str, Any]]
+        self,
+        http: object,
+        *,
+        flavor: str,
+        issues: Sequence[Mapping[str, Any]],
+        state: ChangelogState,
     ) -> dict[str, list[dict[str, Any]]]:
         del http
+        self.states.append(state)
         ids = [str(i["id"]) for i in issues]
         self.changelog_calls.append((flavor, ids))
         late, early = "2026-09-01T09:00:00.000+0000", "2026-08-02T09:00:00.000+0000"
@@ -129,6 +157,6 @@ class Seams:
         return {i: [{"id": 1, "object": obj, "relationship": "mentions"}] for i in ids}
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> Seams:
-        monkeypatch.setattr(jira_module, "_fetch_changelogs", self.changelogs)
-        monkeypatch.setattr(jira_module, "_fetch_remote_links", self.remote_links)
+        monkeypatch.setattr(jira_changelog, "fetch_changelogs", self.changelogs)
+        monkeypatch.setattr(jira_changelog, "fetch_remote_links", self.remote_links)
         return self

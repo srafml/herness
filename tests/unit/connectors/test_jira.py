@@ -2,8 +2,9 @@
 discovery (impl 01 U01-71 to U01-75; T01-17; TH01-04, TH01-05).
 
 Pages are replayed from the committed cassettes (``tests.support.jira_pages``) through a
-``SourceHttp`` over an ``httpx2.MockTransport`` client; the T01-18 changelog and remote-link
-calls are the module seams ``_fetch_changelogs`` / ``_fetch_remote_links``, stubbed here.
+``SourceHttp`` over an ``httpx2.MockTransport`` client. The changelog and remote-link calls
+(``jira_changelog.fetch_changelogs`` / ``fetch_remote_links``, T01-18) are stubbed here where
+a test is about search paging; ``test_jira_changelog.py`` replays them for real.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from tests.unit.connectors._jira_data import (
     settings,
 )
 
+from herness.connectors import jira_changelog
 from herness.connectors.base import KEY_SCHEMA, METADATA_FIELDS
 from herness.connectors.jira import (
     JIRA_FIELDS,
@@ -45,7 +47,7 @@ from herness.connectors.jira import (
     build_jql,
 )
 from herness.core import config as c
-from herness.core.errors import ConfigError, HernessError, SchemaViolation
+from herness.core.errors import ConfigError, SchemaViolation
 from herness.core.resilience import ProcessState
 
 pytestmark = pytest.mark.unit
@@ -162,6 +164,7 @@ def test_ut01_72_cloud_page_of_37_not_last_continues(seams: Seams) -> None:
     assert table.column("remotelinks").to_pylist() == [None] * 40  # fetch_remote_links off
     assert [flavor for flavor, _ in seams.changelog_calls] == ["cloud", "cloud"]
     assert [len(i) for _, i in seams.changelog_calls] == [37, 3]
+    assert seams.states[0] is seams.states[1]  # one ChangelogState per connector instance
     assert seams.link_calls == []
     changelog = json.loads(table.column("changelog")[0].as_py())
     assert [h["id"] for h in changelog] == ["100011", "100012"]  # sorted by created
@@ -200,40 +203,43 @@ def test_ut01_72_rows_pass_through_bounded_batches(seams: Seams) -> None:
     assert list(connector(pages(_page([], isLast=True))).sync("issue", None)) == []
 
 
-def test_ut01_72_changelog_seam_fails_closed_before_any_batch() -> None:
-    """UT01-72 until T01-18 the default changelog seam raises a typed error before any
-    batch is yielded (no lake write, no watermark move); the message holds no data."""
+def _refuse(*_args: object, **_kwargs: object) -> dict[str, list[dict[str, object]]]:
+    msg = "bad changelog page"
+    raise SchemaViolation(msg, source="jira")
+
+
+def test_ut01_72_changelog_failure_fails_closed_before_any_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT01-72 a failing changelog fetch raises on the first `next()`, before any batch is
+    yielded (no lake write, no watermark move; TH01-05)."""
+    monkeypatch.setattr(jira_changelog, "fetch_changelogs", _refuse)
     replay = Replay(cassette("cloud_search.json"))
-    with pytest.raises(HernessError) as info:
+    with pytest.raises(SchemaViolation, match="bad changelog page"):
         next(connector(replay).sync("issue", SINCE, UNTIL))
-    assert "T01-18" not in str(info.value)
-    assert "SYN" not in str(info.value)
     assert len(replay.seen) == 1
 
 
-def test_ut01_72_remote_link_seam_fails_closed(
+def test_ut01_72_remote_link_failure_fails_closed(
     seams: Seams, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT01-72 the default remote-link seam also fails closed before any batch."""
-    import herness.connectors.jira as jira_module  # noqa: PLC0415 - restore the default
-
-    monkeypatch.setattr(jira_module, "_fetch_remote_links", jira_module._not_built)
+    """UT01-72 a failing remote-link fetch also raises before any batch."""
+    monkeypatch.setattr(jira_changelog, "fetch_remote_links", _refuse)
     replay = Replay(cassette("cloud_search.json"))
-    with pytest.raises(HernessError):
+    with pytest.raises(SchemaViolation, match="bad changelog page"):
         next(connector(replay, fetch_remote_links=True).sync("issue", SINCE, UNTIL))
-    assert seams.link_calls == []
+    assert len(seams.changelog_calls) == 1
 
 
+@pytest.mark.parametrize("missing", ["fetch_changelogs", "fetch_remote_links"])
 def test_ut01_72_incomplete_changelog_is_schema_violation(
-    monkeypatch: pytest.MonkeyPatch,
+    seams: Seams, monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
-    """UT01-72 a page whose changelog result misses an issue is refused (complete changelog)."""
-    import herness.connectors.jira as jira_module  # noqa: PLC0415 - seam
-
-    monkeypatch.setattr(jira_module, "_fetch_changelogs", lambda *_a, **_k: {})
+    """UT01-72 a page whose changelog or remote-link result misses an issue is refused."""
+    monkeypatch.setattr(jira_changelog, missing, lambda *_a, **_k: {})
     replay = Replay(cassette("cloud_search.json"))
-    with pytest.raises(SchemaViolation, match="incomplete changelog"):
-        next(connector(replay).sync("issue", SINCE, UNTIL))
+    with pytest.raises(SchemaViolation, match="incomplete changelog or remote links"):
+        next(connector(replay, fetch_remote_links=True).sync("issue", SINCE, UNTIL))
 
 
 def test_ut01_72_watermark_field_entities_and_unknown_entity() -> None:

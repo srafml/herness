@@ -7,9 +7,10 @@ mapping); pages follow the body ``nextPageToken`` (Cloud, under ``CursorGuard``)
 ``startAt`` (DC), never a server-supplied URL. JQL is built only from the validated
 ``jql_scope`` and the run's bounds (TH01-07). The HTTP layer and the row helpers (``base``
 re-exports ``http_client``) are imported lazily: importing ``flatten_issue`` (T11-12) loads
-no ``httpx`` code. Complete changelogs and remote links (U01-76, U01-77, T01-18) are reached
-through the seams ``_fetch_changelogs`` / ``_fetch_remote_links``, whose defaults fail closed
-before any batch is yielded (no lake write, no watermark move without them).
+no ``httpx`` code. Complete changelogs and remote links (U01-76, U01-77) come from
+``jira_changelog`` per search page before any row of the page is batched, so a shape error
+or an incomplete changelog raises before a batch is yielded (no lake write, no watermark
+move; TH01-05).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+from herness.connectors import jira_changelog as changelogs_api
 from herness.connectors.jira_changelog import project_history, project_remote_link
 from herness.connectors.settings import JiraSettings
 from herness.core import time as clock
@@ -68,17 +70,6 @@ _NAMED: Final[Mapping[str, SuggestedKey]] = {
     "epic link": "jira.epic_link",
 }
 _COST_RE: Final = re.compile(r"(?i)cost|usd|budget")
-
-
-def _not_built(*_args: object, **_kwargs: object) -> _ByIssue:
-    """Fail closed until T01-18 provides ``fetch_changelogs`` / ``fetch_remote_links``."""
-    msg = "jira changelog and remote link fetch is not available in this build"
-    raise ConfigError(msg, source=_SOURCE)
-
-
-# T01-18: bind to jira_changelog.fetch_changelogs (with ChangelogState) and fetch_remote_links.
-_fetch_changelogs: Callable[..., _ByIssue] = _not_built
-_fetch_remote_links: Callable[..., _ByIssue] = _not_built
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +217,8 @@ class JiraConnector:
         self._custom = tuple(dict.fromkeys(_check_custom_ids(custom_field_ids)))
         self._http = http
         self._clock = clock
-        self._version = "3" if settings.flavor == "cloud" else "2"
+        self._version: Literal["2", "3"] = "3" if settings.flavor == "cloud" else "2"
+        self._cl_state = changelogs_api.ChangelogState()  # bulk availability (U01-76)
         self.entities: tuple[str, ...] = tuple(settings.entities)
 
     def _source(self) -> SourceHttp:
@@ -288,10 +280,13 @@ class JiraConnector:
         from herness.connectors.rows import parse_source_timestamp  # noqa: PLC0415 - lazy
 
         http, ids = self._source(), [_issue_id(i) for i in issues]
-        changelogs = _fetch_changelogs(http, flavor=self._settings.flavor, issues=issues)
+        flavor, state = self._settings.flavor, self._cl_state
+        changelogs = changelogs_api.fetch_changelogs(
+            http, flavor=flavor, issues=issues, state=state
+        )
         links: _ByIssue | None = None
         if self._settings.fetch_remote_links:
-            links = _fetch_remote_links(http, version=self._version, issue_ids=ids)
+            links = changelogs_api.fetch_remote_links(http, version=self._version, issue_ids=ids)
         rows: list[_Row] = []
         for issue_id, issue in zip(ids, issues, strict=True):
             history = changelogs.get(issue_id)
