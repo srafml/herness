@@ -58,23 +58,30 @@ def _needs_gpu(row: JobRow) -> bool:
 def _gpu_controller(
     row: JobRow, owner: str, started: datetime, stack: ExitStack
 ) -> GpuController | None:
-    """Step 2: the host GPU lock, the loaded class and the swap; None for CPU-only jobs."""
+    """Step 2: the host GPU lock, the loaded class and the swap; None for CPU-only jobs.
+
+    A failed swap is applied by `finish_job`; any other exit (a held lock, Ctrl+C, a
+    detection error) requeues the job at once with no attempt charge, then re-raises.
+    """
     if not _needs_gpu(row):
         return None
+    applied = False  # the swap failure is applied by `finish_job`; all else yields the job
     try:
         stack.enter_context(GpuLock(get_config().paths.data / "locks" / "gpu.lock"))
-    except ConfigError:
-        now = clock.now()
-        require_jobs_backend().finish_yield(row.job_id, owner, now, now)  # no attempt charge
+        controller = GpuController(worker_id=None, runner=ComposeRunner(), http=LoopbackHttp())
+        loaded = controller.detect_loaded_class()
+        if row.gpu_class not in {"none", loaded}:
+            try:
+                controller.swap(row.gpu_class, reason="inline")
+            except ModelUnavailable as exc:
+                applied = True
+                finish_job(row, owner, exc, attempt_started_at=started, stop_reason=None)
+                raise
+    except BaseException:  # held lock, Ctrl+C (no SIGINT handler yet) or any failure: yield
+        if not applied:
+            now = clock.now()
+            require_jobs_backend().finish_yield(row.job_id, owner, now, now)  # no attempt charge
         raise
-    controller = GpuController(worker_id=None, runner=ComposeRunner(), http=LoopbackHttp())
-    loaded = controller.detect_loaded_class()
-    if row.gpu_class not in {"none", loaded}:
-        try:
-            controller.swap(row.gpu_class, reason="inline")
-        except ModelUnavailable as exc:
-            finish_job(row, owner, exc, attempt_started_at=started, stop_reason=None)
-            raise
     return controller
 
 
@@ -86,7 +93,7 @@ def _beat(ctx: InlineJobContext, owner: str, stop: threading.Event) -> None:
         lease_until = clock.now() + timedelta(seconds=jobs.lease_s)
         try:
             kept = backend.heartbeat_job(ctx.job_id, owner, lease_until)
-        except HernessError as exc:  # store busy: try again at the next beat
+        except Exception as exc:  # noqa: BLE001 - thread boundary (ENG §3.4): retry next beat
             _log.warning(
                 "jobs.inline.heartbeat_failed", job_id=ctx.job_id, error_type=type(exc).__name__
             )

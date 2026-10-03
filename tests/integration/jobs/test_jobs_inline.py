@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
+import structlog.testing
 from tests.support.fake_gpu import FakeGpu
 from tests.support.fake_keyring import MemoryKeyring
 from tests.support.worker_env import WorkerEnv
@@ -275,6 +276,51 @@ def test_cv_t08_22_failed_swap_is_applied_then_raised(
     assert _lock_free()
 
 
+class _InterruptedSwap:
+    """A `GpuController` stand-in whose detection or swap raises `error` (M1)."""
+
+    error: BaseException = KeyboardInterrupt()
+    fail_detect = False
+
+    def __init__(self, **kwargs: Any) -> None:
+        del kwargs
+
+    def detect_loaded_class(self) -> str:
+        if self.fail_detect:
+            raise self.error
+        return "none"
+
+    def swap(self, cls: str, *, reason: str) -> float:
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    ("error", "fail_detect"),
+    [(KeyboardInterrupt(), False), (KeyboardInterrupt(), True), (RuntimeError("x"), True)],
+)
+def test_cv_t08_22_interrupt_during_step_2_yields_the_job(
+    worker_env: WorkerEnv,
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+    fail_detect: bool,
+) -> None:
+    """IT08-12 (cv, M1) Ctrl+C (KeyboardInterrupt) or any other non-applied failure during
+    step 2 (detection or swap, before the SIGINT handler exists) requeues the claimed job at
+    once with no attempt charge, releases the lock and re-raises; the handler never runs."""
+    stand_in = type("Stand", (_InterruptedSwap,), {"error": error, "fail_detect": fail_detect})
+    monkeypatch.setattr(inline, "GpuController", stand_in)
+    ran: list[str] = []
+    _use(monkeypatch, "review", lambda ctx: ran.append("x"))
+    job_id = worker_env.enqueue(kind="review", gpu_class="reasoning")
+    with pytest.raises(type(error)):
+        run_inline(job_id)
+    row = worker_env.job(job_id)
+    assert (row.status, row.attempts, row.lease_owner) == ("queued", 0, None)
+    assert row.last_error is None
+    assert ran == []
+    assert _lock_free()
+
+
 def test_cv_t08_22_handler_error_is_applied_then_raised(
     worker_env: WorkerEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -326,11 +372,13 @@ def test_cv_t08_22_cancel_stops_the_handler_through_the_heartbeat(
     assert worker_env.job(job_id).status == "canceled"
 
 
+@pytest.mark.parametrize("error", [StoreBusy("store busy"), RuntimeError("driver bug")])
 def test_cv_t08_22_heartbeat_extends_the_lease_and_survives_store_errors(
-    worker_env: WorkerEnv, monkeypatch: pytest.MonkeyPatch
+    worker_env: WorkerEnv, monkeypatch: pytest.MonkeyPatch, error: BaseException
 ) -> None:
-    """IT08-12 (cv) the heartbeat thread extends the lease every `heartbeat_s`; a store
-    error is logged and retried at the next beat instead of stopping the handler."""
+    """IT08-12 (cv) the heartbeat thread extends the lease every `heartbeat_s`; a failed beat
+    (a store error or any other Exception, M5) is logged `jobs.inline.heartbeat_failed` with
+    its error type and retried at the next beat instead of ending the thread."""
     backend = require_jobs_backend()
     real = backend.heartbeat_job
     calls: list[str] = []
@@ -338,8 +386,7 @@ def test_cv_t08_22_heartbeat_extends_the_lease_and_survives_store_errors(
     def flaky(job_id: str, owner: str, lease_until: Any) -> bool:
         calls.append(owner)
         if len(calls) == 1:
-            msg = "store busy"
-            raise StoreBusy(msg)
+            raise error
         return real(job_id, owner, lease_until)
 
     monkeypatch.setattr(backend, "heartbeat_job", flaky)
@@ -354,8 +401,14 @@ def test_cv_t08_22_heartbeat_extends_the_lease_and_survives_store_errors(
 
     _use(monkeypatch, "sync", handler)
     job_id = worker_env.enqueue(kind="sync")
-    assert run_inline(job_id).status == "done"
+    with structlog.testing.capture_logs() as logs:
+        assert run_inline(job_id).status == "done"
     assert calls[:2] == [inline_owner(), inline_owner()]
+    failed = [e for e in logs if e["event"] == "jobs.inline.heartbeat_failed"]
+    assert [(e["log_level"], e["error_type"]) for e in failed] == [
+        ("warning", type(error).__name__)
+    ]
+    assert str(error) not in str(failed)
     assert seen == {"stopped": False}
 
 
