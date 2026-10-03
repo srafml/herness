@@ -34,7 +34,7 @@ from herness.enrich import _distill_steps as steps
 from herness.enrich.distill import YieldRequested, make_distill_handler, run_distill
 from herness.enrich.labels import HUMAN_SCHEMA
 from herness.enrich.laya_models import verify_model_dir
-from herness.enrich.review_items import iter_review_items
+from herness.enrich.review_items import create_if_absent, iter_review_items
 
 pytestmark = pytest.mark.integration
 
@@ -181,11 +181,11 @@ def test_it03_15_no_teacher_is_model_unavailable(env: DistillEnv) -> None:
     assert ctx.events == ["enter:decider", "start:openjev", "stop:openjev", "exit:decider"]
 
 
-def _blocking_reviews(env: DistillEnv) -> None:
-    """100 q_b human rows disagreeing with the stub teacher on non-gold records."""
+def _blocking_reviews(env: DistillEnv, n_reviews: int = 100) -> None:
+    """``n_reviews`` q_b human rows disagreeing with the stub teacher on non-gold records."""
     q_b = env.qs.get("q_b")
     rows = []
-    for n, rec in enumerate(env.records[len(env.gold) : len(env.gold) + 100]):
+    for n, rec in enumerate(env.records[len(env.gold) : len(env.gold) + n_reviews]):
         answer = stub_answer(rec.hash, q_b)[0]
         rows.append({
             "content_hash": rec.hash, "record_id": rec.record_id, "question": "q_b",
@@ -380,3 +380,72 @@ def test_it03_15_yield_during_active_scoring(env: DistillEnv) -> None:
         run_distill(round_kind="active", ctx=ctx.as_ctx())
     assert "start:openjev" not in ctx.events
     assert ctx.steps() == ["prepared"]
+
+
+# --- fix round 1: pending-gold exclusion, teacher rerun, review threshold --------------------
+
+
+def test_it03_15_pending_gold_item_hash_never_trains(env: DistillEnv) -> None:
+    """IT03-15 a hash with a pending ``purpose = gold`` item (not yet gold) is kept out of the
+    sample, the teacher rows and the training set (TH03-04)."""
+    rec = env.records[len(env.gold)]  # a non-gold record of the pool
+    q_c = env.qs.get("q_c")
+    payload = {
+        "record_id": rec.record_id, "content_hash": rec.hash, "question": "q_c",
+        "question_fingerprint": q_c.fingerprint, "question_set_version": QSV, "answer": None,
+        "probability": None, "decider": None, "decider_version": None, "purpose": "gold",
+        "text_ref": "enrich.text_redacted",
+    }  # fmt: skip
+    keys = ("purpose", "question", "content_hash")
+    made, _ = create_if_absent("label_check", [payload], match_keys=keys,
+                               blocking_statuses=("pending",), scope={"question_set_version": QSV},
+                               now=steps.clock.now())  # fmt: skip
+    assert made == 1
+    report = run_distill(round_kind="initial", ctx=FakeCtx().as_ctx())
+    assert report.n_sample == 159  # the pool minus the pending gold hash
+    assert rec.hash not in set(env.teacher_rows().column("content_hash").to_pylist())
+    data = env.trainer.seen[-1]
+    trained = set(data.train.column("content_hash").to_pylist())
+    trained |= set(data.val.column("content_hash").to_pylist())
+    assert trained
+    assert rec.hash not in trained
+
+
+def test_it03_15_teacher_rerun_appends_no_duplicate_rows(
+    env: DistillEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT03-15 a yield after the teacher rows were appended reruns the teacher step without
+    duplicating any teacher row."""
+    real = steps.request_gold_items
+    calls: list[int] = []
+
+    def yield_once(run: steps.Run, wh: object) -> int:
+        calls.append(1)
+        if len(calls) == 1:
+            stage = "gold_requests"
+            raise YieldRequested(stage)
+        return real(run, wh)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(steps, "request_gold_items", yield_once)
+    ctx = FakeCtx()
+    with pytest.raises(YieldRequested):
+        run_distill(round_kind="initial", ctx=ctx.as_ctx())
+    assert ctx.steps() == ["prepared"]
+    first = env.teacher_rows().num_rows
+    assert first > 0
+    run_distill(round_kind="initial", ctx=ctx.as_ctx())
+    rows = env.teacher_rows()
+    assert rows.num_rows == first
+    keys = list(zip(rows.column("content_hash").to_pylist(), rows.column("question").to_pylist(),
+                    strict=True))  # fmt: skip
+    assert len(keys) == len(set(keys))
+
+
+@pytest.mark.parametrize(("n_reviews", "blocked"), [(99, []), (100, ["q_b"])])
+def test_it03_15_blocking_needs_at_least_100_reviews(
+    env: DistillEnv, n_reviews: int, blocked: list[str]
+) -> None:
+    """IT03-15 full disagreement with 99 reviews does not block; with 100 it does."""
+    _blocking_reviews(env, n_reviews)
+    report = run_distill(round_kind="initial", ctx=FakeCtx().as_ctx())
+    assert report.blocked_questions == blocked
