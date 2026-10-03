@@ -61,7 +61,7 @@ from herness.harness.memory import (
     recommend,
 )
 from herness.harness.memory.recall import RecallResult
-from herness.harness.memory.settings import MemoryConfig
+from herness.harness.memory.settings import MemoryConfig, WriteConfig
 from herness.harness.memory.store import Embedder
 from herness.harness.memory.tools import MemoryToolStore
 from herness.harness.tools import ToolRegistry
@@ -88,14 +88,15 @@ class Rec:
         return self.result
 
 
-def build(env: Env, tmp_path: Path, **overrides: Any) -> MemoryStore:
+def build(env: Env, tmp_path: Path, cfg: MemoryConfig | None = None,
+          **overrides: Any) -> MemoryStore:  # fmt: skip
     """A facade on the writer env's collaborators (no LLM registry unless given)."""
     kwargs: dict[str, Any] = {
         "conn_factory": core.connection, "vectors": env.vectors,
         "embedder": Embedder(env.embed, model_name="bge-m3"), "redactor": env.redactor,
         "llms": None, "allowed_numeral_patterns": ALLOWED, "data_root": tmp_path / "data",
     }  # fmt: skip
-    return MemoryStore(MemoryConfig(injection_patterns=PATTERNS), **(kwargs | overrides))
+    return MemoryStore(cfg or MemoryConfig(injection_patterns=PATTERNS), **(kwargs | overrides))
 
 
 @pytest.fixture
@@ -205,8 +206,9 @@ def _patch(store: MemoryStore, monkeypatch: pytest.MonkeyPatch, owner: str, attr
 @pytest.mark.parametrize(
     ("owner", "attr", "call", "args", "kwargs"),
     [
-        ("recaller", "recall", lambda s: s.recall_with_status("q", ["semantic"], None, 5),
-         ("q", ["semantic"], None, 5, None), {}),
+        ("recaller", "recall",
+         lambda s: s.recall_with_status("q", ["semantic"], "flt", 5, "run-ctx"),
+         ("q", ["semantic"], "flt", 5, "run-ctx"), {}),
         ("writer", "propose", lambda s: s.propose("item", "ctx"), ("item", "ctx"), {}),
         ("lifecycle", "approve", lambda s: s.approve("m", "u", "n", 0.9), ("m", "u", "n", 0.9),
          {}),
@@ -246,8 +248,8 @@ def test_ut07_85_recall_returns_hits(store: MemoryStore, monkeypatch: pytest.Mon
     hits = [_sentinel()]
     rec = _patch(store, monkeypatch, "recaller", "recall",
                  RecallResult(hits=hits, degraded=True, n_candidates=1))  # type: ignore[arg-type]  # fmt: skip
-    assert store.recall("q", None, None, 3, None) is hits
-    assert rec.calls == [(("q", None, None, 3, None), {})]
+    assert store.recall("q", None, "flt", 3, "run-ctx") is hits  # type: ignore[arg-type]
+    assert rec.calls == [(("q", None, "flt", 3, "run-ctx"), {})]
 
 
 def test_ut07_85_render_returns_text(store: MemoryStore, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -283,11 +285,15 @@ def _draft(rank: int = 1) -> dict[str, Any]:
 
 
 def test_ut07_85_write_recommendations_converts_and_binds(
-    store: MemoryStore, monkeypatch: pytest.MonkeyPatch
+    env: Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT07-85 dict drafts become `RecommendationDraft`s; priors are read once per call; the
-    deps carry `write.max_content_chars`; log lines in the call carry `run_id`."""
-    priors = Rec([])
+    """UT07-85 dict drafts become `RecommendationDraft`s; priors are read once per call and
+    reach every adjustment; the deps carry a non-default `write.max_content_chars`; log lines
+    in the call carry `run_id`."""
+    cfg = MemoryConfig(injection_patterns=PATTERNS, write=WriteConfig(max_content_chars=1500))
+    store = build(env, tmp_path, cfg)
+    measured = [{"rec_id": "rec_prior"}]
+    priors = Rec(measured)
     monkeypatch.setattr(closed_loop, "outcomes_for_similarity", priors)
     seen: list[Any] = []
 
@@ -298,7 +304,8 @@ def test_ut07_85_write_recommendations_converts_and_binds(
         return ["rec_1", "rec_2"]
 
     monkeypatch.setattr(recommend, "write_recommendations", fake)
-    monkeypatch.setattr(recommend, "outcome_adjustment", Rec("adj"))
+    adjust = Rec("adj")
+    monkeypatch.setattr(recommend, "outcome_adjustment", adjust)
     typed = RecommendationDraft.model_validate(_draft(2))
     assert store.write_recommendations(RUN_ID, [_draft(1), typed]) == ["rec_1", "rec_2"]
     ((run_id, recs, deps, bound),) = seen
@@ -306,7 +313,12 @@ def test_ut07_85_write_recommendations_converts_and_binds(
     assert bound["run_id"] == RUN_ID
     assert recs[0] == RecommendationDraft.model_validate(_draft(1))
     assert recs[1] is typed
-    assert deps.content_max == store._cfg.write.max_content_chars
+    assert deps.content_max == 1500
+    assert [(a, k["priors"]) for a, k in adjust.calls] == [
+        ((recs[0], 0.5), measured),
+        ((recs[1], 0.5), measured),
+    ]
+    assert all(k["priors"] is measured for _, k in adjust.calls)
     assert deps.allowed is store._allowed
     assert deps.writer is store._writer
     assert len(priors.calls) == 1
@@ -564,6 +576,31 @@ def test_ut07_48_foreign_handler_conflict(
     register_handler("outcome_measure", lambda ctx: None)  # type: ignore[arg-type, return-value]
     with pytest.raises(ConfigError, match="already registered for outcome_measure"):
         memory_pkg.register_memory_components(ToolRegistry(), store)
+
+
+@pytest.mark.parametrize("kind", ["outcome_measure", "memory_maintenance"])
+def test_ut07_48_conflict_registers_nothing(
+    store: MemoryStore, reset_process_state: ProcessState, kind: str
+) -> None:
+    """UT07-48 a foreign handler for either kind fails before any tool, handler or seam is
+    registered or configured (atomic composition)."""
+    del reset_process_state
+    from herness.core.jobs.handlers import register_handler  # noqa: PLC0415 - local to test
+
+    foreign = lambda ctx: None  # noqa: E731 - a stand-in handler
+    register_handler(kind, foreign)  # type: ignore[arg-type]
+    registry = ToolRegistry()
+    with pytest.raises(ConfigError, match=f"already registered for {kind}"):
+        memory_pkg.register_memory_components(registry, store)
+    assert registry.names() == []
+    assert resolve_handler(kind) is foreign
+    other = "memory_maintenance" if kind == "outcome_measure" else "outcome_measure"
+    with pytest.raises(ConfigError, match="no handler"):
+        resolve_handler(other)  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="configure_outcome"):
+        outcome.outcome_deps()
+    with pytest.raises(ConfigError, match="configure_maintenance"):
+        maintenance.maintenance_deps()
 
 
 # --- import cost and cycles (C13) -------------------------------------------------------------

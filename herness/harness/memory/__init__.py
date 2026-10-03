@@ -17,6 +17,8 @@ import threading
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
+    from herness.core.jobs.handlers import Handler
+    from herness.core.types import JobKind
     from herness.harness.memory._facade import HealthResult as HealthResult
     from herness.harness.memory._facade import MemoryStore as MemoryStore
     from herness.harness.tools import ToolRegistry
@@ -66,16 +68,30 @@ def register_memory_components(tool_registry: ToolRegistry, store: MemoryStore) 
     """Register both memory tools (U07-65) and the `outcome_measure` (U07-86) and
     `memory_maintenance` (U07-96) job handlers (T08-12), and point the handlers' one-argument
     seams at `store`'s collaborators (T07-18, T07-22 notes). Calling it again is a no-op
-    except that the seams follow the latest `store`."""
-    from herness.core.jobs.handlers import register_handler  # noqa: PLC0415 - cheap package
+    except that the seams follow the latest `store`. A different handler already registered
+    for either kind is a `ConfigError` raised before anything is registered or configured."""
+    from herness.core.errors import ConfigError  # noqa: PLC0415 - cheap module
+    from herness.core.jobs.handlers import register_handler, resolve_handler  # noqa: PLC0415
     from herness.harness.memory import maintenance, outcome  # noqa: PLC0415 - idem
     from herness.harness.memory.tools import register_memory_tools  # noqa: PLC0415 - idem
 
+    handlers: tuple[tuple[JobKind, Handler], ...] = (
+        ("outcome_measure", outcome.outcome_measure_handler),
+        ("memory_maintenance", maintenance.memory_maintenance_handler),
+    )
+    for kind, handler in handlers:  # check both first: a conflict changes nothing
+        try:
+            current = resolve_handler(kind)
+        except ConfigError:  # none registered yet
+            continue
+        if current is not handler:
+            msg = f"handler already registered for {kind}"
+            raise ConfigError(msg)
+    for kind, handler in handlers:
+        register_handler(kind, handler)
     register_memory_tools(tool_registry, store)
     outcome.configure_outcome(store.outcome_deps)
     maintenance.configure_maintenance(store.maintenance_deps)
-    register_handler("outcome_measure", outcome.outcome_measure_handler)
-    register_handler("memory_maintenance", maintenance.memory_maintenance_handler)
 
 
 def _reset_memory_store() -> None:
