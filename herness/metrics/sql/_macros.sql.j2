@@ -137,6 +137,14 @@ coalesce({{ rs.alias(name) }}.to_category, CASE WHEN {{ rs.alias(item_alias) }}.
 coalesce(list_extract({{ vals }}, list_position({{ keys }}, {{ key_expr }})), {{ default_expr }})
 {%- endmacro -%}
 
+{#- BEGIN team_bucket (U04-35; T04-16) -#}
+{#- Criticality bucket of a team (design 04 §5.8 step 2): the minimum core.service.criticality
+    over the services mapped to the team as owner or support; 1-2 hi, 3-4 lo, else none. -#}
+{%- macro team_bucket(team_expr) -%}
+(SELECT CASE WHEN min(tb_sv.criticality) BETWEEN 1 AND 2 THEN 'hi' WHEN min(tb_sv.criticality) BETWEEN 3 AND 4 THEN 'lo' ELSE 'none' END FROM core.service_map tb_sm JOIN core.service tb_sv ON tb_sv.service_id = tb_sm.service_id WHERE tb_sm.team_id = {{ team_expr }} AND tb_sm.role IN ('owner', 'support'))
+{%- endmacro -%}
+{#- END team_bucket -#}
+
 {#- BEGIN observed_days (U04-35; T04-14 + T04-16 shared) -#}
 {#- Days of incident history: design 04 §5.5 with s_window_days in place of 365 (impl 04 §3.9),
     one scalar subquery over the non-excluded metrics.incident_fact rows. -#}

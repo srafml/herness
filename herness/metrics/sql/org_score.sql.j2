@@ -1,0 +1,172 @@
+{#- score.org rows (impl 04 U04-67; design 04 §5.8 steps 1-6, §7.1 scorecard).
+    One SELECT over persisted tables: every runtime value is a p() bind and prose lives only
+    in Jinja comments, so no SQL comment reaches the recorded SQL. Output columns follow the
+    score.org order without query_ids. DuckDB least/greatest skip NULL arguments, so every
+    clip is guarded by an explicit NULL test. Sums use ORDER BY so the result is deterministic.
+    Flags are listed in sorted order: insufficient_sample, low_coverage, no_data, no_trend,
+    peer_fallback. -#}
+{%- macro clip5(expr) -%}
+CASE WHEN {{ expr }} IS NOT NULL THEN greatest(-5.0, least(5.0, {{ expr }})) END
+{%- endmacro -%}
+{%- set W_END = "CAST(date_trunc('week', " ~ p('as_of') ~ ") AS DATE)" -%}
+{%- set W0 = "CAST(" ~ W_END ~ " - INTERVAL 84 DAY AS DATE)" -%}
+{#- Step 1: scorecard (metric, weight, sign) and the scored entities with their natural group. -#}
+WITH card AS (
+    SELECT u.metric, CAST(u.w AS DOUBLE) AS w,
+           CASE WHEN list_contains({{ p('s_lower_better') }}, u.metric) THEN 1.0 ELSE -1.0 END
+               AS sgn
+    FROM (
+        SELECT unnest({{ p('s_org_metrics') }}) AS metric,
+               unnest({{ p('s_org_weights') }}) AS w
+    ) u
+),
+ent AS (
+    SELECT 'team' AS entity_type, t.team_id AS entity_id,
+           'team:crit_' || {{ team_bucket('t.team_id') }} AS natural_group,
+           'team:all' AS all_group
+    FROM core.team t
+    WHERE t.active
+    UNION ALL
+    SELECT 'org', o.org_id,
+           'org:level' || CAST((SELECT max(oc.depth) FROM metrics.org_closure oc
+                                WHERE oc.org_id = o.org_id) AS VARCHAR),
+           'org:all'
+    FROM core.org o
+),
+{#- Step 2: x at t12w (NULL when missing or insufficient); sample_size 0 when missing. -#}
+base AS (
+    SELECT e.entity_type, e.entity_id, e.natural_group, e.all_group, c.metric, c.w, c.sgn,
+           CASE WHEN NOT coalesce(list_contains(mv.flags, 'insufficient_sample'), false)
+                THEN mv.value END AS x,
+           CAST(coalesce(mv.sample_size, 0) AS BIGINT) AS sample_size,
+           mv.metric IS NULL AS no_data,
+           coalesce(list_contains(mv.flags, 'insufficient_sample'), false) AS insufficient
+    FROM ent e
+    CROSS JOIN card c
+    LEFT JOIN metrics.metric_value mv
+        ON mv.metric = c.metric AND mv.entity_type = e.entity_type
+       AND mv.entity_id = e.entity_id AND mv.period = 't12w'
+       AND mv.period_start = {{ p('window_start_date') }}
+),
+{#- Step 3: the natural group, or the all group when it has too few non-NULL x. -#}
+grp AS (
+    SELECT b.*,
+           CASE WHEN count(b.x) OVER (PARTITION BY b.entity_type, b.metric, b.natural_group)
+                     < {{ p('s_min_peer_group') }}
+                THEN b.all_group ELSE b.natural_group END AS peer_group
+    FROM base b
+),
+{#- Step 4: group statistics over non-NULL x for every natural and all group. -#}
+mem AS (
+    SELECT entity_type, metric, natural_group AS peer_group, x FROM base
+    UNION ALL
+    SELECT entity_type, metric, all_group AS peer_group, x FROM base
+),
+med AS (
+    SELECT entity_type, metric, peer_group, median(x) AS median_g, mad(x) AS mad_g
+    FROM mem
+    GROUP BY entity_type, metric, peer_group
+),
+gs AS (
+    SELECT d.entity_type, d.metric, d.peer_group, d.median_g,
+           CASE WHEN d.mad_g > 0 THEN 1.4826 * d.mad_g
+                WHEN avg(abs(m.x - d.median_g) ORDER BY m.x) > 0
+                THEN 1.2533 * avg(abs(m.x - d.median_g) ORDER BY m.x) END AS denom
+    FROM med d
+    JOIN mem m
+        ON m.entity_type = d.entity_type AND m.metric = d.metric
+       AND m.peer_group = d.peer_group
+    GROUP BY d.entity_type, d.metric, d.peer_group, d.median_g, d.mad_g
+),
+{#- Step 6: Theil-Sen slope over the 12 complete weeks before as_of (>= 6 distinct t). -#}
+wk AS (
+    SELECT mv.entity_type, mv.entity_id, mv.metric,
+           date_diff('week', {{ W0 }}, mv.period_start) AS t, mv.value AS v
+    FROM metrics.metric_value mv
+    WHERE mv.period = 'week' AND mv.value IS NOT NULL
+      AND mv.entity_type IN ('team', 'org')
+      AND list_contains({{ p('s_org_metrics') }}, mv.metric)
+      AND mv.period_start >= {{ W0 }} AND mv.period_start < {{ W_END }}
+),
+npts AS (
+    SELECT entity_type, entity_id, metric, count(DISTINCT t) AS n
+    FROM wk
+    GROUP BY entity_type, entity_id, metric
+),
+slopes AS (
+    SELECT a.entity_type, a.entity_id, a.metric,
+           median((b.v - a.v) / CAST(b.t - a.t AS DOUBLE)) AS slope
+    FROM wk a
+    JOIN wk b
+        ON b.entity_type = a.entity_type AND b.entity_id = a.entity_id
+       AND b.metric = a.metric AND b.t > a.t
+    GROUP BY a.entity_type, a.entity_id, a.metric
+),
+trend AS (
+    SELECT n.entity_type, n.entity_id, n.metric, CASE WHEN n.n >= 6 THEN s.slope END AS slope
+    FROM npts n
+    LEFT JOIN slopes s
+        ON s.entity_type = n.entity_type AND s.entity_id = n.entity_id AND s.metric = n.metric
+),
+{#- Step 5: robust z (unclipped), badness b and trend badness, both clipped to [-5, 5]. -#}
+zs AS (
+    SELECT g.entity_type, g.entity_id, g.metric, g.w, g.x, g.sample_size, g.no_data,
+           g.insufficient, g.peer_group, g.peer_group <> g.natural_group AS fallback,
+           s.median_g, s.denom, tr.slope,
+           CASE WHEN g.x IS NULL THEN NULL
+                WHEN s.denom IS NULL THEN 0.0
+                ELSE (g.x - s.median_g) / s.denom END AS z
+    FROM grp g
+    JOIN gs s
+        ON s.entity_type = g.entity_type AND s.metric = g.metric
+       AND s.peer_group = g.peer_group
+    LEFT JOIN trend tr
+        ON tr.entity_type = g.entity_type AND tr.entity_id = g.entity_id
+       AND tr.metric = g.metric
+),
+bs AS (
+    SELECT z.*,
+           {{ clip5('(z.z * card.sgn)') }} AS b,
+           CASE WHEN z.denom IS NOT NULL
+                THEN {{ clip5('(card.sgn * z.slope * 12 / z.denom)') }} END AS trend_b
+    FROM zs z
+    JOIN card ON card.metric = z.metric
+),
+{#- Step 7: composite over covered weight; low coverage gives NULL. -#}
+agg AS (
+    SELECT entity_type, entity_id,
+           coalesce(sum(w ORDER BY metric) FILTER (WHERE b IS NOT NULL), 0) AS covered,
+           sum(w ORDER BY metric) AS total,
+           sum(w * (b + {{ p('s_trend_weight') }} * coalesce(trend_b, 0)) ORDER BY metric)
+               FILTER (WHERE b IS NOT NULL) AS num
+    FROM bs
+    GROUP BY entity_type, entity_id
+),
+cov AS (
+    SELECT entity_type, entity_id, num, covered,
+           covered > 0 AND covered / total >= {{ p('s_min_weight_coverage') }} AS ok
+    FROM agg
+),
+{#- Step 8: rank per entity type. -#}
+ranked AS (
+    SELECT entity_type, entity_id, ok, CASE WHEN ok THEN num / covered END AS composite,
+           row_number() OVER (
+               PARTITION BY entity_type
+               ORDER BY CASE WHEN ok THEN num / covered END DESC NULLS LAST, entity_id
+           ) AS rnk
+    FROM cov
+)
+{#- Step 9: rows with their flags. -#}
+SELECT b.entity_type, b.entity_id, b.metric, b.x AS value, b.peer_group,
+       b.median_g AS peer_median, b.z AS z_score, b.slope AS trend_slope, b.sample_size,
+       r.composite, r.rnk AS rank, {{ p('unconfirmed') }} AS unconfirmed,
+       CAST(list_filter([
+           CASE WHEN b.insufficient THEN 'insufficient_sample' END,
+           CASE WHEN NOT r.ok THEN 'low_coverage' END,
+           CASE WHEN b.no_data THEN 'no_data' END,
+           CASE WHEN b.slope IS NULL THEN 'no_trend' END,
+           CASE WHEN b.fallback THEN 'peer_fallback' END
+       ], f -> f IS NOT NULL) AS VARCHAR[]) AS flags
+FROM bs b
+JOIN ranked r ON r.entity_type = b.entity_type AND r.entity_id = b.entity_id
+ORDER BY b.entity_type, b.entity_id, b.metric
