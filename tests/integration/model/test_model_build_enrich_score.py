@@ -579,6 +579,8 @@ def test_it02_26_scoring_checkpoint_survives_yield_and_resume(
 
     for name in ("metrics", "check"):
         monkeypatch.setitem(scoring_module._STEP_FUNCS, name, step(name))
+    # T04-21: remove once funding is wired (portfolio needs score.funding)
+    monkeypatch.setitem(scoring_module._STEP_FUNCS, "portfolio", None)
     outcome = _done(first)
     build_id = str(outcome.result["build_id"])
     assert (outcome.status, ran) == ("yield", ["metrics"])

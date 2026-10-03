@@ -56,7 +56,11 @@ def _validate_once(cfg: MetricsCatalogConfig, /, *, weights: WeightsConfig) -> l
 def patches(catalog: MetricCatalog, cfg_hash: str = CFG_HASH) -> list[tuple[object, str, object]]:
     """(object, name, value) triples pointing facts and scoring at the tiny config."""
     cfg = SimpleNamespace(weights=_WEIGHTS, metrics=catalog.config)
+    # T04-20 wired `portfolio`, which needs `score.funding`; the funding step stays unwired
+    # until T04-21, so full runs here keep `portfolio` unavailable. T04-21 drops this triple.
+    step_funcs = {**scoring._STEP_FUNCS, "portfolio": None}
     return [
+        (scoring, "_STEP_FUNCS", step_funcs),
         (scoring, "validate_catalog", _validate_once),
         (facts, "catalog_from_config", shipped_catalog),
         (facts, "get_config", lambda: cfg),
