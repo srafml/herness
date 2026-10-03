@@ -7,8 +7,11 @@ Spec 11's `full` synthetic build does not exist yet; both run on local "full-lik
 `embed_query` on the CPU with the tiny sentence-transformers model of `tests/fixtures/models/
 tiny-st` (bge-m3 is not in the test environment), and a stand-in warehouse whose
 `enrich.text_redacted` holds a snippet for every vector. BT05-07: every shipped catalog metric
-at team grain over 13 weeks on a `metrics_tiny`-schema build with `INCIDENTS` synthetic
-incidents over `TEAMS` teams, `SERVICES` services and two years. Run:
+at team grain over 13 weeks on a `metrics_tiny`-schema build with `TEAMS` teams, `SERVICES`
+services (owner and support `service_map` rows) and about two years of synthetic `INCIDENTS`
+incidents, `EVENTS` alert events, `CHANGES` changes (+ `LINKS` incident-change links) and
+`ITEMS` work items (epics with child stories, bugs and tasks, their transitions and
+incident-mention links), so every timed metric computes over real rows. Run:
 pytest -m "integration and slow" tests/bench.
 
 Spec targets (impl 05 §10.1): "BT05-06 | `semantic_search` k = 20 | 100 queries on `full`
@@ -72,6 +75,10 @@ INCIDENTS = 200_000
 TEAMS = 50
 SERVICES = 200
 CALLS_PER_METRIC = 25
+EVENTS = 400_000  # ~80 per team-week, 4/5 noise severities (alert_noise_ratio min sample 50)
+CHANGES = 100_000  # ~20 deployed per team-week (change metrics min sample 10)
+LINKS = 20_000
+ITEMS = 160_000  # 1 epic per 8 items: ~4 epics and ~22 done items per team-week
 _CHUNK = 20_000
 
 
@@ -226,6 +233,43 @@ _SYNTHETIC = (
     " 1 + i % 5, CASE WHEN i % 50 = 0 THEN 'canceled' ELSE 'closed' END, 'S' || (i % $services),"
     " 'T' || (i % $teams), i % 3, i % 7 = 0, i % 11 = 0, 1800 + i % 600, i % 90"
     " FROM range($incidents) t(i)",
+    "INSERT INTO core.service_map SELECT 'S' || i, 'T' || ((i + r) % $teams), NULL, NULL, 'O2',"
+    " CASE r WHEN 0 THEN 'owner' ELSE 'support' END, 'cmdb', 1.0 - r * 0.5"
+    " FROM range($services) t(i), range(2) u(r)",
+    "INSERT INTO core.event SELECT 'E' || i, 'prometheus',"
+    " TIMESTAMPTZ '2024-04-01 00:00:00+00' + to_seconds(CAST(i * 150 AS BIGINT)),"
+    " 'S' || (i % $services), 'h' || (i % 997),"
+    " ['critical', 'major', 'minor', 'warning', 'info'][1 + i % 5], 'alert ' || (i % 40),"
+    " 'resolved', 'd' || i, 60 + i % 900, CASE WHEN i % 4 = 0 THEN 'I' || (i % $incidents) END"
+    " FROM range($events) t(i)",
+    "INSERT INTO core.change (record_id, number, state, risk, type, opened_at, actual_end,"
+    " service_id, team_id, outcome) SELECT 'C' || i, 'CHG' || i, 'closed', 'moderate',"
+    " CASE WHEN i % 10 = 0 THEN 'emergency' WHEN i % 3 = 0 THEN 'standard' ELSE 'normal' END,"
+    " ts - to_hours(CAST(4 + i % 200 AS BIGINT)), ts, 'S' || (i % $services), 'T' || (i % $teams),"
+    " CASE WHEN i % 20 = 0 THEN 'unsuccessful' WHEN i % 37 = 0 THEN 'backed_out'"
+    " WHEN i % 50 = 1 THEN 'canceled' ELSE 'successful' END FROM (SELECT i,"
+    " TIMESTAMPTZ '2024-04-01 00:00:00+00' + to_minutes(CAST(i * 10 AS BIGINT)) AS ts"
+    " FROM range($changes) t(i))",
+    "INSERT INTO enrich.incident_change_link SELECT 'I' || (i * 10), 'C' || (i * 5),"
+    " 'time_window', CASE WHEN i % 4 = 0 THEN 0.5 ELSE 0.9 END FROM range($links) t(i)",
+    "INSERT INTO core.work_item (record_id, key, type, parent_key, project, status,"
+    " status_category, created_at, resolved_at, story_points, team_id, service_id)"
+    " SELECT 'W' || i, 'K' || i, CASE WHEN i % 8 = 0 THEN 'epic'"
+    " ELSE ['story', 'bug', 'task'][1 + i % 3] END,"
+    " CASE WHEN i % 8 <> 0 THEN 'K' || (i - i % 8) END, 'P' || (i // 8 % $teams), cat, cat, ts,"
+    " CASE WHEN cat = 'done' THEN ts + to_hours(done_h) END, 1 + i % 8,"
+    " 'T' || (i // 8 % $teams), 'S' || (i // 8 % $services) FROM (SELECT i,"
+    " TIMESTAMPTZ '2024-04-01 00:00:00+00' + to_seconds(CAST(i * 375 AS BIGINT)) AS ts,"
+    " CAST(CASE WHEN i % 8 = 0 THEN 480 ELSE 72 + i % 13 * 24 END AS BIGINT) AS done_h,"
+    " CASE WHEN i % 10 = 9 THEN 'in_progress' WHEN i % 10 = 7 THEN 'todo' ELSE 'done' END AS cat"
+    " FROM range($items) t(i))",
+    "INSERT INTO core.work_item_transition SELECT w.record_id, 'Open', 'In Progress', 'todo',"
+    " 'in_progress', w.created_at + to_hours(CAST(CASE WHEN w.type = 'epic' THEN 96"
+    " ELSE 24 + abs(hash(w.key)) % 48 END AS BIGINT)) FROM core.work_item w"
+    " WHERE w.status_category <> 'todo' UNION ALL SELECT w.record_id, 'In Progress', 'Done',"
+    " 'in_progress', 'done', w.resolved_at FROM core.work_item w WHERE w.status_category = 'done'",
+    "INSERT INTO core.work_item_link SELECT 'K' || i, 'INC' || i, 'mentions_incident'"
+    " FROM range($items) t(i) WHERE i % 15 = 1",
 )
 
 
@@ -234,15 +278,27 @@ def metrics_con() -> Iterator[duckdb.DuckDBPyConnection]:
     with pytest.MonkeyPatch.context() as mp:
         patch_facts_config(mp)
         con = build_metrics_tiny(rows=False)
-        values = {"teams": TEAMS, "services": SERVICES, "incidents": INCIDENTS}
+        values = {
+            "teams": TEAMS, "services": SERVICES, "incidents": INCIDENTS, "events": EVENTS,
+            "changes": CHANGES, "links": LINKS, "items": ITEMS,
+        }  # fmt: skip
         for statement in _SYNTHETIC:
             con.execute(statement, {k: v for k, v in values.items() if f"${k}" in statement})
         with freeze_time("2026-04-01 06:30:00"):
             materialize_facts(con, TINY_BUILD_ID)
-    facts = cast("tuple[int]", con.execute("SELECT count(*) FROM metrics.incident_fact").fetchone())
+    facts = cast(
+        "tuple[int, int, int, int]",
+        con.execute(
+            "SELECT (SELECT count(*) FROM metrics.incident_fact),"
+            " (SELECT count(*) FROM metrics.change_fact),"
+            " (SELECT count(*) FROM metrics.work_item_fact),"
+            " (SELECT count(*) FROM core.work_item_transition)"
+        ).fetchone(),
+    )
     sys.stderr.write(
-        f"BT05-07 data: {INCIDENTS} incidents, {TEAMS} teams, {SERVICES} services,"
-        f" {facts[0]} incident_fact rows\n"
+        f"BT05-07 data: {TEAMS} teams, {SERVICES} services, {EVENTS} events, {LINKS} links;"
+        f" facts: {facts[0]} incident, {facts[1]} change, {facts[2]} work_item;"
+        f" {facts[3]} transitions\n"
     )
     yield con
     con.close()
@@ -265,14 +321,13 @@ def test_bt05_07_get_metric_team_13_weeks_p95(
     ctx = sd.make_ctx(handle, FakeOps(), limits=SqlLimits(timeout_s=30.0))
     tool = wt.GetMetric()
     first_monday = datetime.date(2024, 7, 1)
-    # "every catalog metric, team grain": the metrics that have the team grain (two shipped
-    # metrics, availability_pct and error_rate, are service/org only and refuse team grain).
+    # "every catalog metric, team grain": every metric with the team grain. Two shipped metrics,
+    # availability_pct and error_rate, have grains [service, org] (config/metrics.yaml, their
+    # entries) and refuse team grain, so they are not timed.
     names = [name for name in catalog.names() if "team" in catalog.get(name).grains]
-    assert len(names) >= len(catalog.names()) - 2
-    # The synthetic data holds org, teams, services and incidents only: metrics over alerts,
-    # changes or work items compute empty results. They are still timed; the incident-backed
-    # metrics must return rows (the base bench asserted rows for every metric and could not
-    # pass on this data, T05-28 note).
+    assert set(catalog.names()) - set(names) == {"availability_pct", "error_rate"}
+    # Every timed call must return rows (an empty result is cheaper than a real one and would
+    # understate the p95); metrics with an empty result are listed on stderr, then fail.
     empty: set[str] = set()
 
     def one_pass() -> list[float]:
@@ -304,8 +359,8 @@ def test_bt05_07_get_metric_team_13_weeks_p95(
         c.reset_config()
     sys.stderr.write(
         f"BT05-07 {len(names)} metrics x {CALLS_PER_METRIC} calls per repeat;"
-        f" empty on the stand-in data: {sorted(empty)}\n"
+        f" metrics with an empty result: {sorted(empty)}\n"
     )
-    assert not empty & {"incident_count", "mttr_hours", "p1p2_count", "sla_breach_rate"}
+    assert not empty, f"metrics with an empty result: {sorted(empty)}"
     p95_ms = report("BT05-07", "p95_get_metric", p95s, "ms", "< 2000 ms")
     assert p95_ms < 2000, f"get_metric p95 {p95_ms:.1f} ms"
