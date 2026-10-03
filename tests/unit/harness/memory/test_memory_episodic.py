@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -296,6 +296,22 @@ def test_ut07_67_injection_shaped_text_stays_data(deps: EpisodicDeps) -> None:
     assert line.count('decision="') == 0
 
 
+def test_ut07_67_tally_counts_verdicts_of_recs_no_longer_accepted(deps: EpisodicDeps) -> None:
+    """UT07-67 verdicts are the latest outcome of every rec, even one rejected after it."""
+    current, prior = seed_run(started=NOW), seed_run(started=NOW - DAY)
+    rid, other = seed_recs([rec_row(prior, NOW - 50 * DAY), rec_row(prior, NOW - 49 * DAY)])
+    seed_decision(rid, "accepted", NOW - 40 * DAY)
+    seed_outcome(rid, "paid_off")
+    seed_decision(rid, "rejected", NOW - 5 * DAY)
+    seed_decision(other, "accepted", NOW - 40 * DAY)
+    seed_outcome(other, "worse")
+    seed_decision(other, "deferred", NOW - 4 * DAY)
+    ctx = prior_context(_ctx(current), deps=deps, now=NOW)
+    assert ctx.tally == {"accepted": 0, "paid_off": 1, "no_effect": 0, "worse": 1,
+                         "inconclusive": 0, "pending": 0}  # fmt: skip
+    assert {i.decision for i in ctx.items} == {"rejected", "deferred"}
+
+
 def test_ut07_67_malformed_stored_number_shows_bare_marker(deps: EpisodicDeps) -> None:
     """UT07-67 a stored NumberRef that no longer validates leaves the marker bare."""
     current, prior = seed_run(started=NOW), seed_run(started=NOW - DAY)
@@ -396,6 +412,46 @@ def test_ut07_68_note_content_with_date_pattern(tmp_path: Path, jobs: None) -> N
     keys = [j["idem_key"] for j in _job_rows()]
     assert keys == [f"outcome:{rid}:1:2026-09-03", f"outcome:{rid}:2:2026-09-03"]
     assert _decisions()[0]["effective_at"] == "2026-09-03T23:30:00.000000Z"
+
+
+def test_ut07_68_non_utc_effective_at_near_midnight(tmp_path: Path, jobs: None) -> None:
+    """UT07-68 a -05:00 effective_at late on 1 Sep is 2 Sep in UTC everywhere it is used."""
+    deps = make_deps(make_writer_allowing(tmp_path / "tz", DATE_PATTERN), allowed=(DATE_PATTERN,))
+    rid = _one_rec()
+    eff = datetime(2026, 9, 1, 23, 30, tzinfo=timezone(timedelta(hours=-5)))
+    decide(rid, "accepted", "ok", USER, eff, deps=deps, now=NOW)
+    assert _decisions()[0]["effective_at"] == "2026-09-02T04:30:00.000000Z"
+    (note,) = memory_rows()
+    assert note["content"].endswith(" with effect from 2026-09-02.")
+    rows = _job_rows()
+    assert [j["idem_key"] for j in rows] == [f"outcome:{rid}:1:2026-09-02",
+                                             f"outcome:{rid}:2:2026-09-02"]  # fmt: skip
+    # due dates: 2026-09-02 + 12 weeks and + 26 weeks, at 06:00 UTC
+    assert [j["scheduled_for"] for j in rows] == [
+        "2026-11-25T06:00:00.000000Z", "2027-03-03T06:00:00.000000Z",
+    ]  # fmt: skip
+
+
+def test_ut07_68_reason_cut_after_redaction(deps: EpisodicDeps, jobs: None) -> None:
+    """UT07-68 a reason that redaction inflates past 1,000 chars is cut to 1,000 after it."""
+    rid = _one_rec(expected_metric=None)
+    reason = " ".join(["a@b.io"] * 140)  # 979 chars; each address becomes an 18-char token
+    assert len(reason) <= 1000
+    decide(rid, "rejected", reason, USER, deps=deps, now=NOW)
+    stored = _decisions()[0]["reason"]
+    assert len(stored) == 1000
+    assert stored.startswith("[EMAIL_")
+    assert "a@b.io" not in stored
+
+
+def test_ut07_68_target_label_redacted_before_cut(deps: EpisodicDeps, jobs: None) -> None:
+    """UT07-68 the note's target label is redacted before the 150-char cut (no partial leak)."""
+    target = "x" * 7 + f"{PLANTED_EMAIL} " * 8  # raw label cut at 150 ends inside an address
+    rid = _one_rec(target_id=target, expected_metric=None)
+    decide(rid, "rejected", "no", USER, deps=deps, now=NOW)
+    (note,) = memory_rows()
+    assert "[EMAIL_" in note["content"]
+    assert PLANTED_EMAIL.split("@", maxsplit=1)[0] not in note["content"]
 
 
 def test_ut07_68_numeral_bearing_parts_are_left_out(deps: EpisodicDeps, jobs: None) -> None:
