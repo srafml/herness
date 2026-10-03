@@ -505,10 +505,10 @@ def test_ut04_71_compute_reexports_peer_group() -> None:
 
 
 @pytest.mark.parametrize("bad_id", INJECTIONS)
-def test_th04_01_entity_id_is_bound_not_rendered(
+def test_ut04_72_th04_01_entity_id_is_bound_not_rendered(
     tiny: duckdb.DuckDBPyConnection, bad_id: str
 ) -> None:
-    """TH04-01 injection-shaped ids reach SQL only as typed binds; tables stay intact."""
+    """UT04-72 TH04-01 injection-shaped ids reach SQL only as typed binds; tables stay intact."""
     _services(tiny, 2, bad_id, "S5")
     seen: list[RecordedQuery] = []
     info = peer_group("service", bad_id, con=tiny, on_evidence=seen.append)
@@ -526,8 +526,11 @@ def test_th04_01_entity_id_is_bound_not_rendered(
     assert count[0] == 4
 
 
-def test_th04_01_metric_is_allowlisted_and_bound(tiny: duckdb.DuckDBPyConnection) -> None:
-    """TH04-01 an injection-shaped metric is rejected; a valid one is a bind, not SQL text."""
+def test_ut04_71_th04_01_metric_is_allowlisted_and_bound(tiny: duckdb.DuckDBPyConnection) -> None:
+    """UT04-71 TH04-01 an injection-shaped metric is rejected.
+
+    A valid one is a bind, not SQL text.
+    """
     for bad in INJECTIONS:
         with pytest.raises(ToolInputError, match="unknown metric"):
             peer_group("team", "T1", metric=bad, con=tiny)
