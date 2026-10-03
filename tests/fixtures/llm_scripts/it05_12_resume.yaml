@@ -1,0 +1,15 @@
+# T05-27 (IT05-12, flow F05-06): the resumed run after the kill. The model re-runs the step 1
+# query (same SQL, another purpose, so it executes again) next to a new query: the evidence use
+# of step 1 must not be duplicated. Then the text turn and the structured final.
+# Child: tests/support/loop_kill.py.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: run_sql
+          arguments: {sql: "SELECT count(*) AS n FROM core.incident", purpose: recheck after resume}
+        - name: run_sql
+          arguments: {sql: "SELECT max(mttr_hours) AS m FROM core.incident", purpose: step 4}
+    - final:
+        text: "Counted incidents by service and priority."
+    - final:
+        output: {answer: "40 incidents"}
