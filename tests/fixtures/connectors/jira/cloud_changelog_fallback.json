@@ -1,0 +1,1429 @@
+{
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search/jql",
+        "json": {
+          "jql": "updated >= \"2026/09/01 10:00\" AND updated < \"2026/09/02 09:59\" AND (project = SYN) ORDER BY updated ASC, id ASC",
+          "fields": [
+            "issuetype",
+            "parent",
+            "project",
+            "components",
+            "labels",
+            "status",
+            "created",
+            "resolutiondate",
+            "summary",
+            "description",
+            "updated",
+            "issuelinks",
+            "customfield_10016",
+            "customfield_10014"
+          ],
+          "maxResults": 100
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issues": [
+            {
+              "id": "10001",
+              "key": "SYN-1",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 1",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 1"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:06:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 1.0,
+                "customfield_10014": "SYN-0"
+              }
+            },
+            {
+              "id": "10002",
+              "key": "SYN-2",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": "2026-09-01T09:30:00.000+0000",
+                "summary": "Synthetic issue 2",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 2"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:07:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 2.0,
+                "customfield_10014": "SYN-0"
+              }
+            }
+          ],
+          "nextPageToken": "synthetic-next-page-token-1",
+          "isLast": false
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/changelog/bulkfetch",
+        "json": {
+          "issueIdsOrKeys": [
+            "10001",
+            "10002"
+          ],
+          "maxResults": 1000
+        }
+      },
+      "response": {
+        "status": 404,
+        "json": {
+          "errorMessages": [
+            "synthetic not found"
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/issue/10001/changelog",
+        "params": {
+          "startAt": "0",
+          "maxResults": "100"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "self": "https://jira.example.test/rest/api/3/issue/10001/changelog?startAt=0&maxResults=100",
+          "startAt": 0,
+          "values": [
+            {
+              "id": "10001000",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:00:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001001",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:01:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001002",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:02:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001003",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:03:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001004",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:04:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001005",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:05:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001006",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:06:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001007",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:07:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001008",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:08:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001009",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:09:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001010",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:10:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001011",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:11:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001012",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:12:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001013",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:13:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001014",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:14:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001015",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:15:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001016",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:16:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001017",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:17:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001018",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:18:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001019",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:19:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001020",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:20:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001021",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:21:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001022",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:22:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001023",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:23:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001024",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:24:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001025",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:25:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001026",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:26:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001027",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:27:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001028",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:28:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001029",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:29:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001030",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:30:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001031",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:31:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001032",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:32:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001033",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:33:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001034",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:34:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001035",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:35:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001036",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:36:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001037",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:37:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001038",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:38:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001039",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:39:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001040",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:40:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001041",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:41:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001042",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:42:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001043",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:43:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001044",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:44:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001045",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:45:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001046",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:46:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001047",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:47:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001048",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:48:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001049",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:49:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            }
+          ],
+          "maxResults": 50,
+          "total": 57,
+          "isLast": false,
+          "nextPage": "https://jira.example.test/rest/api/3/issue/10001/changelog?startAt=50&maxResults=50"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/issue/10001/changelog",
+        "params": {
+          "startAt": "50",
+          "maxResults": "100"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "self": "https://jira.example.test/rest/api/3/issue/10001/changelog?startAt=50&maxResults=100",
+          "startAt": 50,
+          "values": [
+            {
+              "id": "10001050",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:50:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001051",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:51:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001052",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:52:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001053",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:53:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            },
+            {
+              "id": "10001054",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:54:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10001055",
+              "author": {
+                "accountId": "synthetic-account-3",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:55:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10001056",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:56:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            }
+          ],
+          "maxResults": 50,
+          "total": 57,
+          "isLast": true
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/issue/10002/changelog",
+        "params": {
+          "startAt": "0",
+          "maxResults": "100"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "self": "https://jira.example.test/rest/api/3/issue/10002/changelog?startAt=0&maxResults=100",
+          "startAt": 0,
+          "values": [
+            {
+              "id": "10002000",
+              "author": {
+                "accountId": "synthetic-account-0",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:00:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "1",
+                  "fromString": "To Do",
+                  "to": "2",
+                  "toString": "In Progress"
+                }
+              ]
+            },
+            {
+              "id": "10002001",
+              "author": {
+                "accountId": "synthetic-account-1",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:01:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "2",
+                  "fromString": "In Progress",
+                  "to": "3",
+                  "toString": "In Review"
+                }
+              ]
+            },
+            {
+              "id": "10002002",
+              "author": {
+                "accountId": "synthetic-account-2",
+                "displayName": "Synthetic Person"
+              },
+              "created": "2026-08-01T10:02:00.000+0000",
+              "items": [
+                {
+                  "field": "status",
+                  "fieldtype": "jira",
+                  "from": "3",
+                  "fromString": "In Review",
+                  "to": "4",
+                  "toString": "Done"
+                }
+              ]
+            }
+          ],
+          "maxResults": 100,
+          "total": 3
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/rest/api/3/search/jql",
+        "json": {
+          "jql": "updated >= \"2026/09/01 10:00\" AND updated < \"2026/09/02 09:59\" AND (project = SYN) ORDER BY updated ASC, id ASC",
+          "fields": [
+            "issuetype",
+            "parent",
+            "project",
+            "components",
+            "labels",
+            "status",
+            "created",
+            "resolutiondate",
+            "summary",
+            "description",
+            "updated",
+            "issuelinks",
+            "customfield_10016",
+            "customfield_10014"
+          ],
+          "maxResults": 100,
+          "nextPageToken": "synthetic-next-page-token-1"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "issues": [
+            {
+              "id": "10003",
+              "key": "SYN-3",
+              "fields": {
+                "issuetype": {
+                  "id": "10002",
+                  "name": "Story"
+                },
+                "parent": {
+                  "id": "10000",
+                  "key": "SYN-0"
+                },
+                "project": {
+                  "id": "10100",
+                  "key": "SYN",
+                  "name": "Synthetic"
+                },
+                "components": [
+                  {
+                    "id": "10200",
+                    "name": "core"
+                  }
+                ],
+                "labels": [
+                  "synthetic"
+                ],
+                "status": {
+                  "name": "Done",
+                  "statusCategory": {
+                    "key": "done"
+                  }
+                },
+                "created": "2026-08-01T09:00:00.000+0000",
+                "resolutiondate": null,
+                "summary": "Synthetic issue 3",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Synthetic description 3"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "updated": "2026-09-01T10:08:00.000+0000",
+                "issuelinks": [],
+                "customfield_10016": 3.0,
+                "customfield_10014": "SYN-0"
+              }
+            }
+          ],
+          "isLast": true
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rest/api/3/issue/10003/changelog",
+        "params": {
+          "startAt": "0",
+          "maxResults": "100"
+        }
+      },
+      "response": {
+        "status": 200,
+        "json": {
+          "self": "https://jira.example.test/rest/api/3/issue/10003/changelog?startAt=0&maxResults=100",
+          "startAt": 0,
+          "values": [],
+          "maxResults": 100,
+          "total": 0
+        }
+      }
+    }
+  ]
+}

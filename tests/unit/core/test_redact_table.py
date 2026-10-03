@@ -55,6 +55,8 @@ def dotenv_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     herness.write_text(text, "utf-8")
     (tmp_path / ".env").write_text(f"HERNESS_SECRET__REDACT_HMAC_KEY={KEY.hex()}\n", "utf-8")
     monkeypatch.setenv("HERNESS_ENV", "dev")
+    # spawned workers get a working (empty) keyring backend, not the host default
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "tests.support.fake_keyring.MemoryKeyring")
     c.init_config("local", config_dir=cfg_dir)
     return cfg_dir
 

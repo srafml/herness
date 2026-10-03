@@ -58,8 +58,9 @@ def test_st10_08_various_clients_are_blocked_before_any_socket_opens(tmp_path: P
         socket.create_connection(("evil.example.com", 443), timeout=1)
     with pytest.raises(EgressBlocked):
         _https_connection_get("evil.example.com")
+    no_proxy = urllib.request.ProxyHandler({})  # noqa: TID251 - ignore the host's *_PROXY env
     with pytest.raises(EgressBlocked):
-        urllib.request.urlopen("https://evil.example.com", timeout=1)  # noqa: TID251
+        urllib.request.build_opener(no_proxy).open("https://evil.example.com", timeout=1)  # noqa: TID251
 
 
 def test_st10_29_huggingface_blocked_and_offline_env_set(
