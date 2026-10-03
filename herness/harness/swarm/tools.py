@@ -19,7 +19,6 @@ from herness.core.types import (
     AsyncTool,
     Finding,
     FindingStatus,
-    NumberRef,
     Role,
     ScopeEntityType,
     Specialty,
@@ -30,7 +29,7 @@ from herness.core.types import (
 )
 from herness.harness.blackboard import Blackboard, FindingFilter
 from herness.harness.swarm.spawn import SpawnBroker
-from herness.harness.tools import TOOL_CONTENT_MAX_CHARS
+from herness.harness.tools import NUMBER_REF_SCHEMA, TOOL_CONTENT_MAX_CHARS
 
 __all__ = ["EscalateTool", "ListFindingsTool", "PostFindingTool", "RequestSubtaskTool"]
 __all__ += ["build_task_tools"]
@@ -64,22 +63,6 @@ def _obj(props: dict[str, JsonValue]) -> _Schema:
     }
 
 
-_ROW_KEY_PAIR: Final = _obj(
-    {"column": _text(1, 128), "value": {"type": ["string", "number", "boolean", "null"]}}
-)
-NUMBER_REF_SCHEMA: Final = _obj(
-    {
-        "id": {"type": "string", "pattern": r"^n[0-9]+$"},
-        "value": {"type": ["number", "string"]},
-        "unit": _enum(get_args(NumberRef.model_fields["unit"].annotation)),
-        "query_id": _QID,
-        "column": _text(1, 128),
-        "row_key": {"type": ["array", "null"], "maxItems": 16, "items": _ROW_KEY_PAIR},
-        "format": _enum(
-            get_args(get_args(NumberRef.model_fields["format"].annotation)[0]), nullable=True
-        ),
-    }
-)
 _ENTITY_TYPES: Final = get_args(ScopeEntityType.__value__)
 _ENTITY_ID: Final = _text(1, 200)
 POST_FINDING_SCHEMA: Final = _obj(

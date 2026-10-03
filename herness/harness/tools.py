@@ -43,7 +43,7 @@ from herness.harness import _tools_dispatch as dsp
 from herness.harness import _tools_record as rec
 from herness.harness._tools_dispatch import MAX_TOOL_ARGUMENT_CHARS, MAX_TOOL_CALLS_PER_MESSAGE
 from herness.harness._tools_record import json_safe
-from herness.harness._tools_schema import check_tool_schema
+from herness.harness._tools_schema import NUMBER_REF_SCHEMA, check_tool_schema
 from herness.harness.sql_guard import SqlGuard
 
 if TYPE_CHECKING:  # roles.base and loop import this module at run time
@@ -53,6 +53,7 @@ if TYPE_CHECKING:  # roles.base and loop import this module at run time
 __all__ = [
     "MAX_TOOL_ARGUMENT_CHARS",
     "MAX_TOOL_CALLS_PER_MESSAGE",
+    "NUMBER_REF_SCHEMA",
     "TOOL_CONTENT_MAX_CHARS",
     "TOOL_OWNERS",
     "AsyncTool",

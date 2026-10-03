@@ -4,20 +4,21 @@ Split out so `tools.py` stays within its 400-line budget. `check_tool_schema` is
 registration rule: a valid Draft 2020-12 schema that is strict-compatible at every object
 level (R-26: `additionalProperties: false`, every property listed in `required`; optional
 values are nullable). `schema_hint` is the dispatch step 5 hint: the first validation error
-with its JSON path, never echoing the offending argument value (TH05-16).
+with its JSON path, never echoing the offending argument value (TH05-16). `NUMBER_REF_SCHEMA`
+is spec 05's `NumberRef` as a strict tool argument (re-exported by `tools.py`; T07-23 move).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from typing import Final
+from typing import Final, get_args
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import JsonValue
 
 from herness.core.errors import ConfigError
-from herness.core.types import AsyncTool, Tool
+from herness.core.types import AsyncTool, NumberRef, Tool
 
 HINT_MAX_CHARS: Final = 300
 _SUB_ONE: Final = ("items", "not", "if", "then", "else", "contains", "additionalItems")
@@ -32,6 +33,26 @@ _JSON_TYPE: Final = {
     list: "array",
     dict: "object",
 }
+
+
+def _obj(props: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    return {"type": "object", "properties": props, "required": list(props),
+            "additionalProperties": False}  # fmt: skip
+
+
+_TEXT: Final[dict[str, JsonValue]] = {"type": "string", "minLength": 1, "maxLength": 128}
+_NR: Final = NumberRef.model_fields
+_FORMATS: Final[list[JsonValue]] = [str(v) for v in get_args(get_args(_NR["format"].annotation)[0])]
+# U05-10 strict fallback (`row_key` as `{column, value}` pairs: an open object is not strict);
+# the swarm (06) and memory (07) tool schemas embed this one definition.
+NUMBER_REF_SCHEMA: Final = _obj({
+    "id": {"type": "string", "pattern": r"^n[0-9]+$"}, "value": {"type": ["number", "string"]},
+    "unit": {"type": "string", "enum": [str(v) for v in get_args(_NR["unit"].annotation)]},
+    "query_id": {"type": "string", "pattern": r"^q_[0-9a-f]{16}$"}, "column": dict(_TEXT),
+    "row_key": {"type": ["array", "null"], "maxItems": 16, "items": _obj(
+        {"column": dict(_TEXT), "value": {"type": ["string", "number", "boolean", "null"]}})},
+    "format": {"type": ["string", "null"], "enum": [*_FORMATS, None]},
+})  # fmt: skip
 
 
 def _subschemas(schema: Mapping[str, JsonValue]) -> Iterator[JsonValue]:

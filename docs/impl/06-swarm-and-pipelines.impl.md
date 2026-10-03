@@ -83,7 +83,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (spec 00
 | `herness/harness/findings.py` | Pure finding rules and entity lookups | `extract_markers`, `validate_markers`, `impact_usd`, `normalize_objective`, `compute_dedup_key`, `EntityCatalog` | L4 | none | 260 |
 | `herness/harness/blackboard.py` | Blackboard API, single writer thread | `FindingFilter`, `Blackboard` | L4 | `herness.core.redact`, `herness.core.resilience` (fault point), `herness.core.jobs` (task helpers) | 380 |
 | `herness/harness/swarm/__init__.py` | Re-exports | `Swarm`, `RunRequest`, `RunResult`, `review_job_handler` | L4 | none | 20 |
-| `herness/harness/swarm/tools.py` | Swarm-provided tools | `PostFindingTool`, `ListFindingsTool`, `RequestSubtaskTool`, `EscalateTool`, `build_task_tools` | L4 | `herness.harness.tools` | 330 |
+| `herness/harness/swarm/tools.py` | Swarm-provided tools (imports spec 05 `NUMBER_REF_SCHEMA` from `herness.harness.tools`, T07-23 spec note) | `PostFindingTool`, `ListFindingsTool`, `RequestSubtaskTool`, `EscalateTool`, `build_task_tools` | L4 | `herness.harness.tools` | 330 |
 | `herness/harness/swarm/spawn.py` | Spawn broker | `SpawnDecision`, `SpawnBroker` | L4 | none | 220 |
 | `herness/harness/swarm/routing.py` | Role mapping, routing, hooks and tool context construction | `map_agent_result`, `role_prompt_name`, `Route`, `route_task`, `build_hooks`, `build_tool_context`, `default_tools` | L4 | `herness.harness.loop`, `herness.harness.llm`, `herness.core.resilience` | 330 |
 | `herness/harness/swarm/scheduler.py` | Phase scheduler and task executor | `PhaseRunner`, `budget_admits`, `CapTracker` | L4 | `herness.core.jobs` | 360 |
