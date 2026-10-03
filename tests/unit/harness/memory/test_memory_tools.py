@@ -597,3 +597,20 @@ def test_ut07_90_null_values_take_defaults(ops_store: OpsStoreHandle) -> None:
     assert (item.provenance.query_ids, item.provenance.finding_ids) == ([], [])
     assert item.data["entities"] == []
     assert "rationale" not in item.data
+
+
+def test_ut07_90_non_string_query_and_content(ops_store: OpsStoreHandle) -> None:
+    """UT07-90 behind the schema: a null query or content is a ToolInputError."""
+    ctx = ctx_for(seed_run())
+    with pytest.raises(ToolInputError, match=r"^query must be a string$"):
+        RecallMemoryTool(FakeStore())(ctx, **{**_RECALL_NULLS, "query": None})
+    with pytest.raises(ToolInputError, match=r"^content must be a string$"):
+        _propose(FakeStore(), ctx, None)  # type: ignore[arg-type]
+
+
+def test_ut07_90_row_key_not_pairs_is_left_to_validation(ops_store: OpsStoreHandle) -> None:
+    """UT07-90 a row_key list that is not {column, value} pairs fails NumberRef validation."""
+    num: JsonValue = {"id": "n1", "value": 4, "unit": "count", "query_id": QID, "column": "c",
+           "row_key": ["team"], "format": None}  # fmt: skip
+    with pytest.raises(ToolInputError, match=r"^invalid propose_memory arguments: numbers$"):
+        _propose(FakeStore(), ctx_for(seed_run()), "churn: [[n1]] left", numbers=[num])
