@@ -159,6 +159,8 @@ def test_ut04_71_team_buckets_and_all_fallback(
     _mv(tiny, "T4", 6.0, flags=["insufficient_sample"])  # does not count, as in score.org
     few = peer_group("team", "T1", metric=MTTR, con=tiny)
     assert _shape(few) == ("team:all", ["T2", "T3", "T4", "T5"], 4, "all")
+    _use(monkeypatch, _catalog(min_peer_group=3))  # 2 counted values: the flagged one decides
+    assert peer_group("team", "T1", metric=MTTR, con=tiny).key == "team:all"
     _use(monkeypatch, _catalog(min_peer_group=2))
     assert _shape(peer_group("team", "T1", metric=MTTR, con=tiny)) == (
         "team:crit_hi",
@@ -220,7 +222,6 @@ def test_ut04_71_input_validation(
         lambda: peer_group("cluster", "C1", con=tiny),  # type: ignore[arg-type]
         lambda: peer_group("team", "", con=tiny),
         lambda: peer_group("team", "x" * 257, con=tiny),
-        lambda: peer_group("team", "T1\n", con=tiny),
         lambda: peer_group("team", 5, con=tiny),  # type: ignore[arg-type]
         lambda: peer_group("team", "T1", metric="nope", con=tiny),
         lambda: peer_group("team", "T1", metric="availability_pct", con=tiny),
@@ -229,6 +230,8 @@ def test_ut04_71_input_validation(
     for call in bad:
         with pytest.raises(ToolInputError):
             call()
+    with pytest.raises(ToolInputError, match="printable"):
+        peer_group("team", "T1\n", con=tiny)
     with pytest.raises(ToolInputError, match="unknown team"):  # 256 characters pass the checks
         peer_group("team", "x" * 256, con=tiny)
     assert peer_group("service", "S1", metric="availability_pct", con=tiny).key == "service:crit_1"
@@ -269,6 +272,12 @@ def test_ut04_73_item_with_service(tiny: duckdb.DuckDBPyConnection) -> None:
     _services(tiny, 1, "S11", "S12", "S13")
     info = peer_group("work_item", "W1", con=tiny)
     assert _shape(info) == ("service:crit_1", ["S11", "S12", "S13"], 3, None)
+    tiny.execute(  # a matching owner map row does not override the item's own service_id
+        "INSERT INTO core.service_map (service_id, jira_project, role, confidence)"
+        " VALUES ('S2', 'PAY', 'owner', 1.0)"
+    )
+    info = peer_group("work_item", "W1", con=tiny)
+    assert _shape(info) == ("service:crit_1", ["S11", "S12", "S13"], 3, None)
 
 
 def _item(
@@ -299,14 +308,31 @@ def test_ut04_73_item_via_service_map(tiny: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def test_ut04_73_item_via_map_highest_confidence(tiny: duckdb.DuckDBPyConnection) -> None:
+    """UT04-73 the owner map row with the highest confidence wins, whatever its component."""
+    _services(tiny, 2, "S5", "S6", "S7")
+    _item(tiny, "WM8", "MAP", ["api"])
+    tiny.execute(
+        "INSERT INTO core.service_map (service_id, jira_project, jira_component, role, confidence)"
+        " VALUES ('S5', 'MAP', 'api', 'owner', 0.5), ('S6', 'MAP', NULL, 'owner', 0.9)"
+    )
+    assert peer_group("work_item", "WM8", con=tiny).member_ids == ["S5", "S7"]
+
+
 def _clone_incident(
-    con: duckdb.DuckDBPyConnection, record_id: str, cluster: str, sid: str, ts: str
+    con: duckdb.DuckDBPyConnection,
+    record_id: str,
+    cluster: str,
+    sid: str,
+    ts: str,
+    *,
+    excluded: bool = False,
 ) -> None:
     con.execute(
         "INSERT INTO metrics.incident_fact SELECT * REPLACE (? AS record_id, ? AS cluster_id,"
-        " ? AS service_id, CAST(? AS TIMESTAMPTZ) AS opened_at, false AS excluded)"
+        " ? AS service_id, CAST(? AS TIMESTAMPTZ) AS opened_at, ? AS excluded)"
         " FROM metrics.incident_fact WHERE record_id = 'I1'",
-        [record_id, cluster, sid, ts],
+        [record_id, cluster, sid, ts, excluded],
     )
 
 
@@ -325,6 +351,18 @@ def test_ut04_73_cluster_fix_most_frequent_service(tiny: duckdb.DuckDBPyConnecti
     _clone_incident(tiny, "TA", "C2", "S2", "2026-03-01 00:00:00+00")
     _clone_incident(tiny, "TB", "C2", "S1", "2026-03-02 00:00:00+00")
     assert peer_group("work_item", "cluster_fix:C2", con=tiny).member_ids == ["S11"]  # tie: S1
+
+
+def test_ut04_73_cluster_fix_ignores_excluded_and_as_of(tiny: duckdb.DuckDBPyConnection) -> None:
+    """UT04-73 excluded incidents and ones opened at as_of_ts do not pick the owning service."""
+    as_of_ts = "2026-04-01 04:00:00+00"  # local midnight of as_of in America/New_York
+    for cluster in ("C3", "C4"):
+        _clone_incident(tiny, f"{cluster}S1", cluster, "S1", "2026-03-01 00:00:00+00")
+    for n in range(2):
+        _clone_incident(tiny, f"AT{n}", "C3", "S2", as_of_ts)
+        _clone_incident(tiny, f"EX{n}", "C4", "S2", "2026-03-05 00:00:00+00", excluded=True)
+    for cluster in ("C3", "C4"):
+        assert peer_group("work_item", f"cluster_fix:{cluster}", con=tiny).key == "service:crit_1"
 
 
 def test_ut04_73_unresolved_items(tiny: duckdb.DuckDBPyConnection) -> None:
