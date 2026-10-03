@@ -100,12 +100,28 @@ def promote_build(
     previous = write_current(build_id, layout=layout)
     if previous is not None and previous != build_id:
         _retire_quietly(previous, layout)  # deferred or failed: the next cleanup retries
+    finish_promotion(build_id, build_cfg=build_cfg, layout=layout, now=now, previous=previous)
+    return previous
+
+
+def finish_promotion(
+    build_id: str,
+    *,
+    build_cfg: BuildSettings,
+    layout: DataLayout,
+    now: datetime.datetime,
+    previous: str | None,
+) -> None:
+    """Steps 5-6 of U02-104 once ``CURRENT`` names ``build_id``: retention, then the log.
+
+    Also the whole promotion of a retried job whose earlier attempt switched ``CURRENT``
+    and then failed (T02-21 spec note under U02-104); ``previous`` is then unknown (None).
+    """
     protect = frozenset({build_id})
     cleanup_builds(
         mode="post", keep_last=build_cfg.keep_last, protect=protect, layout=layout, now=now
     )
     _log.info("model.build.promoted", build_id=build_id, previous=previous)
-    return previous
 
 
 def _job_builds(job: JobRow) -> set[str]:

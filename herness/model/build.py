@@ -326,7 +326,7 @@ def _yield(run: _BuildRun) -> JobOutcome:
 def _fail(run: _BuildRun, stage: str, exc: HernessError) -> None:
     """Mark the build failed (best effort), log and write metrics (U02-98 error path)."""
     try:
-        if stage != "promote" or "dq" not in run.result:  # gate passed: retry resumes here
+        if not _build_promote.keeps_status(run, stage):  # T02-21: a retry resumes promote
             meta.update_build_row(_connection(run), status="failed", finished_at=clock.now())
     except Exception as mark_exc:  # noqa: BLE001 - the original error must propagate
         error_class = type(mark_exc).__name__
@@ -389,7 +389,7 @@ def run_build_pipeline(ctx: JobContext, *, llm_factory: object | None = None) ->
     layout = data_layout(cfg=cfg)
     now = clock.now()
     state = ctx.load_state()
-    build_id, done = support.resolve_build(payload.build_id, state, layout, now)
+    build_id, done = support.resolve_build(payload.build_id, state, layout, now, payload.stages)
     _build_promote.cleanup_before_build(build_id, cfg.sources.build, layout, now)  # step 4
     run = _BuildRun(ctx, payload, cfg, layout, build_id, now, llm_factory, done, state=state)
     try:

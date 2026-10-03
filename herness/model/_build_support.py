@@ -11,7 +11,7 @@ import dataclasses
 import datetime
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import psutil
@@ -87,29 +87,43 @@ def _status(build_id: str, layout: DataLayout) -> str | None:
     return found[0] if found else None
 
 
+def _resumable(status: str | None, done: Sequence[str], stages: Sequence[str]) -> bool:
+    """``building``, or ``promoted`` when ``promote`` is the only requested stage left: a
+    promotion that failed after the status update (T02-21 spec note under U02-104)."""
+    left = [stage for stage in stages if stage not in done]
+    return status == "building" or (status == "promoted" and left == ["promote"])
+
+
 def resolve_build(
     build_id: str | None,
     state: Mapping[str, JsonValue],
     layout: DataLayout,
     now: datetime.datetime,
+    stages: Sequence[str] = STAGE_ORDER,
 ) -> tuple[str, list[str]]:
     """The build to work on and its stages already done (U02-98 step 3).
 
-    A payload ``build_id`` must exist (NotFoundError) with status ``building`` (ConfigError);
-    else a state naming a ``building`` build with ``build`` done resumes it; else a new ID.
+    A payload ``build_id`` must exist (NotFoundError) and be resumable (ConfigError); else a
+    state naming a resumable build with ``build`` done resumes it; else a new ID. Resumable
+    is ``building``, or ``promoted`` when only ``promote`` of the payload ``stages`` is left.
     """
     if build_id is not None:
         status = _status(build_id, layout)
         if status is None:
             msg = f"build {build_id} does not exist"
             raise NotFoundError(msg, kind="build", key=build_id)
-        if status != "building":
+        done = _done_stages(state, build_id)
+        if not _resumable(status, done, stages):
             msg = f"build {build_id} is {status}"
             raise ConfigError(msg)
-        return build_id, _done_stages(state, build_id)
+        return build_id, done
     state_id = state.get("build_id")
     done = _done_stages(state, state_id)
-    if isinstance(state_id, str) and "build" in done and _status(state_id, layout) == "building":
+    if (
+        isinstance(state_id, str)
+        and "build" in done
+        and _resumable(_status(state_id, layout), done, stages)
+    ):
         return state_id, done
     return warehouse.new_build_id(now), []
 
