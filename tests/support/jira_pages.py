@@ -197,7 +197,8 @@ def history(n: int, k: int, *, field: str = "status") -> dict[str, Any]:
     """History ``k`` (0-based) of issue ``n``: id ``<10000 + n><k:03d>``, ``created`` one
     minute apart from 2026-08-01T10:00, an ``author`` (dropped by the projection) and one
     item; status items walk through ``_STATUSES``."""
-    created = f"2026-08-{1 + k // 1440:02d}T{10 + k // 60 % 24:02d}:{k % 60:02d}:00.000+0000"
+    day, hour = divmod(10 + k // 60, 24)  # the hour carries into the day
+    created = f"2026-08-{1 + day:02d}T{hour:02d}:{k % 60:02d}:00.000+0000"
     if field == "status":
         before, after = _STATUSES[k % 3], _STATUSES[k % 3 + 1]
         item = {"field": "status", "fieldtype": "jira", "from": str(k % 3 + 1)}

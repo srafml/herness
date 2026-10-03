@@ -208,6 +208,11 @@ def _refuse(*_args: object, **_kwargs: object) -> dict[str, list[dict[str, objec
     raise SchemaViolation(msg, source="jira")
 
 
+def _refuse_links(*_args: object, **_kwargs: object) -> dict[str, list[dict[str, object]]]:
+    msg = "bad remote link page"
+    raise SchemaViolation(msg, source="jira")
+
+
 def test_ut01_72_changelog_failure_fails_closed_before_any_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -224,9 +229,9 @@ def test_ut01_72_remote_link_failure_fails_closed(
     seams: Seams, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT01-72 a failing remote-link fetch also raises before any batch."""
-    monkeypatch.setattr(jira_changelog, "fetch_remote_links", _refuse)
+    monkeypatch.setattr(jira_changelog, "fetch_remote_links", _refuse_links)
     replay = Replay(cassette("cloud_search.json"))
-    with pytest.raises(SchemaViolation, match="bad changelog page"):
+    with pytest.raises(SchemaViolation, match="bad remote link page"):
         next(connector(replay, fetch_remote_links=True).sync("issue", SINCE, UNTIL))
     assert len(seams.changelog_calls) == 1
 

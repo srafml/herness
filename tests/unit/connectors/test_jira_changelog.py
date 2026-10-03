@@ -224,6 +224,74 @@ def test_ut01_74_repeated_bulk_token_is_refused() -> None:
         )
 
 
+def _small_guard(monkeypatch: pytest.MonkeyPatch, pages: int) -> None:
+    """Cap every `CursorGuard` at `pages` steps (the program cap is 1,000,000)."""
+    import herness.connectors.http as http_module  # noqa: PLC0415 - lazily imported class
+
+    real = http_module.CursorGuard
+    monkeypatch.setattr(http_module, "CursorGuard", lambda: real(max_pages=pages))
+
+
+def _growing(start: int) -> dict[str, Any]:
+    """A per-issue page that never sets `isLast` and always raises `total` past the end."""
+    page = {"startAt": start, "total": start + 2, "values": [jira_pages.history(1, start)]}
+    (interaction,) = gets(page, path="/rest/api/3/issue/10001/changelog")
+    interaction["request"]["params"] = {"startAt": str(start), "maxResults": "100"}
+    return interaction
+
+
+def test_ut01_74_issue_changelog_paging_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT01-74 (TH01-04) a per-issue changelog that never sets `isLast` and keeps raising
+    `total` stops at the `CursorGuard` page limit, before any request past the limit."""
+    _small_guard(monkeypatch, 3)
+    replay = Replay([_growing(0), _growing(1), _growing(2)])
+    state = ChangelogState(bulk_available=False)
+    with pytest.raises(SchemaViolation, match=r"^page limit exceeded$"):
+        fetch_changelogs(source_http(replay), flavor="cloud", issues=[_issue(1)], state=state)
+    assert not replay.interactions
+    assert len(replay.seen) == 3
+
+
+def test_ut01_74_bulk_paging_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT01-74 (TH01-04) a bulk changelog that always sends a new `nextPageToken` stops at
+    the `CursorGuard` page limit."""
+    _small_guard(monkeypatch, 2)
+    pages = [{"issueChangeLogs": [], "nextPageToken": f"synthetic-t{n}"} for n in range(3)]
+    replay = Replay([_post(BULK, page) for page in pages])
+    with pytest.raises(SchemaViolation, match=r"^page limit exceeded$"):
+        fetch_changelogs(
+            source_http(replay), flavor="cloud", issues=[_issue(1)], state=ChangelogState()
+        )
+    assert len(replay.seen) == 3
+
+
+def test_ut01_74_server_ignoring_start_at_is_refused() -> None:
+    """UT01-74 a server that ignores `startAt` (page 0 again) would duplicate histories:
+    `SchemaViolation("duplicate changelog history")` with the numeric issue id only."""
+    again = {"startAt": 0, "total": 4, "isLast": False, "values": jira_pages.histories(1, 2)}
+    path = "/rest/api/3/issue/10001/changelog"
+    replay = Replay([*gets(again, path=path), *gets(again, path=path)])
+    for n, start in enumerate(("0", "2")):
+        replay.interactions[n]["request"]["params"] = {"startAt": start, "maxResults": "100"}
+    state = ChangelogState(bulk_available=False)
+    with pytest.raises(SchemaViolation, match=r"^duplicate changelog history$") as info:
+        fetch_changelogs(source_http(replay), flavor="cloud", issues=[_issue(1)], state=state)
+    assert info.value.context == {"source": "jira", "issue_id": "10001"}
+    assert not replay.interactions
+
+
+def test_ut01_74_repeated_bulk_page_under_new_token_is_refused() -> None:
+    """UT01-74 a bulk page repeated under a new token duplicates histories and is refused."""
+    logs = [{"issueId": "10001", "changeHistories": jira_pages.histories(1, 1)}]
+    first = {"issueChangeLogs": logs, "nextPageToken": "synthetic-t1"}
+    replay = Replay([_post(BULK, first), _post(BULK, {"issueChangeLogs": logs})])
+    with pytest.raises(SchemaViolation, match=r"^duplicate changelog history$") as info:
+        fetch_changelogs(
+            source_http(replay), flavor="cloud", issues=[_issue(1)], state=ChangelogState()
+        )
+    assert info.value.context == {"source": "jira", "issue_id": "10001"}
+
+
 @pytest.mark.parametrize(
     "page",
     [

@@ -121,9 +121,14 @@ def _count(value: object, issue_id: str | None = None) -> int:
     return value
 
 
-def _ordered(raw: _Raw) -> list[dict[str, object]]:
-    """Projected histories ascending by ``(created, id)``; ``author`` dropped."""
-    return sorted(map(project_history, raw), key=lambda h: (str(h["created"]), str(h["id"])))
+def _ordered(raw: _Raw, issue_id: str) -> list[dict[str, object]]:
+    """Projected histories ascending by ``(created, id)``; ``author`` dropped. A repeated
+    history ``id`` (a server ignoring ``startAt`` or repeating a bulk page) is refused."""
+    histories = [project_history(h) for h in raw]
+    if len({h["id"] for h in histories}) != len(histories):
+        msg = "duplicate changelog history"
+        raise _bad(msg, issue_id=issue_id)
+    return sorted(histories, key=lambda h: (str(h["created"]), str(h["id"])))
 
 
 def fetch_changelogs(
@@ -140,7 +145,7 @@ def fetch_changelogs(
         raw = {i: _dc_histories(http, i, issue) for i, issue in zip(ids, issues, strict=True)}
     else:
         raw = _cloud_histories(http, ids, state)
-    return {i: _ordered(raw[i]) for i in ids}
+    return {i: _ordered(raw[i], i) for i in ids}
 
 
 def _cloud_histories(http: SourceHttp, ids: list[str], state: ChangelogState) -> dict[str, _Raw]:
