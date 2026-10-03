@@ -1,4 +1,4 @@
-"""Property test for the funding attribution (impl 04 PT04-05; U04-64; T04-14).
+"""Property tests for the funding attribution and score (impl 04 PT04-05, PT04-06).
 
 Random link graphs: candidates in a forest (initiatives with epics), incidents with random
 services, clusters, costs and direct links, noise events and failed changes, and root-cause
@@ -6,6 +6,7 @@ decisions. Cluster-fix thresholds are lowered so pass 2 adds candidates in many 
 Each example builds its own warehouse with real stage 400 facts (`tests.support.metrics_funding`).
 """
 
+import datetime
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -13,6 +14,7 @@ import pytest
 from hypothesis import HealthCheck, event, given, settings
 from hypothesis import strategies as st
 from tests.support.metrics_funding import (
+    AS_OF,
     incident,
     item,
     member,
@@ -22,7 +24,7 @@ from tests.support.metrics_funding import (
 )
 from tests.support.metrics_tiny import tiny_weights
 
-from herness.metrics.funding import ATTRIBUTION_TABLE, run_funding_step
+from herness.metrics.funding import ATTRIBUTION_TABLE, FUNDING_TABLE, run_funding_step
 from herness.metrics.settings import WeightsConfig
 
 pytestmark = pytest.mark.unit
@@ -185,3 +187,42 @@ def test_pt04_05_shares_and_pain_bounded(rows: Rows) -> None:
         assert total_share <= 1 + 1e-9
         assert abs(total_share - 1.0) <= 1e-9
     assert own_pain <= sum(usd.values()) + 0.01
+
+
+def _with_history(rows: Rows, history_days: int, extra: int) -> Rows:
+    """`rows` plus an unlinked, service-less incident `history_days` before as_of and `extra`
+    incidents linked directly to PAY-0, so c_hist and c_sample cover their whole range."""
+    opened = f"{AS_OF - datetime.timedelta(days=history_days)} 12:00:00-05"
+    more = [incident(f"X{n}", service=None) for n in range(extra)]
+    history = incident("H", opened=opened, service=None)
+    return {
+        **rows,
+        "core.incident": [*rows["core.incident"], history, *more],
+        "core.work_item_link": [
+            *rows["core.work_item_link"],
+            *(mention("PAY-0", f"X{n}") for n in range(extra)),
+        ],
+    }
+
+
+def _confidence_kind(confidence: float) -> str:
+    if confidence == 0.05:
+        return "low"
+    return "high" if confidence == 1.0 else "interior"
+
+
+@SLOW_OK
+@given(graphs(), st.integers(1, 800), st.integers(0, 40))
+def test_pt04_06_confidence_bounded(rows: Rows, history_days: int, extra: int) -> None:
+    """PT04-06 confidence ∈ [0.05, 1] on every score.funding row; rank is 1..n."""
+    con = warehouse(_with_history(rows, history_days, extra), WEIGHTS)
+    try:
+        run_funding_step(con, step_context(WEIGHTS))
+        stored = con.execute(f"SELECT confidence, rank FROM {FUNDING_TABLE}").fetchall()  # noqa: S608
+    finally:
+        con.close()
+    assert stored  # W0 (PAY-0) is always a candidate
+    for confidence, _ in stored:
+        assert 0.05 <= confidence <= 1.0
+        event(f"confidence {_confidence_kind(confidence)}")
+    assert sorted(r for _, r in stored) == list(range(1, len(stored) + 1))

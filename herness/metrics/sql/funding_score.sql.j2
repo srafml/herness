@@ -1,0 +1,241 @@
+{#- Funding score (impl 04 U04-65; design 04 §5.5-§5.7).
+    One row per candidate: work-item candidates and the cluster-fix candidates of this build's
+    score.funding_attribution. R(k) = attribution rows of k and of its candidate descendants.
+    Every runtime value is a p() bind; the literals are the spec constants (365, 180, 30.0,
+    0.05, the Fibonacci breakpoints, 12 weeks, 30 days, criticality 5). Prose lives only in
+    Jinja comments, so no SQL comment reaches the recorded SQL. The title is the work-item key
+    or the candidate ID, never free-form content (TH04-04, DD04-12). -#}
+{%- macro in_window(ts) -%}
+{{ ts }} >= {{ p('as_of_ts') }} - to_days({{ p('s_window_days') }}) AND {{ ts }} < {{ p('as_of_ts') }}
+{%- endmacro -%}
+{#- percent_rank over the rows with a non-NULL input; NULL input stays NULL. -#}
+{%- macro prank(x) -%}
+CASE WHEN {{ x }} IS NOT NULL THEN percent_rank() OVER (PARTITION BY {{ x }} IS NULL ORDER BY {{ x }}) END
+{%- endmacro -%}
+{#- U04-65 step 9 fib(pr); NULL pr stays NULL. -#}
+{%- macro fib(pr) -%}
+CASE WHEN {{ pr }} IS NULL THEN NULL WHEN {{ pr }} <= 0.15 THEN 1 WHEN {{ pr }} <= 0.30 THEN 2 WHEN {{ pr }} <= 0.45 THEN 3 WHEN {{ pr }} <= 0.60 THEN 5 WHEN {{ pr }} <= 0.75 THEN 8 WHEN {{ pr }} <= 0.90 THEN 13 ELSE 20 END
+{%- endmacro -%}
+{%- macro dbl(x) -%}CAST({{ x }} AS DOUBLE){%- endmacro -%}
+WITH od AS (
+    SELECT {{ observed_days() }} AS d
+),
+attr AS (
+    SELECT a.candidate_id, a.record_id, a.record_kind, a.share, a.pain_usd, a.quality
+    FROM score.funding_attribution a
+),
+cf AS (
+    SELECT DISTINCT a.candidate_id
+    FROM attr a
+    WHERE starts_with(a.candidate_id, 'cluster_fix:')
+),
+{#- Owning service of a cluster fix: the most frequent service of the cluster's non-excluded
+    incidents in the window, ties lowest ID. -#}
+cf_owner AS (
+    SELECT c.candidate_id, f.service_id
+    FROM cf c
+    JOIN metrics.incident_fact f ON 'cluster_fix:' || f.cluster_id = c.candidate_id
+    WHERE NOT f.excluded AND f.service_id IS NOT NULL AND {{ in_window('f.opened_at') }}
+    GROUP BY c.candidate_id, f.service_id
+    QUALIFY row_number() OVER (
+        PARTITION BY c.candidate_id ORDER BY count(*) DESC, f.service_id) = 1
+),
+cand AS (
+    SELECT w.record_id AS candidate_id, w.type AS candidate_type, w.key, w.project,
+           w.components, w.service_id, w.team_id, w.estimate_cost_usd
+    FROM core.work_item w
+    WHERE w.type IN ('initiative', 'epic', 'feature')
+      AND w.status_category IN ('todo', 'in_progress')
+    UNION ALL
+    SELECT c.candidate_id, 'cluster_fix', NULL, NULL, NULL, o.service_id, NULL, NULL
+    FROM cf c
+    LEFT JOIN cf_owner o ON o.candidate_id = c.candidate_id
+),
+{#- (k, member): k itself and its candidate descendants. -#}
+fam AS (
+    SELECT c.candidate_id AS k, c.candidate_id AS m
+    FROM cand c
+    UNION
+    SELECT wc.ancestor_record_id, wc.record_id
+    FROM metrics.work_item_closure wc
+    WHERE wc.depth >= 1
+      AND wc.record_id IN (SELECT candidate_id FROM cand)
+      AND wc.ancestor_record_id IN (SELECT candidate_id FROM cand)
+),
+r AS (
+    SELECT fm.k, a.record_id, a.record_kind, a.share, {{ dbl('a.pain_usd') }} AS pain, a.quality
+    FROM fam fm
+    JOIN attr a ON a.candidate_id = fm.m
+),
+agg AS (
+    SELECT c.candidate_id,
+           coalesce(sum(r.pain), 0) AS pain,
+           coalesce(sum(r.pain * r.quality), 0) AS pq,
+           coalesce(sum(r.share) FILTER (WHERE r.record_kind = 'incident'), 0) AS n_share
+    FROM cand c
+    LEFT JOIN r ON r.k = c.candidate_id
+    GROUP BY c.candidate_id
+),
+{#- portfolio(k): key of the deepest initiative ancestor-or-self (max depth). -#}
+port AS (
+    SELECT wc.record_id AS k, arg_max(a.key, wc.depth) AS portfolio
+    FROM metrics.work_item_closure wc
+    JOIN core.work_item a ON a.record_id = wc.ancestor_record_id
+    WHERE a.type = 'initiative' AND wc.record_id IN (SELECT candidate_id FROM cand)
+    GROUP BY wc.record_id
+),
+{#- Remaining points of the subtree (ancestor-or-self pairs); NULL when none is non-NULL. -#}
+pts AS (
+    SELECT wc.ancestor_record_id AS k, sum(w.story_points) AS points
+    FROM metrics.work_item_closure wc
+    JOIN core.work_item w ON w.record_id = wc.record_id
+    WHERE w.status_category <> 'done' AND wc.ancestor_record_id IN (SELECT candidate_id FROM cand)
+    GROUP BY wc.ancestor_record_id
+),
+svc AS (
+    SELECT c.candidate_id AS k, c.service_id
+    FROM cand c
+    WHERE c.service_id IS NOT NULL
+    UNION
+    SELECT c.candidate_id, m.service_id
+    FROM cand c
+    JOIN core.service_map m ON m.jira_project = c.project
+    WHERE m.service_id IS NOT NULL
+      AND (m.jira_component IS NULL OR list_contains(coalesce(c.components, []), m.jira_component))
+),
+rr AS (
+    SELECT c.candidate_id,
+           (SELECT count(DISTINCT b.candidate_id)
+            FROM core.work_item_link l
+            JOIN cand b ON b.key = l.to_key
+            WHERE l.link_type = 'blocks' AND l.from_key = c.key)
+           + 5 - coalesce((SELECT min(sv.criticality)
+                           FROM svc s
+                           JOIN core.service sv ON sv.service_id = s.service_id
+                           WHERE s.k = c.candidate_id), 5) AS rr_in
+    FROM cand c
+),
+{#- Theil-Sen over the 12 complete weeks before as_of (t = 0..11, missing weeks 0). -#}
+w0 AS (
+    SELECT CAST(date_trunc('week', {{ p('as_of') }}) AS DATE) - 84 AS start_date
+),
+rec_ts AS (
+    SELECT 'incident' AS record_kind, f.record_id, f.opened_at AS ts
+    FROM metrics.incident_fact f
+    UNION ALL
+    SELECT 'event', e.event_id, e.ts
+    FROM core.event e
+    UNION ALL
+    SELECT 'change', chf.record_id, chf.actual_end
+    FROM metrics.change_fact chf
+),
+weekly AS (
+    SELECT x.k, x.t, sum(x.pain) AS v
+    FROM (
+        SELECT r.k, r.pain,
+               CAST(date_diff('day', w0.start_date,
+                    CAST(date_trunc('week', t.ts AT TIME ZONE {{ p('tz') }}) AS DATE)) / 7
+                    AS INTEGER) AS t
+        FROM r
+        JOIN rec_ts t ON t.record_kind = r.record_kind AND t.record_id = r.record_id
+        CROSS JOIN w0
+    ) x
+    WHERE x.t BETWEEN 0 AND 11
+    GROUP BY x.k, x.t
+),
+series AS (
+    SELECT c.candidate_id AS k, g.t, coalesce(wk.v, 0) AS v
+    FROM cand c
+    CROSS JOIN (SELECT CAST(unnest(range(12)) AS INTEGER) AS t) g
+    LEFT JOIN weekly wk ON wk.k = c.candidate_id AND wk.t = g.t
+),
+slope AS (
+    SELECT a.k, median((b.v - a.v) / (b.t - a.t)) AS tc_in
+    FROM series a
+    JOIN series b ON b.k = a.k AND b.t > a.t
+    GROUP BY a.k
+),
+p1 AS (
+    SELECT DISTINCT r.k
+    FROM r
+    JOIN metrics.incident_fact f ON f.record_id = r.record_id
+    WHERE r.record_kind = 'incident' AND f.priority = 1
+      AND f.opened_at >= {{ p('as_of_ts') }} - to_days(30) AND f.opened_at < {{ p('as_of_ts') }}
+),
+{%- set er_type = "CASE c.candidate_type WHEN 'epic' THEN " ~ p('w_er_epic')
+    ~ " WHEN 'feature' THEN " ~ p('w_er_feature') ~ " WHEN 'initiative' THEN "
+    ~ p('w_er_initiative') ~ " ELSE " ~ p('w_er_cluster_fix') ~ " END" %}
+{%- set sw_portfolio = lkp(p('w_sw_portfolio_k'), p('w_sw_portfolio_v'),
+    'coalesce(pt.portfolio, c.project)', p('w_sw_default')) %}
+{%- set sw_org = lkp(p('w_sw_org_k'), p('w_sw_org_v'), 'coalesce(tm.org_id, sv.org_id)',
+    p('w_sw_default')) %}
+base AS (
+    SELECT c.candidate_id, c.candidate_type,
+           CASE WHEN c.candidate_type = 'cluster_fix' THEN c.candidate_id ELSE c.key END AS title,
+           CAST(g.pain * 365 / od.d AS DECIMAL(18, 2)) AS annual_pain_usd,
+           CAST({{ lkp(p('w_er_override_k'), p('w_er_override_v'), 'c.key', er_type) }}
+                AS DOUBLE) AS expected_reduction,
+           CAST(round(g.n_share) AS BIGINT) AS n_incidents,
+           CASE WHEN g.pain = 0 THEN 0 ELSE g.pq / g.pain END AS c_map,
+           CAST(least({{ p('w_sw_clip_max') }}, greatest({{ p('w_sw_clip_min') }},
+                {{ sw_portfolio }} * {{ sw_org }})) AS DOUBLE) AS strategic_weight,
+           CAST(coalesce(c.estimate_cost_usd,
+                         ps.points * {{ p('w_engineer_hour') }} * {{ p('w_hours_per_point') }},
+                         CASE WHEN c.candidate_type = 'cluster_fix'
+                              THEN {{ p('w_cf_effort_hours') }} * {{ p('w_engineer_hour') }} END)
+                AS DECIMAL(18, 2)) AS effort_cost_usd,
+           od.d AS observed,
+           rr.rr_in, sl.tc_in, p1.k IS NOT NULL AS has_p1
+    FROM cand c
+    CROSS JOIN od
+    JOIN agg g ON g.candidate_id = c.candidate_id
+    JOIN rr ON rr.candidate_id = c.candidate_id
+    JOIN slope sl ON sl.k = c.candidate_id
+    LEFT JOIN p1 ON p1.k = c.candidate_id
+    LEFT JOIN port pt ON pt.k = c.candidate_id
+    LEFT JOIN pts ps ON ps.k = c.candidate_id
+    LEFT JOIN core.team tm ON tm.team_id = c.team_id
+    LEFT JOIN core.service sv ON sv.service_id = c.service_id
+),
+scored AS (
+    SELECT b.*,
+           CAST(b.annual_pain_usd * b.expected_reduction AS DECIMAL(18, 2)) AS addressable_pain_usd,
+           {{ dbl('greatest(0.05, least(1.0, b.c_map * least(1, sqrt(b.n_incidents / 30.0))'
+                  ' * least(1, b.observed / 365.0)))') }} AS confidence
+    FROM base b
+),
+inputs AS (
+    SELECT s.*,
+           CASE WHEN s.effort_cost_usd IS NULL OR s.effort_cost_usd = 0 THEN NULL
+                ELSE {{ dbl('s.addressable_pain_usd') }} * s.confidence * s.strategic_weight
+                     / {{ dbl('s.effort_cost_usd') }} END AS priority,
+           {{ dbl('s.addressable_pain_usd') }} * s.strategic_weight AS bv_in,
+           {{ dbl('s.effort_cost_usd') }} AS js_in
+    FROM scored s
+),
+ranks AS (
+    SELECT i.*,
+           {{ prank('i.bv_in') }} AS bv_pr, {{ prank('i.tc_in') }} AS tc_pr,
+           {{ prank('i.rr_in') }} AS rr_pr, {{ prank('i.js_in') }} AS js_pr
+    FROM inputs i
+),
+fibs AS (
+    SELECT x.*,
+           {{ fib('x.bv_pr') }} AS bv, {{ fib('x.rr_pr') }} AS rr, {{ fib('x.js_pr') }} AS js,
+           CASE WHEN NOT x.has_p1 THEN {{ fib('x.tc_pr') }}
+                ELSE CASE {{ fib('x.tc_pr') }} WHEN 1 THEN 2 WHEN 2 THEN 3 WHEN 3 THEN 5
+                     WHEN 5 THEN 8 WHEN 8 THEN 13 ELSE 20 END END AS tc
+    FROM ranks x
+)
+SELECT f.candidate_id, f.candidate_type, f.title, f.annual_pain_usd, f.addressable_pain_usd,
+       f.expected_reduction, f.n_incidents, f.confidence, f.strategic_weight, f.effort_cost_usd,
+       f.priority,
+       {{ dbl('f.bv + f.tc + f.rr') }} / f.js AS wsjf,
+       CAST(row_number() OVER (
+           ORDER BY f.priority DESC NULLS LAST, f.addressable_pain_usd DESC, f.confidence DESC,
+                    f.candidate_id ASC) AS BIGINT) AS rank,
+       {{ p('unconfirmed') }} AS unconfirmed,
+       CAST(list_concat(
+           CASE WHEN f.effort_cost_usd IS NULL THEN ['no_estimate'] ELSE [] END,
+           CASE WHEN f.observed < 180 THEN ['short_history'] ELSE [] END) AS VARCHAR[]) AS flags
+FROM fibs f
