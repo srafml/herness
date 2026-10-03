@@ -1,0 +1,4712 @@
+{
+ "interactions": [
+  {
+   "request": {
+    "params": {
+     "sysparm_limit": "1"
+    },
+    "path": "/api/now/table/sys_audit_delete"
+   },
+   "response": {
+    "body": {
+     "error": {
+      "message": "forbidden"
+     }
+    },
+    "headers": {},
+    "status": 403
+   }
+  },
+  {
+   "request": {
+    "params": {
+     "sysparm_offset": "0"
+    },
+    "path": "/api/now/table/incident"
+   },
+   "response": {
+    "body": {
+     "result": [
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "adcbcd00000000000000000000a85850"
+       },
+       "number": {
+        "display_value": "INC0010000",
+        "value": "INC0010000"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 08:00:00",
+        "value": "2026-02-19 08:00:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10000",
+        "value": "Synthetic incident 10000"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "d7793e000000000000000000007de9b8",
+        "value": "d7793e000000000000000000007de9b8"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 00:00:00",
+        "value": "2026-02-20 00:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "e7af0700000000000000000000aad26c"
+       },
+       "number": {
+        "display_value": "INC0010001",
+        "value": "INC0010001"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 13:15:00",
+        "value": "2026-02-19 13:15:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10001",
+        "value": "Synthetic incident 10001"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "56b54100000000000000000000b931d6",
+        "value": "56b54100000000000000000000b931d6"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 00:15:00",
+        "value": "2026-02-20 00:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "7d0a12000000000000000000002e22d7"
+       },
+       "number": {
+        "display_value": "INC0010002",
+        "value": "INC0010002"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 06:30:00",
+        "value": "2026-02-19 06:30:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10002",
+        "value": "Synthetic incident 10002"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "8210b9000000000000000000004c3cc8",
+        "value": "8210b9000000000000000000004c3cc8"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 00:30:00",
+        "value": "2026-02-20 00:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "37974b000000000000000000006f34c9"
+       },
+       "number": {
+        "display_value": "INC0010003",
+        "value": "INC0010003"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 16:45:00",
+        "value": "2026-02-18 16:45:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10003",
+        "value": "Synthetic incident 10003"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "8be7fb00000000000000000000e3b900",
+        "value": "8be7fb00000000000000000000e3b900"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 00:45:00",
+        "value": "2026-02-20 00:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "d19d0f000000000000000000008fb19d"
+       },
+       "number": {
+        "display_value": "INC0010004",
+        "value": "INC0010004"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 13:00:00",
+        "value": "2026-02-18 13:00:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10004",
+        "value": "Synthetic incident 10004"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "55601300000000000000000000900224",
+        "value": "55601300000000000000000000900224"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 01:00:00",
+        "value": "2026-02-20 01:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "7c586700000000000000000000bee419"
+       },
+       "number": {
+        "display_value": "INC0010005",
+        "value": "INC0010005"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 05:15:00",
+        "value": "2026-02-19 05:15:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10005",
+        "value": "Synthetic incident 10005"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "b021ab00000000000000000000920e44",
+        "value": "b021ab00000000000000000000920e44"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 01:15:00",
+        "value": "2026-02-20 01:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "3e7a3c00000000000000000000de484f"
+       },
+       "number": {
+        "display_value": "INC0010006",
+        "value": "INC0010006"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 10:30:00",
+        "value": "2026-02-18 10:30:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10006",
+        "value": "Synthetic incident 10006"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "557b2d0000000000000000000010eb4a",
+        "value": "557b2d0000000000000000000010eb4a"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 01:30:00",
+        "value": "2026-02-20 01:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "0655e8000000000000000000005e4bf7"
+       },
+       "number": {
+        "display_value": "INC0010007",
+        "value": "INC0010007"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 11:45:00",
+        "value": "2026-02-19 11:45:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10007",
+        "value": "Synthetic incident 10007"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "38b75900000000000000000000937f13",
+        "value": "38b75900000000000000000000937f13"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 01:45:00",
+        "value": "2026-02-20 01:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "f1202800000000000000000000c0fc57"
+       },
+       "number": {
+        "display_value": "INC0010008",
+        "value": "INC0010008"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 08:00:00",
+        "value": "2026-02-18 08:00:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10008",
+        "value": "Synthetic incident 10008"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "02c49d00000000000000000000711bbf",
+        "value": "02c49d00000000000000000000711bbf"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 02:00:00",
+        "value": "2026-02-20 02:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 7",
+        "value": "e8bcd70000000000000000000005bd5a"
+       },
+       "number": {
+        "display_value": "INC0010009",
+        "value": "INC0010009"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 12:15:00",
+        "value": "2026-02-18 12:15:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10009",
+        "value": "Synthetic incident 10009"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "e9c533000000000000000000008b9650",
+        "value": "e9c533000000000000000000008b9650"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 02:15:00",
+        "value": "2026-02-20 02:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "3aef120000000000000000000057f3da"
+       },
+       "number": {
+        "display_value": "INC0010010",
+        "value": "INC0010010"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 01:30:00",
+        "value": "2026-02-19 01:30:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10010",
+        "value": "Synthetic incident 10010"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "619200000000000000000000003c9d4d",
+        "value": "619200000000000000000000003c9d4d"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 02:30:00",
+        "value": "2026-02-20 02:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "790c7700000000000000000000dbdc91"
+       },
+       "number": {
+        "display_value": "INC0010011",
+        "value": "INC0010011"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 10:45:00",
+        "value": "2026-02-19 10:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10011",
+        "value": "Synthetic incident 10011"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "3322c7000000000000000000000af482",
+        "value": "3322c7000000000000000000000af482"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 02:45:00",
+        "value": "2026-02-20 02:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "14b0020000000000000000000087f3ea"
+       },
+       "number": {
+        "display_value": "INC0010012",
+        "value": "INC0010012"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 22:00:00",
+        "value": "2026-02-18 22:00:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10012",
+        "value": "Synthetic incident 10012"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "7699940000000000000000000024f5c8",
+        "value": "7699940000000000000000000024f5c8"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 03:00:00",
+        "value": "2026-02-20 03:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "2aab8500000000000000000000d545a7"
+       },
+       "number": {
+        "display_value": "INC0010013",
+        "value": "INC0010013"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 04:15:00",
+        "value": "2026-02-19 04:15:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10013",
+        "value": "Synthetic incident 10013"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "67f6e4000000000000000000004d4ced",
+        "value": "67f6e4000000000000000000004d4ced"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 03:15:00",
+        "value": "2026-02-20 03:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "0e08ee000000000000000000001a39c6"
+       },
+       "number": {
+        "display_value": "INC0010014",
+        "value": "INC0010014"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 09:30:00",
+        "value": "2026-02-19 09:30:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10014",
+        "value": "Synthetic incident 10014"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "5ce6ba00000000000000000000ce89fe",
+        "value": "5ce6ba00000000000000000000ce89fe"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 03:30:00",
+        "value": "2026-02-20 03:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 7",
+        "value": "e1532d00000000000000000000037ac3"
+       },
+       "number": {
+        "display_value": "INC0010015",
+        "value": "INC0010015"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 21:45:00",
+        "value": "2026-02-18 21:45:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10015",
+        "value": "Synthetic incident 10015"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "170f4300000000000000000000168cb1",
+        "value": "170f4300000000000000000000168cb1"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 03:45:00",
+        "value": "2026-02-20 03:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "3870000000000000000000000076cb1b"
+       },
+       "number": {
+        "display_value": "INC0010016",
+        "value": "INC0010016"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 00:00:00",
+        "value": "2026-02-20 00:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10016",
+        "value": "Synthetic incident 10016"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "51d6ed0000000000000000000052ca49",
+        "value": "51d6ed0000000000000000000052ca49"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 04:00:00",
+        "value": "2026-02-20 04:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "58e6dc0000000000000000000051d917"
+       },
+       "number": {
+        "display_value": "INC0010017",
+        "value": "INC0010017"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 11:15:00",
+        "value": "2026-02-19 11:15:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10017",
+        "value": "Synthetic incident 10017"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "6136fa0000000000000000000081f479",
+        "value": "6136fa0000000000000000000081f479"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 04:15:00",
+        "value": "2026-02-20 04:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "c8ea2c00000000000000000000cb4234"
+       },
+       "number": {
+        "display_value": "INC0010018",
+        "value": "INC0010018"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 00:30:00",
+        "value": "2026-02-19 00:30:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10018",
+        "value": "Synthetic incident 10018"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "e3a0d2000000000000000000009cf95b",
+        "value": "e3a0d2000000000000000000009cf95b"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 04:30:00",
+        "value": "2026-02-20 04:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "76d9d700000000000000000000a2f1f2"
+       },
+       "number": {
+        "display_value": "INC0010019",
+        "value": "INC0010019"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 15:45:00",
+        "value": "2026-02-18 15:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10019",
+        "value": "Synthetic incident 10019"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "4e8ce5000000000000000000002c528a",
+        "value": "4e8ce5000000000000000000002c528a"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 04:45:00",
+        "value": "2026-02-20 04:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "4940c50000000000000000000031538d"
+       },
+       "number": {
+        "display_value": "INC0010020",
+        "value": "INC0010020"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 08:00:00",
+        "value": "2026-02-19 08:00:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10020",
+        "value": "Synthetic incident 10020"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "7d52410000000000000000000010358e",
+        "value": "7d52410000000000000000000010358e"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 05:00:00",
+        "value": "2026-02-20 05:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "eacfef00000000000000000000fa1aa1"
+       },
+       "number": {
+        "display_value": "INC0010021",
+        "value": "INC0010021"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 11:15:00",
+        "value": "2026-02-19 11:15:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10021",
+        "value": "Synthetic incident 10021"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "553e9a00000000000000000000ff48fd",
+        "value": "553e9a00000000000000000000ff48fd"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 05:15:00",
+        "value": "2026-02-20 05:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "6d50cb00000000000000000000fd280f"
+       },
+       "number": {
+        "display_value": "INC0010022",
+        "value": "INC0010022"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 00:30:00",
+        "value": "2026-02-19 00:30:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10022",
+        "value": "Synthetic incident 10022"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "b9ff9c000000000000000000001a4cd3",
+        "value": "b9ff9c000000000000000000001a4cd3"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 05:30:00",
+        "value": "2026-02-20 05:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "56c7110000000000000000000095b40f"
+       },
+       "number": {
+        "display_value": "INC0010023",
+        "value": "INC0010023"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 20:45:00",
+        "value": "2026-02-18 20:45:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10023",
+        "value": "Synthetic incident 10023"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "11d853000000000000000000009c0298",
+        "value": "11d853000000000000000000009c0298"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 05:45:00",
+        "value": "2026-02-20 05:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "be71af0000000000000000000094afdf"
+       },
+       "number": {
+        "display_value": "INC0010024",
+        "value": "INC0010024"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 00:00:00",
+        "value": "2026-02-19 00:00:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10024",
+        "value": "Synthetic incident 10024"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "0141d40000000000000000000098100c",
+        "value": "0141d40000000000000000000098100c"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 06:00:00",
+        "value": "2026-02-20 06:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "96c7ac000000000000000000006d16eb"
+       },
+       "number": {
+        "display_value": "INC0010025",
+        "value": "INC0010025"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 09:15:00",
+        "value": "2026-02-19 09:15:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10025",
+        "value": "Synthetic incident 10025"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "2bfba700000000000000000000c7a58d",
+        "value": "2bfba700000000000000000000c7a58d"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 06:15:00",
+        "value": "2026-02-20 06:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "ab625e00000000000000000000ed8d2a"
+       },
+       "number": {
+        "display_value": "INC0010026",
+        "value": "INC0010026"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 19:30:00",
+        "value": "2026-02-19 19:30:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10026",
+        "value": "Synthetic incident 10026"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "623f2f00000000000000000000fd1283",
+        "value": "623f2f00000000000000000000fd1283"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 06:30:00",
+        "value": "2026-02-20 06:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "178f020000000000000000000077f0af"
+       },
+       "number": {
+        "display_value": "INC0010027",
+        "value": "INC0010027"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 04:45:00",
+        "value": "2026-02-20 04:45:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10027",
+        "value": "Synthetic incident 10027"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "8e59830000000000000000000033c6f6",
+        "value": "8e59830000000000000000000033c6f6"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 06:45:00",
+        "value": "2026-02-20 06:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "28b55200000000000000000000e300ba"
+       },
+       "number": {
+        "display_value": "INC0010028",
+        "value": "INC0010028"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 02:00:00",
+        "value": "2026-02-20 02:00:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10028",
+        "value": "Synthetic incident 10028"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "a64b0c000000000000000000007f95e3",
+        "value": "a64b0c000000000000000000007f95e3"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 07:00:00",
+        "value": "2026-02-20 07:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "4ad13e000000000000000000006e272d"
+       },
+       "number": {
+        "display_value": "INC0010029",
+        "value": "INC0010029"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 10:15:00",
+        "value": "2026-02-19 10:15:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10029",
+        "value": "Synthetic incident 10029"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "583f8400000000000000000000d2c26a",
+        "value": "583f8400000000000000000000d2c26a"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 07:15:00",
+        "value": "2026-02-20 07:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "36e8ca00000000000000000000ca9c1a"
+       },
+       "number": {
+        "display_value": "INC0010030",
+        "value": "INC0010030"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 18:30:00",
+        "value": "2026-02-18 18:30:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10030",
+        "value": "Synthetic incident 10030"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "cf047600000000000000000000f5cc64",
+        "value": "cf047600000000000000000000f5cc64"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 07:30:00",
+        "value": "2026-02-20 07:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "56c2d600000000000000000000611d72"
+       },
+       "number": {
+        "display_value": "INC0010031",
+        "value": "INC0010031"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 02:45:00",
+        "value": "2026-02-20 02:45:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10031",
+        "value": "Synthetic incident 10031"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "b3ad2700000000000000000000bb6744",
+        "value": "b3ad2700000000000000000000bb6744"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 07:45:00",
+        "value": "2026-02-20 07:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "e7cec2000000000000000000000ba855"
+       },
+       "number": {
+        "display_value": "INC0010032",
+        "value": "INC0010032"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 09:00:00",
+        "value": "2026-02-18 09:00:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10032",
+        "value": "Synthetic incident 10032"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "efebe700000000000000000000cb4fc8",
+        "value": "efebe700000000000000000000cb4fc8"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 08:00:00",
+        "value": "2026-02-20 08:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 7",
+        "value": "22fb0300000000000000000000341d8a"
+       },
+       "number": {
+        "display_value": "INC0010033",
+        "value": "INC0010033"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 12:15:00",
+        "value": "2026-02-18 12:15:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10033",
+        "value": "Synthetic incident 10033"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "081e68000000000000000000001245e3",
+        "value": "081e68000000000000000000001245e3"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 08:15:00",
+        "value": "2026-02-20 08:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "e851cc00000000000000000000af73cf"
+       },
+       "number": {
+        "display_value": "INC0010034",
+        "value": "INC0010034"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 13:30:00",
+        "value": "2026-02-18 13:30:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10034",
+        "value": "Synthetic incident 10034"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "81c531000000000000000000006f2b2a",
+        "value": "81c531000000000000000000006f2b2a"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 08:30:00",
+        "value": "2026-02-20 08:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "b12f2a00000000000000000000409b0d"
+       },
+       "number": {
+        "display_value": "INC0010035",
+        "value": "INC0010035"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 19:45:00",
+        "value": "2026-02-19 19:45:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10035",
+        "value": "Synthetic incident 10035"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "159cc300000000000000000000a2e5d6",
+        "value": "159cc300000000000000000000a2e5d6"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 08:45:00",
+        "value": "2026-02-20 08:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "dd40c2000000000000000000006b2e5c"
+       },
+       "number": {
+        "display_value": "INC0010036",
+        "value": "INC0010036"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 09:00:00",
+        "value": "2026-02-19 09:00:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10036",
+        "value": "Synthetic incident 10036"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "3a134e000000000000000000009a77ff",
+        "value": "3a134e000000000000000000009a77ff"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 09:00:00",
+        "value": "2026-02-20 09:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "3a6960000000000000000000000a93ee"
+       },
+       "number": {
+        "display_value": "INC0010037",
+        "value": "INC0010037"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 07:15:00",
+        "value": "2026-02-20 07:15:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10037",
+        "value": "Synthetic incident 10037"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "a53c5c00000000000000000000671fba",
+        "value": "a53c5c00000000000000000000671fba"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 09:15:00",
+        "value": "2026-02-20 09:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "221b3a00000000000000000000d3e73c"
+       },
+       "number": {
+        "display_value": "INC0010038",
+        "value": "INC0010038"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 18:30:00",
+        "value": "2026-02-19 18:30:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10038",
+        "value": "Synthetic incident 10038"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "ee8c0700000000000000000000452b2c",
+        "value": "ee8c0700000000000000000000452b2c"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 09:30:00",
+        "value": "2026-02-20 09:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "238b6500000000000000000000581c6f"
+       },
+       "number": {
+        "display_value": "INC0010039",
+        "value": "INC0010039"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 20:45:00",
+        "value": "2026-02-18 20:45:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10039",
+        "value": "Synthetic incident 10039"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "eb6f9500000000000000000000a8ff3b",
+        "value": "eb6f9500000000000000000000a8ff3b"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 09:45:00",
+        "value": "2026-02-20 09:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "22d48700000000000000000000e166d0"
+       },
+       "number": {
+        "display_value": "INC0010040",
+        "value": "INC0010040"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 14:00:00",
+        "value": "2026-02-18 14:00:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10040",
+        "value": "Synthetic incident 10040"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "bd4238000000000000000000001ffaa5",
+        "value": "bd4238000000000000000000001ffaa5"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 10:00:00",
+        "value": "2026-02-20 10:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "e435c30000000000000000000025295f"
+       },
+       "number": {
+        "display_value": "INC0010041",
+        "value": "INC0010041"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 17:15:00",
+        "value": "2026-02-18 17:15:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10041",
+        "value": "Synthetic incident 10041"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "18ccdd000000000000000000001a3b61",
+        "value": "18ccdd000000000000000000001a3b61"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 10:15:00",
+        "value": "2026-02-20 10:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "4809120000000000000000000056ca13"
+       },
+       "number": {
+        "display_value": "INC0010042",
+        "value": "INC0010042"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 13:30:00",
+        "value": "2026-02-18 13:30:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10042",
+        "value": "Synthetic incident 10042"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "ba813e00000000000000000000c08e59",
+        "value": "ba813e00000000000000000000c08e59"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 10:30:00",
+        "value": "2026-02-20 10:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "83f67500000000000000000000928481"
+       },
+       "number": {
+        "display_value": "INC0010043",
+        "value": "INC0010043"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 21:45:00",
+        "value": "2026-02-19 21:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10043",
+        "value": "Synthetic incident 10043"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "53f1220000000000000000000009e942",
+        "value": "53f1220000000000000000000009e942"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 10:45:00",
+        "value": "2026-02-20 10:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 7",
+        "value": "738f0a000000000000000000003aa2c9"
+       },
+       "number": {
+        "display_value": "INC0010044",
+        "value": "INC0010044"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 19:00:00",
+        "value": "2026-02-18 19:00:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10044",
+        "value": "Synthetic incident 10044"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "17084200000000000000000000b60989",
+        "value": "17084200000000000000000000b60989"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 11:00:00",
+        "value": "2026-02-20 11:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "3ca60d000000000000000000005bb989"
+       },
+       "number": {
+        "display_value": "INC0010045",
+        "value": "INC0010045"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 06:15:00",
+        "value": "2026-02-20 06:15:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10045",
+        "value": "Synthetic incident 10045"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "1d986500000000000000000000bd1fae",
+        "value": "1d986500000000000000000000bd1fae"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 11:15:00",
+        "value": "2026-02-20 11:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "eb5f040000000000000000000046da45"
+       },
+       "number": {
+        "display_value": "INC0010046",
+        "value": "INC0010046"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 22:30:00",
+        "value": "2026-02-19 22:30:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10046",
+        "value": "Synthetic incident 10046"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "52945c00000000000000000000b77f45",
+        "value": "52945c00000000000000000000b77f45"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 11:30:00",
+        "value": "2026-02-20 11:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "43010b00000000000000000000ad8726"
+       },
+       "number": {
+        "display_value": "INC0010047",
+        "value": "INC0010047"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 04:45:00",
+        "value": "2026-02-19 04:45:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10047",
+        "value": "Synthetic incident 10047"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "1d63970000000000000000000052e722",
+        "value": "1d63970000000000000000000052e722"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 11:45:00",
+        "value": "2026-02-20 11:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "c005ef0000000000000000000081afa7"
+       },
+       "number": {
+        "display_value": "INC0010048",
+        "value": "INC0010048"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 07:00:00",
+        "value": "2026-02-20 07:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10048",
+        "value": "Synthetic incident 10048"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "ffd570000000000000000000009afca5",
+        "value": "ffd570000000000000000000009afca5"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 12:00:00",
+        "value": "2026-02-20 12:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "c8ac5000000000000000000000dc8a04"
+       },
+       "number": {
+        "display_value": "INC0010049",
+        "value": "INC0010049"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 15:15:00",
+        "value": "2026-02-18 15:15:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10049",
+        "value": "Synthetic incident 10049"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "922fbd00000000000000000000d08e79",
+        "value": "922fbd00000000000000000000d08e79"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 12:15:00",
+        "value": "2026-02-20 12:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "973f9400000000000000000000890c32"
+       },
+       "number": {
+        "display_value": "INC0010050",
+        "value": "INC0010050"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 02:30:00",
+        "value": "2026-02-19 02:30:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10050",
+        "value": "Synthetic incident 10050"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "637939000000000000000000003ce4f6",
+        "value": "637939000000000000000000003ce4f6"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 12:30:00",
+        "value": "2026-02-20 12:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "95e1240000000000000000000048490f"
+       },
+       "number": {
+        "display_value": "INC0010051",
+        "value": "INC0010051"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 01:45:00",
+        "value": "2026-02-20 01:45:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10051",
+        "value": "Synthetic incident 10051"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "6826a700000000000000000000cac3ea",
+        "value": "6826a700000000000000000000cac3ea"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 12:45:00",
+        "value": "2026-02-20 12:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "080bd700000000000000000000040866"
+       },
+       "number": {
+        "display_value": "INC0010052",
+        "value": "INC0010052"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 11:00:00",
+        "value": "2026-02-20 11:00:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10052",
+        "value": "Synthetic incident 10052"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "949df800000000000000000000032cef",
+        "value": "949df800000000000000000000032cef"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 13:00:00",
+        "value": "2026-02-20 13:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "a9fa0600000000000000000000acd746"
+       },
+       "number": {
+        "display_value": "INC0010053",
+        "value": "INC0010053"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 08:15:00",
+        "value": "2026-02-20 08:15:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10053",
+        "value": "Synthetic incident 10053"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "7ce35100000000000000000000ced61c",
+        "value": "7ce35100000000000000000000ced61c"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 13:15:00",
+        "value": "2026-02-20 13:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "3ba53b00000000000000000000548b2e"
+       },
+       "number": {
+        "display_value": "INC0010054",
+        "value": "INC0010054"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 09:30:00",
+        "value": "2026-02-20 09:30:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10054",
+        "value": "Synthetic incident 10054"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "4226f400000000000000000000126336",
+        "value": "4226f400000000000000000000126336"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 13:30:00",
+        "value": "2026-02-20 13:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "598b7a00000000000000000000ff6d97"
+       },
+       "number": {
+        "display_value": "INC0010055",
+        "value": "INC0010055"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 03:45:00",
+        "value": "2026-02-19 03:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10055",
+        "value": "Synthetic incident 10055"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "3e07c700000000000000000000b8f1d3",
+        "value": "3e07c700000000000000000000b8f1d3"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 13:45:00",
+        "value": "2026-02-20 13:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "8b8fb600000000000000000000f9de21"
+       },
+       "number": {
+        "display_value": "INC0010056",
+        "value": "INC0010056"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 18:00:00",
+        "value": "2026-02-19 18:00:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10056",
+        "value": "Synthetic incident 10056"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "edb6ed00000000000000000000ddb88a",
+        "value": "edb6ed00000000000000000000ddb88a"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 14:00:00",
+        "value": "2026-02-20 14:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 7",
+        "value": "235a04000000000000000000004eb823"
+       },
+       "number": {
+        "display_value": "INC0010057",
+        "value": "INC0010057"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 09:15:00",
+        "value": "2026-02-20 09:15:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10057",
+        "value": "Synthetic incident 10057"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "fdff610000000000000000000035a10a",
+        "value": "fdff610000000000000000000035a10a"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 14:15:00",
+        "value": "2026-02-20 14:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "26e7d9000000000000000000004409c3"
+       },
+       "number": {
+        "display_value": "INC0010058",
+        "value": "INC0010058"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 11:30:00",
+        "value": "2026-02-20 11:30:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10058",
+        "value": "Synthetic incident 10058"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "02049600000000000000000000d8c795",
+        "value": "02049600000000000000000000d8c795"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 14:30:00",
+        "value": "2026-02-20 14:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "57b4a70000000000000000000081d67c"
+       },
+       "number": {
+        "display_value": "INC0010059",
+        "value": "INC0010059"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 14:45:00",
+        "value": "2026-02-19 14:45:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10059",
+        "value": "Synthetic incident 10059"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "aca8380000000000000000000033db4b",
+        "value": "aca8380000000000000000000033db4b"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 14:45:00",
+        "value": "2026-02-20 14:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "41060200000000000000000000fbb3f7"
+       },
+       "number": {
+        "display_value": "INC0010060",
+        "value": "INC0010060"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 00:00:00",
+        "value": "2026-02-19 00:00:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10060",
+        "value": "Synthetic incident 10060"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "9196c20000000000000000000096495c",
+        "value": "9196c20000000000000000000096495c"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 15:00:00",
+        "value": "2026-02-20 15:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "8405f400000000000000000000be7eaf"
+       },
+       "number": {
+        "display_value": "INC0010061",
+        "value": "INC0010061"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 07:15:00",
+        "value": "2026-02-20 07:15:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10061",
+        "value": "Synthetic incident 10061"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "b628d300000000000000000000d16eaf",
+        "value": "b628d300000000000000000000d16eaf"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 15:15:00",
+        "value": "2026-02-20 15:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "36ab4300000000000000000000ed111d"
+       },
+       "number": {
+        "display_value": "INC0010062",
+        "value": "INC0010062"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 05:30:00",
+        "value": "2026-02-20 05:30:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10062",
+        "value": "Synthetic incident 10062"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "9a25800000000000000000000068caab",
+        "value": "9a25800000000000000000000068caab"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 15:30:00",
+        "value": "2026-02-20 15:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "a7b37d0000000000000000000035780d"
+       },
+       "number": {
+        "display_value": "INC0010063",
+        "value": "INC0010063"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 08:45:00",
+        "value": "2026-02-19 08:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10063",
+        "value": "Synthetic incident 10063"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "19d9d4000000000000000000004f4743",
+        "value": "19d9d4000000000000000000004f4743"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 15:45:00",
+        "value": "2026-02-20 15:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "ad6d640000000000000000000005f278"
+       },
+       "number": {
+        "display_value": "INC0010064",
+        "value": "INC0010064"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 09:00:00",
+        "value": "2026-02-20 09:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10064",
+        "value": "Synthetic incident 10064"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "36057200000000000000000000c45a5a",
+        "value": "36057200000000000000000000c45a5a"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 16:00:00",
+        "value": "2026-02-20 16:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "daaaa000000000000000000000d162ab"
+       },
+       "number": {
+        "display_value": "INC0010065",
+        "value": "INC0010065"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 06:15:00",
+        "value": "2026-02-19 06:15:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10065",
+        "value": "Synthetic incident 10065"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "6464f600000000000000000000e55d30",
+        "value": "6464f600000000000000000000e55d30"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 16:15:00",
+        "value": "2026-02-20 16:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "c9d7bf000000000000000000005dbbbf"
+       },
+       "number": {
+        "display_value": "INC0010066",
+        "value": "INC0010066"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 09:30:00",
+        "value": "2026-02-20 09:30:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10066",
+        "value": "Synthetic incident 10066"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "768b03000000000000000000009256ea",
+        "value": "768b03000000000000000000009256ea"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 16:30:00",
+        "value": "2026-02-20 16:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "c15f200000000000000000000001357a"
+       },
+       "number": {
+        "display_value": "INC0010067",
+        "value": "INC0010067"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 04:45:00",
+        "value": "2026-02-19 04:45:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10067",
+        "value": "Synthetic incident 10067"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "10891e00000000000000000000350291",
+        "value": "10891e00000000000000000000350291"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 16:45:00",
+        "value": "2026-02-20 16:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "8aa201000000000000000000000856f2"
+       },
+       "number": {
+        "display_value": "INC0010068",
+        "value": "INC0010068"
+       },
+       "opened_at": {
+        "display_value": "2026-02-18 23:00:00",
+        "value": "2026-02-18 23:00:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10068",
+        "value": "Synthetic incident 10068"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "fde16100000000000000000000a35b9c",
+        "value": "fde16100000000000000000000a35b9c"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 17:00:00",
+        "value": "2026-02-20 17:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "8fbb1a00000000000000000000cfe679"
+       },
+       "number": {
+        "display_value": "INC0010069",
+        "value": "INC0010069"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 10:15:00",
+        "value": "2026-02-19 10:15:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10069",
+        "value": "Synthetic incident 10069"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "9fae9500000000000000000000ed696e",
+        "value": "9fae9500000000000000000000ed696e"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 17:15:00",
+        "value": "2026-02-20 17:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "191fdd00000000000000000000c3352a"
+       },
+       "number": {
+        "display_value": "INC0010070",
+        "value": "INC0010070"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 19:30:00",
+        "value": "2026-02-19 19:30:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10070",
+        "value": "Synthetic incident 10070"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "7c643300000000000000000000d13b61",
+        "value": "7c643300000000000000000000d13b61"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 17:30:00",
+        "value": "2026-02-20 17:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "6af9000000000000000000000073ad6f"
+       },
+       "number": {
+        "display_value": "INC0010071",
+        "value": "INC0010071"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 10:45:00",
+        "value": "2026-02-20 10:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10071",
+        "value": "Synthetic incident 10071"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "e09a8900000000000000000000c3266e",
+        "value": "e09a8900000000000000000000c3266e"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 17:45:00",
+        "value": "2026-02-20 17:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "b1f8120000000000000000000036006f"
+       },
+       "number": {
+        "display_value": "INC0010072",
+        "value": "INC0010072"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 10:00:00",
+        "value": "2026-02-19 10:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10072",
+        "value": "Synthetic incident 10072"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "05d4d300000000000000000000bae219",
+        "value": "05d4d300000000000000000000bae219"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 18:00:00",
+        "value": "2026-02-20 18:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "4f2aad000000000000000000004d02c0"
+       },
+       "number": {
+        "display_value": "INC0010073",
+        "value": "INC0010073"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 22:15:00",
+        "value": "2026-02-19 22:15:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10073",
+        "value": "Synthetic incident 10073"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "5f2db100000000000000000000df4742",
+        "value": "5f2db100000000000000000000df4742"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 18:15:00",
+        "value": "2026-02-20 18:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "a877e8000000000000000000004c58f7"
+       },
+       "number": {
+        "display_value": "INC0010074",
+        "value": "INC0010074"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 00:30:00",
+        "value": "2026-02-20 00:30:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10074",
+        "value": "Synthetic incident 10074"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "a455e900000000000000000000aa0f8b",
+        "value": "a455e900000000000000000000aa0f8b"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 18:30:00",
+        "value": "2026-02-20 18:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "e8f8b500000000000000000000d51bf8"
+       },
+       "number": {
+        "display_value": "INC0010075",
+        "value": "INC0010075"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 04:45:00",
+        "value": "2026-02-20 04:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10075",
+        "value": "Synthetic incident 10075"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "dc0a0300000000000000000000e71cc3",
+        "value": "dc0a0300000000000000000000e71cc3"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 18:45:00",
+        "value": "2026-02-20 18:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "efbb2000000000000000000000f52815"
+       },
+       "number": {
+        "display_value": "INC0010076",
+        "value": "INC0010076"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 19:00:00",
+        "value": "2026-02-19 19:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10076",
+        "value": "Synthetic incident 10076"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "3ddb8a0000000000000000000082f374",
+        "value": "3ddb8a0000000000000000000082f374"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 19:00:00",
+        "value": "2026-02-20 19:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "4e356600000000000000000000be71b9"
+       },
+       "number": {
+        "display_value": "INC0010077",
+        "value": "INC0010077"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 17:15:00",
+        "value": "2026-02-19 17:15:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10077",
+        "value": "Synthetic incident 10077"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "8e675300000000000000000000399f38",
+        "value": "8e675300000000000000000000399f38"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 19:15:00",
+        "value": "2026-02-20 19:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "47f54c0000000000000000000020ed67"
+       },
+       "number": {
+        "display_value": "INC0010078",
+        "value": "INC0010078"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 01:30:00",
+        "value": "2026-02-19 01:30:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10078",
+        "value": "Synthetic incident 10078"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "0492d800000000000000000000396606",
+        "value": "0492d800000000000000000000396606"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 19:30:00",
+        "value": "2026-02-20 19:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "03205300000000000000000000ecb5a5"
+       },
+       "number": {
+        "display_value": "INC0010079",
+        "value": "INC0010079"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 15:45:00",
+        "value": "2026-02-19 15:45:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10079",
+        "value": "Synthetic incident 10079"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "d3598300000000000000000000d93cb3",
+        "value": "d3598300000000000000000000d93cb3"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 19:45:00",
+        "value": "2026-02-20 19:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 7",
+        "value": "0610b6000000000000000000008a6c24"
+       },
+       "number": {
+        "display_value": "INC0010080",
+        "value": "INC0010080"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 01:00:00",
+        "value": "2026-02-20 01:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10080",
+        "value": "Synthetic incident 10080"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "c6e60200000000000000000000ab72a1",
+        "value": "c6e60200000000000000000000ab72a1"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 20:00:00",
+        "value": "2026-02-20 20:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "bb2ef8000000000000000000001bee07"
+       },
+       "number": {
+        "display_value": "INC0010081",
+        "value": "INC0010081"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 06:15:00",
+        "value": "2026-02-19 06:15:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10081",
+        "value": "Synthetic incident 10081"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "8ee53b0000000000000000000080741b",
+        "value": "8ee53b0000000000000000000080741b"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 20:15:00",
+        "value": "2026-02-20 20:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "7ef03700000000000000000000477ba9"
+       },
+       "number": {
+        "display_value": "INC0010082",
+        "value": "INC0010082"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 11:30:00",
+        "value": "2026-02-19 11:30:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10082",
+        "value": "Synthetic incident 10082"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "a05e360000000000000000000028eebc",
+        "value": "a05e360000000000000000000028eebc"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 20:30:00",
+        "value": "2026-02-20 20:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "c177c400000000000000000000afc907"
+       },
+       "number": {
+        "display_value": "INC0010083",
+        "value": "INC0010083"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 11:45:00",
+        "value": "2026-02-20 11:45:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10083",
+        "value": "Synthetic incident 10083"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "5b615b000000000000000000005f9172",
+        "value": "5b615b000000000000000000005f9172"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 20:45:00",
+        "value": "2026-02-20 20:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "1e6f5a00000000000000000000c62d3a"
+       },
+       "number": {
+        "display_value": "INC0010084",
+        "value": "INC0010084"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 10:00:00",
+        "value": "2026-02-20 10:00:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10084",
+        "value": "Synthetic incident 10084"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "da7ae100000000000000000000a538a8",
+        "value": "da7ae100000000000000000000a538a8"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 21:00:00",
+        "value": "2026-02-20 21:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "f85b4300000000000000000000b898e6"
+       },
+       "number": {
+        "display_value": "INC0010085",
+        "value": "INC0010085"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 13:15:00",
+        "value": "2026-02-20 13:15:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10085",
+        "value": "Synthetic incident 10085"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "af9dd200000000000000000000b2f46e",
+        "value": "af9dd200000000000000000000b2f46e"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 21:15:00",
+        "value": "2026-02-20 21:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "28de4500000000000000000000271001"
+       },
+       "number": {
+        "display_value": "INC0010086",
+        "value": "INC0010086"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 00:30:00",
+        "value": "2026-02-19 00:30:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10086",
+        "value": "Synthetic incident 10086"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "2a148400000000000000000000d68c44",
+        "value": "2a148400000000000000000000d68c44"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 21:30:00",
+        "value": "2026-02-20 21:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "a8b652000000000000000000008236a6"
+       },
+       "number": {
+        "display_value": "INC0010087",
+        "value": "INC0010087"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 16:45:00",
+        "value": "2026-02-19 16:45:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10087",
+        "value": "Synthetic incident 10087"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "b0a7f70000000000000000000019283b",
+        "value": "b0a7f70000000000000000000019283b"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 21:45:00",
+        "value": "2026-02-20 21:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "cf00df00000000000000000000a15dc7"
+       },
+       "number": {
+        "display_value": "INC0010088",
+        "value": "INC0010088"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 04:00:00",
+        "value": "2026-02-19 04:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10088",
+        "value": "Synthetic incident 10088"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "cfec0400000000000000000000893fa5",
+        "value": "cfec0400000000000000000000893fa5"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 22:00:00",
+        "value": "2026-02-20 22:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "0c163600000000000000000000b60f5a"
+       },
+       "number": {
+        "display_value": "INC0010089",
+        "value": "INC0010089"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 00:15:00",
+        "value": "2026-02-19 00:15:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10089",
+        "value": "Synthetic incident 10089"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "ca68bf000000000000000000004533d3",
+        "value": "ca68bf000000000000000000004533d3"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 22:15:00",
+        "value": "2026-02-20 22:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "8641c3000000000000000000005d281b"
+       },
+       "number": {
+        "display_value": "INC0010090",
+        "value": "INC0010090"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 16:30:00",
+        "value": "2026-02-20 16:30:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10090",
+        "value": "Synthetic incident 10090"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "a414c200000000000000000000d87d07",
+        "value": "a414c200000000000000000000d87d07"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 22:30:00",
+        "value": "2026-02-20 22:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "99f8db00000000000000000000bfc72f"
+       },
+       "number": {
+        "display_value": "INC0010091",
+        "value": "INC0010091"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 01:45:00",
+        "value": "2026-02-20 01:45:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10091",
+        "value": "Synthetic incident 10091"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "9aae1b00000000000000000000e38b33",
+        "value": "9aae1b00000000000000000000e38b33"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 22:45:00",
+        "value": "2026-02-20 22:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "942c3e000000000000000000009fba28"
+       },
+       "number": {
+        "display_value": "INC0010092",
+        "value": "INC0010092"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 04:00:00",
+        "value": "2026-02-20 04:00:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10092",
+        "value": "Synthetic incident 10092"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "0e9c6300000000000000000000f2796f",
+        "value": "0e9c6300000000000000000000f2796f"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 23:00:00",
+        "value": "2026-02-20 23:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "75a43300000000000000000000f30586"
+       },
+       "number": {
+        "display_value": "INC0010093",
+        "value": "INC0010093"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 19:15:00",
+        "value": "2026-02-20 19:15:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10093",
+        "value": "Synthetic incident 10093"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "5f808000000000000000000000ecbae5",
+        "value": "5f808000000000000000000000ecbae5"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 23:15:00",
+        "value": "2026-02-20 23:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "ca7d70000000000000000000001f2685"
+       },
+       "number": {
+        "display_value": "INC0010094",
+        "value": "INC0010094"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 11:30:00",
+        "value": "2026-02-20 11:30:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10094",
+        "value": "Synthetic incident 10094"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "df95b8000000000000000000009a30f3",
+        "value": "df95b8000000000000000000009a30f3"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 23:30:00",
+        "value": "2026-02-20 23:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "4a1108000000000000000000003ca6a6"
+       },
+       "number": {
+        "display_value": "INC0010095",
+        "value": "INC0010095"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 19:45:00",
+        "value": "2026-02-20 19:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10095",
+        "value": "Synthetic incident 10095"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "7b5e3000000000000000000000765c01",
+        "value": "7b5e3000000000000000000000765c01"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-20 23:45:00",
+        "value": "2026-02-20 23:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "be4ce90000000000000000000014ff09"
+       },
+       "number": {
+        "display_value": "INC0010096",
+        "value": "INC0010096"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 04:00:00",
+        "value": "2026-02-19 04:00:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10096",
+        "value": "Synthetic incident 10096"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "44b9a700000000000000000000602d91",
+        "value": "44b9a700000000000000000000602d91"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 00:00:00",
+        "value": "2026-02-21 00:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "1609ca000000000000000000009a38be"
+       },
+       "number": {
+        "display_value": "INC0010097",
+        "value": "INC0010097"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 03:15:00",
+        "value": "2026-02-19 03:15:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10097",
+        "value": "Synthetic incident 10097"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "1acc0900000000000000000000d75f1a",
+        "value": "1acc0900000000000000000000d75f1a"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 00:15:00",
+        "value": "2026-02-21 00:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "1a94fe000000000000000000001bfa9c"
+       },
+       "number": {
+        "display_value": "INC0010098",
+        "value": "INC0010098"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 10:30:00",
+        "value": "2026-02-20 10:30:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10098",
+        "value": "Synthetic incident 10098"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "65cdd100000000000000000000a3a29f",
+        "value": "65cdd100000000000000000000a3a29f"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 00:30:00",
+        "value": "2026-02-21 00:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "d2309e000000000000000000008fa939"
+       },
+       "number": {
+        "display_value": "INC0010099",
+        "value": "INC0010099"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 18:45:00",
+        "value": "2026-02-20 18:45:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10099",
+        "value": "Synthetic incident 10099"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "739ce300000000000000000000cc5033",
+        "value": "739ce300000000000000000000cc5033"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 00:45:00",
+        "value": "2026-02-21 00:45:00"
+       }
+      }
+     ]
+    },
+    "headers": {},
+    "status": 200
+   }
+  },
+  {
+   "request": {
+    "params": {
+     "sysparm_offset": "100"
+    },
+    "path": "/api/now/table/incident"
+   },
+   "response": {
+    "body": {
+     "result": [
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "1e420500000000000000000000177ae9"
+       },
+       "number": {
+        "display_value": "INC0010100",
+        "value": "INC0010100"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 23:00:00",
+        "value": "2026-02-19 23:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10100",
+        "value": "Synthetic incident 10100"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "9e472000000000000000000000fccc30",
+        "value": "9e472000000000000000000000fccc30"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 01:00:00",
+        "value": "2026-02-21 01:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "cb47a3000000000000000000002178e4"
+       },
+       "number": {
+        "display_value": "INC0010101",
+        "value": "INC0010101"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 08:15:00",
+        "value": "2026-02-19 08:15:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10101",
+        "value": "Synthetic incident 10101"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "bc715600000000000000000000475ee2",
+        "value": "bc715600000000000000000000475ee2"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 01:15:00",
+        "value": "2026-02-21 01:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 2",
+        "value": "0d50d700000000000000000000f132ef"
+       },
+       "number": {
+        "display_value": "INC0010102",
+        "value": "INC0010102"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 18:30:00",
+        "value": "2026-02-20 18:30:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10102",
+        "value": "Synthetic incident 10102"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "e7ae01000000000000000000007401a5",
+        "value": "e7ae01000000000000000000007401a5"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 01:30:00",
+        "value": "2026-02-21 01:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "12cd8a000000000000000000007e7824"
+       },
+       "number": {
+        "display_value": "INC0010103",
+        "value": "INC0010103"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 07:45:00",
+        "value": "2026-02-19 07:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10103",
+        "value": "Synthetic incident 10103"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "2da47d0000000000000000000019e639",
+        "value": "2da47d0000000000000000000019e639"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 01:45:00",
+        "value": "2026-02-21 01:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "abe8e700000000000000000000433acb"
+       },
+       "number": {
+        "display_value": "INC0010104",
+        "value": "INC0010104"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 11:00:00",
+        "value": "2026-02-20 11:00:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10104",
+        "value": "Synthetic incident 10104"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "762d7100000000000000000000078bb3",
+        "value": "762d7100000000000000000000078bb3"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 02:00:00",
+        "value": "2026-02-21 02:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "8ef5cf000000000000000000005ddb53"
+       },
+       "number": {
+        "display_value": "INC0010105",
+        "value": "INC0010105"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 18:15:00",
+        "value": "2026-02-20 18:15:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10105",
+        "value": "Synthetic incident 10105"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "3fc37b0000000000000000000064c668",
+        "value": "3fc37b0000000000000000000064c668"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 02:15:00",
+        "value": "2026-02-21 02:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "153a7800000000000000000000b8872d"
+       },
+       "number": {
+        "display_value": "INC0010106",
+        "value": "INC0010106"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 23:30:00",
+        "value": "2026-02-20 23:30:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10106",
+        "value": "Synthetic incident 10106"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "ddaead00000000000000000000e0f37b",
+        "value": "ddaead00000000000000000000e0f37b"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 02:30:00",
+        "value": "2026-02-21 02:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "578a35000000000000000000002b3dca"
+       },
+       "number": {
+        "display_value": "INC0010107",
+        "value": "INC0010107"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 12:45:00",
+        "value": "2026-02-20 12:45:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10107",
+        "value": "Synthetic incident 10107"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "ef155c000000000000000000005320bf",
+        "value": "ef155c000000000000000000005320bf"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 02:45:00",
+        "value": "2026-02-21 02:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "86ee74000000000000000000003774e3"
+       },
+       "number": {
+        "display_value": "INC0010108",
+        "value": "INC0010108"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 12:00:00",
+        "value": "2026-02-19 12:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10108",
+        "value": "Synthetic incident 10108"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "bf0c5b000000000000000000005df908",
+        "value": "bf0c5b000000000000000000005df908"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 03:00:00",
+        "value": "2026-02-21 03:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "43e30300000000000000000000882dd7"
+       },
+       "number": {
+        "display_value": "INC0010109",
+        "value": "INC0010109"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 08:15:00",
+        "value": "2026-02-19 08:15:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10109",
+        "value": "Synthetic incident 10109"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "7fe7a300000000000000000000fb8c47",
+        "value": "7fe7a300000000000000000000fb8c47"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 03:15:00",
+        "value": "2026-02-21 03:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "590e5d000000000000000000002e4dff"
+       },
+       "number": {
+        "display_value": "INC0010110",
+        "value": "INC0010110"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 12:30:00",
+        "value": "2026-02-19 12:30:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10110",
+        "value": "Synthetic incident 10110"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "cdb0c4000000000000000000004caca0",
+        "value": "cdb0c4000000000000000000004caca0"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 03:30:00",
+        "value": "2026-02-21 03:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "989af800000000000000000000eab308"
+       },
+       "number": {
+        "display_value": "INC0010111",
+        "value": "INC0010111"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 20:45:00",
+        "value": "2026-02-20 20:45:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10111",
+        "value": "Synthetic incident 10111"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "6cf5d60000000000000000000047b677",
+        "value": "6cf5d60000000000000000000047b677"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 03:45:00",
+        "value": "2026-02-21 03:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "d5dfe600000000000000000000532a1b"
+       },
+       "number": {
+        "display_value": "INC0010112",
+        "value": "INC0010112"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 08:00:00",
+        "value": "2026-02-20 08:00:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10112",
+        "value": "Synthetic incident 10112"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "5894de0000000000000000000009977d",
+        "value": "5894de0000000000000000000009977d"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 04:00:00",
+        "value": "2026-02-21 04:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "3f537000000000000000000000c77157"
+       },
+       "number": {
+        "display_value": "INC0010113",
+        "value": "INC0010113"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 05:15:00",
+        "value": "2026-02-20 05:15:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10113",
+        "value": "Synthetic incident 10113"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "891edf000000000000000000009dcbd4",
+        "value": "891edf000000000000000000009dcbd4"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 04:15:00",
+        "value": "2026-02-21 04:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "3df64e00000000000000000000dd5020"
+       },
+       "number": {
+        "display_value": "INC0010114",
+        "value": "INC0010114"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 19:30:00",
+        "value": "2026-02-19 19:30:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10114",
+        "value": "Synthetic incident 10114"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "4d1d2b0000000000000000000023a30e",
+        "value": "4d1d2b0000000000000000000023a30e"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 04:30:00",
+        "value": "2026-02-21 04:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "09c10600000000000000000000fbebb1"
+       },
+       "number": {
+        "display_value": "INC0010115",
+        "value": "INC0010115"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 20:45:00",
+        "value": "2026-02-19 20:45:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10115",
+        "value": "Synthetic incident 10115"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "e98dd100000000000000000000a93a52",
+        "value": "e98dd100000000000000000000a93a52"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 04:45:00",
+        "value": "2026-02-21 04:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "6acce9000000000000000000004779a1"
+       },
+       "number": {
+        "display_value": "INC0010116",
+        "value": "INC0010116"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 05:00:00",
+        "value": "2026-02-19 05:00:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10116",
+        "value": "Synthetic incident 10116"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "d2d4ed00000000000000000000326f45",
+        "value": "d2d4ed00000000000000000000326f45"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 05:00:00",
+        "value": "2026-02-21 05:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "685aef00000000000000000000920625"
+       },
+       "number": {
+        "display_value": "INC0010117",
+        "value": "INC0010117"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 23:15:00",
+        "value": "2026-02-19 23:15:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10117",
+        "value": "Synthetic incident 10117"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "84bb79000000000000000000001b5f7d",
+        "value": "84bb79000000000000000000001b5f7d"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 05:15:00",
+        "value": "2026-02-21 05:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 3",
+        "value": "e6c26000000000000000000000d6cc87"
+       },
+       "number": {
+        "display_value": "INC0010118",
+        "value": "INC0010118"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 02:30:00",
+        "value": "2026-02-20 02:30:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10118",
+        "value": "Synthetic incident 10118"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "28939f0000000000000000000014c975",
+        "value": "28939f0000000000000000000014c975"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 05:30:00",
+        "value": "2026-02-21 05:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "3161d400000000000000000000eb4de6"
+       },
+       "number": {
+        "display_value": "INC0010119",
+        "value": "INC0010119"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 00:45:00",
+        "value": "2026-02-20 00:45:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10119",
+        "value": "Synthetic incident 10119"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "16dfb600000000000000000000adf0ea",
+        "value": "16dfb600000000000000000000adf0ea"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 05:45:00",
+        "value": "2026-02-21 05:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "322e6000000000000000000000f38b9e"
+       },
+       "number": {
+        "display_value": "INC0010120",
+        "value": "INC0010120"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 16:00:00",
+        "value": "2026-02-20 16:00:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10120",
+        "value": "Synthetic incident 10120"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "8ceaad000000000000000000002ee564",
+        "value": "8ceaad000000000000000000002ee564"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 06:00:00",
+        "value": "2026-02-21 06:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "1b0b610000000000000000000032f2ce"
+       },
+       "number": {
+        "display_value": "INC0010121",
+        "value": "INC0010121"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 22:15:00",
+        "value": "2026-02-20 22:15:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10121",
+        "value": "Synthetic incident 10121"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "aac2d2000000000000000000003d2217",
+        "value": "aac2d2000000000000000000003d2217"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 06:15:00",
+        "value": "2026-02-21 06:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "45c5b80000000000000000000080f6a5"
+       },
+       "number": {
+        "display_value": "INC0010122",
+        "value": "INC0010122"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 14:30:00",
+        "value": "2026-02-20 14:30:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10122",
+        "value": "Synthetic incident 10122"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "d9283a000000000000000000003fd1a8",
+        "value": "d9283a000000000000000000003fd1a8"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 06:30:00",
+        "value": "2026-02-21 06:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "94f2df00000000000000000000ad1774"
+       },
+       "number": {
+        "display_value": "INC0010123",
+        "value": "INC0010123"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 07:45:00",
+        "value": "2026-02-20 07:45:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10123",
+        "value": "Synthetic incident 10123"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "7a810300000000000000000000e84365",
+        "value": "7a810300000000000000000000e84365"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 06:45:00",
+        "value": "2026-02-21 06:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 4",
+        "value": "4f60fd0000000000000000000012f19c"
+       },
+       "number": {
+        "display_value": "INC0010124",
+        "value": "INC0010124"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 04:00:00",
+        "value": "2026-02-20 04:00:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10124",
+        "value": "Synthetic incident 10124"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "6fb02600000000000000000000da9aa1",
+        "value": "6fb02600000000000000000000da9aa1"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 07:00:00",
+        "value": "2026-02-21 07:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 7",
+        "value": "c04ed900000000000000000000765718"
+       },
+       "number": {
+        "display_value": "INC0010125",
+        "value": "INC0010125"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 08:15:00",
+        "value": "2026-02-19 08:15:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10125",
+        "value": "Synthetic incident 10125"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "4bca69000000000000000000006ba5d4",
+        "value": "4bca69000000000000000000006ba5d4"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 07:15:00",
+        "value": "2026-02-21 07:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "f32fa800000000000000000000473d74"
+       },
+       "number": {
+        "display_value": "INC0010126",
+        "value": "INC0010126"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 17:30:00",
+        "value": "2026-02-19 17:30:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10126",
+        "value": "Synthetic incident 10126"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "f0757200000000000000000000650f08",
+        "value": "f0757200000000000000000000650f08"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 07:30:00",
+        "value": "2026-02-21 07:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 5",
+        "value": "a9404900000000000000000000c3f9fd"
+       },
+       "number": {
+        "display_value": "INC0010127",
+        "value": "INC0010127"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 18:45:00",
+        "value": "2026-02-19 18:45:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10127",
+        "value": "Synthetic incident 10127"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "7b45ba000000000000000000003f1f6b",
+        "value": "7b45ba000000000000000000003f1f6b"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 07:45:00",
+        "value": "2026-02-21 07:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 7",
+        "value": "0a3cbc00000000000000000000cdcb90"
+       },
+       "number": {
+        "display_value": "INC0010128",
+        "value": "INC0010128"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 17:00:00",
+        "value": "2026-02-19 17:00:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10128",
+        "value": "Synthetic incident 10128"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "c139560000000000000000000008e1d6",
+        "value": "c139560000000000000000000008e1d6"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 08:00:00",
+        "value": "2026-02-21 08:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 6",
+        "value": "2c93e80000000000000000000026f5f0"
+       },
+       "number": {
+        "display_value": "INC0010129",
+        "value": "INC0010129"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 03:15:00",
+        "value": "2026-02-20 03:15:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10129",
+        "value": "Synthetic incident 10129"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "28a52b00000000000000000000011dad",
+        "value": "28a52b00000000000000000000011dad"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 08:15:00",
+        "value": "2026-02-21 08:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 1",
+        "value": "66f0c800000000000000000000c61a63"
+       },
+       "number": {
+        "display_value": "INC0010130",
+        "value": "INC0010130"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 08:30:00",
+        "value": "2026-02-20 08:30:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10130",
+        "value": "Synthetic incident 10130"
+       },
+       "state": {
+        "display_value": "Closed",
+        "value": "7"
+       },
+       "sys_id": {
+        "display_value": "a4145e000000000000000000000c027c",
+        "value": "a4145e000000000000000000000c027c"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 08:30:00",
+        "value": "2026-02-21 08:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 7",
+        "value": "46acd80000000000000000000008b664"
+       },
+       "number": {
+        "display_value": "INC0010131",
+        "value": "INC0010131"
+       },
+       "opened_at": {
+        "display_value": "2026-02-21 06:45:00",
+        "value": "2026-02-21 06:45:00"
+       },
+       "priority": {
+        "display_value": "4 - Low",
+        "value": "4"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10131",
+        "value": "Synthetic incident 10131"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "42a24f00000000000000000000a84e0a",
+        "value": "42a24f00000000000000000000a84e0a"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 08:45:00",
+        "value": "2026-02-21 08:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "ee1e590000000000000000000089c794"
+       },
+       "number": {
+        "display_value": "INC0010132",
+        "value": "INC0010132"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 12:00:00",
+        "value": "2026-02-20 12:00:00"
+       },
+       "priority": {
+        "display_value": "3 - Moderate",
+        "value": "3"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10132",
+        "value": "Synthetic incident 10132"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "a0707900000000000000000000bccd26",
+        "value": "a0707900000000000000000000bccd26"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 09:00:00",
+        "value": "2026-02-21 09:00:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "f0af0b00000000000000000000dc1ceb"
+       },
+       "number": {
+        "display_value": "INC0010133",
+        "value": "INC0010133"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 12:15:00",
+        "value": "2026-02-19 12:15:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10133",
+        "value": "Synthetic incident 10133"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "df6e3b000000000000000000002eaad2",
+        "value": "df6e3b000000000000000000002eaad2"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 09:15:00",
+        "value": "2026-02-21 09:15:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "c4105c00000000000000000000c6aae0"
+       },
+       "number": {
+        "display_value": "INC0010134",
+        "value": "INC0010134"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 14:30:00",
+        "value": "2026-02-20 14:30:00"
+       },
+       "priority": {
+        "display_value": "5 - Planning",
+        "value": "5"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10134",
+        "value": "Synthetic incident 10134"
+       },
+       "state": {
+        "display_value": "Resolved",
+        "value": "6"
+       },
+       "sys_id": {
+        "display_value": "f7ff4a00000000000000000000d90d3c",
+        "value": "f7ff4a00000000000000000000d90d3c"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 09:30:00",
+        "value": "2026-02-21 09:30:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 9",
+        "value": "4fd34e0000000000000000000069b989"
+       },
+       "number": {
+        "display_value": "INC0010135",
+        "value": "INC0010135"
+       },
+       "opened_at": {
+        "display_value": "2026-02-19 13:45:00",
+        "value": "2026-02-19 13:45:00"
+       },
+       "priority": {
+        "display_value": "1 - Critical",
+        "value": "1"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10135",
+        "value": "Synthetic incident 10135"
+       },
+       "state": {
+        "display_value": "In Progress",
+        "value": "2"
+       },
+       "sys_id": {
+        "display_value": "722cfd0000000000000000000054c27b",
+        "value": "722cfd0000000000000000000054c27b"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 09:45:00",
+        "value": "2026-02-21 09:45:00"
+       }
+      },
+      {
+       "assignment_group": {
+        "display_value": "Synthetic Group 8",
+        "value": "61d2f70000000000000000000060c538"
+       },
+       "number": {
+        "display_value": "INC0010136",
+        "value": "INC0010136"
+       },
+       "opened_at": {
+        "display_value": "2026-02-20 23:00:00",
+        "value": "2026-02-20 23:00:00"
+       },
+       "priority": {
+        "display_value": "2 - High",
+        "value": "2"
+       },
+       "short_description": {
+        "display_value": "Synthetic incident 10136",
+        "value": "Synthetic incident 10136"
+       },
+       "state": {
+        "display_value": "New",
+        "value": "1"
+       },
+       "sys_id": {
+        "display_value": "438d1b00000000000000000000dd9945",
+        "value": "438d1b00000000000000000000dd9945"
+       },
+       "sys_updated_on": {
+        "display_value": "2026-02-21 10:00:00",
+        "value": "2026-02-21 10:00:00"
+       }
+      }
+     ]
+    },
+    "headers": {},
+    "status": 200
+   }
+  }
+ ],
+ "kind": "pages"
+}

@@ -25,6 +25,7 @@ from herness.connectors.factory import build_connector
 from herness.connectors.files import FilesConnector
 from herness.connectors.mongodb import MongoConnector
 from herness.connectors.monitoring.base import MonitoringConnector
+from herness.connectors.servicenow import ServiceNowConnector
 from herness.connectors.snowflake import SnowflakeConnector
 from herness.core import config as c
 from herness.core import registry
@@ -150,8 +151,13 @@ def test_ut01_94_every_registered_connector_builds_without_network(
 ) -> None:
     """UT01-94 every registered connector builds from the synth config; each satisfies
     `Connector`, the key-listing ones `SupportsKeyListing`; no HTTP call is made."""
+    enabled = {name for name, _ in cfg.sources.enabled_sources()}  # servicenow is disabled
     with respx.mock(assert_all_called=False) as mock:
-        built = {name: build_connector(name, cfg) for name in registry.available("connector")}
+        built = {
+            name: build_connector(name, cfg)
+            for name in registry.available("connector")
+            if name in enabled
+        }
     assert not mock.calls
     assert set(built) == {"files", "jira", "monitoring", "mongodb", "snowflake"}
     for name, conn in built.items():
@@ -354,6 +360,38 @@ def test_ut01_94_monitoring_resolves_through_the_builtin_table(
     assert conn.tools() == ("prometheus",)
     assert conn.entities == ("event", "metric_daily")
     assert conn._clock is _fixed
+
+
+_SERVICENOW_ROW = ("connector", "servicenow")
+
+
+def test_ut01_94_servicenow_resolves_through_the_builtin_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-94 the shipped `_BUILTINS` row resolves the real `ServiceNowConnector` (T01-16),
+    which satisfies `Connector` and `SupportsKeyListing`; `build_connector("servicenow", cfg)`
+    passes the section and the clock only; construction makes no network call and resolves
+    no secret (the HTTP client and auth are built on first use)."""
+    row = _shipped_builtins()[_SERVICENOW_ROW]
+    assert row == "herness.connectors.servicenow:ServiceNowConnector"
+    registry.reset_registry()
+    monkeypatch.setitem(registry._BUILTINS, _SERVICENOW_ROW, row)
+    assert registry.get("connector", "servicenow") is ServiceNowConnector
+    sources = SOURCES_YAML.format(inbox="data/inbox").replace(
+        "  servicenow:\n    enabled: false", "  servicenow:\n    enabled: true"
+    )
+    config = c.load_config("local", config_dir=write_sync_config(tmp_path, sources), env={})
+    with respx.mock(assert_all_called=False) as mock:
+        conn = build_connector("servicenow", config, clock=_fixed)
+    assert not mock.calls
+    assert isinstance(conn, ServiceNowConnector)
+    assert isinstance(conn, SupportsKeyListing)
+    assert _conforms(conn) is conn
+    assert conn._settings is config.sources.source("servicenow")
+    assert conn._clock is _fixed
+    assert conn._http is None
+    assert conn.entities == ("incident",)
+    assert conn.watermark_field("incident") == "sys_updated_on"
 
 
 _PROBE = """\
