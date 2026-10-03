@@ -290,6 +290,16 @@ def test_ut01_73_bad_cloud_pages(seams: Seams, bodies: list[Any], message: str) 
         list(connector(pages(*bodies)).sync("issue", None, None))
 
 
+def test_ut01_73_issue_without_updated_is_schema_violation(seams: Seams) -> None:
+    """UT01-73 an issue without `fields.updated` raises the typed SchemaViolation (not a
+    KeyError) before any batch is yielded; the message names the field only (TH01-05)."""
+    raw = jira_pages.issue(1)
+    del raw["fields"]["updated"]
+    batches = connector(pages(_page([raw], isLast=True))).sync("issue", None)
+    with pytest.raises(SchemaViolation, match=r"^unparseable timestamp in updated$"):
+        next(batches)
+
+
 def test_ut01_73_absent_is_last_without_token_ends(seams: Seams) -> None:
     """UT01-73 `isLast` absent and no token: the page is the last one."""
     replay = pages(_page([jira_pages.issue(1)]))

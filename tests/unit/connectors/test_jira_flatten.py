@@ -118,8 +118,9 @@ def test_ut01_96_projections_idempotent_and_minimal() -> None:
 )
 def test_ut01_96_bad_history_is_schema_violation(bad: dict[str, Any]) -> None:
     """UT01-96 a history without string `id`/`created` (or with non-list items) is refused."""
-    with pytest.raises(SchemaViolation, match="bad changelog history"):
+    with pytest.raises(SchemaViolation, match=r"^bad changelog history$") as info:
         project_history(bad)
+    assert info.value.context == {"source": "jira"}
 
 
 @pytest.mark.parametrize(
@@ -127,8 +128,9 @@ def test_ut01_96_bad_history_is_schema_violation(bad: dict[str, Any]) -> None:
 )
 def test_ut01_96_bad_remote_link_is_schema_violation(bad: dict[str, Any]) -> None:
     """UT01-96 a link without `id` (number or string) or `object` mapping is refused."""
-    with pytest.raises(SchemaViolation, match="bad remote link"):
+    with pytest.raises(SchemaViolation, match=r"^bad remote link$") as info:
         project_remote_link(bad)
+    assert info.value.context == {"source": "jira"}
 
 
 @pytest.mark.parametrize(

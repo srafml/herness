@@ -302,7 +302,7 @@ class JiraConnector:
             cols = flatten_issue(
                 issue, changelog=history, remotelinks=remote, custom_field_ids=self._custom
             )
-            ts = parse_source_timestamp(issue["fields"]["updated"], field="updated")
+            ts = parse_source_timestamp(issue["fields"].get("updated"), field="updated")
             rows.append((issue_id, ts, _compact(issue), cols))
         return rows
 

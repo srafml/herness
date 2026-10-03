@@ -17,6 +17,7 @@ from herness.core.errors import SchemaViolation
 
 __all__ = ["project_history", "project_remote_link"]
 
+_SOURCE: Final = "jira"
 _ITEM_MEMBERS: Final = ("field", "from", "fromString", "to", "toString")
 
 
@@ -32,7 +33,7 @@ def project_history(history: Mapping[str, object]) -> dict[str, object]:
         items = []
     if not (isinstance(hid, str) and isinstance(created, str) and isinstance(items, list)):
         msg = "bad changelog history"
-        raise SchemaViolation(msg)
+        raise SchemaViolation(msg, source=_SOURCE)
     projected = [
         {member: item.get(member) for member in _ITEM_MEMBERS}
         for item in items
@@ -51,5 +52,5 @@ def project_remote_link(link: Mapping[str, object]) -> dict[str, object]:
     valid_id = isinstance(lid, str) or (isinstance(lid, int) and not isinstance(lid, bool))
     if not (valid_id and isinstance(obj, Mapping)):
         msg = "bad remote link"
-        raise SchemaViolation(msg)
+        raise SchemaViolation(msg, source=_SOURCE)
     return {"id": str(lid), "object": {"url": obj.get("url"), "title": obj.get("title")}}
