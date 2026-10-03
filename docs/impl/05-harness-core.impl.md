@@ -2513,6 +2513,8 @@ All cards are Phase 3. Prompt files (`*.md`) and `config/models.yaml` are data, 
 | Blocked by | none (D05-07 resolved by R-20: `<untrusted_data>`) |
 | Size | M |
 
+Spec note (T07-14 merge fix, controller ruling; for the consistency pass): impl 07 adds a second prompt resolver in `herness.harness`, `herness/harness/memory/_compactor_llm.py` (`compaction_prompt`, U07-77/U07-99), which reads `herness/harness/memory/prompts/compaction_notes.md` through `importlib.resources`. UT05-94's "only the resolver reads prompts" check therefore expects exactly `memory/_compactor_llm.py` and `roles/base.py`. ST05-21 scans every file of both prompts directories (14 role prompts + 1 memory prompt = 15; impl 07's `chat_summary.md` and `correction_classify.md` raise the count when they land), and the wheel `artifacts` list names `herness/harness/memory/prompts/*.md` next to the role prompts.
+
 ### T05-22 Hooks
 
 | Field | Content |

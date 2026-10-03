@@ -133,9 +133,9 @@ report_only = ["nvidia-*"]  # open item O-03
 
 [tool.hatch.build.targets.wheel]
 packages = ["herness"]
-# Role prompts are package data read through importlib.resources (impl 05 T05-21); listed
-# explicitly so the wheel keeps them even if a VCS ignore rule ever matched them.
-artifacts = ["herness/harness/roles/prompts/*.md"]
+# Role and memory prompts are package data read through importlib.resources (impl 05 T05-21,
+# impl 07 T07-14); listed explicitly so the wheel keeps them even if a VCS ignore rule matched.
+artifacts = ["herness/harness/roles/prompts/*.md", "herness/harness/memory/prompts/*.md"]
 
 [tool.hatch.build.targets.sdist]
 include = ["herness", "README.md", "pyproject.toml", "uv.lock"]

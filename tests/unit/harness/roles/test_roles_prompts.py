@@ -402,11 +402,13 @@ def test_ut05_94_system_block_one_under_cap(tmp_path: Path) -> None:
 
 
 def test_ut05_94_only_the_resolver_reads_prompts() -> None:
-    """UT05-94 no harness module other than roles/base.py refers to the prompts directory."""
+    """UT05-94 only the prompt resolvers refer to a prompts directory: roles/base.py for the
+    role prompts, memory/_compactor_llm.py for the compaction prompt (impl 07 U07-77, U07-99)."""
     harness = Path(base.__file__).resolve().parents[1]
     hits = [
         p.relative_to(harness).as_posix()
         for p in harness.rglob("*.py")
         if re.search(r"""["']prompts["']|prompts/""", p.read_text(encoding="utf-8"))
     ]
-    assert hits == ["roles/base.py"]
+    # U07-77 (T07-14): the compaction prompt resolver reads memory/prompts/compaction_notes.md.
+    assert sorted(hits) == ["memory/_compactor_llm.py", "roles/base.py"]

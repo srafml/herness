@@ -26,6 +26,7 @@ from herness.harness.memory.compact_build import (
     split_groups,
     validate_notes,
 )
+from herness.harness.memory.render import escape_content, wrap_untrusted
 from herness.harness.memory.working import CompactionNotes, LedgerEntry, Scratchpad
 
 pytestmark = pytest.mark.unit
@@ -509,7 +510,7 @@ def test_ut07_59_claude_profile() -> None:
     assert all(isinstance(p, TextPart) for p in head.parts)
     texts = [p.text for p in head.parts if isinstance(p, TextPart)]
     assert texts[:2] == ["original task", "SCRATCH"]
-    assert texts[2] == "\n".join(
+    body = "\n".join(
         [
             "Recent tool calls (verbatim):",
             "user: <scratchpad>old</scratchpad>",
@@ -526,6 +527,9 @@ def test_ut07_59_claude_profile() -> None:
             f"orphan {Q3}",
         ]
     )
+    # T07-14 ruling (open question 1): escaped and wrapped like rendered memory (R-20).
+    assert texts[2] == wrap_untrusted("tool_results", None, escape_content(body))
+    assert "&lt;blocked-scratchpad&gt;old" in texts[2]
 
 
 def test_ut07_59_claude_long_transcript_and_missing_result() -> None:
@@ -540,4 +544,4 @@ def test_ut07_59_claude_long_transcript_and_missing_result() -> None:
     texts = [p.text for p in out[0].parts if isinstance(p, TextPart)]
     assert len(texts) == 4
     assert all(len(t) <= cb.TEXT_PART_MAX_CHARS for t in texts)
-    assert "".join(texts[2:]).endswith('tool: run_sql args: {"sql":"SELECT 1"}')
+    assert "".join(texts[2:]).endswith('tool: run_sql args: {"sql":"SELECT 1"}\n</untrusted_data>')

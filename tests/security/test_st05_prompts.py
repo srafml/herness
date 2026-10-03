@@ -22,7 +22,10 @@ from herness.core.settings import RedactionConfig
 
 pytestmark = pytest.mark.unit
 
-_EXPECTED_COUNT = 14  # R-37 removed verifier_claim.md from the card's 15
+# 14 role prompts (R-37 removed verifier_claim.md from the card's 15) plus the impl 07 memory
+# prompts (T07-14: compaction_notes.md); every prompts directory of the harness is scanned.
+_EXPECTED_COUNT = 15
+_PROMPT_DIRS = (("herness.harness.roles", "prompts"), ("herness.harness.memory", "prompts"))
 _DETECTORS = build_detectors(RedactionConfig())
 _SCHEME = re.compile(r"\b[a-z][a-z0-9+.-]{0,31}://|\bwww\.", re.IGNORECASE)
 # Every dotted token, in prose and in code spans alike, must be a warehouse reference
@@ -39,9 +42,10 @@ _LOCALHOST = re.compile(r"\blocalhost\b", re.IGNORECASE)
 
 
 def _prompt_paths() -> Iterator[Path]:
-    root = resources.files("herness.harness.roles") / "prompts"
-    with resources.as_file(root) as directory:
-        yield from sorted(p for p in Path(directory).iterdir() if p.is_file())
+    for package, name in _PROMPT_DIRS:
+        root = resources.files(package) / name
+        with resources.as_file(root) as directory:
+            yield from sorted(p for p in Path(directory).iterdir() if p.is_file())
 
 
 def _detector_hits(text: str) -> list[str]:
@@ -76,9 +80,10 @@ def _detect_secrets_hits(path: Path) -> list[str]:
 
 
 def test_st05_21_scans_every_prompt_file() -> None:
-    """ST05-21 the scan covers every file in the package prompts directory (14)."""
+    """ST05-21 the scan covers every file in the role and memory prompts directories (15)."""
     paths = list(_prompt_paths())
     assert len(paths) == _EXPECTED_COUNT
+    assert "compaction_notes.md" in {p.name for p in paths}
     assert all(p.suffix == ".md" for p in paths)
 
 

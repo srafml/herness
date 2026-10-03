@@ -358,6 +358,7 @@ _NON_ROW_HASHES = {
     ("memory/policy.py", "keyed_hash"),  # memory key
     ("memory/tokens.py", "_message_key"),  # per-message token-count cache key (U07-68)
     ("memory/store.py", "embed"),  # embedding LRU cache key (U07-48)
+    ("memory/_compactor_llm.py", "compaction_prompt"),  # prompt file version hash (U07-99)
     ("roles/base.py", "prompt_hash"),  # prompt file version hash (U05-49)
     ("swarm/lifecycle.py", "request_config_hash"),  # run.config_hash (U06-83)
 }
