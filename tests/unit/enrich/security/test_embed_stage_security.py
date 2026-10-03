@@ -1,8 +1,7 @@
 """Security tests of the embed stage (impl 03 T03-07): ST03-09 (TH03-07), ST03-15 (TH03-13).
 
-ST03-09: `purge_record` (spec 10) is not in the tree yet; per the program ruling the attack
-runs against `lance_filter_in` and the stage's own orphan delete, the `purge_record` half is
-a carry-over.
+ST03-09: the attack runs against `lance_filter_in`, the stage's own orphan delete and (since
+T03-34 closed the carry-over) `herness.enrich.purge_record`.
 """
 
 from __future__ import annotations
@@ -22,8 +21,10 @@ from tests.unit.enrich._embed_support import (
     use_batch_size,
     use_store,
 )
+from tests.unit.enrich._purge_support import CHG1, H1, H2, HP, INC1, INC2, purge_env
 
 from herness.core.errors import SchemaViolation
+from herness.enrich import purge
 from herness.enrich.embed_stage import lance_filter_in, run_embed_stage
 
 pytestmark = pytest.mark.unit
@@ -64,6 +65,30 @@ def test_st03_09_injected_orphan_id_is_skipped_and_not_deleted_by_filter(
     assert skipped[0]["log_level"] == "warning"
     assert (skipped[0]["records"], skipped[0]["orphans"]) == (0, 1)
     assert "OR 1=1" not in repr(logs)
+
+
+def test_st03_09_purge_record_rejects_injection_before_any_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST03-09 `purge_record("x' OR 1=1 --")` -> SchemaViolation before any IO; no row deleted."""
+    env = purge_env(tmp_path)
+    env.add_vectors([(INC1, H1), (INC2, H2)])
+    env.cache([H1, H2])
+    env.labels("human", [(INC1, H1, "q_a")])
+    env.pairs([(INC1, CHG1, HP)])
+    opened: list[str] = []
+    monkeypatch.setattr(purge, "VectorStore", lambda *a: opened.append("vectors"))
+    monkeypatch.setattr(purge, "get_config", lambda: opened.append("config"))
+    for attack in (ATTACK, "", "servicenow:incident:INC1'", 42):
+        with pytest.raises(SchemaViolation) as info:
+            purge.purge_record(attack)  # type: ignore[arg-type]
+        assert "OR 1=1" not in str(info.value)
+        assert "OR 1=1" not in repr((info.value.context, info.value.details, info.value.hint))
+    assert opened == []
+    assert env.vector_ids() == [(INC1, H1), (INC2, H2)]
+    assert env.cache_hashes() == [H1, H2]
+    assert env.label_rows("human") == [(INC1, H1)]
+    assert env.pair_rows() == [(INC1, CHG1, HP)]
 
 
 def test_st03_15_encoder_inputs_equal_redacted_text_and_logs_carry_no_text(

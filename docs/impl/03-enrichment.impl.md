@@ -72,7 +72,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design spec's module t
 | Path | Purpose | Public symbols | Layer | Extra imports | Line budget |
 |------|---------|----------------|-------|---------------|-------------|
 | `herness/core/types/decisions.py` | Shared decision types owned by 03 (submodule of the `herness.core.types` package, re-exported from it; R-01, ENG §14 E6) | `QuestionType`, `Entity`, `Question`, `QuestionSet`, `DecisionInput`, `Answer`, `DecisionOutput` | L0 | none (only `herness.core.errors`, `herness.core.ids`) | 180 |
-| `herness/enrich/__init__.py` | Package facade | `purge_record`, `embed_query`, `health` | L3 | — | 20 |
+| `herness/enrich/__init__.py` | Package facade | `purge_record`, `embed_query`, `health` | L3 | — | 40 |
 | `herness/enrich/settings.py` | pydantic models of `config/decisions.yaml` and of the `deciders` section of `config/models.yaml` (R-76) | `DecisionsConfig` and section models (U03-09), `DecidersSettings` (U03-150), `check_decider_refs` (U03-151) | L3 | only the standard library, `pydantic`, `herness.core.types` and `herness.core.errors` (settings exception, R-03; imported by `herness.core.config`) | 400 |
 | `herness/enrich/questions.py` | Question set loading, fingerprints, dynamic options, acceptance lookup | `question_fingerprint`, `load_question_set`, `check_fingerprint_registry`, `resolve_dynamic_options`, `shortlist_options`, `acceptance_for`, `PAIR_QUESTIONS` | L3 | `duckdb`, `numpy` | 300 |
 | `herness/enrich/layout.py` | Data path resolution and on-disk layout | `resolve_data_path`, `EnrichPaths` | L3 | — | 150 |
@@ -104,6 +104,8 @@ Line budgets follow ENG §2.4 (400 lines per module). The design spec's module t
 | `herness/enrich/cluster_ids.py` | Centroids and stable ID matching | `compute_centroids`, `match_cluster_ids`, `IdMatch` | L3 | `scipy`, `numpy` | 220 |
 | `herness/enrich/cluster_describe.py` | Descriptors, c-TF-IDF, naming | `describe_clusters`, `top_terms_ctfidf`, `needs_naming`, `representative_texts`, `name_clusters` | L3 | `sklearn` | 380 |
 | `herness/enrich/cluster_stage.py` | `cluster` stage: snapshot IO, cadence, incremental, full, writes | `ClusterSnapshot`, `is_full_recluster_due`, `run_cluster_stage` | L3 | `duckdb`, `pyarrow` | 390 |
+| `herness/enrich/_cluster_io.py` | Private sibling of `cluster_stage` (T03-25 spec note): the snapshot directory IO of U03-103 (`ClusterSnapshot`, `SnapshotMeta`, atomic writes, no-pickle loads and refusal of `*.pkl`/`*.bin`/`*.pt`, TH03-16; `members.parquet` for crash reruns) the bounded streaming of in-window incident vectors from LanceDB (`VectorSource`) and the named-centroid update `finalize_clusters` saves (U03-106), split off for the 390-line budget of `cluster_stage.py`, which re-exports `ClusterSnapshot` and `SnapshotMeta` as its public names | none (private; `ClusterSnapshot`, `SnapshotMeta` re-exported by `cluster_stage`) | L3 | `numpy`, `pyarrow`, `lancedb` | 400 |
+| `herness/enrich/_cluster_full.py` | Private sibling of `cluster_stage` (T03-25 spec note; second sibling as for `laya_trainer`, T03-31): the full recluster of U03-105 step 3 (PCA reuse or fit, projection, prototype k-means, HDBSCAN, assignment, pruning, streamed centroids, `match_cluster_ids`, centroid table with carried names, `members.parquet` and the `assigned` snapshot, CUDA OOM → `FatalError`, yield after the save) and step 4 (descriptors, c-TF-IDF over the ≤ 2,000-text sample, naming candidates), split off because the stage cannot fit 390 + 400 lines; imported only by `cluster_stage`, which re-exports `ALGORITHM_BASE` and `CLUSTER_SEED` | none (private) | L3 | `numpy`, `pyarrow`, `torch` | 300 |
 | `herness/enrich/link_changes.py` | Incident↔change linking | `heuristic_link_score`, `link_candidates`, `pair_inputs`, `run_link_stage` | L3 | `duckdb` | 320 |
 | `herness/enrich/sql/link_candidates.sql` | Heuristic candidate SQL | SQL file | — | — | 120 |
 | `herness/enrich/mapping_suggest.py` | Mapping suggestions | `norm_name`, `mapping_scores`, `prepare_mapping_vectors`, `run_suggest_stage` | L3 | `rapidfuzz`, `numpy` | 360 |
@@ -2937,6 +2939,8 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Security notes | TH03-12; ASVS V14 data deletion. |
 | Tests | UT03-133, UT03-134, ST03-14 |
 
+Spec note (T03-34): step 4 is a soft delete in LanceDB, so after it `purge_record` calls T02-08 (herness.store.vectors.VectorStore.purge_history) on `ticket_embedding` (impl 02 F02-07 step 3: `delete_ids` + `purge_history`); no older table version keeps the record. The vector delete runs last (after steps 6–8, with `shared` read as `content_hash IN (...) AND NOT record_id IN (...)`), so a spec 10 retry after a partial failure still finds hashes held only in vectors. Label rows of pairs involving the record (`record_id` `<id>|…` or `…|<id>`, exact key components) are dropped and their hashes purged even when no pair index part names the pair any more. `hashes_shared` counts only shared hashes the record still held in vectors or labels in this call, so a second call returns zeros. An emptied label part is rewritten with no rows (`LabelStore.read` needs a part); an emptied pair index part is deleted. Errors: a part that is not Parquet or lacks an expected column → `SchemaViolation`; non-busy OS errors inside the reused U03-41 `purge_hashes` and `replace_atomic` raise `FatalError` (as U03-38).
+
 #### U03-146 herness.enrich.health
 
 | Field | Content |
@@ -2954,6 +2958,8 @@ Pair decisions are not written to `enrich.decision` (open item OI-08).
 | Complexity and limits | < 5 s (hash check memoized) |
 | Security notes | — |
 | Tests | UT03-135 |
+
+Spec note (T03-34): "no calibration file for any decider version in use" is read as: every decider version in use that is known without loading a model (`primary_decider`, per-question primaries and `escalation_chain`; `laya` = the `CURRENT` version, `openjev`/`jev` = `deciders.<name>.model` when enabled; `llm` is skipped, its version comes from the spec 05 role binding at run time) has a non-empty `CalibrationStore.load` for the current question set version. While `data/cache` does not exist yet, the probe file goes to the data root (health never creates the cache root); the probe is removed in `finally`. The package facade keeps `herness.enrich.health` the function although the submodule has the same name (its module class drops only the import system's submodule binding).
 
 ---
 
@@ -3042,7 +3048,7 @@ Data classification: `text` is `confidential` (redacted but still business text)
 | `laya/<version>/` | `model.safetensors`, `rl_agent_config.json`, tokenizer files, `manifest.json` (U03-115), `calibration.json` (U03-47), `eval.json` (U03-129), `checkpoints/epoch-<n>/` | `run_distill` | files atomic; directory created with `exist_ok=False` |
 | `laya/CURRENT` | active version text | `accept_model`, `rollback_model` only | atomic replace |
 | `calibration/<decider>/<url-quoted version>/<qsv>.json` | per-question T, ECE, accuracy for `openjev`, `jev`, `llm`, `ensemble` | `evaluate_candidate` (teacher), `run_distill` (ensemble when members have gold rows) | atomic |
-| `clusters/<algorithm_version>/<snapshot_id>/` | `pca.npz` (`components`, `mean`, `fit_id` as a 0-d string array), `prototypes.npy`, `proto_cluster.parquet` (`proto_idx INT32`, `cluster_id VARCHAR` NULL for noise, `hdbscan_prob DOUBLE`, `weight BIGINT`), `centroids.parquet` (`cluster_id`, `centroid FLOAT[1024]`, `size BIGINT`, `named_centroid FLOAT[1024]`, `named_size BIGINT`, `label`, `root_cause_category`, `retired_at TIMESTAMPTZ`), `members.parquet` (full runs, for crash reruns), `snapshot.json` (delta DD-10) | `run_cluster_stage`, `finalize_clusters` | files atomic; `CURRENT` last |
+| `clusters/<algorithm_version>/<snapshot_id>/` | `pca.npz` (`components`, `mean`, `fit_id` as a 0-d string array), `prototypes.npy`, `proto_cluster.parquet` (`proto_idx INT32`, `cluster_id VARCHAR` NULL for noise, `hdbscan_prob DOUBLE`, `weight BIGINT`), `centroids.parquet` (`cluster_id`, `centroid FLOAT[1024]`, `size BIGINT`, `named_centroid FLOAT[1024]`, `named_size BIGINT`, `label`, `root_cause_category`, `retired_at TIMESTAMPTZ`; spec note T03-25: on disk `centroid` and `named_centroid` are variable-length float lists, cast back to `FLOAT[1024]` on read, because pyarrow cannot read a null fixed-size list back from Parquet), `members.parquet` (full runs, for crash reruns), `snapshot.json` (delta DD-10) | `run_cluster_stage`, `finalize_clusters` | files atomic; `CURRENT` last |
 | `clusters/CURRENT` | `<algorithm_version>/<snapshot_id>` | `finalize_clusters` | atomic |
 
 Retention: this spec deletes no model version and no snapshot (design 03 §5.8 step 7 forbids deleting referenced versions; cleanup of unreferenced ones is open item OI-13).
