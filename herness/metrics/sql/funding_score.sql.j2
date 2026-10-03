@@ -63,12 +63,14 @@ fam AS (
       AND wc.ancestor_record_id IN (SELECT candidate_id FROM cand)
 ),
 r AS (
-    SELECT fm.k, a.record_id, a.record_kind, a.share, {{ dbl('a.pain_usd') }} AS pain, a.quality
+    SELECT fm.k, a.record_id, a.record_kind, a.share, a.pain_usd, {{ dbl('a.pain_usd') }} AS pain,
+           a.quality
     FROM fam fm
     JOIN attr a ON a.candidate_id = fm.m
 ),
 agg AS (
     SELECT c.candidate_id,
+           coalesce(sum(r.pain_usd), 0) AS pain_dec,
            coalesce(sum(r.pain), 0) AS pain,
            coalesce(sum(r.pain * r.quality), 0) AS pq,
            coalesce(sum(r.share) FILTER (WHERE r.record_kind = 'incident'), 0) AS n_share
@@ -172,7 +174,7 @@ p1 AS (
 base AS (
     SELECT c.candidate_id, c.candidate_type,
            CASE WHEN c.candidate_type = 'cluster_fix' THEN c.candidate_id ELSE c.key END AS title,
-           CAST(g.pain * 365 / od.d AS DECIMAL(18, 2)) AS annual_pain_usd,
+           CAST(g.pain_dec * 365 / od.d AS DECIMAL(18, 2)) AS annual_pain_usd,
            CAST({{ lkp(p('w_er_override_k'), p('w_er_override_v'), 'c.key', er_type) }}
                 AS DOUBLE) AS expected_reduction,
            CAST(round(g.n_share) AS BIGINT) AS n_incidents,
@@ -224,7 +226,8 @@ fibs AS (
            {{ fib('x.bv_pr') }} AS bv, {{ fib('x.rr_pr') }} AS rr, {{ fib('x.js_pr') }} AS js,
            CASE WHEN NOT x.has_p1 THEN {{ fib('x.tc_pr') }}
                 ELSE CASE {{ fib('x.tc_pr') }} WHEN 1 THEN 2 WHEN 2 THEN 3 WHEN 3 THEN 5
-                     WHEN 5 THEN 8 WHEN 8 THEN 13 ELSE 20 END END AS tc
+                     WHEN 5 THEN 8 WHEN 8 THEN 13 WHEN 13 THEN 20 WHEN 20 THEN 20 END
+           END AS tc
     FROM ranks x
 )
 SELECT f.candidate_id, f.candidate_type, f.title, f.annual_pain_usd, f.addressable_pain_usd,

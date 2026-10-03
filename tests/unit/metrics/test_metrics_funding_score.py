@@ -29,7 +29,6 @@ from tests.support.metrics_funding import (
     step_context,
     warehouse,
 )
-from tests.support.metrics_tiny import tiny_weights
 
 from herness.metrics.evidence import WRITABLE_TABLES
 from herness.metrics.funding import ATTRIBUTION_TABLE, FUNDING_TABLE, run_funding_step
@@ -129,6 +128,19 @@ def test_ut04_80_annualized_pain_and_short_history(
     assert row["confidence"] == pytest.approx(max(0.05, math.sqrt(1 / 30.0) * c_hist))
 
 
+def test_ut04_80_both_flags_sorted(closing: list[duckdb.DuckDBPyConnection]) -> None:
+    """UT04-80 a candidate with no estimate and 179 days of history has both flags, sorted."""
+    con = warehouse(
+        {
+            "core.work_item": [item("A", "PAY-1")],
+            "core.incident": [incident("I1", opened=at(179), service="S3")],
+            "core.work_item_link": [mention("PAY-1", "I1")],
+        }
+    )
+    closing.append(con)
+    assert scores(con)["A"]["flags"] == ["no_estimate", "short_history"]
+
+
 # --- UT04-81 effort chain ------------------------------------------------------------------------
 
 
@@ -177,6 +189,13 @@ def test_ut04_81_effort_chain_and_no_estimate(closing: list[duckdb.DuckDBPyConne
     assert cf["annual_pain_usd"] == Decimal("20000.00")
     assert cf["addressable_pain_usd"] == Decimal("8000.00")
     assert (got["A"]["title"], got["A"]["candidate_type"]) == ("PAY-1", "epic")
+    # JS ranks only the three non-NULL efforts: B 3000 -> 1, A 5000 -> 5, cluster fix -> 20.
+    # BV: only the cluster fix has pain (20); RR: cluster fix on S3, 5 - 1 = 4 (20); TC all 1.
+    assert {k: got[k]["wsjf"] for k in ("A", "B", "cluster_fix:C9")} == {
+        "A": pytest.approx(3 / 5),
+        "B": pytest.approx(3 / 1),
+        "cluster_fix:C9": pytest.approx((20 + 1 + 20) / 20),
+    }
 
 
 # --- UT04-82 confidence --------------------------------------------------------------------------
@@ -216,6 +235,8 @@ def test_ut04_82_n_incidents_rounds_share_sum(closing: list[duckdb.DuckDBPyConne
     )
     got = build(closing, rows)
     assert [got[k]["n_incidents"] for k in ("A", "B", "C")] == [1, 0, 0]
+    # annual pain sums the stored cents exactly: 10000.00 + 3333.33.
+    assert got["A"]["annual_pain_usd"] == Decimal("13333.33")
 
 
 # --- UT04-83 strategic weight --------------------------------------------------------------------
@@ -250,6 +271,7 @@ def test_ut04_83_strategic_weight_product_clip_default(
         item("E3", "OPS-3", project="OPS", team="T3"),
         item("E4", "OPS-4", project="OPS", team="T2"),
         item("E5", "OPS-5", project="OPS", team=None, service="S1"),
+        item("E6", "OPS-6", project="OPS", team="T3", service="S1"),
     ]
     cluster = [incident(r, service="S1") for r in ("IF0", "IF1")]
     rows = graph(
@@ -269,7 +291,31 @@ def test_ut04_83_strategic_weight_product_clip_default(
         "E3": pytest.approx(0.5),  # 1.0 x 0.2 clipped to 0.5
         "E4": pytest.approx(1.0),  # both defaults
         "E5": pytest.approx(1.6),  # no team: org of service S1
+        "E6": pytest.approx(0.5),  # team T3 (O3) wins over service S1 (O1)
         "cluster_fix:C9": pytest.approx(1.6),  # owning service S1 -> O1
+    }
+
+
+def test_ut04_83_cluster_fix_owner_tie_lowest_service(
+    closing: list[duckdb.DuckDBPyConnection],
+) -> None:
+    """UT04-83 a cluster split 1/1 over S1 (O1) and S2 (O3) is owned by S1, the lowest ID."""
+    services = [
+        {"service_id": s, "criticality": 1, "org_id": o}
+        for s, o in (("S1", "O1"), ("S2", "O3"), ("S3", "O1"))
+    ]
+    rows = graph(
+        [],
+        [],
+        core__incident=[incident("IF0", service="S2"), incident("IF1", service="S1")],
+        enrich__cluster_member=[member("IF0", "C9"), member("IF1", "C9")],
+    )
+    rows["core.service"] = services
+    weights = _strategic_weights()
+    sw = weights.strategic_weights.model_copy(update={"org": {"O1": 1.6, "O3": 0.8}})
+    got = build(closing, rows, weights.model_copy(update={"strategic_weights": sw}))
+    assert {k: r["strategic_weight"] for k, r in got.items()} == {
+        "cluster_fix:C9": pytest.approx(1.6)
     }
 
 
@@ -311,6 +357,31 @@ def test_ut04_84_priority_and_rank_ties(closing: list[duckdb.DuckDBPyConnection]
     by_key = sorted(got.values(), key=_rank_key)
     assert [r["rank"] for r in by_key] == [1, 2, 3, 4, 5]
     assert all(r["unconfirmed"] is True for r in got.values())  # shipped weights unconfirmed
+
+
+def test_ut04_84_rank_confidence_breaks_ties(closing: list[duckdb.DuckDBPyConnection]) -> None:
+    """UT04-84 equal priority (0) and addressable pain (0.00): higher confidence ranks first."""
+    items = [item(k, f"PAY-{k}", kind="feature", estimate=1000) for k in ("Z0", "Z1", "Z2")]
+    # 0.0007 minutes at P3 cost 0.01 USD: annual 0.01 or 0.02, x 0.15 rounds to 0.00.
+    tiny = {"minutes": 0.0007, "priority": 3}
+    links = [("T1", "PAY-Z1", tiny), ("T2", "PAY-Z2", tiny), ("T3", "PAY-Z2", tiny)]
+    got = build(closing, graph(items, links))
+    assert [got[k]["annual_pain_usd"] for k in ("Z0", "Z1", "Z2")] == [
+        Decimal("0.00"),
+        Decimal("0.01"),
+        Decimal("0.02"),
+    ]
+    assert {got[k]["addressable_pain_usd"] for k in got} == {Decimal("0.00")}
+    assert {got[k]["priority"] for k in got} == {0.0}
+    assert got["Z2"]["confidence"] > got["Z1"]["confidence"] > got["Z0"]["confidence"]
+    assert {k: r["rank"] for k, r in got.items()} == {"Z2": 1, "Z1": 2, "Z0": 3}
+
+
+def test_ut04_84_zero_effort_priority_null(closing: list[duckdb.DuckDBPyConnection]) -> None:
+    """UT04-84 effort 0 (estimate 0) gives priority NULL without the no_estimate flag."""
+    got = build(closing, graph([item("A", "PAY-A", estimate=0)], [("I1", "PAY-A", {})]))
+    row = got["A"]
+    assert (row["effort_cost_usd"], row["priority"], row["flags"]) == (Decimal("0.00"), None, [])
 
 
 def test_ut04_84_step_records_score_with_upstream(
@@ -427,6 +498,49 @@ def test_ut04_85_fibonacci_mapping_p1_step_and_wsjf(
     }
 
 
+def test_ut04_85_p1_step_cap_and_window(closing: list[duckdb.DuckDBPyConnection]) -> None:
+    """UT04-85 the P1 step is capped at 20 and needs a P1 opened in the last 30 days."""
+    items = [
+        item("U", "PAY-U", estimate=1000),
+        item("V", "PAY-V", estimate=2000),
+        item("W", "PAY-W", estimate=3000),
+    ]
+    p3 = {"priority": 3}
+    links: list[tuple[str, str, dict[str, Any]]] = [
+        (f"IU{t}", "PAY-U", {**p3, "opened": _week(t)}) for t in range(6, 12)
+    ]
+    links += [("IU1", "PAY-U", {"opened": _week(11)})]  # P1 within 30 days on the top TC
+    links += [("IV1", "PAY-V", {"opened": at(31)})]  # P1 31 days before as_of: no step
+    links += [("IW1", "PAY-W", {"opened": at(29)})]  # P1 29 days before as_of: step 1 -> 2
+    got = build(closing, graph(items, links))
+    # TC: U slope > 0 -> 20 (stays 20); V, W slope 0 -> 1; W stepped to 2.
+    # BV: U 4000 -> 20, V = W 2500 -> 1. RR all 1. JS: 1, 5, 20.
+    assert {k: r["wsjf"] for k, r in got.items()} == {
+        "U": pytest.approx((20 + 20 + 1) / 1),
+        "V": pytest.approx((1 + 1 + 1) / 5),
+        "W": pytest.approx((1 + 2 + 1) / 20),
+    }
+
+
+def test_ut04_85_blocks_direction(closing: list[duckdb.DuckDBPyConnection]) -> None:
+    """UT04-85 RR counts the candidates k blocks (from_key = k), not the ones blocking k."""
+    items = [
+        item("P", "PAY-P", estimate=1000),
+        item("Q", "PAY-Q", estimate=2000),
+        item("R", "PAY-R", estimate=3000),
+    ]
+    pairs = (("PAY-P", "PAY-Q"), ("PAY-P", "PAY-R"), ("PAY-Q", "PAY-R"))
+    blocks = [{"from_key": a, "to_key": b, "link_type": "blocks"} for a, b in pairs]
+    got = build(closing, graph(items, [], core__work_item_link=blocks))
+    # RR inputs P 2, Q 1, R 0 -> 20, 5, 1 (counted by to_key: P 0, Q 1, R 2 -> 1, 5, 20);
+    # BV and TC all 1; JS 1, 5, 20.
+    assert {k: r["wsjf"] for k, r in got.items()} == {
+        "P": pytest.approx((1 + 1 + 20) / 1),
+        "Q": pytest.approx((1 + 1 + 5) / 5),
+        "R": pytest.approx((1 + 1 + 1) / 20),
+    }
+
+
 def test_ut04_85_fibonacci_breakpoints(closing: list[duckdb.DuckDBPyConnection]) -> None:
     """UT04-85 percent ranks k/20 map to 1, 2, 3, 5, 8, 13, 20 at .15, .30 ... .90."""
     items = [item(f"W{k:02d}", f"PAY-{k:02d}", estimate=100 * (k + 1)) for k in range(21)]
@@ -461,13 +575,34 @@ def test_ut04_87_parent_pain_is_own_plus_child(closing: list[duckdb.DuckDBPyConn
 
 def test_ut04_80_expected_reduction_override(closing: list[duckdb.DuckDBPyConnection]) -> None:
     """UT04-80 addressable = annual x expected reduction; an override by key wins."""
-    w = tiny_weights()
-    er = w.expected_reduction.model_copy(update={"overrides": {"PAY-C": 0.6}})
-    weights = w.model_copy(update={"expected_reduction": er})
-    items = [item("P", "PAY-P", kind="initiative"), item("C", "PAY-C", parent="PAY-P")]
-    got = build(closing, graph(items, [("I1", "PAY-C", {})]), weights)
-    assert (got["C"]["expected_reduction"], got["P"]["expected_reduction"]) == (
-        pytest.approx(0.6),
-        pytest.approx(0.25),
+    w = cluster_fix_weights()
+    er = w.expected_reduction.model_copy(
+        update={
+            "epic": 0.3,
+            "initiative": 0.2,
+            "cluster_fix": 0.45,
+            "overrides": {"PAY-C": 0.6},
+        }
     )
+    weights = w.model_copy(update={"expected_reduction": er})
+    items = [
+        item("P", "PAY-P", kind="initiative"),
+        item("C", "PAY-C", parent="PAY-P"),
+        item("E", "PAY-E"),
+        item("F", "PAY-F", kind="feature"),
+    ]
+    rows = graph(
+        items,
+        [("I1", "PAY-C", {})],
+        core__incident=[incident(r, service="S3") for r in ("IF0", "IF1")],
+        enrich__cluster_member=[member("IF0", "C9"), member("IF1", "C9")],
+    )
+    got = build(closing, rows, weights)
+    assert {k: r["expected_reduction"] for k, r in got.items()} == {
+        "P": pytest.approx(0.2),
+        "C": pytest.approx(0.6),  # override by key beats epic 0.3
+        "E": pytest.approx(0.3),
+        "F": pytest.approx(0.15),  # shipped feature value
+        "cluster_fix:C9": pytest.approx(0.45),
+    }
     assert got["C"]["addressable_pain_usd"] == Decimal("6000.00")
