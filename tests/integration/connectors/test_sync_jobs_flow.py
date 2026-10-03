@@ -15,7 +15,6 @@ from typing import Any, cast
 
 import pyarrow.parquet as pq
 import pytest
-from pydantic import JsonValue
 from tests.support.build_harness import FakeJobContext
 from tests.support.fake_keyring import MemoryKeyring
 from tests.support.ops_store import OpsStoreHandle
@@ -29,8 +28,9 @@ from herness.core import config as c
 from herness.core import redact as r
 from herness.core import registry
 from herness.core.jobs import queue
-from herness.core.jobs.handlers import Handler, register_handler, resolve_handler, run_handler
-from herness.core.jobs.ports import JobRow, JobsBackend, bind_jobs_backend, require_jobs_backend
+from herness.core.jobs.handlers import Handler, register_handler, resolve_handler
+from herness.core.jobs.inline import run_inline
+from herness.core.jobs.ports import JobsBackend, bind_jobs_backend
 from herness.core.redact_directory import NameDirectory
 from herness.core.resilience import ProcessState, bind_ops_backend
 from herness.core.resilience import reset_process_state as reset_state
@@ -43,7 +43,6 @@ from herness.store.ops.resilience import SqliteResilienceBackend
 
 pytestmark = pytest.mark.integration
 
-_OWNER = "h:1:cpu0"
 _NOW = datetime.datetime(2026, 3, 1, tzinfo=datetime.UTC)
 
 
@@ -99,41 +98,23 @@ def test_it01_01_files_sync_twice_is_idempotent(env: Path) -> None:
     assert len(list((env / "raw" / "files" / "teams").rglob("*.parquet"))) == len(first["files"])
 
 
-class ClaimedJobContext(FakeJobContext):
-    """Test-local `JobContext` around a claimed `JobRow` (stand-in for T08-22 run_inline)."""
-
-    def __init__(self, row: JobRow) -> None:
-        super().__init__(dict(row.payload), kind=row.kind, job_id=row.job_id)
-        self._job = row
-
-
 def test_it01_08_sync_job_runs_through_the_queue(env: Path) -> None:
-    """IT01-08 registered handlers; a `sync` job for files enqueued, claimed and run ends
-    `done` with the `SyncResult` dict in its result.
-
-    T08-22 `run_inline` does not exist yet: enqueue, claim, `resolve_handler` and
-    `run_handler` with a test-local context stand in for it; T08-22 swaps in `run_inline`.
-    """
+    """IT01-08 registered handlers; a `sync` job for files enqueued and run through T08-22
+    `run_inline` ends `done` with the `SyncResult` dict in its result."""
     drop_inbox(env)
     register_job_handlers()
     kind, payload, idem_key = build_sync_payload("files", today=_NOW.date())
     job_id = queue.enqueue(kind, payload, "none", idem_key=idem_key)
     assert queue.enqueue(kind, payload, "none", idem_key=idem_key) == job_id  # deduped
-    row = queue.claim(owner=_OWNER, allowed_classes=("none",))
-    assert row is not None
-    assert (row.job_id, row.kind, row.idem_key) == (job_id, "sync", "sync:files")
-    outcome = run_handler(ClaimedJobContext(row), resolve_handler(row.kind))
-    assert isinstance(outcome, JobOutcome)
+    outcome = run_inline(job_id)
     (result,) = _results(outcome)
     assert set(result) == set(SyncResult.__dataclass_fields__)
     assert (result["source"], result["entity"], result["rows"]) == ("files", "teams", 3)
     assert outcome.result["partial"] is False
-    now = datetime.datetime.now(datetime.UTC)
-    done: dict[str, JsonValue] = dict(outcome.result)
-    assert require_jobs_backend().finish_done(job_id, _OWNER, done, now)
     finished = queue.get(job_id)
-    assert finished.status == "done"
-    assert finished.result == done
+    assert (finished.kind, finished.idem_key) == ("sync", "sync:files")
+    assert (finished.status, finished.attempts, finished.lease_owner) == ("done", 1, None)
+    assert finished.result == dict(outcome.result)
 
 
 def test_it01_08_register_job_handlers_is_idempotent(
