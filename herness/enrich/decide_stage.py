@@ -4,8 +4,8 @@ Impl 03 §3.13 (U03-84 ... U03-87; design 03 §5.1, §5.7; F03-04 ... F03-06). T
 (`run_enrichment`, T03-28) holds the GPU class (R-43), starts services and builds deciders;
 these stages take no GPU lock. A yield request flushes the cache writer, then raises
 `YieldRequested(<stage>)` (U03-152). Logs, errors and notes carry counts, ids and codes only.
-Carry-over: `report` is typed by the private `_Report` protocol until `StageReport` (U03-142,
-T03-28) lands. `ResolveArgs` bundles `resolve_frame`'s arguments but `wh`, `qs` and `cache`.
+`report` is the pipeline's `StageReport` (U03-142, imported for typing only, as `_Report`).
+`ResolveArgs` bundles `resolve_frame`'s arguments but `wh`, `qs` and `cache`.
 Spec note (T03-21): the teacher is sent only queued questions it has no current row for
 (`exclude_deciders`); those it answered below the gate go straight to the LLM phase.
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal
 
 import duckdb
 import pyarrow as pa
@@ -48,6 +48,10 @@ from herness.enrich.labels import LabelStore
 from herness.enrich.questions import PAIR_QUESTIONS, question_fingerprint
 from herness.enrich.resolve import QueueItem, escalation_queue, resolve_frame
 from herness.enrich.settings import DecidersSettings, DecisionsConfig
+
+if TYPE_CHECKING:
+    from herness.enrich.pipeline import StageReport as _Report
+    from herness.enrich.pipeline import StageStatus
 
 __all__ = [
     "ResolveArgs", "build_inputs", "run_decide_escalate", "run_decide_primary",
@@ -84,16 +88,6 @@ ORDER BY content_hash, record_id, entity"""  # noqa: S608 - fixed view names
 _log = get_logger("enrich.decide")
 
 
-class _Report(Protocol):
-    """Fields the stages mutate. T03-28: retype to StageReport (U03-142)."""
-
-    status: str
-    note: str | None
-    decided: int
-    escalated: int
-    failed: int
-
-
 @dataclass(frozen=True, slots=True)
 class ResolveArgs:
     """`resolve_frame` arguments except `wh`, `qs` and `cache` (U03-86)."""
@@ -107,7 +101,7 @@ class ResolveArgs:
     now: datetime
 
 
-def _mark(report: _Report, status: str, note: str) -> None:
+def _mark(report: _Report, status: StageStatus, note: str) -> None:
     report.status, report.note = status, note
 
 

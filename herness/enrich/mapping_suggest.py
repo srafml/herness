@@ -11,7 +11,7 @@ from __future__ import annotations
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import duckdb
 import numpy as np
@@ -27,6 +27,9 @@ from herness.enrich.embed import Encoder, embed_texts
 from herness.enrich.review_items import create_if_absent
 from herness.enrich.settings import DecisionsConfig, MappingWeights
 from herness.enrich.text import normalize_text
+
+if TYPE_CHECKING:
+    from herness.enrich.pipeline import StageReport as _Report
 
 __all__ = [
     "ALGORITHM_VERSION", "MappingVectors", "ScoreMatrices", "Service", "Subject", "SubjectType",
@@ -79,13 +82,6 @@ WHERE list_contains(CAST($ids AS VARCHAR[]), team_id) GROUP BY team_id, service_
 """
 
 _log = get_logger("enrich.suggest")
-
-
-class _Report(Protocol):
-    """Counters the stage mutates. T03-xx pipeline: retype to StageReport (U03-142)."""
-
-    status: Literal["done", "skipped", "degraded", "failed"]
-    rows: int
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,15 +6,15 @@ members' cached rows only through the `EnsembleDecider` (U03-67), with temperatu
 `CalibrationStore`; it calls no model or client. The caller (`run_enrichment`, T03-28) holds
 the GPU class and runs the members first. Restartable: pairs with a current ensemble row are
 not pooled again, and reviews are selected from the cached ensemble rows.
-Carry-over: `report` is typed by the private `_Report` protocol until `StageReport` (U03-142,
-T03-28) lands. Logs, errors and payloads carry counts, ids, hashes and codes only (TH03-03).
+`report` is the pipeline's `StageReport` (U03-142; `_Report`, imported for typing only). Logs,
+errors and payloads carry counts, ids, hashes and codes only (TH03-03).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from itertools import groupby
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final
 
 import duckdb
 import pyarrow as pa
@@ -31,6 +31,9 @@ from herness.enrich.questions import PAIR_QUESTIONS, question_fingerprint
 from herness.enrich.resolve import QueueItem
 from herness.enrich.review_items import create_if_absent
 from herness.enrich.settings import DecisionsConfig
+
+if TYPE_CHECKING:
+    from herness.enrich.pipeline import StageReport as _Report
 
 __all__ = ["ensemble_band", "run_ensemble_pool"]
 
@@ -85,14 +88,6 @@ LIMIT $cap
 """  # noqa: S608 - fixed view names
 
 _log = get_logger("enrich.ensemble")
-
-
-class _Report(Protocol):
-    """Fields the stage mutates. T03-28: retype to StageReport (U03-142)."""
-
-    status: str
-    note: str | None
-    decided: int
 
 
 def _duck_error(exc: duckdb.Error, *, where: str) -> SchemaViolation:
