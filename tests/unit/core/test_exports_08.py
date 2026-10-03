@@ -12,6 +12,7 @@ import json
 import subprocess
 import sys
 import types
+from datetime import UTC, datetime
 
 import pytest
 
@@ -134,6 +135,21 @@ def test_cv_t08_23_same_name_exports_are_callable_modules() -> None:
         value = getattr(package, name)
         assert isinstance(value, types.ModuleType)
         assert callable(value)
+
+
+def test_cv_t08_23_chat_policy_module_call_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT08-63 (cv) calling the package attribute `jobs.chat_policy` calls the U08-75 function."""
+    module = importlib.import_module("herness.core.jobs.chat_policy")
+    calls: list[object] = []
+
+    def fake(now: datetime) -> str:
+        calls.append(now)
+        return "live"
+
+    monkeypatch.setattr(module, "chat_policy", fake)
+    now = datetime(2026, 1, 5, 12, 0, tzinfo=UTC)
+    assert jobs.chat_policy(now) == fake(now)
+    assert calls == [now, now]
 
 
 def test_cv_t08_23_package_import_loads_no_submodule() -> None:
