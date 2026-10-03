@@ -27,8 +27,10 @@ from herness.metrics.settings import WeightsConfig
 
 pytestmark = pytest.mark.unit
 
-# One warehouse and five recorded queries per example: cap the commit profile.
-MAX_EXAMPLES: Final = min(settings().max_examples, 25)
+# One warehouse and five recorded queries per example: cap the commit profile (200 examples)
+# at 25; a larger profile (nightly) keeps its own max_examples.
+_COMMIT_MAX: Final = 200
+MAX_EXAMPLES: Final = 25 if settings().max_examples <= _COMMIT_MAX else settings().max_examples
 SLOW_OK: Final = settings(
     deadline=None, max_examples=MAX_EXAMPLES, suppress_health_check=[HealthCheck.too_slow]
 )
@@ -81,6 +83,16 @@ def graphs(draw: st.DrawFn) -> Rows:
             members.append(member(rid, cluster, draw(st.floats(0.5, 1.0))))
         linked = draw(st.lists(st.sampled_from(keys), max_size=3, unique=True))
         links.extend(mention(key, rid, reverse=draw(st.booleans())) for key in linked)
+    # Forced shapes so the commit profile regularly reaches the rarer paths.
+    force_root_cause = draw(st.booleans())
+    if force_root_cause:  # W0 on S1 with a matching decision; an unlinked incident in C1
+        items[0]["service_id"] = "S1"
+        incidents.append(incident("IRC", service=None))
+        members.append(member("IRC", "C1", draw(st.floats(0.5, 1.0))))
+    if draw(st.booleans()):  # cluster CF: 2 costly unlinked incidents, no enrich.cluster row
+        for rid in ("IF0", "IF1"):
+            incidents.append(incident(rid, service=None, minutes=600))
+            members.append(member(rid, "CF", draw(st.floats(0.5, 1.0))))
     ev = {"source_tool": "datadog", "severity": "major", "ts": "2026-02-01 10:00:00-05"}
     events = [
         {**ev, "event_id": f"E{e}", "service_id": draw(st.sampled_from(SERVICES))}
@@ -100,11 +112,15 @@ def graphs(draw: st.DrawFn) -> Rows:
         }
         for c in CLUSTERS
     ]
+    deciders = draw(st.lists(st.integers(0, n_cand - 1), max_size=2, unique=True))
+    if force_root_cause:
+        clusters[0]["service_ids"] = ["S1"]
+        deciders = sorted({0, *deciders})
     decisions = [
         {"record_id": f"W{k}", "question": "root_cause", "answer": "config",
          "probability": draw(st.floats(0.1, 1.0)), "decider": "m1",
          "decided_at": "2026-01-01 00:00:00+00"}
-        for k in draw(st.lists(st.integers(0, n_cand - 1), max_size=2, unique=True))
+        for k in deciders
     ]  # fmt: skip
     return {
         "core.work_item": items,
@@ -116,6 +132,17 @@ def graphs(draw: st.DrawFn) -> Rows:
         "enrich.cluster": clusters,
         "enrich.decision": decisions,
     }
+
+
+# Path kind of each stored row: tier-2 cluster paths weigh 0.8 x quality, root-cause paths
+# 0.6 x quality (shipped tier weights), cluster-fix paths have a cluster_fix: candidate.
+_PATH_KINDS: Final = (
+    "SELECT DISTINCT CASE WHEN tier = 1 THEN 'tier1_direct' WHEN tier = 3 THEN 'tier3_service'"
+    " WHEN starts_with(candidate_id, 'cluster_fix:') THEN 'tier2_cluster_fix'"
+    " WHEN abs(weight - 0.8 * quality) <= 1e-9 THEN 'tier2_cluster'"
+    " ELSE 'tier2_root_cause' END FROM score.funding_attribution"
+)
+assert ATTRIBUTION_TABLE in _PATH_KINDS
 
 
 def _record_usd(con_rows: Sequence[tuple[object, ...]]) -> Mapping[tuple[str, str], float]:
@@ -139,14 +166,11 @@ def test_pt04_05_shares_and_pain_bounded(rows: Rows) -> None:
         stored = con.execute(
             f"SELECT record_kind, record_id, share, pain_usd FROM {ATTRIBUTION_TABLE}"  # noqa: S608
         ).fetchall()
-        fix = "starts_with(candidate_id, 'cluster_fix:')"
-        paths = con.execute(
-            f"SELECT DISTINCT tier, {fix} FROM {ATTRIBUTION_TABLE}"  # noqa: S608 - constants
-        ).fetchall()
+        paths = con.execute(_PATH_KINDS).fetchall()
     finally:
         con.close()
-    for tier, fix in paths:  # labels for --hypothesis-show-statistics
-        event(f"tier {tier}" + (" cluster_fix" if fix else ""))
+    for (kind,) in paths:  # labels for --hypothesis-show-statistics
+        event(f"path {kind}")
     share_sum: dict[tuple[str, str], float] = {}
     own_pain = 0.0
     for kind, record, share, pain_usd in stored:
