@@ -1,0 +1,15 @@
+# T05-28 (ET05-01): fixed synthetic golden question on the stand-in build
+# (tests/support/warehouse_tools_build.py): total incidents. One tool call.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT count(*) AS incidents FROM core.incident"
+            purpose: total incidents
+    - final:
+        text: "The build holds [[n1]] incidents."
+    - final:
+        output:
+          text: "The build holds [[n1]] incidents."
+          numbers_from: last_tool_result

@@ -1,12 +1,15 @@
 """Agent loop overhead benchmark (BT05-01).
 
+Spec target (impl 05 §10.1): "BT05-01 | Loop overhead per step | `FakeLLMClient` answering
+instantly, fake tools returning instantly, 30-step script, 200 runs | mean per-step overhead
+< 20 ms". Method: 5 warm-up runs, then the 200 runs measured `REPEATS` times; the gate is the
+median of the per-repeat means. Every run stops at the scripted step count (TH05-08).
 Run: pytest -m "integration and slow" tests/bench.
 """
 
 from __future__ import annotations
 
 import asyncio
-import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -14,6 +17,7 @@ from pathlib import Path
 import pytest
 from pydantic import JsonValue
 from tests.support import loop_standin as ls
+from tests.support.bench_stats import REPEATS, report
 from tests.support.dispatch_standin import SyncTool, strict_schema, use_test_config
 from tests.support.fake_llm import FakeLLMClient
 from tests.support.harness_fakes import RecordingTracer
@@ -97,11 +101,11 @@ def test_bt05_01_loop_overhead_per_step(cfg: None) -> None:
         )  # fmt: skip
         result = await loop.run_agent(role, {"q": "x"}, ctx, client, profile, hooks)
         assert result.status == "completed"
+        assert result.stop_reason == "final"
+        assert result.steps == STEPS  # bounded: stops at the scripted step count (TH05-08)
         return result.steps
 
     async def rounds() -> tuple[float, int]:
-        for _ in range(WARM_UP):
-            await one()
         _TimedClient.spent, tool_time[0] = 0.0, 0.0
         steps = 0
         start = time.perf_counter()
@@ -110,8 +114,15 @@ def test_bt05_01_loop_overhead_per_step(cfg: None) -> None:
         total = time.perf_counter() - start
         return total - _TimedClient.spent - tool_time[0], steps
 
-    overhead, steps = asyncio.run(rounds())
-    assert steps == RUNS * STEPS
-    mean_ms = overhead / steps * 1000
-    sys.stderr.write(f"BT05-01 loop overhead mean {mean_ms:.3f} ms per step\n")
+    async def repeats() -> list[float]:
+        for _ in range(WARM_UP):
+            await one()
+        means: list[float] = []
+        for _ in range(REPEATS):
+            overhead, steps = await rounds()
+            assert steps == RUNS * STEPS
+            means.append(overhead / steps * 1000)
+        return means
+
+    mean_ms = report("BT05-01", "mean_step_overhead", asyncio.run(repeats()), "ms", "< 20 ms")
     assert mean_ms < 20, f"loop overhead mean {mean_ms:.3f} ms per step"

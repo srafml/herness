@@ -1,0 +1,20 @@
+# T05-28 (ET05-01): priority mix. The first query names a blocked column and is refused by the
+# SQL guard (a failed tool call, ok = false); the model corrects it. Two tool calls, one failed.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT priority, description FROM core.incident"
+            purpose: priority and text
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT priority, count(*) AS incidents FROM core.incident GROUP BY 1 ORDER BY 1"
+            purpose: incidents per priority
+    - final:
+        text: "Priority level [[n1]] has [[n2]] incidents."
+    - final:
+        output:
+          text: "Priority level [[n1]] has [[n2]] incidents."
+          numbers_from: last_tool_result

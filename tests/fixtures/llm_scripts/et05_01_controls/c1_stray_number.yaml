@@ -1,0 +1,15 @@
+# T05-28 (ET05-01 negative control): the answer states a number outside any marker
+# ("about 57"), which no recorded query supports. The check must fail on it.
+- match: {dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            sql: "SELECT count(*) AS incidents FROM core.incident"
+            purpose: total incidents
+    - final:
+        text: "The build holds [[n1]] incidents, about 57 of them urgent."
+    - final:
+        output:
+          text: "The build holds [[n1]] incidents, about 57 of them urgent."
+          numbers_from: last_tool_result
