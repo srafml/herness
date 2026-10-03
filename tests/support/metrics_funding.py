@@ -19,7 +19,7 @@ from tests.support.metrics_tiny import BUILD_ID, build_metrics_tiny, shipped_cat
 
 from herness.metrics import facts
 from herness.metrics.context import StepContext
-from herness.metrics.funding import ATTRIBUTION_TABLE, run_funding_step
+from herness.metrics.funding import ATTRIBUTION_TABLE, FUNDING_TABLE, run_funding_step
 from herness.metrics.settings import WeightsConfig
 
 AS_OF: Final = datetime.date(2026, 4, 1)
@@ -41,6 +41,24 @@ _BASE: Final[dict[str, list[dict[str, object]]]] = {
         {"service_id": s, "criticality": 1, "org_id": "O1"} for s in ("S1", "S2", "S3", "S9")
     ],
 }
+
+SCORE_COLUMNS: Final = (
+    "candidate_id",
+    "candidate_type",
+    "title",
+    "annual_pain_usd",
+    "addressable_pain_usd",
+    "expected_reduction",
+    "n_incidents",
+    "confidence",
+    "strategic_weight",
+    "effort_cost_usd",
+    "priority",
+    "wsjf",
+    "rank",
+    "unconfirmed",
+    "flags",
+)
 
 type Rows = Mapping[str, Sequence[Mapping[str, object]]]
 
@@ -85,19 +103,25 @@ def item(  # noqa: PLR0913 - one keyword per work item column the tests vary
     service: str | None = None,
     status: str = "in_progress",
     components: list[str] | None = None,
+    project: str = "PAY",
+    team: str | None = "T1",
+    estimate: float | None = None,
+    points: float | None = None,
 ) -> dict[str, object]:
-    """A `core.work_item` row in project PAY."""
+    """A `core.work_item` row (project PAY unless given)."""
     return {
         "record_id": record_id,
         "key": key,
         "type": kind,
         "parent_key": parent,
-        "project": "PAY",
+        "project": project,
         "components": components,
         "status_category": status,
         "created_at": "2025-12-01 09:00:00-05",
-        "team_id": "T1",
+        "team_id": team,
         "service_id": service,
+        "estimate_cost_usd": estimate,
+        "story_points": points,
     }
 
 
@@ -149,3 +173,22 @@ def share_sums(con: duckdb.DuckDBPyConnection) -> list[float]:
     """Per attributed record, the sum of its shares."""
     sql = f"SELECT sum(share) FROM {ATTRIBUTION_TABLE} GROUP BY record_kind, record_id"  # noqa: S608 - constant
     return [float(r[0]) for r in con.execute(sql).fetchall()]
+
+
+def cluster_fix_weights(weights: WeightsConfig | None = None) -> WeightsConfig:
+    """Weights whose cluster-fix thresholds a two-incident cluster of 10000 USD passes."""
+    w = weights if weights is not None else tiny_weights()
+    cf = w.cluster_fix.model_copy(
+        update={"min_incidents_12m": 2, "min_annual_pain_usd": 1000, "max_linked_share": 0.5}
+    )
+    return w.model_copy(update={"cluster_fix": cf})
+
+
+def scores(
+    con: duckdb.DuckDBPyConnection, weights: WeightsConfig | None = None
+) -> dict[str, dict[str, Any]]:
+    """Run the funding step and return the `score.funding` rows (without query_ids) by ID."""
+    run_funding_step(con, step_context(weights))
+    cols = ", ".join(SCORE_COLUMNS)
+    rows = con.execute(f"SELECT {cols} FROM {FUNDING_TABLE}").fetchall()  # noqa: S608 - constants
+    return {row[0]: dict(zip(SCORE_COLUMNS, row, strict=True)) for row in rows}

@@ -26,7 +26,7 @@ from tests.support.metrics_funding import (
 from tests.support.metrics_tiny import BUILD_ID, tiny_weights
 
 from herness.metrics.evidence import WRITABLE_TABLES
-from herness.metrics.funding import ATTRIBUTION_TABLE, run_funding_step
+from herness.metrics.funding import ATTRIBUTION_TABLE, FUNDING_TABLE, run_funding_step
 from herness.metrics.render import render_named
 from herness.metrics.settings import WeightsConfig
 
@@ -88,7 +88,8 @@ def test_ut04_75_run_funding_step_records_evidence(
     closing.append(con)
     sc = step_context()
     result = run_funding_step(con, sc)
-    assert result.row_counts == {ATTRIBUTION_TABLE: 2}
+    # Step 3 (T04-15) also stores score.funding: candidates A and B.
+    assert result.row_counts == {ATTRIBUTION_TABLE: 2, FUNDING_TABLE: 2}
     assert (result.warnings, result.flags, result.failed_checks) == ([], [], [])
     ids = con.execute(f"SELECT DISTINCT query_id FROM {ATTRIBUTION_TABLE}").fetchall()  # noqa: S608
     assert len(ids) == 1
@@ -101,7 +102,8 @@ def test_ut04_75_run_funding_step_records_evidence(
     assert (producer, row_count) == ("score", 2)
     assert len(sql) < EVIDENCE_SQL_CAP
     assert '"name":"funding_attribution"' in params
-    assert run_funding_step(con, sc).row_counts == {ATTRIBUTION_TABLE: 2}  # repeatable
+    repeat = run_funding_step(con, sc).row_counts
+    assert repeat == {ATTRIBUTION_TABLE: 2, FUNDING_TABLE: 2}  # repeatable
     again = con.execute(f"SELECT DISTINCT query_id FROM {ATTRIBUTION_TABLE}").fetchall()  # noqa: S608
     assert again == ids
 
