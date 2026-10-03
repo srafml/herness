@@ -7,10 +7,10 @@ can exercise it directly with synthetic series.
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import date, timedelta
 from statistics import fmean, stdev
-from typing import Literal
+from typing import Literal, cast
 
 from herness.harness.memory.settings import OutcomeConfig
 
@@ -69,6 +69,24 @@ def measurement_windows(effective_at: date, measurement: Literal[1, 2], w: Metri
         start = max(end - timedelta(weeks=w.window_weeks), t0 + lag_and_l)
         post, due = (start, end), end
     return Windows(pre=pre, post=post, due=due)
+
+
+def metric_weeks(cfg: OutcomeConfig, metric: str) -> MetricWeeks:
+    """The four week counts of `metric`: `cfg` with its `per_metric` override (T07-18)."""
+    over = cast("Mapping[str, int]", cfg.per_metric.get(metric, {}))
+    return MetricWeeks(*(over.get(f.name, getattr(cfg, f.name)) for f in fields(MetricWeeks)))
+
+
+def _due_pair(w: MetricWeeks) -> tuple[int, int]:
+    t0 = date(2000, 1, 3)  # any day: due dates are whole weeks after effective_at (U07-83)
+    first, second = measurement_windows(t0, 1, w).due, measurement_windows(t0, 2, w).due
+    return (first - t0).days // 7, (second - t0).days // 7
+
+
+def due_weeks(cfg: OutcomeConfig) -> tuple[dict[str, tuple[int, int]], tuple[int, int]]:
+    """`due_measurements` week pairs (U07-33): per overridden metric, and the default."""
+    per = {name: _due_pair(metric_weeks(cfg, name)) for name in cfg.per_metric}
+    return per, _due_pair(metric_weeks(cfg, ""))
 
 
 def _in_window(day: date, window: tuple[date, date]) -> bool:

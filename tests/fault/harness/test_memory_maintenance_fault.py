@@ -1,17 +1,24 @@
 """Fault tests for the memory maintenance job (impl 07 FT07-01; U07-96, T07-22).
 
-A "kill" between the SQLite commit and the vector upsert is simulated with the card's own
-harness (T05-27 loop_kill is not on the base): `fault_point("sqlite.write")` rules through
-`fault_env`, an embedder that raises, and a caller transaction whose `embed_after_commit`
-never runs. Each leaves the item `embedding_pending`; the next maintenance run backfills it.
+In process: `fault_point("sqlite.write")` rules through `fault_env`, an embedder that raises,
+and a caller transaction whose `embed_after_commit` never runs; each leaves the item
+`embedding_pending` and the next maintenance run backfills it. Real kill (T07-23, the T05-27
+`loop_kill` pattern): the child `tests.support.memory_kill` stores an item through the
+`MemoryStore` facade and is killed by the fault plan before the vector or the pending flag is
+written; the parent's registered `memory_maintenance` handler flags and backfills it.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from tests.support.fault_env import FaultEnv
+from tests.support.memory_kill import SURVIVED
 from tests.support.ops_store import OpsStoreHandle
 from tests.unit.harness.memory._maintenance_env import (
     FakeCtx,
@@ -20,12 +27,27 @@ from tests.unit.harness.memory._maintenance_env import (
     row_of,
     vector_metas,
 )
-from tests.unit.harness.memory._write_env import NOW, RUN_ID, proposal, provenance
+from tests.unit.harness.memory._write_env import (
+    NOW,
+    PATTERNS,
+    ROOT,
+    RUN_ID,
+    FakeEmbed,
+    make_writer,
+    proposal,
+    provenance,
+)
 
 from herness.core.errors import StoreBusy
+from herness.core.jobs.handlers import resolve_handler
 from herness.core.resilience import ProcessState
+from herness.harness.memory import MemoryStore, register_memory_components
 from herness.harness.memory.policy import keyed_hash
+from herness.harness.memory.settings import MemoryConfig
+from herness.harness.memory.store import Embedder, VectorIndex
+from herness.harness.tools import ToolRegistry
 from herness.store.ops import core
+from herness.store.vectors import VectorStore
 
 pytestmark = pytest.mark.fault
 
@@ -109,3 +131,45 @@ def test_ft07_01_store_busy_in_backfill_resumes_idempotently(
     assert [s["step"] for s in resumed.saves] == [6, 7]
     _backfilled(env, result.memory_id)
     assert list(vector_metas(env)) == [result.memory_id]
+
+
+def test_ft07_01_process_killed_after_commit_then_maintenance_backfills(
+    ops_store: OpsStoreHandle, tmp_path: Path, reset_process_state: ProcessState
+) -> None:
+    """FT07-01 a real process kill between the SQLite commit and the vector upsert: the
+    child dies (fault plan `kill` on the pending-flag write after the failed upsert); the item
+    is stored with neither a vector nor `embedding_pending`; maintenance (registered by
+    `register_memory_components`) flags it and backfills the vector."""
+    del reset_process_state
+    plan = tmp_path / "kill_plan.json"
+    plan.write_text(json.dumps([{"point": "sqlite.write", "action": "kill",
+                                 "kind": "memory_embedding_flag"}]), encoding="utf-8")  # fmt: skip
+    vectors_dir = tmp_path / "vectors"
+    child_env = {**os.environ, "HERNESS_ENV": "test", "HERNESS_FAULTS": str(plan)}
+    content = "Churn means customers who left the service."
+    out = subprocess.run(  # noqa: S603 - fixed interpreter and module
+        [sys.executable, "-m", "tests.support.memory_kill", str(ops_store.db_path),
+         str(vectors_dir), content],
+        cwd=ROOT, env=child_env, capture_output=True, text=True, timeout=180, check=False,
+    )  # fmt: skip
+    assert out.returncode != 0, out.stdout[-500:] + out.stderr[-1500:]
+    assert SURVIVED not in out.stdout
+    (row,) = core.read_all("SELECT memory_id FROM memory_item")
+    memory_id = row["memory_id"]
+    assert row_of(memory_id)["data"].get("embedding_pending") in (None, False)
+    vectors = VectorIndex(lambda: VectorStore(vectors_dir))
+    store = MemoryStore(
+        MemoryConfig(injection_patterns=PATTERNS), conn_factory=core.connection,
+        vectors=vectors, embedder=Embedder(FakeEmbed(), model_name="bge-m3"),
+        redactor=make_writer(tmp_path).redactor, llms=None,
+        allowed_numeral_patterns=(r"(INC|CHG|PRB)\d+",), data_root=ops_store.data_root,
+    )  # fmt: skip
+    assert vectors.list_ids("", 10) == []
+    register_memory_components(ToolRegistry(), store)
+    outcome = resolve_handler("memory_maintenance")(FakeCtx())  # type: ignore[arg-type]
+    assert outcome.result["vectors"]["flagged"] == 1
+    assert outcome.result["backfill"] == {"embedded": 1, "stopped": False}
+    (meta,) = vectors.list_ids("", 10)
+    assert meta.memory_id == memory_id
+    assert meta.content_hash == row_of(memory_id)["data"]["content_hash"]
+    assert row_of(memory_id)["data"]["embedding_pending"] is False

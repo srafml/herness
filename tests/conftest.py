@@ -5,7 +5,8 @@ opt-in `reset_process_state` fixture (impl 08 §11) and T08-08 the `tests.suppor
 plugin; T11-40 registers `tests.support.ops_store` (U11-78) in place of the interim
 `tests.support.ops_core_store` (T02-04). T02-12 registers `tests.support.build_harness`
 (`build_harness`, `fake_job_context`; impl 02 §11). T05-16 registers
-`tests.support.harness_state` (autouse `reset_harness_state`: the process tool registry).
+`tests.support.harness_state` (autouse `reset_harness_state`: the process tool registry;
+T07-23 adds the process `MemoryStore` and its outcome / maintenance handler seams).
 T11-23 registers `tests.support.stub_http` (`stub_services`) and `tests.support.fake_llm`
 (`fake_llm_registered`). T10-21 registers `tests.support.secret_leak` (`leak_run`).
 """

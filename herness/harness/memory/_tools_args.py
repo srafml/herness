@@ -20,7 +20,7 @@ from herness.core import redact
 from herness.core import time as clock
 from herness.core.errors import ToolInputError
 from herness.core.types import Kind, Layer, MemoryItem, NumberRef, RecallHit
-from herness.harness.swarm.tools import NUMBER_REF_SCHEMA
+from herness.harness.tools import NUMBER_REF_SCHEMA
 
 __all__ = [
     "ALL_KINDS", "PROPOSE_KINDS", "PROPOSE_MEMORY_SCHEMA", "RECALL_MEMORY_SCHEMA", "Schema",

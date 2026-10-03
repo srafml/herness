@@ -620,6 +620,24 @@ forbidden_modules = [
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
+name = "memory-no-callers (T07-23)"
+type = "forbidden"
+# impl 07 §2 import rules: spec 06 (swarm, blackboard, pipelines) imports memory, never the
+# reverse; memory never imports herness.eval (L5; golden questions are passed in, DD29).
+# Indirect paths through the config root's settings exception (ENG §2.1, R-03) are ignored.
+source_modules = ["herness.harness.memory"]
+forbidden_modules = [
+    "herness.harness.swarm",
+    "herness.harness.blackboard",
+    "herness.harness.pipelines",
+    "herness.eval",
+]
+ignore_imports = [
+    "herness.core.config -> herness.**.settings",
+    "herness.core._config_sections -> herness.**.settings",
+]
+
+[[tool.importlinter.contracts]]
 name = "store-rw-restricted"
 type = "forbidden"
 # impl 02 §2.2, TH02-05 (ST02-05): herness.store._warehouse_rw may be imported only by

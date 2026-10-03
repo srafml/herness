@@ -54,8 +54,7 @@ from herness.harness.memory.tools import (
 from herness.harness.memory.types import MemoryNotFound, ProposeResult
 from herness.harness.roles.analyst import analyst_role
 from herness.harness.roles.writer import WRITER
-from herness.harness.swarm.tools import NUMBER_REF_SCHEMA
-from herness.harness.tools import ToolRegistry
+from herness.harness.tools import NUMBER_REF_SCHEMA, ToolRegistry
 
 pytestmark = pytest.mark.unit
 
