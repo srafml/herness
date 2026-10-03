@@ -289,8 +289,8 @@ def fail_job(message: str) -> str:
     return job_id
 
 
-# Only CREDENTIAL / URL_TOKEN shapes: a bare known value in a job error is stored unmasked
-# (the leak recorded by ST10-14's strict xfail), so it stays out of the green run.
+# Only CREDENTIAL / URL_TOKEN shapes: the bare known value case (scrubbed since T08-15b) is
+# checked on its own by ST10-14's known-secret job test.
 JOB_ERROR: Final = (
     f"reconcile failed: password={SENTINEL_CRED} "
     f"see https://wiki.synthetic-corp.test/kb?token={SENTINEL_URL}"

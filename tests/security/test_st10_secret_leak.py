@@ -96,15 +96,6 @@ def test_st10_14_blocked_host_never_gets_a_socket(leak_run: LeakRun) -> None:
     assert leak_run.resolved_blocked is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "T10-21 finding: a job error message holding a bare known secret value is stored "
-        "unmasked in job.last_error (herness.core.jobs.outcomes._last_error and "
-        "tasks._last_error apply redact_text only, not known_values/scrub_secrets); "
-        "awaiting a ruling, remove this marker when fixed"
-    ),
-)
 def test_st10_14_job_error_with_known_secret_is_masked_in_ops(
     ops_store: OpsStoreHandle,
     fake_keyring: MemoryKeyring,

@@ -21,6 +21,7 @@ from herness.core.ids import IdKind, canonical_json, is_valid_id
 from herness.core.jobs.ports import CheckpointKey, SqlWrites, require_jobs_backend
 from herness.core.logging import get_logger
 from herness.core.redact import redact_text
+from herness.core.secrets import scrub_secrets
 
 CHECKPOINT_SCHEMA_VERSION: Final = 1
 CHECKPOINT_MAX_BYTES: Final = 4_194_304  # 4 MiB (TH08-10)
@@ -168,8 +169,10 @@ def complete_task(
 
 
 def _last_error(err: HernessError, now_ts: str) -> dict[str, str]:
-    """The U08-50 `last_error` shape without `attempt` (the backend adds the row's attempts)."""
-    message = redact_text(str(err)) or ""  # redaction failure: fail closed, no text
+    """The U08-50 `last_error` shape without `attempt` (the backend adds the row's attempts):
+    known secret values scrubbed (U10-36), then redacted, then cut; a failure stores no text."""
+    scrubbed = scrub_secrets(None, "last_error", {"m": str(err)}).get("m")
+    message = (redact_text(scrubbed) if isinstance(scrubbed, str) else None) or ""
     return {
         "class": type(err).__name__,
         "message": message[:LAST_ERROR_MESSAGE_CHARS],

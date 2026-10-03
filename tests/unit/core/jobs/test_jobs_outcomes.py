@@ -399,6 +399,16 @@ def test_ut08_59_unredactable_message_is_withheld(
     assert message == outcomes.MESSAGE_WITHHELD
 
 
+def test_ut08_59_unscrubbable_message_is_withheld(
+    fake_now: _Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-59 a failed known-secret scrub (T08-15b) stores the placeholder, never the text."""
+    monkeypatch.setattr(outcomes, "scrub_secrets", lambda *_a: {"event": "log.scrub.failed"})
+    row = _running()
+    assert _finish(row, SchemaViolation("upstream said no")) == "failed"
+    assert (_get(row.job_id).last_error or {})["message"] == outcomes.MESSAGE_WITHHELD
+
+
 def test_ut08_59_fatal_error_fails(fake_now: _Clock) -> None:
     """UT08-59 a fatal error: `failed`, `job_failed` event, finished metric."""
     row = _running()

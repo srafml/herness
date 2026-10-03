@@ -15,9 +15,11 @@ from datetime import UTC, datetime
 
 import pytest
 import structlog
+from tests.support.fake_keyring import MemoryKeyring
 from tests.support.ops_store import OpsStoreHandle
 
 from herness.core import redact as r
+from herness.core import secrets
 from herness.core import time as clock
 from herness.core.errors import (
     BudgetExceeded,
@@ -54,6 +56,7 @@ pytestmark = pytest.mark.unit
 
 T0 = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 BIG = "x" * (5 * 1024 * 1024)
+KNOWN_VALUE = "plainvaluewithoutshape"  # a resolved secret value with no credential shape
 
 
 @pytest.fixture
@@ -441,6 +444,24 @@ def test_ut08_70_last_error_redacted(run_id: str, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(tasks_mod, "redact_text", lambda text: None)
     other = _task(run_id)
     assert fail_task(other, QueryError("secret text"), max_task_attempts=3) == "dead"
+    assert json.loads(str(_row(other)["last_error"]))["message"] == ""
+
+
+def test_ut08_70_last_error_known_secret_masked(
+    run_id: str, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT08-70 a known secret value (no credential shape) in the error is scrubbed before
+    redaction (T08-15b, U10-36); a scrub failure stores no text (fail closed)."""
+    fake_keyring.store[("herness", "jira.token")] = KNOWN_VALUE
+    assert secrets.resolve("secret:jira.token").get_secret_value() == KNOWN_VALUE
+    task = _task(run_id)
+    fail_task(task, QueryError(f"upstream rejected credential {KNOWN_VALUE}"), max_task_attempts=3)
+    message = json.loads(str(_row(task)["last_error"]))["message"]
+    assert KNOWN_VALUE not in message
+    assert message.startswith("upstream rejected credential ")
+    monkeypatch.setattr(tasks_mod, "scrub_secrets", lambda *_a: {"event": "log.scrub.failed"})
+    other = _task(run_id)
+    fail_task(other, QueryError(f"again {KNOWN_VALUE}"), max_task_attempts=3)
     assert json.loads(str(_row(other)["last_error"]))["message"] == ""
 
 
