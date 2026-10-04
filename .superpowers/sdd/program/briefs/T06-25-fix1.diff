@@ -1,0 +1,462 @@
+75e2a12 fix(harness): T06-25 review round 1 (payload test, shared evidence set, queue constants, crash cleanup, unverified result, rank table)
+
+diff --git a/docs/impl/06-swarm-and-pipelines.impl.md b/docs/impl/06-swarm-and-pipelines.impl.md
+index 8aff9e5..7cb734d 100644
+--- a/docs/impl/06-swarm-and-pipelines.impl.md
++++ b/docs/impl/06-swarm-and-pipelines.impl.md
+@@ -111,17 +111,17 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (spec 00
+ | `herness/harness/pipelines/_chat_turn.py` | Private sibling of `chat` (T06-25 split): the async turn of U06-129 steps 5–6 (`run_agent` with the egress fallback, observed tools, escalation, verification and repair, session save) | — (private) | L4 | none | 360 |
+ | `herness/harness/pipelines/_chat_rows.py` | Private sibling of `chat` (T06-25 split): `Turn` state, plain-text marker rendering (R-16), the run, task and reply-row writes of U06-129 steps 5a, 5i–5j and 6 | — (private) | L4 | `herness.core.jobs` (task helpers) | 220 |
+ | `herness/harness/swarm/escalation.py` | Escalation to a mini swarm and its summary message | `escalate_to_review`, `post_escalation_summary` | L4 | `herness.core.jobs` | 220 |
+ 
+ Import direction inside `herness.harness` (an `import-linter` "layers" contract, top to bottom; a module may import only modules listed below it):
+ 
+ | Rank | Modules |
+ |------|---------|
+-| 1 (top) | `herness.harness.pipelines.chat`, `herness.harness.pipelines.chat_support` |
++| 1 (top) | `herness.harness.pipelines.chat`, its private siblings `herness.harness.pipelines._chat_turn` and `herness.harness.pipelines._chat_rows` (T06-25), `herness.harness.pipelines.chat_support` |
+ | 2 | `herness.harness.swarm` (all submodules) |
+ | 3 | `herness.harness.pipelines.base`, `herness.harness.pipelines.funding_review`, `herness.harness.pipelines.org_review`, `herness.harness.pipelines.settings` |
+ | 4 | `herness.harness.blackboard`, `herness.harness.findings`, `herness.harness.budget` |
+ | 5 | spec 05, 07 modules (`loop`, `tools`, `llm`, `roles`, `verifier`, `tracing`, `memory`), `herness.harness.gates` |
+ 
+ `herness.harness.loop` imports `herness.harness.gates` for the `CallGate` type (D06-05); `gates` imports nothing from `herness.harness`. `herness.harness.pipelines.__init__` re-exports every symbol lazily (module `__getattr__`), so importing `herness.harness.pipelines` from rank 2 does not import rank 1, and importing `herness.harness.pipelines.settings` from `herness.core.config` does not import any rank 1–5 module (R-03; D06-34 covers `herness/harness/__init__.py`, owned by 05).
+ 
+ ## 3. Unit specs
+diff --git a/herness/harness/pipelines/_chat_rows.py b/herness/harness/pipelines/_chat_rows.py
+index 0559296..476a359 100644
+--- a/herness/harness/pipelines/_chat_rows.py
++++ b/herness/harness/pipelines/_chat_rows.py
+@@ -104,16 +104,17 @@ class Turn:
+     claimed: bool = False
+     client_key: str = ""
+     notice: bool = False
+     tracer: Tracer | None = None
+     bb: Blackboard | None = None
+     escalation: tuple[str, str] | None = None
+     lock: asyncio.Lock | None = None
+     seen: set[str] = field(default_factory=set)
++    done: bool = False  # steps 5i-5j committed
+ 
+ 
+ def render(text: str, numbers: Sequence[NumberRef]) -> str:
+     """`text` with each valid marker naming one of `numbers` formatted (R-16, O06-15)."""
+     refs = {n.id: n for n in numbers}
+     for marker in reversed(parse_markers(text).markers):
+         if (ref := refs.get(marker.id)) is not None:
+             text = text[: marker.start] + format_number(ref) + text[marker.end :]
+@@ -180,29 +181,31 @@ def finish(
+ 
+     result: dict[str, object] = {
+         "summary": "", "status": status, "partial": status != "verified",
+         "query_ids": list(answer.query_ids), "model": t.client_key,
+     }  # fmt: skip
+     complete_task(t.task_id, result, writes=writes)
+ 
+ 
+-def cleanup(env: TurnEnv, t: Turn, exc: HernessError | None) -> None:
+-    """Step 6: `error` event (none when the consumer stopped), reply `failed`, run ended."""
++def cleanup(env: TurnEnv, t: Turn, exc: HernessError | None, *, crashed: bool = False) -> None:
++    """Step 6: `error` event (none when the consumer stopped or the worker crashed, whose
++    caller streams its own), reply `failed`, run `failed` (`canceled` on a stop), task dead."""
+     if exc is not None:
+         hint = exc.hint or ("Try again later." if isinstance(exc, RetryableError) else None)
+         t.emit(ErrorEvent(error_type=type(exc).__name__, message=str(exc), hint=hint))
+         _log.error("harness.chat.turn_failed", run_id=t.run_id or None,
+                    error_type=type(exc).__name__)  # fmt: skip
+-    else:
++    elif not crashed:
+         _log.info("harness.chat.turn_stopped", run_id=t.run_id or None)
+     try:
+         update_chat_message(t.reply_id, status="failed")
+         if t.run_id:
+-            to, now = ("failed" if exc is not None else "canceled"), env.deps.clock()
++            to, now = ("failed" if exc or crashed else "canceled"), env.deps.clock()
+             run_write(lambda conn: set_run_status(conn, t.run_id, to, _LIVE_RUN, now=now),
+                       op="chat_end_run")  # fmt: skip
+         if t.claimed:
+-            err = exc if exc is not None else FatalError("chat turn stopped by its consumer")
++            why = "chat turn crashed" if crashed else "chat turn stopped by its consumer"
++            err = exc if exc is not None else FatalError(why)
+             fail_task(t.task_id, err, max_task_attempts=1)
+     except HernessError as err2:
+         _log.warning("harness.chat.cleanup_failed", run_id=t.run_id or None,
+                      error_type=type(err2).__name__)  # fmt: skip
+diff --git a/herness/harness/pipelines/_chat_turn.py b/herness/harness/pipelines/_chat_turn.py
+index bf1d637..943b9cc 100644
+--- a/herness/harness/pipelines/_chat_turn.py
++++ b/herness/harness/pipelines/_chat_turn.py
+@@ -30,17 +30,19 @@ from herness.core.errors import (
+ )  # fmt: skip
+ from herness.core.logging import get_logger
+ from herness.core.types import (
+     ChatAnswer,
+     CorrectionCapturedEvent,
+     EscalatedEvent,
+     EvidenceEvent,
+     FinalEvent,
++    ItemResult,
+     MemoryRunContext,
++    NumberCheck,
+     SqlLimits,
+     TaskBudget,
+     TokenEvent,
+     ToolContext,
+     ToolEvent,
+     VerificationEvent,
+     VerificationResult,
+ )  # fmt: skip
+@@ -164,16 +166,17 @@ async def _answer(env: TurnEnv, t: Turn, started: float) -> TurnStatus:
+     for chunk in chunk_text(render(answer.text, answer.numbers)):
+         t.emit(TokenEvent(text=chunk))
+     answer, status, v, removed = await _verify(env, t, answer, (ledger, budget))
+     if output is None and status == "verified":
+         status = "partial"  # the loop stopped without a final answer
+     t.emit(VerificationEvent(result=v, status=status, removed_claims=removed))
+     latency_ms = round((clock.monotonic() - started) * 1000)
+     finish(env, t, answer, status, latency_ms, ledger)
++    t.done = True
+     t.emit(FinalEvent(answer=answer, run_id=t.run_id))
+     _log.info(
+         "harness.chat.turn_completed",
+         run_id=t.run_id, mode=t.mode, status=status, latency_ms=latency_ms,
+     )  # fmt: skip
+     labels = {"mode": t.mode, "verified": status}
+     deps.metrics.record_counter("herness_harness_chat_turns_total", component="harness",
+                                 labels=labels)  # fmt: skip
+@@ -311,19 +314,28 @@ async def _verify(
+             "previous": answer.model_dump(mode="json"),
+             "verifier_report": v.model_dump(mode="json"),
+         }  # fmt: skip
+         output, _stop = await _agent(env, t, payload, *limits)
+         if output is not None:
+             answer = _answer_of(output, t)
+             v = await _check(env, t, answer)
+     if v is None:
++        # Nothing was verified: each cited number is `query_failed` (so `passed` is False
++        # whenever the answer cites one); `status` stays authoritative.
++        checks = [
++            NumberCheck(number_id=n.id, query_id=n.query_id, column=n.column, row_key=n.row_key,
++                        claimed=n.value, actual=None, result="query_failed")
++            for n in answer.numbers
++        ]  # fmt: skip
++        item = ItemResult(where="answer", passed=not checks, checks=checks, uncited=[],
++                          unknown_markers=[], bad_refs=[], unverified_findings=[])  # fmt: skip
+         empty = VerificationResult(
+-            build_id=t.build_id, passed=True, items=[], n_numbers=0, n_failed=0,
+-            verified_at=env.deps.clock(), duration_ms=0,
++            build_id=t.build_id, passed=not checks, items=[item], n_numbers=len(checks),
++            n_failed=len(checks), verified_at=env.deps.clock(), duration_ms=0,
+         )  # fmt: skip
+         return answer, "unverified", empty, []
+     if v.passed:
+         return answer, "verified", v, []
+     answer, removed = trim_failing_claims(answer, v)
+     return answer, "partial", v, removed
+ 
+ 
+diff --git a/herness/harness/pipelines/chat.py b/herness/harness/pipelines/chat.py
+index e8a8353..76affdf 100644
+--- a/herness/harness/pipelines/chat.py
++++ b/herness/harness/pipelines/chat.py
+@@ -22,16 +22,17 @@ from herness.core.egress import cloud_chat_allowed
+ from herness.core.errors import ConfigError, NotFound
+ from herness.core.jobs import queue as job_queue
+ from herness.core.jobs.chat_policy import chat_model_profile
+ from herness.core.logging import get_logger
+ from herness.core.resilience import metrics as process_metrics
+ from herness.core.types import ChatEvent, ChatMode, ErrorEvent, JobOutcome, ModeEvent
+ from herness.harness.llm.registry import LLMRegistry
+ from herness.harness.memory import MemoryStore, get_memory_store
++from herness.harness.pipelines._chat_rows import cleanup
+ from herness.harness.pipelines._chat_turn import Turn, TurnEnv, run_turn
+ from herness.harness.pipelines.chat_support import MODE_MESSAGES
+ from herness.harness.swarm.escalation import JobsFacade
+ from herness.harness.tracing import Tracer
+ from herness.harness.verifier import Verifier
+ from herness.harness.warehouse import WarehousePool
+ from herness.store.layout import data_layout
+ from herness.store.ops import evidence as evidence_ops
+@@ -255,16 +256,18 @@ class ChatService:
+ 
+     def _work(self, turn: Turn) -> None:
+         """The worker thread: one event loop for the turn, then the end-of-stream sentinel."""
+         try:
+             asyncio.run(run_turn(self._env, turn))
+         except Exception as exc:  # noqa: BLE001 - a bug must not leave the consumer waiting
+             _log.error("harness.chat.turn_crashed", error_type=type(exc).__name__)
+             turn.emit(ErrorEvent(error_type="InternalError", message="chat turn failed", hint=None))
++            if not turn.done:  # step 6 cleanup: no row, run or task lease left open
++                cleanup(self._env, turn, None, crashed=True)
+         finally:
+             turn.emit(None)
+ 
+     def _defer(self, session_id: str, message_id: str, reply_id: str) -> ModeEvent:
+         """U06-129 step 2: one `chat` job per user message (idempotency key, R-41)."""
+         job_id = self._deps.jobs.enqueue(
+             "chat", {"session_id": session_id, "message_id": message_id},
+             gpu_class="reasoning", priority=None, idem_key=f"chat:{session_id}:{message_id}",
+diff --git a/tests/integration/harness/test_chat_service.py b/tests/integration/harness/test_chat_service.py
+index 73b2bf3..3de94e0 100644
+--- a/tests/integration/harness/test_chat_service.py
++++ b/tests/integration/harness/test_chat_service.py
+@@ -5,16 +5,17 @@ Impl 06 U06-127 … U06-129 and U06-136 (design 06 §5.13): every turn runs the
+ the real job queue; the model is scripted per client key (`_chat_service_env`).
+ """
+ 
+ from __future__ import annotations
+ 
+ import json
+ import re
+ from pathlib import Path
++from types import SimpleNamespace
+ from typing import Any
+ 
+ import pytest
+ import structlog
+ from tests.integration.harness import _chat_service_env as cs
+ from tests.integration.harness._chat_service_env import (
+     CLOUD,
+     LIVE,
+@@ -39,16 +40,17 @@ from tests.unit.harness.memory._chat_env import ChatLLM, correction, make_deps
+ 
+ from herness.core.errors import ConfigError, EgressBlocked, NotFound, StoreBusy
+ from herness.core.jobs import queue
+ from herness.core.types import (
+     ChatEvent,
+     CorrectionCapturedEvent,
+     ErrorEvent,
+     EscalatedEvent,
++    EvidenceEvent,
+     FinalEvent,
+     ModeEvent,
+     TextPart,
+     TokenEvent,
+     ToolEvent,
+     VerificationEvent,
+ )
+ from herness.harness.memory import chat as memory_chat
+@@ -179,16 +181,19 @@ def test_it06_11_verifier_unavailable_is_unverified(chat_env: Env) -> None:
+     session save is skipped for an unverified answer."""
+     env = chat_env
+     env.verifier.error = ConfigError("warehouse missing")
+     env.script(LIVE, answer_script("Team One had [[n1]] incidents.", [ref("n1", 40)]))
+     message_id = env.ask()
+     events = env.turn("live")
+     (verification,) = _of(events, VerificationEvent)
+     assert verification.status == "unverified"
++    result = verification.result
++    assert (result.passed, result.n_numbers, result.n_failed) == (False, 1, 1)
++    assert [c.result for c in result.items[0].checks] == ["query_failed"]
+     assert types_of(events)[-1] == "final"
+     assert _reply(env, message_id)["verified"] == "unverified"
+     assert env.memory.saved == []
+ 
+ 
+ def test_it06_11_no_user_message_and_foreign_message(chat_env: Env) -> None:
+     """IT06-11 no user message → `NotFound` error event (R-19); a message of another session
+     → `NotFound` and no assistant row."""
+@@ -294,25 +299,57 @@ def test_it06_34_job_run_twice_no_second_model_call(
+     first = chat_mod.chat_job_handler(_Ctx(job["job_id"]))  # type: ignore[arg-type]
+     calls = len(client.requests)
+     second = chat_mod.chat_job_handler(_Ctx(job["job_id"]))  # type: ignore[arg-type]
+     assert len(client.requests) == calls == 3
+     assert second == first
+     assert first.result["status"] == "verified"
+ 
+ 
+-def test_it06_34_job_payload_and_session_errors(chat_env: Env) -> None:
+-    """IT06-34 a payload without both ids → `ConfigError`; an unknown session → `NotFound`."""
++@pytest.mark.parametrize(
++    "payload",
++    [
++        {"session_id": "S"},
++        {"session_id": "S", "message_id": 7},
++        {"session_id": "S", "message_id": "msg_x", "extra": True},
++    ],
++    ids=["missing_id", "non_string_id", "extra_key"],
++)
++def test_it06_34_job_payload_must_be_two_ids(
++    chat_env: Env, monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]
++) -> None:
++    """IT06-34 U06-136 step 1: a payload other than exactly the two id strings →
++    `ConfigError` from the payload check, before any service is built."""
+     env = chat_env
+-    bad = queue.enqueue("chat", {"session_id": env.session_id}, "reasoning")
+-    with pytest.raises(ConfigError):
+-        chat_mod.chat_job_handler(_Ctx(bad))  # type: ignore[arg-type]
++
++    def no_service() -> chat_mod.ChatService:
++        msg = "service built before the payload check"
++        raise AssertionError(msg)
++
++    monkeypatch.setattr(chat_mod, "_service_from_config", no_service)
++    payload = {k: env.session_id if v == "S" else v for k, v in payload.items()}
++    job_id = queue.enqueue("chat", payload, "reasoning")
++    with pytest.raises(
++        ConfigError, match="chat job payload needs exactly session_id and message_id"
++    ):
++        chat_mod.chat_job_handler(_Ctx(job_id))  # type: ignore[arg-type]
++
++
++def test_it06_34_unknown_session_not_found(chat_env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
++    """IT06-34 U06-136 step 2: an unknown session → `NotFound` before any service is built."""
++    del chat_env
++
++    def no_service() -> chat_mod.ChatService:
++        msg = "service built for an unknown session"
++        raise AssertionError(msg)
++
++    monkeypatch.setattr(chat_mod, "_service_from_config", no_service)
+     unknown = "ses_" + "0" * 26
+     gone = queue.enqueue("chat", {"session_id": unknown, "message_id": "msg_x"}, "reasoning")
+-    with pytest.raises(NotFound):
++    with pytest.raises(NotFound, match="chat session not found"):
+         chat_mod.chat_job_handler(_Ctx(gone))  # type: ignore[arg-type]
+ 
+ 
+ def test_it06_34_service_from_config(chat_env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+     """IT06-34 the job builds its service from `get_config()` with the default deps."""
+     del chat_env
+     store = Memory()
+     monkeypatch.setattr(chat_mod, "get_memory_store", lambda: store)
+@@ -551,8 +588,66 @@ def test_it06_13_default_deps_cloud_rule_and_unbound_vectors(chat_env: Env) -> N
+     local = chat_mod.ChatDeps.from_config(env.cfg)
+     assert local.data_policy_allows_cloud("local") is False
+     approved = with_policy(env.cfg, profile="hybrid", approved=True, egress=True)
+     hybrid = chat_mod.ChatDeps.from_config(approved)
+     assert hybrid.data_policy_allows_cloud("hybrid") is True
+     assert hybrid.data_policy_allows_cloud("premium") is False
+     with pytest.raises(NotFound):
+         local.vectors.search_tickets([0.0], 1, entity=None, service_id=None)
++
++
++def test_it06_11_evidence_once_per_query_id_per_turn(chat_env: Env) -> None:
++    """IT06-11 U06-130 per turn: `run_sql` twice and `list_findings` all return Q1; each call
++    is one `tool` event but Q1 is one `evidence` event, shared by the trace observer and the
++    `ObservedTool` wrapper (one `seen` set per turn)."""
++    env = chat_env
++    found = SimpleNamespace(
++        finding_id="fnd_" + "0" * 26, status="verified", entity_type="team", entity_id="t1",
++        confidence=0.9, numbers=[], claim="Team One is busy", query_ids=[Q1],
++    )  # fmt: skip
++    nulls: dict[str, Any] = dict.fromkeys(
++        ("status", "entity_type", "entity_ids", "task_ids", "author_roles", "min_confidence",
++         "include_superseded", "limit"),
++    )  # fmt: skip
++    steps = [
++        ls.resp(calls=[call("run_sql", "c1", sql="SELECT 1")]),
++        ls.resp(calls=[call("list_findings", "c2", **nulls)]),
++        ls.resp(calls=[call("run_sql", "c3", sql="SELECT 2")]),
++        ls.resp("draft"),
++        final("Team One had [[n1]] incidents.", [ref("n1", 40)]),
++    ]
++    env.script(LIVE, steps)
++    env.ask()
++    events = env.turn("live", past_reader=lambda **_k: [found])
++    tools = _of(events, ToolEvent)
++    assert [(e.name, e.query_id) for e in tools] == [
++        ("run_sql", Q1), ("list_findings", Q1), ("run_sql", Q1),
++    ]  # fmt: skip
++    assert [e.query_id for e in events if isinstance(e, EvidenceEvent)] == [Q1]
++
++
++def test_it06_11_worker_crash_closes_rows(chat_env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
++    """IT06-11 a non-`HernessError` crash inside the turn: one `InternalError` event, and the
++    step 6 cleanup still runs (reply `failed`, run `failed`, task dead, no lease left)."""
++    env = chat_env
++
++    def boom(session_id: str) -> Any:
++        del session_id
++        msg = "bug"
++        raise RuntimeError(msg)
++
++    monkeypatch.setattr(env.memory, "session_load", boom)
++    message_id = env.ask()
++    with structlog.testing.capture_logs() as logs:
++        events = env.turn("live")
++    assert types_of(events) == ["mode", "error"]
++    assert events[-1] == ErrorEvent(
++        error_type="InternalError", message="chat turn failed", hint=None
++    )
++    assert _reply(env, message_id)["status"] == "failed"
++    (run,) = read_all("SELECT run_id, status FROM run", ())
++    assert run["status"] == "failed"
++    (task,) = select_tasks(run["run_id"])
++    assert task.status == "dead"
++    assert [e["error_type"] for e in logs if e["event"] == "harness.chat.turn_crashed"] == [
++        "RuntimeError"
++    ]
+diff --git a/tests/security/test_st06_chat.py b/tests/security/test_st06_chat.py
+index 67110dd..785098e 100644
+--- a/tests/security/test_st06_chat.py
++++ b/tests/security/test_st06_chat.py
+@@ -5,20 +5,22 @@ ST06-11 (TH06-11): a chat loop that never finishes ends within its budget and ti
+ (TH06-12): `cloud` without the chat approval, or under `local`, is answered by the local
+ reduced model with no off-network call. ST06-14 (TH06-14): at INFO no log line carries the
+ user's question or the answer. Setup as in `tests/integration/harness/_chat_service_env.py`.
+ """
+ 
+ from __future__ import annotations
+ 
+ import asyncio
++import queue
+ import threading
+ import time
+ from collections.abc import Callable
+-from typing import Any
++from types import SimpleNamespace
++from typing import Any, ClassVar
+ 
+ import pytest
+ import structlog
+ from tests.integration.harness import _chat_service_env as cs
+ from tests.integration.harness._chat_service_env import (
+     CLOUD,
+     LIVE,
+     PLANTED,
+@@ -241,8 +243,44 @@ def test_st06_14_no_user_or_answer_text_in_logs(chat_env: Env) -> None:
+     assert types_of(events)[-1] == "final"
+     visible = [e for e in logs if e.get("log_level") != "debug"]
+     assert any(e["event"] == "harness.chat.turn_completed" for e in visible)
+     for event in visible:
+         line = repr(event)
+         assert PLANTED not in line
+         assert "handled" not in line
+         assert "incidents?" not in line
++
++
++class _RecordingQueue(queue.Queue[Any]):
++    """`queue.Queue` that records its size and every `get` timeout."""
++
++    made: ClassVar[list[int]] = []
++    timeouts: ClassVar[list[float | None]] = []
++
++    def __init__(self, maxsize: int = 0) -> None:
++        super().__init__(maxsize)
++        self.made.append(maxsize)
++
++    def get(self, block: bool = True, timeout: float | None = None) -> Any:
++        self.timeouts.append(timeout)
++        return super().get(block, timeout)
++
++
++def test_st06_11_queue_bound_and_turn_timeout(
++    chat_env: Env, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """ST06-11 the event hand-off is bounded at 1,000 events and every wait for the next
++    event is `chat.budget.wall_clock_s + 30` seconds (U06-129 step 4, §9 constants)."""
++    env = chat_env
++    assert (chat_mod.QUEUE_MAX, chat_mod.QUEUE_GRACE_S) == (1000, 30)
++    fake = SimpleNamespace(Queue=_RecordingQueue, Empty=queue.Empty, Full=queue.Full)
++    monkeypatch.setattr(chat_mod, "queue", fake)
++    _RecordingQueue.made.clear()
++    _RecordingQueue.timeouts.clear()
++    env.script(LIVE, answer_script("Team One had [[n1]] incidents.", [ref("n1", 40)]))
++    env.ask()
++    events = env.turn("live")
++    assert types_of(events)[-1] == "final"
++    assert _RecordingQueue.made == [1000]
++    wall = env.cfg.pipelines.pipelines.chat.budget.wall_clock_s
++    assert _RecordingQueue.timeouts
++    assert set(_RecordingQueue.timeouts) == {wall + 30}
