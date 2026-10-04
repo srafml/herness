@@ -26,7 +26,7 @@ def _exists(module: str) -> bool:
 
 
 def _flatten(layers: list[str]) -> list[str]:
-    return [name.strip() for layer in layers for name in layer.split("|")]
+    return [name.strip() for layer in layers for name in layer.replace(":", "|").split("|")]
 
 
 def _config() -> dict[str, Any]:

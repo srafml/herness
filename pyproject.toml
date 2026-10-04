@@ -283,8 +283,10 @@ include_external_packages = false
 name = "herness layers"
 type = "layers"
 layers = [
-    # impl 09 §2: the private CLI package sits above reports and eval (T09-20)
-    "herness._cli",
+    # impl 09 §2: the private CLI package sits above reports and eval (T09-20); herness.admin
+    # (impl 10 §3.7, R-07) is L5 beside it, non-independent: admin returns
+    # herness._cli.output.CommandResult and cmd_admin (T09-24) calls the admin bodies.
+    "herness._cli : herness.admin",
     "herness.eval | herness.reports",
     "herness.harness",
     "herness.metrics",
@@ -374,6 +376,7 @@ forbidden_modules = [
     "herness.enrich",
     "herness.reports",
     "herness._cli",
+    "herness.admin",
 ]
 
 [[tool.importlinter.contracts]]
@@ -546,6 +549,7 @@ type = "forbidden"
 source_modules = ["herness.core.*.settings"]
 forbidden_modules = [
     "herness._cli",
+    "herness.admin",
     "herness.cli",
     "herness.connectors",
     "herness.enrich",
