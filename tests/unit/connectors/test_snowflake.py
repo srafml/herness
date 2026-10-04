@@ -372,6 +372,18 @@ def test_ut01_88_auth_failure_on_connect(snowflake_env: SpyBreaker) -> None:
     assert server.calls == []
 
 
+def test_ut01_88_auth_failure_force_opens_the_snowflake_breaker_once(
+    snowflake_env: SpyBreaker,
+) -> None:
+    """UT01-88 (08 section 9.2) sqlstate 28000 on the SELECT: `force_open` once with the raised
+    AuthError on the `snowflake` breaker, one SELECT, no retry."""
+    server = FakeSnowflake(errors={"SELECT": [sfe.DatabaseError(msg="x", sqlstate="28000")]})
+    with pytest.raises(AuthError) as info:
+        list(connector(server).sync("cost_center", None))
+    assert len(server.statements("SELECT")) == 1
+    assert snowflake_env.forced == [info.value]
+
+
 def test_ut01_88_queue_timeout_is_rate_limited(snowflake_env: SpyBreaker) -> None:
     """UT01-88 sqlstate 57014 on the SELECT → RateLimited(retry_after=None) once retries stop."""
     errors = [sfe.ProgrammingError(msg="queued too long", sqlstate="57014") for _ in range(20)]

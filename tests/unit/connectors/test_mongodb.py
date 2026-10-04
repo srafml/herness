@@ -248,6 +248,20 @@ def test_ut01_85_auth_failure_maps_to_auth_error(
     assert [type(e) for e in mongo_breaker.failures] == [AuthError]
 
 
+def test_ut01_85_auth_failure_force_opens_the_mongodb_breaker_once(
+    mongo_breaker: SpyBreaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-85 (08 section 9.2) auth failure: `force_open` once with the raised AuthError on the
+    `mongodb` breaker, a single query, no retry."""
+    factory = Factory()
+    _seed(factory, 3)
+    flaky = flaky_find(monkeypatch, {1: me.OperationFailure("Authentication failed.", code=18)})
+    with pytest.raises(AuthError) as info:
+        list(connector(factory).sync("orders", None))
+    assert len(flaky.queries) == 1
+    assert mongo_breaker.forced == [info.value]
+
+
 def test_ut01_85_ping_failure_is_source_unavailable(
     mongo_uri: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

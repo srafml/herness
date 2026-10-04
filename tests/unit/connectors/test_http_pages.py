@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 import json
 import random
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -103,9 +103,17 @@ def test_ut01_62_invalid_json_is_schema_violation(slept: list[float]) -> None:
     assert slept == []
 
 
+_CALLS: dict[str, Callable[[SourceHttp], object]] = {
+    "get_json": lambda h: h.get_json("/p"),
+    "post_json": lambda h: h.post_json("/p", json_body={}),
+    "post_form_lines": lambda h: list(h.post_form_lines("/p", data={"q": "1"})),
+}
+
+
+@pytest.mark.parametrize("call", list(_CALLS))
 @pytest.mark.parametrize("status", [401, 403])
 def test_ut01_62_auth_error_force_opens_the_source_breaker_once_without_retry(
-    status: int, slept: list[float], monkeypatch: pytest.MonkeyPatch
+    status: int, call: str, slept: list[float], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT01-62 (08 §9.2) a 401/403 page raises AuthError after exactly one request: no retry,
     `force_open` called once with that error on the breaker of the source key."""
@@ -119,7 +127,7 @@ def test_ut01_62_auth_error_force_opens_the_source_breaker_once_without_retry(
 
     monkeypatch.setattr(CircuitBreaker, "force_open", spy)
     with pytest.raises(AuthError) as caught:
-        _http(handler).get_json("/p")
+        _CALLS[call](_http(handler))
     assert len(seen) == 1
     assert slept == []
     assert len(forced) == 1

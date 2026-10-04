@@ -23,6 +23,7 @@ from pymongo import errors as me
 from pymongo.collection import Collection as _Collection
 from pymongo.database import Database
 
+from herness.connectors._auth_breaker import open_on_auth
 from herness.connectors.base import KEY_SCHEMA
 from herness.connectors.rows import RowBatcher, flatten_record, parse_source_timestamp, to_snake
 from herness.connectors.settings import MongoSettings
@@ -82,7 +83,7 @@ def _driver[T](fn: Callable[[], T]) -> T:
     try:
         return fn()
     except me.PyMongoError as exc:
-        raise _map_mongo_error(exc) from None
+        raise open_on_auth(_SOURCE, _map_mongo_error(exc)) from None
 
 
 def _uri_parts(uri: str) -> tuple[bool, list[str], list[tuple[str, str]]]:

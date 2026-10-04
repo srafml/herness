@@ -92,6 +92,7 @@ Default layer imports per ENG §2.1: L2 may import L0 (`herness.core.*`) and L1 
 | `herness/connectors/monitoring/datadog.py` | Datadog adapter | `DatadogAdapter` | L2 | — | 260 |
 | `herness/connectors/monitoring/splunk.py` | Splunk export adapter (SPL is validated by `settings.validate_spl`) | `SplunkAdapter` | L2 | — | 250 |
 | `herness/connectors/monitoring/dynatrace.py` | Dynatrace adapter | `DynatraceAdapter` | L2 | — | 250 |
+| `herness/connectors/_auth_breaker.py` | Force-opens a source breaker on `AuthError` for drivers that map errors outside `SourceHttp` | `open_on_auth` | L2 | — | 40 |
 | `herness/connectors/mongodb.py` | MongoDB connector | `MongoConnector` | L2 | `pymongo`, `bson` | 320 |
 | `herness/connectors/snowflake.py` | Snowflake connector with scan guard | `SnowflakeConnector` | L2 | `snowflake.connector`, `pyarrow` | 340 |
 | `herness/connectors/dataverse.py` | Dataverse Web API connector | `DataverseConnector` | L2 | — | 290 |
