@@ -50,6 +50,10 @@ _FIRST_ORG = (
     " FROM score.org ORDER BY ALL {} LIMIT 1)"
 )
 _SELECT_BOTH = "UPDATE score.portfolio SET selected = true WHERE scenario = 'lean'"
+# One unconfirmed action_lever row (the tiny build yields none) carrying its own query id.
+_LEVER_ROW = (
+    "INSERT INTO score.action_lever (unconfirmed, query_ids) VALUES (true, ['q_forged00000000a4'])"
+)
 # (check, planting statements, expected value; None = count the unconfirmed rows)
 VIOLATIONS: list[tuple[str, tuple[str, ...], float | None]] = [
     (
@@ -79,7 +83,11 @@ VIOLATIONS: list[tuple[str, tuple[str, ...], float | None]] = [
     ),
     (
         "score_portfolio_budget",
-        ("UPDATE score.funding SET effort_cost_usd = 600000.40", _SELECT_BOTH),
+        (  # lean budget 1000000: floors sum to 999999, U04-60 ceilings to 1000001
+            "UPDATE score.funding SET effort_cost_usd = 500000.40 WHERE candidate_id = 'W1'",
+            "UPDATE score.funding SET effort_cost_usd = 499999.70 WHERE candidate_id = 'W2'",
+            _SELECT_BOTH,
+        ),
         1.0,
     ),
     ("score_portfolio_parent_child", (_SELECT_BOTH,), 1.0),
@@ -97,11 +105,13 @@ VIOLATIONS: list[tuple[str, tuple[str, ...], float | None]] = [
         (
             "UPDATE score.funding SET query_ids = ['q_forged00000000a1']",
             "UPDATE score.funding_attribution SET query_id = 'q_forged00000000a2'",
-            "UPDATE score.portfolio SET query_ids = list_append(query_ids, 'q_forged00000000a1')",
+            "UPDATE score.org SET query_ids = list_append(query_ids, 'q_forged00000000a3')",
+            _LEVER_ROW,
+            "UPDATE score.portfolio SET query_ids = list_append(query_ids, 'q_forged00000000a5')",
         ),
-        2.0,
+        5.0,  # one distinct forged id per score table: dropping any branch changes the count
     ),
-    ("score_unconfirmed_rows", ("UPDATE score.org SET unconfirmed = true",), None),
+    ("score_unconfirmed_rows", ("UPDATE score.org SET unconfirmed = true", _LEVER_ROW), None),
 ]
 
 
@@ -232,6 +242,31 @@ def test_ut04_115_pain_total_fails_beyond_tolerance(scored: duckdb.DuckDBPyConne
     assert value > threshold > 0.01
     assert json.loads(details)["n_bad"] == 1
     assert "score_pain_total" in result.failed_checks
+
+
+def test_ut04_115_pain_total_counts_noise_events(scored: duckdb.DuckDBPyConnection) -> None:
+    """UT04-115 `score_pain_total` recomputes noise-event records too (U04-64 rec_cost): a
+    noise event in the window that no candidate is attributed makes the attributed sum fall
+    short of the window total by exactly its annualized triage cost (value < 0, passes)."""
+    binds = _step_context().binds()
+    severity = sorted(binds["d_noise_severities"])[0]  # type: ignore[call-overload]
+    scored.execute(
+        "INSERT INTO core.event (event_id, ts, service_id, severity, incident_id)"
+        " VALUES ('E_NOISE', TIMESTAMPTZ '2026-03-15 12:00:00+00', 'S1', ?, NULL)",
+        [severity],
+    )
+    _check(scored)
+    _severity, value, threshold, passed, _details = _row(scored, "score_pain_total")
+    usd = float(binds["w_triage_minutes"]) / 60 * float(binds["w_engineer_hour"])  # type: ignore[arg-type]
+    row = scored.execute(
+        "SELECT greatest(1, least(?, date_diff('day', CAST(min(opened_at) AT TIME ZONE ? AS DATE),"
+        " DATE '2026-04-01'))) FROM metrics.incident_fact WHERE NOT excluded",
+        [binds["s_window_days"], binds["tz"]],
+    ).fetchone()
+    assert row is not None
+    assert passed is True
+    assert value == pytest.approx(-usd * 365 / row[0])
+    assert value < 0 < threshold
 
 
 def test_ut04_115_pain_total_within_tolerance(scored: duckdb.DuckDBPyConnection) -> None:

@@ -65,13 +65,18 @@ def test_st04_06_edited_funding_value_detected_and_rerun_restores(
     scored: duckdb.DuckDBPyConnection,
 ) -> None:
     """ST04-06 an edited `score.funding` value: the stored rows no longer hash to the
-    evidence `result_hash` of their query; re-running `funding` re-derives the same hash
+    evidence `result_hash` of their query, and re-running `portfolio` (which reads it) fails
+    as a rerun hash mismatch; re-running `funding` re-derives the same hash
     (no conflict) and rewrites the edited row."""
     qid = _funding_qid(scored)
     recorded = _evidence_hash(scored, qid)
     assert _table_hash(scored) == recorded
     scored.execute("UPDATE score.funding SET confidence = 0.9 WHERE rank = 1")
     assert _table_hash(scored) != recorded  # the tampering is visible against the evidence
+    # product path: re-running the step that reads score.funding gives its pinned query id a
+    # different result, which the evidence hash comparison rejects
+    with pytest.raises(SchemaViolation, match="nondeterministic result"):
+        run_scoring(BUILD_ID, steps=["portfolio"], con=scored)
     run_scoring(BUILD_ID, steps=["funding"], con=scored)
     assert _funding_qid(scored) == qid
     assert _evidence_hash(scored, qid) == recorded
