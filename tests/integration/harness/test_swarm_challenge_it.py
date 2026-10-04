@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import structlog
 from pydantic import JsonValue
 from tests.integration.harness import test_swarm_scheduler_it as base_it
 from tests.support import loop_standin as ls
@@ -31,7 +32,7 @@ from herness.core import time as clock
 from herness.core.errors import BudgetExceeded, ConfigError, FatalError
 from herness.core.ids import IdKind, new_id
 from herness.core.ids import query_id as compute_query_id
-from herness.core.jobs import claim_task, complete_task
+from herness.core.jobs import claim_task, complete_task, fail_task
 from herness.core.types import (
     SKEPTIC_CHECKS,
     AgentResult,
@@ -49,6 +50,7 @@ from herness.harness.findings import compute_dedup_key
 from herness.harness.roles import base
 from herness.harness.roles.base import get_role
 from herness.harness.swarm import challenge, hybrid, scheduler
+from herness.harness.swarm._challenge_gate1 import _StoreReader
 from herness.harness.swarm.adversarial import build_skeptic_task
 from herness.harness.swarm.routing import default_tools
 from herness.harness.swarm.scheduler import PhaseOutcome, PhaseRunner
@@ -439,8 +441,9 @@ def _evidence(s: Sched, sql: str) -> str:
     return qid
 
 
-def _crosscheck(s: Sched, target: str, value: int, qid: str) -> str:
-    """A crosscheck task on `target`'s n1 that posted one finding with `value` via `qid`."""
+def _crosscheck(s: Sched, target: str, value: int, qid: str, *, dead: bool = False) -> str:
+    """A crosscheck task on `target`'s n1 that posted one finding with `value` via `qid`;
+    with `dead` it posts nothing and ends dead (returns its task id)."""
     scope = EntityScope(entity_type="team", entity_ids=["t1"])
     objective = f"Compute independently: incidents for team t1 way one {new_id(IdKind.TASK)}"
     spec = TaskSpec(
@@ -454,6 +457,9 @@ def _crosscheck(s: Sched, target: str, value: int, qid: str) -> str:
     base_it._insert(spec)
 
     assert claim_task(spec.task_id)
+    if dead:
+        fail_task(spec.task_id, FatalError("crosscheck broke"), max_task_attempts=1)
+        return spec.task_id
     numbers = [{"id": "n1", "value": value, "unit": "count", "query_id": qid,
                 "column": "incidents", "row_key": None}]  # fmt: skip
     ctx = s.bb.ctx(task_id=spec.task_id)
@@ -474,6 +480,8 @@ def test_it06_10_crosscheck_disagree_and_agree(sched: Sched) -> None:
     _crosscheck(sched, good, 7, xq)
     _crosscheck(sched, bad, 40, xq)
     _crosscheck(sched, same, 7, sched.bb.ops_qid)  # same query: invalid value
+    lone = post_finding(sched, 4, claim="Team t1 counted [[n1]] incidents")
+    _crosscheck(sched, lone, 7, xq, dead=True)  # the only crosscheck task is dead
     run(sched, challenge.run_gate1)
     fg, fbad, fsame = _one(good), _one(bad), _one(same)
     assert fg.status == "verified"
@@ -491,6 +499,20 @@ def test_it06_10_crosscheck_disagree_and_agree(sched: Sched) -> None:
     assert fsame.verification is not None
     assert fsame.verification.cross_checks[0].agreed is False
     assert fsame.verification.cross_checks[0].values == [7.0]
+    flone = _one(lone)  # incomplete: not rejected, stays verified, record kept (O06-10)
+    assert flone.status == "verified"
+    assert flone.verification is not None
+    [lone_cc] = flone.verification.cross_checks
+    assert (lone_cc.values, lone_cc.agreed) == ([7.0], False)
+    reader = _StoreReader(sched.bb.run_id)
+    tol, knobs = sched.env.cfg.swarm.crosscheck, sched.env.knobs
+
+    def outcome(fid: str) -> challenge.CrosscheckOutcome:
+        return challenge.evaluate_crosschecks(_one(fid), reader=reader, knobs=knobs, tolerances=tol)
+
+    assert (outcome(lone).incomplete, outcome(lone).disagree) == (True, False)
+    assert (outcome(same).incomplete, outcome(good).incomplete) == (True, False)
+    assert (outcome(bad).incomplete, outcome(bad).disagree) == (False, True)
 
 
 # --- IT06-29 gate 1 batches
@@ -540,23 +562,31 @@ def test_it06_29_batches_of_20_with_transitions_and_records(sched: Sched) -> Non
 
 
 def test_it06_29_verifier_error_leaves_batch_proposed(sched: Sched) -> None:
-    """IT06-29 a HernessError from the Verifier fails the task (dead); its findings stay
-    `proposed` and never reach the Writer."""
-    ids = _insert_findings(sched, 2)
+    """IT06-29 two batches; a HernessError from the Verifier on the second fails that task
+    (dead) and its findings stay `proposed` (never reaching the Writer); the first batch is
+    verified; no exception escapes `run_gate1` and the gate log counts the `unverified`."""
+    ids = _insert_findings(sched, 25)
 
     class _Broken(_Verifier):
         def verify_findings(
             self, findings: list[Finding], build_id: str
         ) -> list[VerificationResult]:
-
-            msg = "verifier down"
-            raise FatalError(msg)
+            if findings[0].finding_id == ids[20]:
+                msg = "verifier down"
+                raise FatalError(msg)
+            return super().verify_findings(findings, build_id)
 
     setup(sched, verifier=_Broken())
-    run(sched, challenge.run_gate1)
-    [task] = select_tasks(sched.bb.run_id, roles={"verifier"})
-    assert task.status == "dead"
-    assert {get_findings(ids)[i].status for i in ids} == {"proposed"}
+    with structlog.testing.capture_logs() as logs:
+        out = run(sched, challenge.run_gate1)
+    assert out == PhaseOutcome(frozenset(), False)
+    tasks = select_tasks(sched.bb.run_id, roles={"verifier"})
+    assert [t.status for t in tasks] == ["done", "dead"]
+    found = get_findings(ids)
+    assert {found[i].status for i in ids[:20]} == {"verified"}
+    assert {found[i].status for i in ids[20:]} == {"proposed"}
+    [event] = [e for e in logs if e["event"] == "harness.gate1.completed"]
+    assert (event["verified"], event["rejected"], event["unverified"]) == (20, 0, 5)
 
 
 # --- U06-108 / U06-109 / U06-114 edge paths (IT06-28, IT06-29)

@@ -261,6 +261,7 @@ async def run_gate1(env: RunEnv, runner: PhaseRunner) -> PhaseOutcome:
     _log.info(
         "harness.gate1.completed", run_id=env.run.run_id,
         verified=tally.count("verified"), rejected=tally.count("rejected"),
+        unverified=tally.count("proposed"),  # a dead batch's findings stay proposed
     )  # fmt: skip
     return out
 
