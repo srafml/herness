@@ -299,8 +299,7 @@ def _fingerprint_tx(ctx: _Ctx, g: _Group, c: Conn) -> _Outcome:
 
 def _after_commit(deps: ProceduralDeps, new_ids: Sequence[str], moved: Mapping[str, str]) -> None:
     """Step 9: embed new items, then mirror status changes onto their vectors."""
-    for memory_id in new_ids:
-        deps.writer.embed_after_commit(memory_id)
+    deps.writer.embed_many_after_commit(new_ids, op="promote")
     for status in sorted(set(moved.values())):
         ids = [m for m, s in moved.items() if s == status]
         try:
@@ -320,8 +319,8 @@ def promote_procedural(
     ctx = _Ctx(run_id, run.build_id, deps, now)
     groups, seen, skipped = _collect(run_id, deps)
     created = updated = qa = repeated = 0
-    promoted: list[str] = []
-    expired: list[str] = []
+    promoted, expired, new_ids = (list[str]() for _ in range(3))
+    moved: dict[str, str] = {}
     for fp, g in groups.items():
         reason = unsafe_reason(g.parsed, deps.guard) if g.passes else None
         out = _Outcome()
@@ -339,7 +338,8 @@ def promote_procedural(
         for event, memory_id, fingerprint, lb in out.events:
             _log.info(event, memory_id=memory_id, fingerprint=fingerprint, pass_lb=round(lb, 4))
             (promoted if event.endswith("promoted") else expired).append(memory_id)
-        _after_commit(deps, out.new_ids, out.moved)
+        new_ids, moved = new_ids + out.new_ids, moved | out.moved
+    _after_commit(deps, new_ids, moved)  # one vector upsert per run (T07-28)
     return PromotionReport(
         run_id=run_id, queries_seen=seen, skipped_unparsable=skipped, templates_created=created,
         templates_updated=updated, qa_pairs_created=qa, promoted=promoted, expired=expired,
