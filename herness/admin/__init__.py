@@ -15,7 +15,7 @@ __all__ = ["register_handlers"]
 def register_handlers(*, memory_purge: Callable[[str], int]) -> None:
     """Register the ``maintenance`` handler (U10-75); impl 08 calls it with ``ctx`` only (R-42).
 
-    Same ``memory_purge`` again: no-op (``partial`` is new each call); else ConfigError.
+    Bind ``memory_purge`` once in the composition root: identity is compared (else ConfigError).
     """
     try:
         held = resolve_handler("maintenance")

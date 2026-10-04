@@ -62,3 +62,22 @@ def test_st10_31_bad_reason_ref_rejected(enqueued: list[Any]) -> None:
             cmd_privacy_delete([GOOD], reason_ref=reason, actor="ops")
         assert str(caught.value) == "invalid reason_ref"
     assert enqueued == []
+
+
+@pytest.mark.parametrize("bad", ["a:b:x@y", "a:b:x+y", "a:b:" + "x" * 186])
+def test_st10_31_idem_key_unsafe_id_rejected_before_enqueue(bad: str, enqueued: list[Any]) -> None:
+    """ST10-31 an ID that passes the spec regex but whose ``privacy_delete:`` key JobSpec would
+    refuse (``@``, ``+``, over 200 characters) raises ConfigError; nothing is enqueued."""
+    with pytest.raises(ConfigError) as caught:
+        cmd_privacy_delete([GOOD, bad], reason_ref="DSR-1", actor="ops")
+    assert str(caught.value) == "invalid record_id at position 2"
+    assert enqueued == []
+
+
+def test_st10_31_non_str_inputs_raise_config_error(enqueued: list[Any]) -> None:
+    """ST10-31 a non-str record ID or reason_ref raises ConfigError, never TypeError."""
+    with pytest.raises(ConfigError):
+        cmd_privacy_delete([GOOD, 5], reason_ref="DSR-1", actor="ops")  # type: ignore[list-item]
+    with pytest.raises(ConfigError):
+        cmd_privacy_delete([GOOD], reason_ref=None, actor="ops")  # type: ignore[arg-type]
+    assert enqueued == []

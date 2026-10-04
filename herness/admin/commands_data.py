@@ -26,6 +26,11 @@ _RECORD_ID: Final = re.compile(
     r"[a-z][a-z0-9_]{0,31}:[a-z][a-z0-9_]{0,63}:[A-Za-z0-9._:@/+-]{1,200}", re.ASCII
 )
 _REASON_REF: Final = re.compile(r"[A-Za-z0-9._:/-]{1,64}", re.ASCII)
+# Mirrors JobSpec.idem_key (herness/core/types/jobs.py): the derived key must be accepted
+# before anything is enqueued, so a late SchemaViolation cannot leave earlier IDs enqueued.
+_IDEM_KEY: Final = re.compile(r"[A-Za-z0-9_:.\-/]+", re.ASCII)
+_IDEM_MAX: Final = 200
+_IDEM_PREFIX: Final = "privacy_delete:"
 _MAX_IDS: Final = 100
 _PRIORITY: Final = 80
 _NO_WORKER: Final = "no worker is running; start it with `herness worker` or rerun with `--inline`"
@@ -38,10 +43,12 @@ def _validate(record_ids: Sequence[str], reason_ref: str) -> None:
         msg = f"record_ids must hold 1 to {_MAX_IDS} ids"
         raise ConfigError(msg)
     for position, item in enumerate(cast("Sequence[object]", record_ids), start=1):
-        if not (isinstance(item, str) and _RECORD_ID.fullmatch(item) and ".." not in item):
+        ok = isinstance(item, str) and _RECORD_ID.fullmatch(item) and ".." not in item
+        key = _IDEM_PREFIX + item if isinstance(item, str) else ""
+        if not (ok and len(key) <= _IDEM_MAX and _IDEM_KEY.fullmatch(key)):
             msg = f"invalid record_id at position {position}"
             raise ConfigError(msg)
-    if _REASON_REF.fullmatch(reason_ref) is None:
+    if not isinstance(cast("object", reason_ref), str) or _REASON_REF.fullmatch(reason_ref) is None:
         msg = "invalid reason_ref"
         raise ConfigError(msg)
 
@@ -69,7 +76,7 @@ def cmd_privacy_delete(
             payload,
             "none",
             priority=_PRIORITY,
-            idem_key="privacy_delete:" + record_id,
+            idem_key=_IDEM_PREFIX + record_id,
         )
         jobs.append({"record_id": record_id, "job_id": job_id})
     warnings = [] if worker_alive() else [_NO_WORKER]
