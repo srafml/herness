@@ -21,7 +21,7 @@ from app.common import auth, bootstrap
 from app.common.auth import Identity, build_roster, display_name, resolve_identity
 from herness.core.errors import FatalError
 from herness.reports import _os_user
-from herness.reports.rules import user_ref_for
+from herness.reports.rules import role_for, user_ref_for
 
 pytestmark = pytest.mark.unit
 
@@ -41,6 +41,42 @@ def test_ut09_45_expose_disabled_uses_os_user() -> None:
         "svc", "os", "header_ignored_expose_disabled"
     )
     assert resolve_identity({}, None, ui, "svc") == Identity("svc", "os", None)
+
+
+@pytest.mark.parametrize("bind", ["0.0.0.0", "10.0.0.5"])  # noqa: S104 - cases under test
+@pytest.mark.parametrize("headers", [{}, HEADER])
+def test_ut09_45_expose_disabled_non_loopback_bind_denied(
+    bind: str, headers: dict[str, str]
+) -> None:
+    """UT09-45 expose off + non-loopback bind: no identity, `bind_not_loopback` (header or not)."""
+    ui = ui_config(bind=bind, admins=["svc"])
+    identity = resolve_identity(headers, "127.0.0.1", ui, "svc")
+    assert identity == Identity(None, "none", "bind_not_loopback")
+    assert role_for(identity.username, ui.roles) == "denied"
+
+
+@pytest.mark.parametrize("bind", ["127.0.0.1", "::1"])
+def test_ut09_45_expose_disabled_loopback_bind_os_identity(bind: str) -> None:
+    """UT09-45 expose off + loopback bind: the OS identity."""
+    assert resolve_identity({}, None, ui_config(bind=bind), "svc") == Identity("svc", "os", None)
+
+
+def test_ut09_83_non_loopback_bind_session_denied_and_logged(
+    session: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-83 expose off + bind 0.0.0.0: session actor denied; reason logged (no header value)."""
+    services = fake_services(ui_config(bind="0.0.0.0", reviewers=["alice"]))  # noqa: S104
+    monkeypatch.setattr(bootstrap, "get_services", lambda: services)
+    seen: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(auth._log, "warning", lambda event, **kw: seen.append((event, kw)))
+    at = AppTest.from_function(actor_script)
+    at.run()
+    assert not at.exception
+    assert at.text[0].value == "denied|anonymous|anonymous"
+    assert seen == [("app.identity.header_ignored", {"reason": "bind_not_loopback"})]
+    assert session == [
+        {"event": "auth", "user_ref": "anonymous", "role": "denied", "result": "denied"}
+    ]
 
 
 def test_ut09_46_trusted_proxy_header_identity() -> None:

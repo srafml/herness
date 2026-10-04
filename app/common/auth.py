@@ -60,10 +60,14 @@ def _ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
         return None
 
 
+def _loopback_bind(ui: UiConfig) -> bool:
+    return ui.bind.strip().lower() in _LOOPBACK
+
+
 def _untrusted(ui: UiConfig, remote_ip: str | None) -> str | None:
     """The first failed exposure condition of U09-54 step 2 (a) - (d), else None."""
     proxy = ui.expose.trusted_proxy
-    if ui.bind.strip().lower() not in _LOOPBACK:
+    if not _loopback_bind(ui):
         return "bind_not_loopback"
     if proxy is None:
         return "no_trusted_proxy"
@@ -82,6 +86,8 @@ def resolve_identity(
     wanted = ui.expose.identity_header.lower()
     value = next((v for k, v in headers.items() if k.lower() == wanted), None)
     if not ui.expose.enabled:
+        if not _loopback_bind(ui):  # controller ruling (T09-13 fix 1): OS identity on loopback only
+            return Identity(None, "none", "bind_not_loopback")
         reason = None if value is None else "header_ignored_expose_disabled"
         return Identity(os_user, "os", reason)
     if (failed := _untrusted(ui, remote_ip)) is not None:
