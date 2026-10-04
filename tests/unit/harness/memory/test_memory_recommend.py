@@ -646,6 +646,9 @@ def test_ut07_63_personal_data_in_target_is_masked(env: Env) -> None:
     assert "service:owner " in content
     assert "team:lead " in content
     assert content.endswith(", service:svc_plain.")
+    # T07-26b: a redacted label is not the named id, so only the plain target is cited
+    (item,) = memory_rows()
+    assert item["data"]["entities"] == [{"type": "service", "id": "svc_plain"}]
 
 
 def test_ut07_63_summary_cites_named_targets_as_entities(env: Env) -> None:

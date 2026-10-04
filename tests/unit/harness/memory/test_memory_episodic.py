@@ -452,6 +452,7 @@ def test_ut07_68_target_label_redacted_before_cut(deps: EpisodicDeps, jobs: None
     (note,) = memory_rows()
     assert "[EMAIL_" in note["content"]
     assert PLANTED_EMAIL.split("@", maxsplit=1)[0] not in note["content"]
+    assert note["data"]["entities"] == []  # T07-26b: the redacted label is not cited
 
 
 def test_ut07_68_numeral_bearing_parts_are_left_out(deps: EpisodicDeps, jobs: None) -> None:
