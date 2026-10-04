@@ -112,7 +112,8 @@ def test_it07_13_purge_after_indexing_deletes_vectors(
 ) -> None:
     """IT07-13 TH07-21 two items cite a record and the index is built over their vectors;
     `purge(record)` deletes the vector rows (the row count drops, `vectors()` finds none) and
-    neither the indexed search nor the optimized index after maintenance returns them."""
+    neither the indexed search nor the index after the next `refresh_index` (an `optimize()`)
+    returns them."""
     monkeypatch.setattr(ann, "MIN_ROWS", SMALL)
     seed_vectors(tmp_path, BULK)  # bulk vectors in tmp_path/vectors, as make_writer's index
     env = make_writer(tmp_path)

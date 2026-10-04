@@ -3,10 +3,13 @@
 Private sibling of ``store.py`` (§2 row); only ``store.py`` imports it, and the maintenance job
 reaches it through ``VectorIndex.refresh_index`` (U07-96 step 8), never a request path. The
 index policy is spec 03's (U03-35, ``herness.enrich.embed_stage.maintain_index``): IVF_PQ,
-cosine, ``round(sqrt(rows))`` partitions, 64 sub-vectors; no index below 10,000 rows (flat
-search); a rebuild when the table holds more than 1.2x the rows recorded at the last build
-(field metadata of ``vector``), otherwise ``optimize()``, which folds newer rows into the index
-and compacts deleted ones. The constants are mirrored, not imported: importing ``embed_stage``
+cosine, ``round(sqrt(rows))`` partitions, 64 sub-vectors; an index is never built below 10,000
+rows (flat search); a build when there is none and a rebuild when the table holds more than 1.2x
+the rows recorded at the last build (field metadata of ``vector``). Every other refresh, at any
+row count (also below the threshold, and after an indexed table shrank below it), runs
+``optimize()``: it folds newer rows into an existing index, compacts deleted rows and prunes
+table versions older than LanceDB's default 7 days, so purged vectors leave the files (TH07-21).
+The constants are mirrored, not imported: importing ``embed_stage``
 would load ``herness.enrich.embed`` with the store (UT07-22); UT07-91 pins them equal.
 
 Search probes at least ``NPROBES`` partitions and more, up to all of them, when a narrow
@@ -39,7 +42,7 @@ ROWS_KEY: Final = "herness.index_rows"  # spec 03 INDEX_ROWS_KEY (field metadata
 NPROBES: Final = 20  # partitions always probed (of round(sqrt(rows)))
 REFINE_FACTOR: Final = 10  # exact re-rank of 10 x limit PQ candidates
 
-type IndexAction = Literal["built", "rebuilt", "optimized", "skipped"]
+type IndexAction = Literal["built", "rebuilt", "optimized"]
 _log = get_logger("memory")
 
 
@@ -69,7 +72,7 @@ def _built_rows(table: Table) -> int | None:
 
 
 def refresh(table: Table, write_lock: threading.Lock) -> IndexRefresh:
-    """Build, rebuild or optimize the index per the spec 03 policy (maintenance step 8).
+    """Build or rebuild the index per the spec 03 policy, else optimize (maintenance step 8).
 
     Training runs outside ``write_lock`` (it reads one table version; upserts may go on and
     are searched flat until the next refresh); the metadata stamp and ``optimize()``, which
@@ -78,10 +81,8 @@ def refresh(table: Table, write_lock: threading.Lock) -> IndexRefresh:
     started = clock.monotonic()
     rows = table.count_rows()
     built = _built_rows(table)
-    if rows < MIN_ROWS:
-        return {"action": "skipped", "rows": rows}
-    if built is not None and rows <= GROWTH * built:
-        with write_lock:
+    if rows < MIN_ROWS or (built is not None and rows <= GROWTH * built):
+        with write_lock:  # version cleanup at any row count (TH07-21); never a build below MIN
             table.optimize()
         return {"action": "optimized", "rows": rows}
     config = IvfPq(

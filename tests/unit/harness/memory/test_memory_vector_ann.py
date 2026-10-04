@@ -7,6 +7,7 @@ clustered corpus vectors (`tests.support.memory_bench_corpus`) and is marked `sl
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from herness.store.vectors import EMBEDDING_DIM, VectorStore
 pytestmark = pytest.mark.unit
 
 SMALL = 300  # rows standing for MIN_ROWS (PQ training needs 256 rows)
+NARROW_BULK = 2_500  # round(sqrt(2,508)) = 50 partitions > NPROBES
 ALL_LAYERS = ["semantic", "procedural", "episodic"]
 
 
@@ -54,6 +56,19 @@ def _indexed(index: VectorIndex) -> bool:
     return any("vector" in i.columns for i in _table(index).list_indices())
 
 
+def _optimizes(index: VectorIndex, monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Count `optimize()` calls on the index's table class (passed through)."""
+    cls, calls = type(_table(index)), list[int]()
+    real = cls.optimize
+
+    def spy(self: Any, *args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(cls, "optimize", spy)
+    return calls
+
+
 def _recorded(index: VectorIndex) -> bytes | None:
     metadata = _table(index).schema.field("vector").metadata or {}
     return metadata.get(ann.ROWS_KEY.encode())
@@ -70,18 +85,47 @@ def test_ut07_91_policy_mirrors_spec03_constants() -> None:
     assert ann.ROWS_KEY == embed_stage.INDEX_ROWS_KEY
 
 
-def test_ut07_91_below_threshold_skips_and_searches_flat(index: VectorIndex) -> None:
-    """UT07-91 below MIN_ROWS no index is built; search answers from the flat scan."""
+def test_ut07_91_below_threshold_optimizes_and_searches_flat(
+    index: VectorIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-91 below MIN_ROWS no index is built, but `optimize()` runs (version cleanup,
+    TH07-21); search answers from the flat scan."""
     rows = _rows(0, SMALL - 1)
     index.upsert(rows)
-    assert index.refresh_index() == {"action": "skipped", "rows": SMALL - 1}
+    optimized = _optimizes(index, monkeypatch)
+    assert index.refresh_index() == {"action": "optimized", "rows": SMALL - 1}
+    assert optimized == [1]
     assert not _indexed(index)
     assert index.search(rows[5].vector, ["semantic"], ["active"], 3)[0][0] == _mid(5)
 
 
-def test_ut07_91_empty_table_skips(index: VectorIndex) -> None:
-    """UT07-91 a fresh table is skipped (0 rows)."""
-    assert index.refresh_index() == {"action": "skipped", "rows": 0}
+def test_ut07_91_empty_table_optimizes(index: VectorIndex, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT07-91 a fresh table (0 rows) builds nothing and is optimized."""
+    optimized = _optimizes(index, monkeypatch)
+    assert index.refresh_index() == {"action": "optimized", "rows": 0}
+    assert optimized == [1]
+    assert not _indexed(index)
+
+
+def test_ut07_91_indexed_table_shrunk_below_threshold_is_optimized(
+    index: VectorIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-91 TH07-21 an indexed table that shrank below MIN_ROWS (a bulk purge) is still
+    optimized on every refresh, never rebuilt; the deleted rows stay out of search."""
+    rows = _rows(0, SMALL)
+    index.upsert(rows)
+    assert index.refresh_index()["action"] == "built"
+    gone = [r.memory_id for r in rows[:50]]
+    index.delete(gone)
+    optimized = _optimizes(index, monkeypatch)
+    with capture_logs() as logs:
+        assert index.refresh_index() == {"action": "optimized", "rows": SMALL - 50}
+        assert index.refresh_index() == {"action": "optimized", "rows": SMALL - 50}
+    assert optimized == [1, 1]
+    assert not [e for e in logs if e["event"] == "memory.vector.index_built"]
+    assert _recorded(index) == str(SMALL).encode()
+    hits = index.search(rows[0].vector, ALL_LAYERS, ["active"], 20)
+    assert not {h[0] for h in hits} & set(gone)
 
 
 def test_ut07_91_ensure_table_builds_nothing(index: VectorIndex) -> None:
@@ -145,17 +189,21 @@ def test_ut07_91_index_without_recorded_rows_is_rebuilt(index: VectorIndex) -> N
 
 def test_ut07_91_prefilter_on_layer_and_status_with_index(index: VectorIndex) -> None:
     """UT07-91 with the index the layer/status prefilter still holds, and a narrow filter
-    returns every matching row (probes widen until `limit` rows are found)."""
-    index.upsert(_rows(0, SMALL))
-    episodic = _rows(1000, 6, layer="episodic")
+    returns every matching row: 2,500 rows give 50 partitions, more than the 20 always
+    probed, so the probes must widen (maximum_nprobes 0) until `limit` rows are found."""
+    rows = _rows(0, NARROW_BULK)
+    index.upsert(rows)
+    episodic = _rows(10_000, 8, layer="episodic")
     index.upsert(episodic)
-    index.refresh_index()
+    assert index.refresh_index() == {"action": "built", "rows": NARROW_BULK + 8}
+    assert round(math.sqrt(NARROW_BULK + 8)) > ann.NPROBES
     index.set_status([_mid(3)], "rejected")
-    query = _rows(0, SMALL)[3].vector
-    assert _mid(3) not in {h[0] for h in index.search(query, ["semantic"], ["active"], 10)}
-    assert index.search(query, ["semantic"], ["rejected"], 10)[0][0] == _mid(3)
-    found = index.search(query, ["episodic"], ["active"], 10)
-    assert sorted(h[0] for h in found) == sorted(r.memory_id for r in episodic)
+    assert _mid(3) not in {h[0] for h in index.search(rows[3].vector, ["semantic"], ["active"], 10)}
+    assert index.search(rows[3].vector, ["semantic"], ["rejected"], 10)[0][0] == _mid(3)
+    expected = sorted(r.memory_id for r in episodic)
+    for query in np.random.default_rng(17).standard_normal((12, EMBEDDING_DIM)):
+        found = index.search(query, ["episodic"], ["active"], 10)
+        assert sorted(h[0] for h in found) == expected
 
 
 def test_ut07_91_distances_are_exact_with_index(index: VectorIndex) -> None:

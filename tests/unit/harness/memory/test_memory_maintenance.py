@@ -128,7 +128,7 @@ def test_ut07_84_repairs_backfills_and_requests_review(
                                  "statuses": {"active": 4}}  # fmt: skip
     assert counts["backfill"] == {"embedded": 1, "stopped": False}
     assert counts["review"] == 1
-    assert counts["index"] == {"action": "skipped", "rows": 4}
+    assert counts["index"] == {"action": "optimized", "rows": 4}
     assert [s["step"] for s in ctx.saves] == [1, 2, 3, 4, 5, 6, 7, 8]
     done = [e for e in logs if e["event"] == "memory.maintenance.completed"]
     assert done == [{"event": "memory.maintenance.completed", "log_level": "info",
