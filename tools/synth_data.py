@@ -29,7 +29,7 @@ from tools.synth.catalog import build_catalog
 from tools.synth.inbox import write_service_costs
 from tools.synth.params import SOURCES, SynthUsageError, load_params, params_hash
 from tools.synth.pii import build_name_list
-from tools.synth.shards import plan_shards, run_all_shards
+from tools.synth.shards import cause_fields, plan_shards, run_all_shards
 from tools.synth.truth_writer import write_name_directory, write_synth_mappings, write_truth
 from tools.synth.verify import verify_root
 
@@ -94,9 +94,8 @@ def _prepare_root(root: Path, *, overwrite: bool) -> Path:
             raise _refuse(base, RootNotEmpty(msg, key="root", path=base.as_posix()))
         marker = base / MARKER
         if marker.is_symlink() or not marker.is_file():
-            raise _refuse(
-                base, _usage("overwrite", f"needs the {MARKER} marker of a generated root")
-            )
+            needs = _usage("overwrite", f"needs the {MARKER} marker of a generated root")
+            raise _refuse(base, needs)
         for child in sorted(base.iterdir()):
             if child.is_dir() and not child.is_symlink():
                 shutil.rmtree(child)
@@ -223,7 +222,8 @@ def _failed(ns: argparse.Namespace | None, exc: Exception, code: int) -> int:
     """Log `synth.generate.failed` and write a one-line reason (keys and paths only)."""
     seed, scale = getattr(ns, "seed", None), getattr(ns, "scale", None)
     kind = type(exc).__name__
-    _log.error("synth.generate.failed", seed=seed, scale=scale, error_type=kind, exit_code=code)
+    fields = {"seed": seed, "scale": scale, "error_type": kind, "exit_code": code}
+    _log.error("synth.generate.failed", **fields, **cause_fields(exc))
     reason = exc.message if isinstance(exc, HernessError) else "unexpected error"
     sys.stderr.write(f"synth_data: {kind}: {reason}\n")
     return code
