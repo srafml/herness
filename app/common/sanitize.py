@@ -26,8 +26,13 @@ __all__ = [
 _MAX_CHARS: Final = 50_000
 _MAX_NUMBERS: Final = 200
 _UNRESOLVED: Final = "[unresolved]"
-# C0 controls except \t and \n, DEL and C1 controls are removed (step 1).
-_DROP: Final[dict[int, str | None]] = dict.fromkeys([*range(9), *range(11, 32), *range(127, 160)])
+# C0 controls except \t and \n, DEL and C1 controls are removed (step 1), and so are the Unicode
+# format characters used for spoofing: zero-width and LRM/RLM (U+200B-U+200F), bidi embeddings
+# and overrides (U+202A-U+202E), bidi isolates (U+2066-U+2069) and the BOM (U+FEFF).
+_DROP: Final[dict[int, str | None]] = dict.fromkeys(
+    [*range(9), *range(11, 32), *range(127, 160), *range(0x200B, 0x2010), *range(0x202A, 0x202F),
+     *range(0x2066, 0x206A), 0xFEFF]
+)  # fmt: skip
 # Steps 2 and 3. Link text excludes brackets and an image target excludes parentheses, so each
 # scan stops at the next candidate (linear); whatever these miss is escaped by step 5.
 _IMAGE_RE: Final = re.compile(r"!\[([^\[\]]*)\]\([^()]*\)")
@@ -37,7 +42,7 @@ _QUERY_ID_RE: Final = re.compile(r"q_[0-9a-f]{16}")
 # Step 4: autolinks, bare URLs and (GFM autolinks them too) e-mail addresses -> inline code.
 _URL_RE: Final = re.compile(
     r"<(?P<auto>(?:https?|ftp|mailto):[^<>\s\x00]*)>"
-    r"|(?P<bare>(?i:\b(?:https?://|www\.))[^\s\x00]*)"
+    r"|(?P<bare>(?i:(?<![A-Za-z])(?:https?://|www\.))[^\s\x00]*)"  # also after `_` or a digit
     r"|(?P<mail>(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+)"
 )
 _URL_SAFE: Final = str.maketrans(

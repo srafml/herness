@@ -80,7 +80,10 @@ def test_st09_21_dashboard_env_spoof_gains_no_role(
     monkeypatch.setattr(auth, "audit", lambda _e, _a, **fields: calls.append(fields))
     monkeypatch.setattr(_os_user, "windows_user", lambda: "real-user")
     monkeypatch.setattr(_os_user, "posix_user", lambda: "real-user")
+    for name in _SPOOF_VARS:  # only the variable under test is set: getpass would return it
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(variable, "root-admin")
+    assert getpass.getuser() == "root-admin"
     at = AppTest.from_function(actor_script)
     at.run()
     assert not at.exception
@@ -131,56 +134,99 @@ def test_st09_02_markdown_elements_have_no_image_link_or_latex() -> None:
     assert "`https://evil.example/p`" in bodies[0]
 
 
+def _not_false(value: ast.expr) -> bool:
+    return not (isinstance(value, ast.Constant) and value.value is False)
+
+
 def _unsafe_kw(kw: ast.keyword) -> bool:
-    safe = isinstance(kw.value, ast.Constant) and kw.value.value is False
-    return kw.arg == "unsafe_allow_html" and not safe
+    """`unsafe_allow_html=<not False>`, also inside a `**{...}` dict literal."""
+    if kw.arg == "unsafe_allow_html":
+        return _not_false(kw.value)
+    if kw.arg is None and isinstance(kw.value, ast.Dict):
+        return any(
+            isinstance(key, ast.Constant) and key.value == "unsafe_allow_html" and _not_false(val)
+            for key, val in zip(kw.value.keys, kw.value.values, strict=True)
+        )
+    return False
 
 
-def _is_st_html(func: ast.expr) -> bool:
-    return (
-        isinstance(func, ast.Attribute)
-        and func.attr == "html"
-        and isinstance(func.value, ast.Name)
-        and func.value.id in {"st", "streamlit"}
-    )
+def _streamlit_names(tree: ast.AST) -> set[str]:
+    """Names bound to `streamlit` or one of its submodules (`import streamlit as x`, ...)."""
+    names = {"st", "streamlit"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names |= {
+                a.asname or a.name.split(".")[0]
+                for a in node.names
+                if a.name == "streamlit" or a.name.startswith("streamlit.")
+            }
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("streamlit"):
+            names |= {a.asname or a.name for a in node.names if a.name != "html"}
+    return names
 
 
-def _violations(path: Path) -> list[str]:
-    found: list[str] = []
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), str(path))):
-        where = f"{path.name}:{getattr(node, 'lineno', 0)}"
+def _root(func: ast.expr) -> str | None:
+    while isinstance(func, ast.Attribute):
+        func = func.value
+    return func.id if isinstance(func, ast.Name) else None
+
+
+def _violations(path: Path) -> list[tuple[int, str]]:
+    """Forbidden HTML paths in one file, as `(line, kind)` in line order."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+    names = _streamlit_names(tree)
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            found += [f"{where} unsafe_allow_html" for kw in node.keywords if _unsafe_kw(kw)]
-            if _is_st_html(node.func):
-                found.append(f"{where} st.html")
+            found += [(node.lineno, "unsafe_allow_html") for kw in node.keywords if _unsafe_kw(kw)]
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "html" and _root(func) in names:
+                found.append((node.lineno, "html call"))
         if (
             isinstance(node, ast.ImportFrom)
-            and node.module == "streamlit"
+            and (node.module or "").startswith("streamlit")
             and any(alias.name == "html" for alias in node.names)
         ):
-            found.append(f"{where} from streamlit import html")
-    return found
+            found.append((node.lineno, "html import"))
+    return sorted(found)
 
 
 def test_st09_28_no_unsafe_html_in_app() -> None:
     """ST09-28 AST scan of `app/`: no `unsafe_allow_html=True` and no `st.html` call."""
     files = sorted(APP.rglob("*.py"))
     assert files
-    assert [v for path in files for v in _violations(path)] == []
+    assert [(path.name, v) for path in files for v in _violations(path)] == []
 
 
 def test_st09_28_scanner_detects_violations(tmp_path: Path) -> None:
-    """ST09-28 the scanner itself flags each forbidden form."""
+    """ST09-28 the scanner itself flags each forbidden form, including aliases and `**{}`."""
     bad = tmp_path / "bad.py"
     bad.write_text(
-        "import streamlit as st\nfrom streamlit import html\n"
-        "st.markdown('x', unsafe_allow_html=True)\nst.html('<b>')\n"
-        "st.write('x', unsafe_allow_html=flag)\nst.markdown('ok', unsafe_allow_html=False)\n",
+        "import streamlit as st\n"  # 1
+        "from streamlit import html\n"  # 2
+        "st.markdown('x', unsafe_allow_html=True)\n"  # 3
+        "st.html('<b>')\n"  # 4
+        "st.write('x', unsafe_allow_html=flag)\n"  # 5
+        "st.markdown('ok', unsafe_allow_html=False)\n"  # 6
+        "import streamlit as x\n"  # 7
+        "x.html('<b>')\n"  # 8
+        "import streamlit.components.v1 as components\n"  # 9
+        "components.html('<b>')\n"  # 10
+        "streamlit.components.v1.html('<b>')\n"  # 11
+        "from streamlit.components.v1 import html as h2\n"  # 12
+        "st.markdown('x', **{'unsafe_allow_html': True})\n"  # 13
+        "st.markdown('x', **{'unsafe_allow_html': False})\n"  # 14
+        "other.html('ok')\n",  # 15 - not streamlit
         encoding="utf-8",
     )
-    assert [v.split(" ", 1)[1] for v in _violations(bad)] == [
-        "from streamlit import html",
-        "unsafe_allow_html",
-        "st.html",
-        "unsafe_allow_html",
+    assert _violations(bad) == [
+        (2, "html import"),
+        (3, "unsafe_allow_html"),
+        (4, "html call"),
+        (5, "unsafe_allow_html"),
+        (8, "html call"),
+        (10, "html call"),
+        (11, "html call"),
+        (12, "html import"),
+        (13, "unsafe_allow_html"),
     ]

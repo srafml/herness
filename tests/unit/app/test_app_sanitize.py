@@ -44,7 +44,7 @@ def _assert_post(out: str) -> None:
     assert re.search(r"(?<!\\):material/", out) is None
     for target in _LINK_RE.findall(out):
         assert re.fullmatch(r"#ev-q_[0-9a-f]{16}", target), out
-    for url in re.finditer(r"(?i)\b(https?://|www\.)", out):  # bare URLs only in code spans
+    for url in re.finditer(r"(?i)(?<![A-Za-z])(https?://|www\.)", out):  # only in code spans
         assert re.sub(r"\\.", "", out[: url.start()]).count("`") % 2 == 1, out
 
 
@@ -69,6 +69,11 @@ HOSTILE = [
     "`code` and ``http://x``",
     "a\x00b\x1b[2Jc\x07",
     "[evidence](#ev-q_fedcba9876543210)",
+    "_https://evil.example/?d=secret",
+    "x_www.evil.example",
+    "_www.evil.example/p",
+    "1https://evil.example/x",
+    "http\u200b://evil.example/zw and \u202egnp.exe",
 ]
 
 
@@ -90,6 +95,22 @@ def test_ut09_54_specific_rewrites() -> None:
     assert safe_markdown(":red[x]") == "\\:red\\[x\\]"
     assert safe_markdown("line1\nline2\tx") == "line1\nline2\tx"
     assert safe_markdown("a\x00b\x1bc") == "abc"
+    assert safe_markdown("_https://e.example/?d=s") == "_`https://e.example/?d=s`"
+    assert safe_markdown("x_www.e.example") == "x_`www.e.example`"
+    assert safe_markdown("1https://e.example") == "1`https://e.example`"
+
+
+SPOOF = "".join(
+    map(chr, [*range(0x200B, 0x2010), *range(0x202A, 0x202F), *range(0x2066, 0x206A), 0xFEFF])
+)
+
+
+def test_ut09_54_unicode_format_characters_removed() -> None:
+    """UT09-54 zero-width, bidi embedding/override/isolate characters and the BOM are removed."""
+    assert safe_markdown("a" + SPOOF + "b") == "ab"
+    assert safe_markdown(chr(0x202E) + "exe.txt") == "exe.txt"
+    assert escape_markdown_chunk("a" + SPOOF + "b") == "ab"
+    assert all(escape_markdown_chunk(c) == "" for c in SPOOF)  # character-local removal
 
 
 def test_ut09_54_allowed_anchor_kept_disallowed_dropped() -> None:

@@ -74,7 +74,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `app/common/__init__.py` | Package marker | none | L5 | — | 5 |
 | `app/common/bootstrap.py` | Dashboard composition root | `AppServices`, `get_services` | L5 | `streamlit` | 120 |
 | `app/common/auth.py` | Identity resolution from OS user or trusted header; display names | `Identity`, `resolve_identity`, `current_actor`, `Roster`, `build_roster`, `display_name` | L5 | `streamlit` | 200 |
-| `app/common/sanitize.py` | Markdown sanitising of model text | `safe_markdown`, `escape_markdown_chunk`, `link_numbers` | L5 | none | 180 |
+| `app/common/sanitize.py` | Markdown sanitising of model text | `safe_markdown`, `escape_markdown_chunk`, `render_answer_markdown`, `render_marked_markdown` | L5 | none | 180 |
 | `app/common/wh.py` | Read-only warehouse access and named queries | `NoCurrentBuild`, `current_build_id`, `get_conn`, `NamedQuery`, `load_named_queries`, `check_forbidden_columns`, `query`, `FORBIDDEN_TEXT_COLUMNS` | L5 | `streamlit`, `duckdb`, `yaml` | 260 |
 | `app/common/queries.sql.yaml` | Named SQL queries | see U09-63 | data | — | 400 |
 | `app/common/data.py` | Cached ops reads, cache invalidation, trace pages | `ops_read`, `after_write`, `TracePage`, `read_trace_page` | L5 | `streamlit` | 220 |
