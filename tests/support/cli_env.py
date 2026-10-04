@@ -1,15 +1,15 @@
 """CLI test environment (impl 09 §11, T09-20): config tree with roles, OS user, isolation.
 
 ``cli_env`` gives a test a temporary working directory, an in-memory keyring holding
-``ui_user_ref_key``, a patched ``getpass.getuser`` and a ``write_config`` helper that writes
-a loadable ``config/`` tree (``tests.support.config_tree.write_full_config``) with
-``security.ui.roles``. It removes the offline environment variables the socket guard sets and
-undoes ``configure_logging`` and the bound ports after the test.
+``ui_user_ref_key``, a patched process-credential lookup (``identity._credential_user``) and a
+``write_config`` helper that writes a loadable ``config/`` tree
+(``tests.support.config_tree.write_full_config``) with ``security.ui.roles``. It removes the
+offline environment variables the socket guard sets and undoes ``configure_logging`` and the
+bound ports after the test.
 """
 
 from __future__ import annotations
 
-import getpass
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +18,7 @@ import pytest
 from tests.support.config_tree import write_full_config
 from tests.support.fake_keyring import MemoryKeyring
 
+from herness._cli import identity
 from herness.core import egress_socket
 from herness.core.logging import reset_logging
 from herness.core.resilience import ProcessState
@@ -70,7 +71,8 @@ def cli_env(
     monkeypatch.chdir(tmp_path)
     fake_keyring.store[("herness", "ui_user_ref_key")] = USER_REF_KEY
     env = CliEnv(tmp_path)
-    monkeypatch.setattr(getpass, "getuser", lambda: env.user)
+    monkeypatch.setattr(identity, "_credential_user", lambda: env.user)
+    monkeypatch.setattr(identity, "_fallback_logged", [])  # the once-per-process warning flag
     try:
         yield env
     finally:

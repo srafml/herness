@@ -2345,7 +2345,7 @@ The warning "No worker is running; the job is queued." / "Start `herness worker`
 
 | Function | Signature | Behavior |
 |----------|-----------|----------|
-| `cli_actor` | `(cfg: HernessConfig, *, need_ref: bool) -> Actor` | `username = getpass.getuser()`; `role = role_for(username, cfg.security.ui.roles)`; `user_ref = user_ref_for(username, load_user_ref_key())`; when the key is missing and `need_ref` is false, `user_ref = "unkeyed"`; when `need_ref` is true the `ConfigError` propagates (exit 3, R-46) |
+| `cli_actor` | `(cfg: HernessConfig, *, need_ref: bool) -> Actor` | `username` = the OS user from the process credentials, never the environment (POSIX `pwd.getpwuid(os.geteuid()).pw_name`; Windows the bare account name of the calling thread's token via `advapi32.GetUserNameW`), with `getpass.getuser()` used only when that lookup fails or is empty, which logs `cli.identity.fallback` (WARNING, once per process, no user name); `role = role_for(username, cfg.security.ui.roles)`; `user_ref = user_ref_for(username, load_user_ref_key())`; when the key is missing and `need_ref` is false, `user_ref = "unkeyed"`; when `need_ref` is true the `ConfigError` propagates (exit 3, R-46) |
 | `check_command_role` | `(opts: GlobalOptions, path: str, *, inline: bool = False) -> Actor \| None` | Returns `None` without loading config for paths in `DENIED_ALLOWED`; `init` with no `<config_dir>/herness.yaml` → `None` (bootstrap, OI-05); otherwise loads config, builds the actor (`need_ref = path in WRITE_COMMANDS`) and compares `ROLE_RANK[actor.role]` with `ROLE_RANK[COMMAND_ROLES[path]]`; `inline` true additionally requires `admin` (R-45); a path in `ELEVATED_COMMANDS` (design 10 §3.7 "admin (OS)") additionally requires an elevated process (`ctypes.windll.shell32.IsUserAnAdmin()` on Windows, `os.geteuid() == 0` elsewhere), else `PermissionDenied("Run this command from an elevated shell.")`; refusal → `audit("auth", actor.user_ref, user_ref=actor.user_ref, role=actor.role, result="denied", action=f"cli:{path}")`, log `cli.auth.denied`, raise `PermissionDenied(f"You need the {needed} role to run herness {path}.")` |
 | `guarded` | `(path: str) -> Callable[[F], F]` | Decorator: runs `check_command_role` and passes the actor to the handler as keyword `actor` |
 
@@ -2385,8 +2385,8 @@ The warning "No worker is running; the job is queued." / "Start `herness worker`
 | Errors | `PermissionDenied` (exit 11), `ConfigError` (exit 3) (R-46). |
 | Concurrency | Main thread. |
 | Complexity and limits | O(1). |
-| Security notes | TH09-27. The OS user of a shell is trusted as the CLI identity (TB10); anyone with the `svc-herness` account has its role (accepted, §7 g). |
-| Tests | UT09-66, ST09-21, ST09-29 |
+| Security notes | TH09-27. The process credentials are trusted as the CLI identity (TB10); environment variables (`USERNAME`, `LOGNAME`, `USER`, `LNAME`) are not (ST09-21, UT09-109); anyone with the `svc-herness` account has its role (accepted, §7 g). |
+| Tests | UT09-66, UT09-109, UT09-110, ST09-21, ST09-29 |
 
 #### U09-90 herness._cli.wait.submit_job
 
@@ -3080,7 +3080,7 @@ Same steps as F09-04 with terminal output: step 4 prints tool lines and the fina
 | TB5 | Renders model text into `report.html`, `report.md`, the dashboard, chat and the terminal |
 | TB6 | Dashboard process runs the socket guard; PDF fetcher refuses URLs |
 | TB7 | Browser → proxy → Streamlit: identity header, forms, chat input |
-| TB10 | CLI arguments, `--set`, OS user identity, config files |
+| TB10 | CLI arguments, `--set`, OS user identity (process credentials, not environment variables), config files |
 
 ### 7(b) STRIDE threats
 
@@ -3112,7 +3112,7 @@ Same steps as F09-04 with terminal output: step 4 prints tool lines and the fina
 | TH09-24 | local | T | Partial or torn report files | L | M | tmp + fsync + `os.replace`; manifest last (U09-25) | ASVS v5.0.0-V5.3 (section) | UT09-32, FT09-03 |
 | TH09-25 | TB4 | E | Template injection through model text | L | H | Model text never a template source; package loader only (U09-23) | ASVS v5.0.0-V1.2 | ST09-26 |
 | TH09-26 | TB3/TB7 | T | Prompt injection through "Correct a fact" becoming trusted memory | M | M | Corrections always `propose` with `via="chat"` → pending review (spec 07 scan) (U09-36) | LLM01, LLM04 | ST09-27 |
-| TH09-27 | TB10 | E | OS user without the role runs admin commands, runs a job in-process with `--inline`, or runs an `admin (OS)` command from a non-elevated shell | M | H | `guarded` role check on every command; `--inline` admin-only (R-45); elevation check for `ELEVATED_COMMANDS` (U09-89, U09-103) | ASVS v5.0.0-V8.2 | ST09-21, ST09-29, UT09-66 |
+| TH09-27 | TB10 | E | OS user (or a user exporting another account's name in `USERNAME`/`LOGNAME`/`USER`/`LNAME`) without the role runs admin commands, runs a job in-process with `--inline`, or runs an `admin (OS)` command from a non-elevated shell | M | H | identity from process credentials, not the environment (U09-89); `guarded` role check on every command; `--inline` admin-only (R-45); elevation check for `ELEVATED_COMMANDS` (U09-89, U09-103) | ASVS v5.0.0-V8.2 | ST09-21, ST09-29, UT09-66 |
 | TH09-28 | TB6 | I | Dashboard process sends telemetry or reaches the internet | L | M | `gatherUsageStats false`; socket guard in the Streamlit process; offline env vars (U09-53, U09-93) | ASVS v5.0.0-V13.4 (section); LLM02 | ST09-23 |
 | TH09-29 | TB7 | I | Cached chat data of one user shown to another | L | M | Chat reads never cached; caches keyed only on build, query and params (U09-62, U09-64) | ASVS v5.0.0-V8.2 | ST09-25 |
 
@@ -3179,7 +3179,7 @@ No other secret is read here; commands of spec 10 handle their own.
 | TH09-06: a local process on the dashboard host can forge the identity header on the loopback port | Host is a single-purpose machine with admin-only logon; DD-09 would close it | spec 10 (host hardening) |
 | Local mode gives every browser user on the host the OS user's role | Design §9.2; loopback bind keeps it to the host | spec 09 |
 | The dashboard has no CSP without the proxy | Streamlit cannot set response headers; model text is never rendered as HTML | spec 10 |
-| Anyone with the `svc-herness` account has its CLI role | OS identity is the CLI trust basis (TB10) | spec 10 |
+| Anyone with the `svc-herness` account has its CLI role | Process credentials are the CLI trust basis (TB10) | spec 10 |
 | Number linking in stored chat answers fails only if spec 06 bypasses `herness.core.numbers` | Both sides use the shared formatter (R-16); unlinked numbers still appear in the evidence list | spec 06 |
 
 ## 8. Observability
@@ -3216,6 +3216,7 @@ No other secret is read here; commands of spec 10 handle their own.
 | `cli.command.completed` | INFO | `command`, `exit_code`, `duration_ms` | U09-84 |
 | `cli.command.failed` | ERROR | `command`, `error_type`, `exit_code` | U09-84 |
 | `cli.auth.denied` | WARNING | `command`, `role` | U09-89 |
+| `cli.identity.fallback` | WARNING | `source` | U09-89 |
 | `cli.job.enqueued` | INFO | `job_id`, `kind` | U09-90 |
 | `cli.job.detached` | INFO | `job_id` | U09-91 |
 | `cli.worker.absent` | WARNING | `job_id` | U09-90, U09-91 |
@@ -3421,6 +3422,8 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | UT09-106 | U09-109 | set with `msg_2`; repeat with `msg_2`; call with older `msg_1`; message of another session; 6,001 chars | set | stored; repeat unchanged; stale ignored; `SchemaViolation`; `SchemaViolation` |
 | UT09-107 | U09-94 | fake `swarm_health` returning `ok`, `degraded` (reason "worker down"), `down` (reason `StoreBusy`), and raising | doctor | `swarm` row PASS; WARN with the reason and fix; FAIL with the reason; FAIL with the error class name; `swarm_health` called with `list_jobs`, `worker_alive` and `now` keywords |
 | UT09-108 | U09-94 | fake `ops_health`, `warehouse_health`, `VectorStore.health` each returning `("ok", "")`, `("degraded", "r")`, `("down", "StoreBusy")` | doctor | `ops_store`, `warehouse`, `vectors` rows PASS, WARN with reason `r` and fix, FAIL with reason `StoreBusy`; exit 1 only when a row is FAIL (R-46) |
+| UT09-109 | U09-89 | `USERNAME`, `LOGNAME`, `USER`, `LNAME` set to an admin's name; Windows token branch real, POSIX branch with `pwd.getpwuid`/`os.geteuid` mocked, and the dispatch forced each way | `cli_actor` | the actor is the process user with its own role (`denied`), never the spoofed name |
+| UT09-110 | U09-89 | both credential lookups raise `OSError` (then return empty); `getpass.getuser` patched | `cli_actor` | falls back to `getpass.getuser()`; exactly one `cli.identity.fallback` WARNING (field `source`, no user name) across two calls |
 
 ### 11.2 Property tests (marker `unit`, hypothesis)
 
@@ -3502,7 +3505,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | ST09-18 | TH09-23 | Evidence sample cell `<b onmouseover=x>` | escaped in HTML and MD; plain cell in dashboard |
 | ST09-19 | TH09-20 | Sentinel secret values configured; render, `config show`, JSON outputs, logs | sentinel absent everywhere |
 | ST09-20 | TH09-21, TH09-12 | Chat with a unique marker string containing an email | marker absent from logs at INFO and above; stored text redacted |
-| ST09-21 | TH09-27 | OS user mapped to viewer and to denied | admin commands exit 11 with `error.type` `PermissionDenied` (R-46); denied can run only `doctor`, `config validate` |
+| ST09-21 | TH09-27 | OS user mapped to viewer and to denied; a denied user sets `USERNAME`, `LOGNAME`, `USER` or `LNAME` to an admin's name | admin commands exit 11 with `error.type` `PermissionDenied` (R-46); denied can run only `doctor`, `config validate`; the variable gains no role |
 | ST09-22 | TH09-03 | HTML with a remote stylesheet injected before PDF | fetcher refuses; no network call (socket spy) |
 | ST09-23 | TH09-09, TH09-28 | `herness ui` argument list | XSRF true, CORS true, usage stats false, headless true, bind from config |
 | ST09-24 | TH09-22 | `--json` command that logs warnings | stdout exactly one JSON object |
@@ -3794,7 +3797,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Depends on | T09-02; T10-18 (herness.core.egress_socket.install_socket_guard); T10-02 (herness.core.config_sources.load_bootstrap); T10-12 (herness.core.config_validate.run_owner_validators) and `register_owner_validator` (R-71); T04-03 (herness.metrics.catalog.validate_catalog); T04-02 (herness.metrics.settings.MetricsCatalogConfig); T08-23 (herness.store.ops.resilience.bind_core_backends); T00-07 (herness.core.logging.configure_logging); T10-07 (herness.core.secrets.scrub_secrets) |
 | Units | U09-84, U09-85, U09-86, U09-87, U09-89, U09-105, U09-106 |
 | Files | `herness/cli.py`, `herness/_cli/__init__.py`, `herness/_cli/output.py`, `herness/_cli/identity.py` |
-| Tests | UT09-63, UT09-64, UT09-66, UT09-85, UT09-95, UT09-102, UT09-103, ST09-21, ST09-24 |
+| Tests | UT09-63, UT09-64, UT09-66, UT09-109, UT09-110, UT09-85, UT09-95, UT09-102, UT09-103, ST09-21, ST09-24 |
 | Threats | TH09-22, TH09-27, TH09-28 |
 | Acceptance checks | Listed tests pass; `pyproject.toml` entry point `herness = "herness.cli:main"` (edited by the card that owns `pyproject.toml`, T00-01 (pyproject.toml)) |
 | Blocked by | none |

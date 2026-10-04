@@ -9,6 +9,7 @@ from __future__ import annotations
 import ctypes
 import functools
 import getpass
+import importlib
 import inspect
 import os
 import types
@@ -76,9 +77,55 @@ COMMAND_ROLES: Final[Mapping[str, UiRole]] = types.MappingProxyType(
 )
 
 
+_UNLEN: Final = 256  # Windows UNLEN; the buffer holds one more for the terminator
+_fallback_logged: list[bool] = []
+
+
+def _windows_user() -> str:
+    """Bare account name of the calling thread's token (``GetUserNameW``; not the environment)."""
+    from ctypes import wintypes  # noqa: PLC0415 - only meaningful, and only imported, on Windows
+
+    api = cast("Any", ctypes).WinDLL("advapi32", use_last_error=True)
+    api.GetUserNameW.argtypes = [wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+    api.GetUserNameW.restype = wintypes.BOOL
+    buffer = ctypes.create_unicode_buffer(_UNLEN + 1)
+    size = wintypes.DWORD(_UNLEN + 1)
+    if not api.GetUserNameW(buffer, ctypes.byref(size)):
+        raise cast("Any", ctypes).WinError(cast("Any", ctypes).get_last_error())
+    return str(buffer.value)
+
+
+def _posix_user() -> str:
+    """Account name of the effective uid from the password database (not the environment)."""
+    pwd = cast("Any", importlib.import_module("pwd"))  # POSIX only; typed per platform
+    return str(pwd.getpwuid(cast("Any", os).geteuid()).pw_name)
+
+
+def _credential_user() -> str:
+    """The user from process credentials; empty when the lookup fails."""
+    try:
+        return (_windows_user if os.name == "nt" else _posix_user)()
+    except (OSError, KeyError, AttributeError, ImportError):
+        return ""
+
+
+def _os_user() -> str:
+    """The OS user from process credentials; ``getpass.getuser()`` only when that fails.
+
+    ``getpass.getuser()`` reads ``LOGNAME``, ``USER``, ``LNAME`` and ``USERNAME`` first, so it
+    would let any local user claim another account's role (TB10, TH09-27).
+    """
+    if name := _credential_user():
+        return name
+    if not _fallback_logged:
+        _fallback_logged.append(True)
+        _log.warning("cli.identity.fallback", source="getpass")  # no user name: personal data
+    return getpass.getuser()
+
+
 def cli_actor(cfg: HernessConfig, *, need_ref: bool) -> Actor:
     """The OS user as an ``Actor``; ``unkeyed`` without the key unless a ref is needed."""
-    username = getpass.getuser()
+    username = _os_user()
     role = role_for(username, cfg.security.ui.roles)
     try:
         user_ref = user_ref_for(username, load_user_ref_key())

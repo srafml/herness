@@ -10,12 +10,15 @@ import typer
 from tests.support.cli_env import CliEnv
 
 from herness import cli
+from herness._cli import identity
 from herness._cli.identity import guarded
 from herness._cli.output import CliResult, emit
 from herness.core.logging import get_logger
 from herness.reports.rules import Actor
 
 pytestmark = pytest.mark.unit
+
+_REAL_CREDENTIAL_USER = identity._credential_user  # before `cli_env` patches it
 
 
 def _probe(path: str, ran: list[str]) -> typer.models.CommandFunctionType:
@@ -99,3 +102,20 @@ def test_st09_24_json_stdout_is_one_object(
     assert payload["warnings"] == ["slow"]
     assert "cli.worker.absent" in err
     assert "cli.command.completed" in err
+
+
+@pytest.mark.parametrize("variable", ["USERNAME", "LOGNAME", "USER", "LNAME"])
+def test_st09_21_env_spoof_gains_no_role(
+    cli_env: CliEnv,
+    guarded_app: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+) -> None:
+    """ST09-21 env spoof (TH09-27): a denied user exporting an admin's name stays denied."""
+    monkeypatch.setattr(identity, "_credential_user", _REAL_CREDENTIAL_USER)
+    monkeypatch.setattr(identity, "_windows_user", lambda: "real-user")
+    monkeypatch.setattr(identity, "_posix_user", lambda: "real-user")
+    monkeypatch.setenv(variable, "root-admin")
+    cfg_dir = str(cli_env.write_config(admins=["root-admin"], default_role="denied"))
+    assert _run(["--config-dir", cfg_dir, "build"]) == 11
+    assert guarded_app == []

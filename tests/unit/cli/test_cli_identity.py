@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import getpass
 import json
+import os
 import re
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -241,3 +245,93 @@ def test_ut09_66_guarded_passes_actor(cli_env: CliEnv) -> None:
     with pytest.raises(e.PermissionDenied):
         test_app(args=["build"], standalone_mode=False, obj=opts)
     assert len(seen) == 1
+
+
+_REAL_CREDENTIAL_USER = ident._credential_user  # captured before `cli_env` patches it
+_SPOOF_VARS = ("USERNAME", "LOGNAME", "USER", "LNAME")
+
+
+def _spoof(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    for var in _SPOOF_VARS:
+        monkeypatch.setenv(var, name)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows token lookup")
+def test_ut09_109_windows_token_user_ignores_environment(
+    cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-109 Windows: spoofed USERNAME/LOGNAME/USER/LNAME do not change the actor or role."""
+    real = ident._windows_user()
+    assert real
+    monkeypatch.setattr(ident, "_credential_user", _REAL_CREDENTIAL_USER)
+    _spoof(monkeypatch, "root-admin")
+    assert getpass.getuser() == "root-admin"  # the spoof works on the env-reading API
+    cfg = _opts(cli_env, "denied").config()
+    actor = ident.cli_actor(cfg, need_ref=False)
+    assert (actor.display, actor.role) == (real, "denied")
+
+
+def test_ut09_109_posix_user_ignores_environment(
+    cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-109 POSIX branch (pwd and geteuid mocked, dispatch forced): env spoof has no effect."""
+    seen: list[int] = []
+
+    def getpwuid(uid: int) -> SimpleNamespace:
+        seen.append(uid)
+        return SimpleNamespace(pw_name="svc-real")
+
+    monkeypatch.setitem(sys.modules, "pwd", SimpleNamespace(getpwuid=getpwuid))
+    monkeypatch.setattr(os, "geteuid", lambda: 1234, raising=False)
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(ident, "_credential_user", _REAL_CREDENTIAL_USER)
+    _spoof(monkeypatch, "root-admin")
+    cfg = _opts(cli_env, "denied").config()
+    actor = ident.cli_actor(cfg, need_ref=False)
+    assert (actor.display, actor.role, seen) == ("svc-real", "denied", [1234])
+
+
+def test_ut09_109_windows_dispatch_ignores_environment(
+    cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-109 the other way round: with `os.name` `nt` the token branch is the one used."""
+    monkeypatch.setattr(ident, "_windows_user", lambda: "win-real")
+    monkeypatch.setattr(ident, "_posix_user", lambda: pytest.fail("posix branch used"))
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(ident, "_credential_user", _REAL_CREDENTIAL_USER)
+    _spoof(monkeypatch, "root-admin")
+    cfg = _opts(cli_env, "denied").config()
+    assert ident.cli_actor(cfg, need_ref=False).display == "win-real"
+
+
+def test_ut09_110_lookup_failure_falls_back_with_one_warning(
+    cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-110 failed lookup (exception or empty) -> getpass.getuser(); one warning, no name."""
+
+    def broken() -> str:
+        msg = "no token"
+        raise OSError(msg)
+
+    monkeypatch.setattr(ident, "_credential_user", _REAL_CREDENTIAL_USER)
+    monkeypatch.setattr(ident, "_windows_user", broken)
+    monkeypatch.setattr(ident, "_posix_user", broken)
+    monkeypatch.setattr(ident, "_fallback_logged", [])
+    monkeypatch.setattr(getpass, "getuser", lambda: "fallback-user")
+    cfg = _opts(cli_env, "viewer").config()  # configure_logging first, so capture_logs holds
+    with capture_logs() as logs:
+        assert ident.cli_actor(cfg, need_ref=False).display == "fallback-user"
+        assert ident.cli_actor(cfg, need_ref=False).display == "fallback-user"
+    events = [x for x in logs if x["event"] == "cli.identity.fallback"]
+    assert events == [
+        {
+            "component": "cli",
+            "event": "cli.identity.fallback",
+            "log_level": "warning",
+            "source": "getpass",
+        }
+    ]
+    assert "fallback-user" not in json.dumps(logs, default=str)
+    monkeypatch.setattr(ident, "_windows_user", lambda: "")
+    monkeypatch.setattr(ident, "_posix_user", lambda: "")
+    assert ident._os_user() == "fallback-user"  # an empty result also falls back
