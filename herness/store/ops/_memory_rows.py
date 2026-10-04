@@ -2,15 +2,19 @@
 
 Private sibling of ``herness.store.ops.memory``, split off to keep that module inside its impl 07
 §2 line budget; only ``memory`` imports it (``ops-areas-acyclic`` ignore entry). The id patterns
-repeat ``herness.harness.memory.types`` (L4), which this L1 package cannot import.
+repeat ``herness.harness.memory.types`` (L4), which this L1 package cannot import. It also holds
+the selection and delete steps behind ``memory.purge_rows`` (U07-101, T07-26 spec note).
 """
 
 from __future__ import annotations
 
 import enum
+import json
 import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import batched
 from typing import Final, Literal, TypedDict, cast, get_args
 
 from pydantic import JsonValue
@@ -287,3 +291,87 @@ def item_from_row(row: Sequence[object]) -> MemoryItemRow:
         text = cast(str, item[name])
         item[name] = load_typed(text, dict, f"memory_item.{name}", mid) or {}
     return cast(MemoryItemRow, item)
+
+
+# --- U07-101 purge (R-54, TH07-21) ----------------------------------------------------------
+
+RECORD_ID_MAX: Final = 300
+_RECORD_ID_RE: Final = re.compile(r"[a-z_]+:[a-z_]+:.+")
+_PURGE_CHUNK: Final = 500
+_PURGE_COLS: Final = (
+    "SELECT memory_id, json_extract(data,'$.review_item_id'),"
+    " json_extract(data,'$.derived_review_item_id') FROM memory_item WHERE "
+)
+_PURGE_SQL: Final = {
+    "record": _PURGE_COLS + "instr(content, ?) > 0 OR instr(data, ?) > 0"
+    " OR instr(provenance, ?) > 0",
+    "author": _PURGE_COLS + "json_extract(provenance,'$.author_ref') = ?",
+}
+_SCRUB_SQL: Final = "SELECT memory_id, data FROM memory_item WHERE instr(data, ?) > 0"
+_SCRUB_SET: Final = "UPDATE memory_item SET data = ? WHERE memory_id = ?"
+
+
+@dataclass(frozen=True, slots=True)
+class PurgeRows:
+    """What ``purge_rows`` selected or removed (U07-101); every list is sorted."""
+
+    deleted_ids: list[str]
+    scrubbed_ids: list[str]
+    review_item_ids: list[str]
+
+
+type PurgeSelector = tuple[Literal["record", "author"], str]
+type _Scrubs = list[tuple[str, dict[str, JsonValue]]]
+
+
+def purge_selector(record_id: object, author_ref: object) -> PurgeSelector:
+    """The one valid selector, else ToolInputError (U07-101 precondition; nothing echoed)."""
+    if author_ref is None and isinstance(record_id, str):
+        if len(record_id) <= RECORD_ID_MAX and _RECORD_ID_RE.fullmatch(record_id):
+            return "record", record_id
+    elif record_id is None and isinstance(author_ref, str) and HEX32_RE.fullmatch(author_ref):
+        return "author", author_ref
+    msg = "purge_rows needs exactly one selector"
+    raise ToolInputError(msg)
+
+
+def _without(data: dict[str, JsonValue], author_ref: str) -> dict[str, JsonValue] | None:
+    """``data`` minus the person's ``provenance_history`` entries; None when it names none."""
+    history = data.get("provenance_history")
+    if not isinstance(history, list):
+        return None
+    kept = [e for e in history if not (isinstance(e, dict) and e.get("author_ref") == author_ref)]
+    return None if len(kept) == len(history) else {**data, "provenance_history": kept}
+
+
+def purge_select(selector: PurgeSelector, conn: Conn, op: str) -> tuple[PurgeRows, _Scrubs]:
+    """Steps 1-3: the delete set, the scrub rows (with their new ``data``), the review ids.
+
+    A record id is also matched in its JSON-escaped form inside the JSON columns."""
+    how, value = selector
+    escaped = json.dumps(value, ensure_ascii=False)[1:-1]
+    rows = query(_PURGE_SQL[how], [value, escaped, escaped] if how == "record" else [value],
+                 conn, op)  # fmt: skip
+    deleted = sorted(str(r[0]) for r in rows)
+    reviews = sorted({str(v) for r in rows for v in (r[1], r[2]) if v is not None})
+    scrubs: _Scrubs = []
+    if how == "author":
+        gone = set(deleted)
+        for mid, text in query(_SCRUB_SQL, [value], conn, op):
+            data = load_typed(text, dict, "memory_item.data", mid) or {}
+            if mid not in gone and (new := _without(data, value)) is not None:
+                scrubs.append((str(mid), new))
+    scrubs.sort(key=lambda s: s[0])
+    return PurgeRows(deleted, [m for m, _ in scrubs], reviews), scrubs
+
+
+def purge_apply(selector: PurgeSelector, conn: sqlite3.Connection, op: str) -> PurgeRows:
+    """Steps 1-7 on the caller's write connection: select, delete in chunks of 500 (trigger
+    ``memory_item_ad`` removes the FTS rows), then store the scrubbed ``data``."""
+    found, scrubs = purge_select(selector, conn, op)
+    for chunk in batched(found.deleted_ids, _PURGE_CHUNK):
+        sql = f"DELETE FROM memory_item WHERE memory_id IN ({marks(len(chunk))})"  # noqa: S608
+        conn.execute(sql, chunk)
+    for mid, data in scrubs:
+        conn.execute(_SCRUB_SET, (core.dump_json(data, field="data"), mid))
+    return found
