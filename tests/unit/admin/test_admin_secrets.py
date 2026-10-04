@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import structlog
 from tests.support.config_tree import write_full_config
 from tests.support.fake_keyring import MemoryKeyring
 
@@ -69,6 +70,17 @@ def cfg(tmp_path: Path, fake_keyring: MemoryKeyring) -> Iterator[c.HernessConfig
     c.reset_config()
 
 
+def _dotenv(root: Path) -> c.HernessConfig:
+    """Cache a ``synth`` config whose secrets backend is the read-only dotenv backend."""
+    cfg_dir = write_full_config(root)
+    herness = cfg_dir / "herness.yaml"
+    text = herness.read_text("utf-8").replace(
+        "security:\n", "security:\n  secrets: {backend: dotenv}\n"
+    )
+    herness.write_text(text, "utf-8")
+    return c.init_config("synth", config_dir=cfg_dir, env={})
+
+
 def _audit_lines(cfg: c.HernessConfig) -> list[dict[str, object]]:
     lines: list[dict[str, object]] = []
     for path in sorted(Path(cfg.paths.logs).glob("audit-*.jsonl")):
@@ -98,7 +110,8 @@ def test_ut10_72_init_creates_escrowed_keys(
     """UT10-72 both keys absent and escrowed: created, 64 hex, shown once, audited by name."""
     shown: list[str] = []
     prompt = Prompt("ESCROWED", "ESCROWED")
-    result = cmd_secrets_init(actor=USER, prompt=prompt, show=shown.append)
+    with structlog.testing.capture_logs() as logs:  # before any processor (TH10-07)
+        result = cmd_secrets_init(actor=USER, prompt=prompt, show=shown.append)
     assert (result.ok, result.exit_code, result.warnings) == (True, 0, [])
     assert result.data == {
         "secrets": [
@@ -119,6 +132,17 @@ def test_ut10_72_init_creates_escrowed_keys(
     assert not _leaks(result, *values)
     assert _targets(cfg) == list(INIT_NAMES)
     assert not any(value in _audit_text(cfg) for value in values)
+    assert not any(value in repr(logs) for value in values)  # never logged, only shown
+
+
+def test_ut10_72_init_refuses_non_keyring_backend(tmp_path: Path) -> None:
+    """UT10-72 precondition backend keyring: dotenv fails fast, before any value is shown."""
+    _dotenv(tmp_path)
+    shown: list[str] = []
+    prompt = Prompt("ESCROWED", "ESCROWED")
+    with pytest.raises(ConfigError, match="secrets init needs the keyring backend"):
+        cmd_secrets_init(actor=USER, prompt=prompt, show=shown.append)
+    assert (shown, prompt.questions) == ([], [])
 
 
 def test_ut10_72_init_unconfirmed_key_is_not_created(
@@ -266,6 +290,19 @@ def test_ut10_33_cmd_secrets_set_rejects(
     assert not _leaks(result, *answers)
 
 
+@pytest.mark.parametrize("value", ["x" * 16_384, "é" * 8_192], ids=["ascii", "two-byte"])
+def test_ut10_33_cmd_secrets_set_accepts_exactly_16_kib(
+    cfg: c.HernessConfig, fake_keyring: MemoryKeyring, value: str
+) -> None:
+    """UT10-33 a value of exactly 16 KiB (16384 UTF-8 bytes) is stored; one byte more is not."""
+    del cfg
+    assert len(value.encode("utf-8")) == 16_384
+    result = cmd_secrets_set("snow.token", actor=USER, prompt=Prompt(value, value))
+    assert (result.ok, result.exit_code, result.warnings) == (True, 0, [])
+    assert (SVC, "snow.token") in fake_keyring.store  # stored in chunks (U10-33)
+    assert s.resolve("snow.token").get_secret_value() == value
+
+
 def test_ut10_33_cmd_secrets_set_json_object_of_strings(
     cfg: c.HernessConfig, fake_keyring: MemoryKeyring
 ) -> None:
@@ -310,12 +347,6 @@ def test_ut10_33_cmd_secrets_set_backend_error_propagates(
 
 def test_ut10_33_cmd_secrets_set_dotenv_is_read_only(tmp_path: Path) -> None:
     """UT10-33 the dotenv backend refuses writes with ConfigError (exit 3)."""
-    cfg_dir = write_full_config(tmp_path)
-    herness = cfg_dir / "herness.yaml"
-    text = herness.read_text("utf-8").replace(
-        "security:\n", "security:\n  secrets: {backend: dotenv}\n"
-    )
-    herness.write_text(text, "utf-8")
-    c.init_config("synth", config_dir=cfg_dir, env={})
+    _dotenv(tmp_path)
     with pytest.raises(ConfigError, match="read-only"):
         cmd_secrets_set("snow.token", actor=USER, prompt=Prompt(VALUE, VALUE))

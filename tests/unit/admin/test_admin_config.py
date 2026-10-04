@@ -21,7 +21,9 @@ from herness.admin.commands_config import (
     cmd_config_show,
     cmd_config_validate,
 )
+from herness.core import config as c
 from herness.core import config_validate as cv
+from herness.core import redact
 from herness.core import secrets as s
 from herness.core.config_view import ConfigIssue
 from herness.core.errors import ConfigError
@@ -31,7 +33,7 @@ pytestmark = pytest.mark.unit
 HASH_RE = re.compile(r"^cfg_[0-9a-f]{16}$")
 LINE_RE = re.compile(r"^(error|warn) \S+ \S+: .+$")
 SENTINEL = "SENTINEL-SECRET-adm-4c1e"  # pragma: allowlist secret - test sentinel
-HMAC_KEY = "ab" * 32
+HMAC_KEY = "ab" * 32  # pragma: allowlist secret - 64-hex test key
 HASH_LINE = f"warn config_hash -: {OFFLINE_HASH_WARNING}"
 
 
@@ -125,6 +127,60 @@ def test_ut10_20_unknown_profile_is_an_issue(cfg_dir: Path) -> None:
         "config_hash": None,
         "issues": ["error profile -: unknown profile: nope"],
     }
+
+
+def test_ut10_20_unknown_profile_from_environment_is_named(
+    cfg_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-20 an unknown HERNESS_PROFILE (no --profile) is reported by the name tried."""
+    monkeypatch.setenv("HERNESS_PROFILE", "nope")
+    result = _validate(cfg_dir, strict=False)
+    assert (result.ok, result.exit_code) == (False, 1)
+    assert result.data == {
+        "profile": "nope",
+        "config_hash": None,
+        "issues": ["error profile -: unknown profile: nope"],
+    }
+
+
+def test_ut10_20_second_load_failure_is_an_error(
+    cfg_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-20 the hash load failing alone (config changed between loads) is an error issue."""
+    real = c.load_config
+    calls: list[int] = []
+
+    def flaky(*args: object, **kwargs: object) -> c.HernessConfig:
+        calls.append(1)
+        if len(calls) > 1:
+            msg = "config dir not found: config"
+            raise ConfigError(msg)
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(c, "load_config", flaky)
+    monkeypatch.setattr("herness.admin.commands_config.load_config", flaky)
+    result = _validate(cfg_dir, strict=False)
+    assert len(calls) == 2
+    assert (result.ok, result.exit_code) == (False, 1)
+    assert result.data is not None
+    assert result.data["config_hash"] is None
+    assert result.data["issues"] == ["error config -: config dir not found: config"]
+
+
+def test_ut10_20_offline_hash_uses_unresolved_key_id(
+    cfg_dir: Path, fake_keyring: MemoryKeyring
+) -> None:
+    """UT10-20 step 3: offline hashes with key_id "unresolved" even when the key exists."""
+    assert redact is not None  # registers the key-id provider of config_hash (U10-11)
+    fake_keyring.store[("herness", "redact.hmac_key")] = HMAC_KEY
+    cfg = c.load_config(config_dir=cfg_dir, env={})
+    offline = _validate(cfg_dir, strict=False).data
+    online = _validate(cfg_dir, strict=False, offline=False).data
+    assert offline is not None
+    assert online is not None
+    assert offline["config_hash"] == c.config_hash(cfg, key_id="unresolved")
+    assert online["config_hash"] == c.config_hash(cfg)
+    assert offline["config_hash"] != online["config_hash"]
 
 
 def test_ut10_20_profile_resolved_from_environment(

@@ -17,7 +17,8 @@ from typing import Final
 from herness._cli.output import CommandResult
 from herness.core import time as clock
 from herness.core.audit import last_secret_set_times
-from herness.core.config import HernessConfig
+from herness.core.config import HernessConfig, get_config
+from herness.core.errors import ConfigError
 from herness.core.secrets import SecretRef, exists, referenced_secret_names, set_secret
 
 __all__ = ["INIT_NAMES", "cmd_secrets_init", "cmd_secrets_set", "cmd_secrets_status"]
@@ -30,10 +31,6 @@ _ROTATE_AFTER: Final = timedelta(days=90)  # design 10 §5.2 rotation policy
 _DIFFER: Final = "values differ"
 _TOO_LONG: Final = "value exceeds 16 KiB"
 _NOT_OBJECT: Final = "a value starting with { must be a JSON object of strings"
-
-
-def _result(data: dict[str, object], warnings: list[str], exit_code: int) -> CommandResult:
-    return CommandResult(ok=exit_code == 0, data=data, warnings=warnings, exit_code=exit_code)
 
 
 # --- U10-68 secrets init ---------------------------------------------------------------------
@@ -58,6 +55,9 @@ def cmd_secrets_init(
     *, actor: str, prompt: Callable[[str], str], show: Callable[[str], None]
 ) -> CommandResult:
     """``herness secrets init`` (U10-68): create the two keys if absent, escrow-confirmed."""
+    if get_config().security.secrets.backend != "keyring":  # precondition, before any `show`
+        msg = "secrets init needs the keyring backend"
+        raise ConfigError(msg)
     rows: list[dict[str, object]] = []
     warnings: list[str] = []
     for name in INIT_NAMES:
@@ -65,7 +65,8 @@ def cmd_secrets_init(
         rows.append({"name": name, "status": status})
         if status == "not created":
             warnings.append(f"{name} not created: escrow not confirmed")
-    return _result({"secrets": rows}, warnings, 1 if warnings else 0)
+    code = 1 if warnings else 0
+    return CommandResult(ok=code == 0, data={"secrets": rows}, warnings=warnings, exit_code=code)
 
 
 # --- U10-69 secrets set ----------------------------------------------------------------------
@@ -97,9 +98,11 @@ def cmd_secrets_set(name: str, *, actor: str, prompt: Callable[[str], str]) -> C
     v2 = prompt("Repeat")
     reason = _rejection(v1, v2)
     if reason is not None:
-        return _result({"name": ref.name, "stored": False}, [reason], 1)
+        data = {"name": ref.name, "stored": False}
+        return CommandResult(ok=False, data=data, warnings=[reason], exit_code=1)
     set_secret(ref.name, v1, actor=actor)  # step 4: validates, audits by name, then writes
-    return _result({"name": ref.name, "stored": True}, [], 0)
+    data = {"name": ref.name, "stored": True}
+    return CommandResult(ok=True, data=data, warnings=[], exit_code=0)
 
 
 # T10-30: cmd_secrets_rekey
@@ -129,4 +132,7 @@ def cmd_secrets_status(*, cfg: HernessConfig) -> CommandResult:
             missing.append(f"secret missing: {name}")
         if when is not None and now - when > _ROTATE_AFTER:
             stale.append(f"{name}: last set {(now - when).days} days ago; rotate per policy")
-    return _result({"secrets": rows}, missing + stale, 1 if missing else 0)
+    code = 1 if missing else 0
+    return CommandResult(
+        ok=code == 0, data={"secrets": rows}, warnings=missing + stale, exit_code=code
+    )
