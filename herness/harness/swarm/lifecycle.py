@@ -28,6 +28,7 @@ from herness.core.types import Coverage, Depth, EntityScope, RunKind, TaskSpec
 from herness.harness.findings import compute_dedup_key
 from herness.harness.pipelines.settings import DepthKnobs, ReviewKind, resolve_knobs
 from herness.harness.swarm.routing import default_tools, role_budget
+from herness.metrics.portfolio import Scenario
 from herness.store.ops import (
     RunRow,
     insert_run,
@@ -83,8 +84,7 @@ class RunRequest(BaseModel):
     profile: Literal["local", "hybrid", "premium", "synth"] | None = None
     question: str | None = Field(default=None, max_length=2_000)
     focus: EntityScope | None = None
-    # T04-20: widens to list[Scenario | str] when herness.metrics.portfolio.Scenario lands.
-    scenarios: list[_ScenarioName] = Field(default=[], max_length=5)
+    scenarios: list[Scenario | _ScenarioName] = Field(default=[], max_length=5)
     build_id: str | None = Field(default=None, pattern=_BUILD_ID)
     session_id: str | None = Field(default=None, max_length=64)
     budget_override: dict[str, int] | None = None
