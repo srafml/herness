@@ -542,3 +542,17 @@ def test_it06_36_session_save_failure_after_final(chat_env: Env) -> None:
     failed = [e for e in logs if e["event"] == "harness.chat.session_save_failed"]
     assert [(e["log_level"], e["error_type"]) for e in failed] == [("warning", "StoreBusy")]
     assert _reply(env, message_id)["status"] == "done"
+
+
+def test_it06_13_default_deps_cloud_rule_and_unbound_vectors(chat_env: Env) -> None:
+    """IT06-13 the process defaults: `cloud` is allowed only for the active profile under the
+    R-38 rule, and ticket vector search fails closed until the composition root binds it."""
+    env = chat_env
+    local = chat_mod.ChatDeps.from_config(env.cfg)
+    assert local.data_policy_allows_cloud("local") is False
+    approved = with_policy(env.cfg, profile="hybrid", approved=True, egress=True)
+    hybrid = chat_mod.ChatDeps.from_config(approved)
+    assert hybrid.data_policy_allows_cloud("hybrid") is True
+    assert hybrid.data_policy_allows_cloud("premium") is False
+    with pytest.raises(NotFound):
+        local.vectors.search_tickets([0.0], 1, entity=None, service_id=None)
