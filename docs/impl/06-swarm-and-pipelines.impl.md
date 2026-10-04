@@ -108,6 +108,8 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (spec 00
 | `herness/harness/pipelines/_review_common.py` | Private helpers shared by the review pipelines (reads, task fields, planner and writer inputs; `base_priority` stand-in until T06-15; `default_tools` stand-in stays because the §2 import-rank rule forbids pipelines (rank 3) importing swarm (rank 2), guarded by a UT06-68 parity test, pending an owner ruling (T06-13 note)) | — (private) | L4 | none | 260 |
 | `herness/harness/pipelines/chat_support.py` | Chat constants and pure helpers | `MODE_MESSAGES`, `CHAT_TOOLS`, `ObservedTool`, `has_review_intent`, `detect_entities`, `trim_failing_claims`, `chunk_text` | L4 | none | 300 |
 | `herness/harness/pipelines/chat.py` | `ChatService` and the `chat` job handler | `ChatService`, `chat_job_handler` | L4 | `herness.core.jobs` | 390 |
+| `herness/harness/pipelines/_chat_turn.py` | Private sibling of `chat` (T06-25 split): the async turn of U06-129 steps 5–6 (`run_agent` with the egress fallback, observed tools, escalation, verification and repair, session save) | — (private) | L4 | none | 360 |
+| `herness/harness/pipelines/_chat_rows.py` | Private sibling of `chat` (T06-25 split): `Turn` state, plain-text marker rendering (R-16), the run, task and reply-row writes of U06-129 steps 5a, 5i–5j and 6 | — (private) | L4 | `herness.core.jobs` (task helpers) | 220 |
 | `herness/harness/swarm/escalation.py` | Escalation to a mini swarm and its summary message | `escalate_to_review`, `post_escalation_summary` | L4 | `herness.core.jobs` | 220 |
 
 Import direction inside `herness.harness` (an `import-linter` "layers" contract, top to bottom; a module may import only modules listed below it):
