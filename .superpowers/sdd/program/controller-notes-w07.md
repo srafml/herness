@@ -47,3 +47,7 @@ See subcontroller-instructions.md addenda 2026-09-26: checkpoint `wip(<T>)` comm
 - Amendment to addendum 5: temp folders go under the system TEMP on C: (or a C:\ folder named for the agent), never inside a worktree (UT11-37's nested pytest picks up the repo conftest) and never as a new D:\ root folder.
 - Known flakes under load (rerun the file alone; never edit): ST10-54 (egress TLS), UT03-61[3] (test_llm_decider peak-concurrency timing), UT11-05 (timing), PT11-04, ST04-13, UT10-54, PT04-12, test_cv_t08_21_run_once_and_nothing_to_do (test_jobs_supervisor.py). ST10-55 was made hermetic by T10-21. Determinism follow-ups are owed to the owning impls.
 - Gates and mutating verifiers never overlap on one worktree: a verify agent reverts its probes only when it finishes, so a suite started meanwhile may see mutated code. Run the full gates only after the verifier has reported and `git status` is clean.
+
+- Addendum 7 (2026-10-03): gate runs set TMP/TEMP to the per-group temp folder itself (e.g. C:\Users\santh\AppData\Local\Temp\<group>), never a nested subfolder — a nested TMP made lancedb panic (RustPanic) and invalidated a whole suite run in w27-s08.
+
+- Addendum 7 (2026-10-03): gate runs set TMP/TEMP to the per-group temp folder itself (for example the group's own folder directly under the user's Local\Temp), never a nested subfolder. A nested TMP made lancedb panic (RustPanic) and invalidated a whole suite run in w27-s08.

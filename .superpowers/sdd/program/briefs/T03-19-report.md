@@ -1,0 +1,50 @@
+# T03-19 report: Resolve SQL and frame (build agent)
+
+Worktree: D:\herness\.claude\worktrees\agent-a3fc6e3fcb8ed8255 (branch worktree-agent-a3fc6e3fcb8ed8255, base bdb61b7).
+Checkpoint: e77783f `wip(T03-19): resolve SQL, frame, queue and tests green`; final commit 344f8d5 `feat(enrich): T03-19 resolve SQL and frame` (empty marker commit on top; all code is in e77783f).
+
+## Built
+- `herness/enrich/sql/resolve_decisions.sql` (U03-78), 132 / 160 lines. Three statements, one file:
+  1. `enrich_cand` temp table: cache rows joined to `qmeta` (question + current fingerprint) and `versions` (current decider versions), latest `decided_at` per (content_hash, question, decider) via `QUALIFY row_number()` (tiebreak `answer`), calibrated `p_cal` per the U03-78 formulas (bool sigmoid on clamped `distribution['true']`, `1 - v` for answer `false`; choice/score softmax with `+1e-9`), `t` from `calib` default 1.0; `agreement` = `backend_confidence` for `ensemble` rows only (U03-66: ensemble stores agreement in `backend_confidence`).
+  2. `enrich_laya_cal (record_id, question, answer, p_cal)` — the secondary table U03-88 says "exposed by the SQL".
+  3. `enrich_resolved` with exactly the 15 spec columns: pairs = text rows x qmeta where entity in `applies_to` (opened_at from core.incident/change/problem, LEFT JOIN), `in_scope` = primary `laya` or `opened_at >= $bootstrap_since` (NULL opened_at -> not in scope); rank ensemble 1, primary passing the gate 2, chain `3 + list_position`; best candidate joined with `human_latest` (on current fingerprint), primary-row presence, the Laya row (for ensemble `escalated`), `pending_items`; resolve_pair steps 2-4 as CASE expressions.
+- `herness/enrich/resolve.py`, 203 / 380 lines (leaves 177 for run_resolve, decision_wide_sql, select_spot_checks):
+  - `QueueItem` frozen dataclass (U03-80).
+  - `resolve_frame` (U03-79): reads pending `label_check` items first (ops read before anything is registered; `iter_review_items(..., payload_match={"question_set_version": qs.version})`), registers `cache_rows` (DecisionCache.register), `human_latest` (LabelStore.latest_human), `calib` (CalibrationStore.as_table over sorted `versions.items()`), `qmeta` (chain_after per question, pair questions excluded), `versions`, `pending_items` (Arrow tables only; ops DB never attached), runs the SQL via importlib.resources with `$bootstrap_since = now - cfg.escalation.bootstrap_window_days`, unregisters every registered view in `finally`.
+  - `escalation_queue` (U03-80): queue rows grouped per record (sorted question ids, bool_or(scoring_use), opened_at), ordered `max_scoring DESC, opened_at DESC NULLS LAST, record_id`, `LIMIT $max_records`, joined to `enrich.text_redacted` for text. All values bound as parameters.
+  - Private helpers `_qmeta_table`, `_pending_items_table`, `_run_resolve_sql`, `_duck_error`.
+  - DuckDB errors -> `SchemaViolation("resolve_decisions: <reason>")` / `"escalation_queue: <reason>"`; reason = first line of Catalog/Binder messages, else the exception class name (same rule as link_changes, so no row values/ticket text reach the message).
+
+## Tests (tests/unit/enrich/test_resolve.py, pytestmark unit)
+- PT03-10 `test_pt03_10_sql_equals_resolve_pair` — hypothesis, `max_examples=200`: 1-3 questions of random type/threshold/primary/chain, 1-4 records sharing 1-3 content hashes, random opened_at (incl. NULL, in/out of window), per pair a random subset of {laya, openjev, jev, llm, ensemble} rows plus distractors (older duplicate, stale version `v0`, stale fingerprint), random per-(decider, question) temperatures, optional human label (+ stale-fingerprint human row), optional pending item. Reference p_cal from `calibrate.apply_temperature` (independent implementation); expected = `resolve_pair`. Compared row by row (probability/agreement with approx). Gate ties within 1e-9 of the threshold are excluded with `assume` (float noise). Mutation check: 6 of 7 SQL mutations (escalated rule, dedup order, bool false complement, out_of_scope primary rule, human fingerprint join, pending rule) make it fail; the 7th (chain rank 3->1, tying with the primary rank) is near-equivalent.
+  Plus `test_pt03_10_duckdb_error_is_schema_violation`.
+- UT03-76: `test_ut03_76_queue_cap_two` (scoring_use first, newest first, 2 records with all queued questions), `..._full_order_nulls_last`, `..._exclude_deciders`, `..._errors` (negative cap ConfigError; missing frame SchemaViolation).
+- resolve_frame coverage under IT03-04's ID (unit part): real ops_store, cache parts, calibration file, human label, pending items (one from another qsv, ignored): statuses final/human-confirmed/pending/queue/out_of_scope, calibrated T=0.5 probability, views unregistered; SQL error -> SchemaViolation and views unregistered; qmeta primaries/pair exclusion/chains/labels.
+- RED: `pytest tests/unit/enrich/test_resolve.py` without resolve.py -> `ImportError: cannot import name 'resolve' from 'herness.enrich'`.
+- GREEN: card tests 9 passed; `PYTHONUTF8=1 uv run pytest tests/unit/enrich -q -p no:logging` -> 501 passed, 1 skipped. Coverage herness/enrich/resolve.py 99 % (91 stmts, 0 missed; 20 branches, 1 partial).
+- Gates: ruff format/check clean, mypy (208 files) clean, lint-imports 13 kept, check_module_size exit 0, check_type_ownership exit 0. Commit with `SKIP=pytest-unit` (known-red pair on base; not run).
+
+## Deviations / spec notes
+1. `resolve_frame` takes an extra keyword-only `deciders: DecidersSettings` (same cause as T03-17's recorded deviation: after R-76 `chain_after` needs DecidersSettings). Signature otherwise verbatim; `# noqa: PLR0913` with reason.
+2. `exclude_deciders` (U03-80) has no algorithm text in the spec. Implemented as: a queued (record, question) is left out when an excluded decider already has a current candidate row for it (e.g. teacher-primary rows below threshold must not be re-sent to the same teacher). To support that the SQL keeps candidates in a temp table `enrich_cand (content_hash, question, decider, decider_version, answer, decided_at, agreement, p_cal)` besides `enrich_resolved`. Controller may want to confirm this reading in the spec.
+3. The SQL also creates `enrich_laya_cal` (named by U03-88 as exposed by this SQL).
+4. `qmeta.labels` is filled (bool true/false, score 0-3, choice sorted option keys; [] for dynamic options) but the SQL does not use it — resolve_pair has no label filter, so using it would break PT03-10 equality.
+5. `resolve_frame` raises ConfigError when a non-pair question has no entry in `primaries` (not in spec; guards a KeyError).
+6. `escalation_queue` raises ConfigError for `max_records < 0` (not in spec).
+7. Pending items use `payload_match` (ops-side filter) instead of filtering in Python — same result.
+
+## Carry-overs
+- IT03-04 proper (pipeline run twice) belongs to the later stage card; run_resolve / decision_wide_sql / select_spot_checks go into resolve.py (177 lines of budget left).
+- No `herness/enrich/__init__.py` or pyproject change needed (herness.enrich package contracts already cover the new module).
+
+## Fix round 1 (review T03-19-review.md)
+Checkpoint c94ef4b `wip(T03-19): fix round 1 (stale-row generator, entity keys, rf ids)`; final marker commit 70a2dd1 `fix(enrich): T03-19 review round 1` on top.
+
+- I-1: the PT03-10 generator now adds, for every drawn decider, stale rows that are NEWER than the current row (+1 day) with a DIFFERENT answer: one at non-current version `v0`, one at a stale fingerprint. For about half of the drawn deciders the stale rows are the decider's only rows (no current row; the decider is absent from the reference `resolve_pair` input). The older same-version duplicate stays (its answer now also differs). Mutation run on a scratch-restored copy (never committed), PT03-10 only, 200 examples each — all KILLED: cache fingerprint filter removed; versions join removed; `entity` removed from the `best` partition; `entity` removed from the `best` join; escalated rule; dedup order; bool false complement; out_of_scope primary rule; human fingerprint join; pending rule.
+- M1: `entity` added to the `ranked` projection, the `best` partition and the `best` join in the SQL; `escalation_queue` already grouped by (record_id, entity, content_hash) and now orders `..., record_id, entity` (both the inner and the outer ORDER BY). No documented guarantee of record_id uniqueness across core.incident/change/problem was found (impl 02 guarantees the lake `_record_id` embeds the entity, not the core ids), so the keys include entity. PT03-10 now draws records with the same record_id as incident and change (qmeta applies_to both); new `test_ut03_76_record_id_shared_across_entities` covers the queue.
+- M2: `escalation_queue` adds the `enrich_cand` NOT EXISTS clause (a constant SQL fragment, no values formatted) and the `$exclude` parameter only when `exclude_deciders` is non-empty; tested by dropping `enrich_cand` and querying without exclusions. Spec note (ruling accepted): `exclude_deciders` leaves out a queued (record, question) when an excluded decider already has a current candidate row for it (`enrich_cand`).
+- M3: the three resolve_frame tests are `test_rf_resolve_frame_builds_enrich_resolved`, `test_rf_resolve_frame_error_unregisters`, `test_rf_qmeta_needs_every_primary` (docstrings start `RF`); no other tests/unit/enrich file used rf IDs, so the global-constraints convention applies. IT03-04 no longer appears on any test.
+- M4: `mypy --strict tests/unit/enrich/test_resolve.py` clean (chain drawn without a lambda; question types typed `QuestionType`; `expected` typed `dict[tuple[str, str, str], Resolution]`).
+- M5: `_assert_unregistered` checks all six views including `pending_items` (each `SELECT` raises CatalogException), after success and after the SQL error.
+- Sizes: resolve.py 207 / 380, resolve_decisions.sql 133 / 160.
+- Results: card tests 10 passed; `tests/unit/enrich` 502 passed, 1 skipped; resolve.py coverage 99 % (95 stmts, 22 branches, 1 partial); ruff format/check, mypy (208 files), lint-imports (13 kept), check_module_size exit 0. Committed with `SKIP=pytest-unit` (known-red pair).
