@@ -1,0 +1,1437 @@
+31e311c feat(synth): T11-14 generate CLI, overwrite marker and --verify
+9e9cd08 wip(T11-14): generate, main, verify and the card's tests green
+
+diff --git a/docs/impl/11-testing-eval-synthetic-data.impl.md b/docs/impl/11-testing-eval-synthetic-data.impl.md
+index 1550edb..1dc119e 100644
+--- a/docs/impl/11-testing-eval-synthetic-data.impl.md
++++ b/docs/impl/11-testing-eval-synthetic-data.impl.md
+@@ -76,16 +76,17 @@ Line budgets are the production-code limit for the file (ENG §2.4 caps every mo
+ | `tools/synth/fetch.py` | `_fetched_at` and re-emit placement | `assign_fetch` | Tooling | `numpy` | 150 |
+ | `tools/synth/flatten.py` | Source JSON → lake Arrow batch in the impl 01 raw column contract (R-59): `flatten_record` for ServiceNow, `flatten_issue` for Jira | `to_lake_batch` | Tooling | `pyarrow`, `herness.connectors.rows`, `herness.connectors.jira` | 200 |
+ | `tools/synth/shards.py` | Shard planning, worker pool, shard execution | `Shard`, `ShardResult`, `plan_shards`, `run_shard`, `run_all_shards` | Tooling | `multiprocessing`, `herness.store.lake` | 350 |
+ | `tools/synth/_shard_run.py` | Private sibling of `shards` (T11-13 spec note): one shard's generation, plants, dirty defects, fetch placement, `task_sla` rows and lake write (F11-02), split off for the 350-line budget of `shards.py`, which imports it lazily because the generators import `Shard` from `shards`; imported only by `shards` | none (private) | Tooling | `numpy` | 280 |
+ | `tools/synth/_shard_io.py` | Private sibling of `shards` (T11-13 spec note): `LakeWriter` sink, per-shard truth parts under `<root>/truth/.parts/` and the phase A incident time index (`.npy`, no pickles); imported only by `_shard_run` and `truth_writer` | none (private) | Tooling | `pyarrow`, `numpy`, `herness.store.lake` | 220 |
+ | `tools/synth/truth_writer.py` | Truth directory writer and synth mappings fragment | `write_truth`, `write_synth_mappings`, `write_name_directory` | Tooling | `pyarrow` | 250 |
+ | `tools/synth/inbox.py` | `service_costs.csv` inbox drop | `write_service_costs` | Tooling | — | 100 |
+ | `tools/synth/verify.py` | `--verify` lake contract and truth-count check | `VerifyReport`, `verify_root`, `content_hashes` | Tooling | `duckdb` | 250 |
++| `tools/synth/_manifest.py` | Private sibling of `tools/synth_data.py` (T11-14 spec note): `TruthManifest` assembly from the catalog plant targets, the plan's epic sequence numbers, the change schedule and the run sums (U11-23 step 6, `question_set_version` through `load_config(profile="synth")`) and the `.synth_root` marker writer (step 7), split off for the 250-line budget of `synth_data.py`; imported only by `tools.synth_data` | none (private) | Tooling | `herness.eval.truth`, `herness.core.config` | 180 |
+ | `tools/synth/pii_corpus.py` | Redaction corpus writer | `write_pii_corpus` | Tooling | — | 200 |
+ | `tools/synth/api_pages.py` | Source-shaped JSON pages writer | `write_api_pages` | Tooling | — | 250 |
+ | `tools/phase_gate.py` | Phase gate definitions and runner | `GateCheck`, `GATES`, `run_gate`, `main` | Tooling | `subprocess` | 300 |
+ | `herness/eval/__init__.py` | Package marker | — | L5 | — | 5 |
+ | `herness/eval/truth.py` | Truth manifest model and loader (the only module under `herness/` allowed to name truth files, R-64) | `TruthManifest`, `load_truth`, `truth_dir_for`, `plant_value` | L5 | — | 250 |
+ | `herness/eval/settings.py` | `config/eval.yaml` section model | `EvalConfig` and nested models | L5 | none beyond the ENG §2.1 settings rule (standard library, pydantic, `herness.core.types`, `herness.core.errors`) | 150 |
+ | `herness/eval/golden.py` | Suite model, loader, placeholder resolution, reference SQL | `Suite`, `EvalQuestion`, `Expected`, `NumericExpected`, `EntitiesExpected`, `RulesExpected`, `RubricExpected`, `ResolvedQuestion`, `load_suite`, `resolve` | L5 | `duckdb` | 400 |
+ | `herness/eval/grading.py` | Grading methods and unsupported-number count | `GradeResult`, `UnsupportedReport`, `grade_numeric`, `grade_entities`, `grade_rules`, `grade_rubric`, `count_unsupported`, `split_sentences`, `kendall_tau_check` | L5 | `scipy` | 400 |
+diff --git a/tests/integration/tools/synth/test_synth_data_cli.py b/tests/integration/tools/synth/test_synth_data_cli.py
+new file mode 100644
+index 0000000..62c0d7f
+--- /dev/null
++++ b/tests/integration/tools/synth/test_synth_data_cli.py
+@@ -0,0 +1,79 @@
++"""CLI runs of tools/synth_data.py through the real spawn pool: IT11-01, IT11-02 (F11-01,
++F11-03). The `small` variants are marked `slow` (nightly)."""
++
++import json
++import subprocess
++import sys
++from collections.abc import Iterator
++from pathlib import Path
++
++import pytest
++
++from herness.core.logging import reset_logging
++from tools.synth.verify import content_hashes, verify_root
++from tools.synth_data import main
++
++pytestmark = pytest.mark.integration
++
++_REPO = Path(__file__).resolve().parents[4]
++_SCRIPT = _REPO / "tools" / "synth_data.py"
++
++
++@pytest.fixture(autouse=True)
++def _reset_logging() -> Iterator[None]:
++    yield
++    reset_logging()  # `main` configures process logging
++
++
++def _generate(root: Path, seed: int, scale: str, workers: int) -> dict[str, str]:
++    argv = ["--seed", str(seed), "--scale", scale, "--root", str(root), "--workers", str(workers)]
++    assert main(argv) == 0
++    return content_hashes(root)
++
++
++def _determinism(tmp_path: Path, seed: int, scale: str) -> None:
++    one = _generate(tmp_path / "w1", seed, scale, 1)
++    eight = _generate(tmp_path / "w8", seed, scale, 8)
++    assert one
++    assert one == eight
++
++
++def test_it11_01_tiny_content_hashes_equal_across_worker_counts(tmp_path: Path) -> None:
++    """IT11-01 seed 7 tiny with `--workers 1` and `--workers 8`: equal `content_hashes`
++    for every `source/entity`."""
++    _determinism(tmp_path, 7, "tiny")
++
++
++@pytest.mark.slow
++def test_it11_01_small_content_hashes_equal_across_worker_counts(tmp_path: Path) -> None:
++    """IT11-01 seed 42 small with `--workers 1` and `--workers 8` (slow)."""
++    _determinism(tmp_path, 42, "small")
++
++
++def _cli_verify(root: Path, scale: str) -> None:
++    cmd = [sys.executable, str(_SCRIPT), "--seed", "7", "--scale", scale, "--verify"]
++    done = subprocess.run(  # noqa: S603 - fixed interpreter and script, tmp root
++        [*cmd, "--root", str(root)],
++        cwd=_REPO,
++        capture_output=True,
++        text=True,
++        check=False,
++        timeout=3600,
++    )
++    assert done.returncode == 0, done.stderr[-2000:]
++    lines = done.stdout.splitlines()
++    assert len(lines) == 1, done.stdout[:2000]
++    assert set(json.loads(lines[0])) == {"root", "rows", "seconds", "params_hash"}
++    assert verify_root(root).ok
++
++
++def test_it11_02_tiny_cli_verify_exits_0(tmp_path: Path) -> None:
++    """IT11-02 `python tools/synth_data.py --seed 7 --scale tiny --verify` exits 0 and
++    prints exactly one JSON line on stdout (worker logs stay off stdout)."""
++    _cli_verify(tmp_path / "root", "tiny")
++
++
++@pytest.mark.slow
++def test_it11_02_small_cli_verify_exits_0(tmp_path: Path) -> None:
++    """IT11-02 the same at `small` (slow)."""
++    _cli_verify(tmp_path / "root", "small")
+diff --git a/tests/security/test_st11_07_overwrite_marker.py b/tests/security/test_st11_07_overwrite_marker.py
+new file mode 100644
+index 0000000..5428aa0
+--- /dev/null
++++ b/tests/security/test_st11_07_overwrite_marker.py
+@@ -0,0 +1,66 @@
++"""Security test for the overwrite marker (ST11-07, TH11-07, U11-23, U11-24)."""
++
++from collections.abc import Iterator
++from pathlib import Path
++
++import pytest
++
++from herness.core.logging import reset_logging
++from tools.synth_data import main
++
++pytestmark = pytest.mark.unit
++
++_SENTINEL = "operator data that the generator does not own\n"
++
++
++@pytest.fixture(autouse=True)
++def _reset_logging() -> Iterator[None]:
++    yield
++    reset_logging()  # `main` configures process logging
++
++
++def _argv(root: Path) -> list[str]:
++    return ["--seed", "7", "--scale", "tiny", "--root", str(root), "--overwrite"]
++
++
++def test_st11_07_overwrite_without_marker_exits_3_and_keeps_sentinel(
++    tmp_path: Path, capsys: pytest.CaptureFixture[str]
++) -> None:
++    """ST11-07 `--overwrite` on a directory with a sentinel file and no `.synth_root`:
++    exit 3, the sentinel and its sibling directory intact, nothing added."""
++    root = tmp_path / "not_a_synth_root"
++    (root / "nested").mkdir(parents=True)
++    sentinel = root / "sentinel.txt"
++    sentinel.write_text(_SENTINEL, encoding="utf-8")
++    (root / "nested" / "keep.bin").write_bytes(b"\x01")
++
++    assert main(_argv(root)) == 3
++
++    assert sentinel.read_text(encoding="utf-8") == _SENTINEL
++    assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*")) == [
++        "nested",
++        "nested/keep.bin",
++        "sentinel.txt",
++    ]
++    captured = capsys.readouterr()
++    assert captured.out == ""
++    assert _SENTINEL.strip() not in captured.err  # error output names paths and keys only
++
++
++def test_st11_07_marker_that_is_a_directory_or_link_is_not_a_marker(tmp_path: Path) -> None:
++    """ST11-07 a `.synth_root` that is a directory or a symlink does not authorise deletion."""
++    target = tmp_path / "elsewhere.json"
++    target.write_text("{}", encoding="utf-8")
++    for kind in ("dir", "link"):
++        root = tmp_path / kind
++        root.mkdir()
++        (root / "sentinel.txt").write_text(_SENTINEL, encoding="utf-8")
++        marker = root / ".synth_root"
++        if kind == "dir":
++            marker.mkdir()
++        else:
++            marker.symlink_to(target)
++
++        assert main(_argv(root)) == 3
++        assert (root / "sentinel.txt").read_text(encoding="utf-8") == _SENTINEL
++    assert target.read_text(encoding="utf-8") == "{}"
+diff --git a/tests/unit/tools/synth/test_synth_verify.py b/tests/unit/tools/synth/test_synth_verify.py
+new file mode 100644
+index 0000000..757e815
+--- /dev/null
++++ b/tests/unit/tools/synth/test_synth_verify.py
+@@ -0,0 +1,192 @@
++"""Tests for tools.synth.verify (U11-22): UT11-26 plus review-focus checks.
++
++One tiny root is generated per module through `tools.synth_data.generate`, with the spawn
++pool replaced by an in-process runner (unit tests start no subprocess; the pool path is
++covered by IT11-01 and IT11-02). Each test corrupts its own copy of that root.
++"""
++
++import shutil
++from collections.abc import Sequence
++from pathlib import Path
++
++import pyarrow as pa
++import pyarrow.parquet as pq
++import pytest
++
++from herness.eval.truth import TruthManifest, load_truth
++from tools import synth_data
++from tools.synth.catalog import Catalog
++from tools.synth.dirty import DirtyCounters
++from tools.synth.params import SynthParams
++from tools.synth.shards import AggregateResult, Shard, run_shard, worker_context
++from tools.synth.verify import VerifyReport, content_hashes, verify_root
++
++pytestmark = pytest.mark.unit
++
++_SEED = 7
++_HASH_LEN = 32
++_DIRTY_KEYS = ("duplicate_rows", "later_versions", "tombstones")
++
++
++def _inline_run(
++    shards: Sequence[Shard],
++    cat: Catalog,
++    params: SynthParams,
++    *,
++    seed: int,
++    root: Path,
++    workers: int,
++) -> AggregateResult:
++    """In-process stand-in for `run_all_shards`: phase A (incidents) first, then the rest."""
++    ctx = worker_context(root, seed, params, cat)
++    out = AggregateResult(ctx.parts_dir, DirtyCounters())
++    (ctx.parts_dir / "idx").mkdir(parents=True, exist_ok=True)
++    for shard in sorted(shards, key=lambda s: (s.source, s.entity) != ("servicenow", "incident")):
++        out.add(run_shard(shard, ctx))
++    return out
++
++
++@pytest.fixture(scope="module")
++def tiny_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
++    root = tmp_path_factory.mktemp("verify") / "root"
++    with pytest.MonkeyPatch.context() as mp:
++        mp.setattr(synth_data, "run_all_shards", _inline_run)
++        synth_data.generate(_SEED, "tiny", root, workers=1)
++    return root
++
++
++@pytest.fixture
++def root_copy(tiny_root: Path, tmp_path: Path) -> Path:
++    copy = tmp_path / "copy"
++    shutil.copytree(tiny_root, copy)
++    return copy
++
++
++def _raw(root: Path, key: str) -> Path:
++    return root / "data" / "raw" / key
++
++
++def _files(root: Path, key: str) -> list[Path]:
++    return sorted(_raw(root, key).rglob("*.parquet"))
++
++
++def _truth(root: Path) -> TruthManifest:
++    return load_truth(root / "truth")
++
++
++def test_ut11_26_clean_tiny_root_verifies_ok(root_copy: Path) -> None:
++    """UT11-26 a freshly generated tiny root passes: no problem, counts equal the truth."""
++    report = verify_root(root_copy)
++    truth = _truth(root_copy)
++
++    assert isinstance(report, VerifyReport)
++    assert report.problems == ()
++    assert report.ok is True
++    assert report.row_counts == truth.row_counts
++    assert report.dirty == {k: truth.dirty[k] for k in _DIRTY_KEYS}
++    assert truth.row_counts["servicenow/task_sla"] > 0
++    assert truth.row_counts["servicenow/cmn_department"] > 0
++
++
++def test_ut11_26_dot_prefixed_file_is_a_problem(root_copy: Path) -> None:
++    """UT11-26 a dot-prefixed file left under data/raw is reported (the glob skips it)."""
++    first = _files(root_copy, "servicenow/incident")[0]
++    shutil.copy(first, first.with_name(".part-left-over.parquet"))
++
++    report = verify_root(root_copy)
++
++    assert report.ok is False
++    assert any("dot-prefixed" in p for p in report.problems)
++    assert report.row_counts == _truth(root_copy).row_counts  # the glob never reads it
++
++
++@pytest.mark.parametrize(
++    ("key", "column"),
++    [
++        ("servicenow/cmn_department", "_source_key"),  # single file: the column is gone
++        ("servicenow/incident", "_payload"),  # one of many files: union fills NULLs
++    ],
++)
++def test_ut11_26_dropped_column_is_a_problem(root_copy: Path, key: str, column: str) -> None:
++    """UT11-26 a metadata column dropped from a lake file is reported."""
++    path = _files(root_copy, key)[0]
++    table = pq.read_table(path)
++    pq.write_table(table.drop_columns([column]), path)
++
++    report = verify_root(root_copy)
++
++    assert report.ok is False
++    assert any(key in p and column in p for p in report.problems), report.problems
++
++
++def test_ut11_26_extra_row_is_a_problem(root_copy: Path) -> None:
++    """UT11-26 one extra lake row breaks the row count against `truth.row_counts`."""
++    source = _files(root_copy, "servicenow/problem")[0]
++    row = pq.read_table(source).slice(0, 1)
++    pq.write_table(row, source.with_name("part-extra.parquet"))
++
++    report = verify_root(root_copy)
++
++    assert report.ok is False
++    truth = _truth(root_copy)
++    assert report.row_counts["servicenow/problem"] == truth.row_counts["servicenow/problem"] + 1
++    assert any("servicenow/problem" in p and "rows" in p for p in report.problems)
++
++
++def test_rf_record_id_mismatch_and_live_null_payload_are_problems(root_copy: Path) -> None:
++    """U11-22 `_record_id` must equal `_source:_entity:_source_key`; NULL record ids and
++    payload-less live rows are reported (key and column names only)."""
++    path = _files(root_copy, "servicenow/sys_user_group")[0]
++    table = pq.read_table(path)
++    ids = table.column("_record_id").to_pylist()
++    ids[0] = "servicenow:sys_user_group:not-the-key"
++    idx = table.schema.get_field_index("_record_id")
++    pq.write_table(table.set_column(idx, table.schema.field(idx), pa.array(ids)), path)
++
++    report = verify_root(root_copy)
++
++    assert report.ok is False
++    assert any("_record_id" in p and "sys_user_group" in p for p in report.problems)
++    assert not any("not-the-key" in p for p in report.problems)
++
++
++def test_rf_wrong_metadata_type_is_a_problem(root_copy: Path) -> None:
++    """U11-22 the 8 metadata columns must carry the spec 02 types."""
++    path = _files(root_copy, "servicenow/cmn_department")[0]
++    table = pq.read_table(path)
++    idx = table.schema.get_field_index("_deleted")
++    as_text = pa.array([str(v) for v in table.column("_deleted").to_pylist()])
++    pq.write_table(table.set_column(idx, "_deleted", as_text), path)
++
++    report = verify_root(root_copy)
++
++    assert report.ok is False
++    assert any("_deleted" in p and "type" in p for p in report.problems)
++
++
++def test_rf_missing_truth_is_a_problem(root_copy: Path) -> None:
++    """U11-22 a root without a readable truth manifest is not ok."""
++    (root_copy / "truth" / "truth.json").unlink()
++
++    report = verify_root(root_copy)
++
++    assert report.ok is False
++    assert any("truth" in p for p in report.problems)
++
++
++def test_ut11_26_content_hashes_per_entity_and_sensitive_to_rows(root_copy: Path) -> None:
++    """UT11-26 / design §5.1.8 `content_hashes`: one 32-hex md5 per `source/entity`, stable
++    over re-reads and changed by one extra row."""
++    hashes = content_hashes(root_copy)
++
++    assert set(hashes) == set(_truth(root_copy).row_counts)
++    assert all(len(h) == _HASH_LEN and int(h, 16) >= 0 for h in hashes.values())
++    assert content_hashes(root_copy) == hashes
++
++    source = _files(root_copy, "servicenow/problem")[0]
++    pq.write_table(pq.read_table(source).slice(0, 1), source.with_name("part-extra.parquet"))
++    changed = content_hashes(root_copy)
++    assert changed["servicenow/problem"] != hashes["servicenow/problem"]
++    assert {k: v for k, v in changed.items() if k != "servicenow/problem"} == {
++        k: v for k, v in hashes.items() if k != "servicenow/problem"
++    }
+diff --git a/tests/unit/tools/test_synth_data.py b/tests/unit/tools/test_synth_data.py
+new file mode 100644
+index 0000000..0c74529
+--- /dev/null
++++ b/tests/unit/tools/test_synth_data.py
+@@ -0,0 +1,370 @@
++"""Tests for tools.synth_data (U11-23 `generate`, U11-24 `main`): UT11-27..UT11-29.
++
++Generation runs through `generate` with the spawn pool replaced by an in-process runner
++(unit tests start no subprocess; the pool path is covered by IT11-01 and IT11-02).
++"""
++
++import json
++from collections.abc import Callable, Iterator, Sequence
++from pathlib import Path
++
++import pyarrow.parquet as pq
++import pytest
++
++from herness.core.errors import ConfigError
++from herness.core.logging import reset_logging
++from herness.eval.truth import TruthManifest, load_truth
++from tools import synth_data
++from tools.synth import GENERATOR_VERSION
++from tools.synth.catalog import Catalog
++from tools.synth.dirty import DirtyCounters
++from tools.synth.params import SynthParams, SynthUsageError
++from tools.synth.pii import build_name_list
++from tools.synth.shards import AggregateResult, Shard, run_shard, worker_context
++from tools.synth.verify import content_hashes
++from tools.synth_data import RootNotEmpty, generate, main
++
++pytestmark = pytest.mark.unit
++
++_SEED = 7
++_SUMMARY_KEYS = {"root", "rows", "seconds", "params_hash"}
++
++
++def _inline_run(
++    shards: Sequence[Shard],
++    cat: Catalog,
++    params: SynthParams,
++    *,
++    seed: int,
++    root: Path,
++    workers: int,
++) -> AggregateResult:
++    """In-process stand-in for `run_all_shards`: phase A (incidents) first, then the rest."""
++    ctx = worker_context(root, seed, params, cat)
++    out = AggregateResult(ctx.parts_dir, DirtyCounters())
++    (ctx.parts_dir / "idx").mkdir(parents=True, exist_ok=True)
++    for shard in sorted(shards, key=lambda s: (s.source, s.entity) != ("servicenow", "incident")):
++        out.add(run_shard(shard, ctx))
++    return out
++
++
++@pytest.fixture
++def inline_pool(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
++    monkeypatch.setattr(synth_data, "run_all_shards", _inline_run)
++    yield
++    reset_logging()  # `main` configures process logging
++
++
++@pytest.fixture(scope="module")
++def generated(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, TruthManifest]:
++    root = tmp_path_factory.mktemp("generate") / "root"
++    with pytest.MonkeyPatch.context() as mp:
++        mp.setattr(synth_data, "run_all_shards", _inline_run)
++        manifest = generate(_SEED, "tiny", root, workers=1)
++    return root, manifest
++
++
++def _snapshot(root: Path) -> dict[str, bytes]:
++    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
++
++
++class _Recorder:
++    """Stand-in for the module logger: records `(level, event, fields)`."""
++
++    def __init__(self) -> None:
++        self.events: list[tuple[str, str, dict[str, object]]] = []
++
++    def __getattr__(self, level: str) -> Callable[..., None]:
++        def record(event: str, **fields: object) -> None:
++            self.events.append((level, event, fields))
++
++        return record
++
++
++def _args(root: Path, *extra: str) -> list[str]:
++    return ["--seed", str(_SEED), "--scale", "tiny", "--root", str(root), "--workers", "1", *extra]
++
++
++# --- U11-23 generate --------------------------------------------------------------------
++
++
++def test_ut11_27_non_empty_root_without_overwrite_is_refused(tmp_path: Path) -> None:
++    """UT11-27 `generate` on a non-empty root without `overwrite` raises `RootNotEmpty`
++    (a `ConfigError`) and leaves every file unchanged."""
++    root = tmp_path / "root"
++    (root / "sub").mkdir(parents=True)
++    (root / "keep.txt").write_text("operator data\n", encoding="utf-8")
++    (root / "sub" / "more.bin").write_bytes(b"\x00\x01")
++    before = _snapshot(root)
++
++    with pytest.raises(RootNotEmpty) as info:
++        generate(_SEED, "tiny", root)
++
++    assert isinstance(info.value, ConfigError)
++    assert _snapshot(root) == before
++
++
++def test_ut11_27_overwrite_without_marker_is_refused(tmp_path: Path) -> None:
++    """UT11-27 / TH11-07 `overwrite=True` on a non-empty root without `.synth_root` raises
++    `SynthUsageError` and deletes nothing."""
++    root = tmp_path / "root"
++    root.mkdir()
++    (root / "keep.txt").write_text("operator data\n", encoding="utf-8")
++    before = _snapshot(root)
++
++    with pytest.raises(SynthUsageError):
++        generate(_SEED, "tiny", root, overwrite=True)
++
++    assert _snapshot(root) == before
++
++
++def test_rf_generate_rejects_unknown_override(tmp_path: Path) -> None:
++    """U11-23 precondition: an unknown override key raises `SynthUsageError`, nothing written."""
++    root = tmp_path / "root"
++
++    with pytest.raises(SynthUsageError):
++        generate(_SEED, "tiny", root, colour="blue")
++
++    assert not root.exists()
++
++
++def test_rf_generate_writes_layout_marker_and_manifest(
++    generated: tuple[Path, TruthManifest],
++) -> None:
++    """U11-23 postconditions: design §3.1 layout, `.synth_root` marker, a manifest whose
++    counts equal the lake and whose plant ids name generated records."""
++    root, manifest = generated
++    marker = json.loads((root / ".synth_root").read_text(encoding="utf-8"))
++    assert marker == {
++        "seed": _SEED,
++        "scale": "tiny",
++        "generator_version": GENERATOR_VERSION,
++        "params_hash": manifest.params_hash,
++    }
++    for rel in (
++        "data/inbox/service_costs/service_costs.csv",
++        "name_directory.csv",
++        "synth_mappings.yaml",
++        "truth/truth.json",
++        "truth/truth_labels.parquet",
++        "truth/t2_members.parquet",
++        "truth/t3_pairs.parquet",
++    ):
++        assert (root / rel).is_file(), rel
++    assert not (root / "truth" / ".parts").exists()
++    assert load_truth(root / "truth") == manifest
++    assert manifest.generator_version == "2.0.0"
++    assert manifest.question_set_version == "qs-2026-10-01.1"
++    assert manifest.seed == _SEED
++    assert manifest.scale == "tiny"
++    assert manifest.params_hash.startswith("sha256:")
++
++
++def _lake_ids(root: Path, key: str) -> set[str]:
++    ids: set[str] = set()
++    for path in (root / "data" / "raw" / key).rglob("*.parquet"):
++        ids.update(pq.read_table(path, columns=["_record_id"]).column(0).to_pylist())
++    return ids
++
++
++def test_rf_manifest_plants_name_generated_entities(generated: tuple[Path, TruthManifest]) -> None:
++    """U11-23 step 6: the `Plants` fields are assembled from the catalog and the run, so
++    each id names a record in the lake (no placeholders)."""
++    root, manifest = generated
++    p = manifest.plants
++    teams = _lake_ids(root, "servicenow/sys_user_group")
++    services = {
++        i.replace("cmdb_ci_service", "cmdb_ci")
++        for i in _lake_ids(root, "servicenow/cmdb_ci_service")
++    }
++    cis = _lake_ids(root, "servicenow/cmdb_ci")
++    issues = _lake_ids(root, "jira/issue")
++    assert p.T1_bad_team.team_id in teams
++    assert set(p.T1_bad_team.service_ids) <= services
++    assert len(p.T1_bad_team.service_ids) == 3
++    assert (p.T1_bad_team.metric, p.T1_bad_team.lever_usd_model) == ("mttr_hours", "mttr")
++    assert (p.T1_bad_team.multiplier_start, p.T1_bad_team.multiplier_end) == (2.0, 3.0)
++    assert p.T2_roi_epic.epic_record_id in issues
++    assert p.T2_roi_epic.epic_key != p.T2_roi_epic.decoy_epic_key
++    assert p.T2c_cluster_fix.template_id == "tpl_cert_expiry"
++    assert p.T3_change_cluster.ci_id in cis
++    assert p.T3_change_cluster.owning_team_id in teams
++    assert 0.0 < p.T3_change_cluster.source_field_share < 1.0
++    assert 0.0 <= p.T4_noisy_service.generated_noise_ratio <= 1.0
++    assert p.T5_confounder.team_id in teams
++    assert p.T5_confounder.volume_multiplier == 2.8
++    for side in (p.T6_outcomes.paid, p.T6_outcomes.unpaid):
++        assert side.epic_record_id in issues
++        assert side.metric == "incident_count"
++    assert (p.T6_outcomes.paid.effect, p.T6_outcomes.unpaid.effect) == (-0.4, 0.0)
++    for sid in (
++        p.T2_roi_epic.service_id,
++        p.T2c_cluster_fix.service_id,
++        p.T4_noisy_service.service_id,
++    ):
++        assert sid in services
++
++
++def test_ut11_28_overwrite_regenerates_identical_content(
++    generated: tuple[Path, TruthManifest], inline_pool: None
++) -> None:
++    """UT11-28 `generate(..., overwrite=True)` on a generated root clears it (a stray file
++    is gone) and regenerates identical content hashes and an identical truth manifest."""
++    root, manifest = generated
++    hashes = content_hashes(root)
++    truth_before = (root / "truth" / "truth.json").read_bytes()
++    (root / "stray.txt").write_text("left by a test\n", encoding="utf-8")
++
++    again = generate(_SEED, "tiny", root, overwrite=True, workers=1)
++
++    assert not (root / "stray.txt").exists()
++    assert content_hashes(root) == hashes
++    assert (root / "truth" / "truth.json").read_bytes() == truth_before
++    assert again == manifest
++
++
++# --- U11-24 main ------------------------------------------------------------------------
++
++
++def test_ut11_29_valid_arguments_exit_0_with_json_summary(
++    tmp_path: Path, inline_pool: None, capsys: pytest.CaptureFixture[str]
++) -> None:
++    """UT11-29 valid arguments exit 0 and print one JSON line (`root`, `rows`, `seconds`,
++    `params_hash`) on stdout; TH11-07: stdout and stderr carry no made-up person name."""
++    root = tmp_path / "root"
++
++    assert main(_args(root)) == 0
++
++    captured = capsys.readouterr()
++    names = [f"{first} {last}" for first, last in build_name_list(_SEED)]
++    assert not [name for name in names if name in captured.out + captured.err]
++    lines = captured.out.splitlines()
++    assert len(lines) == 1
++    summary = json.loads(lines[0])
++    assert set(summary) == _SUMMARY_KEYS
++    truth = load_truth(root / "truth")
++    assert summary["rows"] == sum(truth.row_counts.values())
++    assert summary["params_hash"] == truth.params_hash
++    assert Path(summary["root"]) == root.resolve()
++    assert summary["seconds"] >= 0
++
++
++def test_ut11_29_bad_scale_value_exits_3(tmp_path: Path, inline_pool: None) -> None:
++    """UT11-29 `--scale huge` is a bad argument value (`SynthUsageError`): exit 3, not 2."""
++    root = tmp_path / "root"
++    argv = ["--seed", "7", "--scale", "huge", "--root", str(root)]
++
++    assert main(argv) == 3
++    assert not root.exists()
++
++
++def test_ut11_29_non_empty_root_exits_3(tmp_path: Path, inline_pool: None) -> None:
++    """UT11-29 a non-empty root without `--overwrite` (`RootNotEmpty`): exit 3."""
++    root = tmp_path / "root"
++    root.mkdir()
++    (root / "keep.txt").write_text("x\n", encoding="utf-8")
++
++    assert main(_args(root)) == 3
++    assert (root / "keep.txt").read_text(encoding="utf-8") == "x\n"
++
++
++def test_ut11_29_corrupted_root_with_verify_exits_1(
++    tmp_path: Path,
++    inline_pool: None,
++    monkeypatch: pytest.MonkeyPatch,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """UT11-29 a root corrupted before `--verify` (a lake file lost after the truth was
++    written) fails verification (`SchemaViolation`): exit 1, `synth.verify.failed` logged,
++    no JSON summary."""
++    real_write_truth = synth_data.write_truth
++
++    def write_truth_then_corrupt(root: Path, manifest: TruthManifest, **kw: Path) -> None:
++        real_write_truth(root, manifest, **kw)
++        next((root / "data" / "raw" / "servicenow" / "problem").rglob("*.parquet")).unlink()
++
++    monkeypatch.setattr(synth_data, "write_truth", write_truth_then_corrupt)
++    log = _Recorder()
++    monkeypatch.setattr(synth_data, "_log", log)
++    root = tmp_path / "root"
++
++    assert main(_args(root, "--verify")) == 1
++
++    assert capsys.readouterr().out == ""
++    events = {(level, event): fields for level, event, fields in log.events}
++    assert events[("error", "synth.verify.failed")]["n_problems"] >= 1
++    assert events[("error", "synth.generate.failed")]["exit_code"] == 1
++    assert "synth.generate.completed" not in {event for _, event, _ in log.events}
++    assert (root / "truth" / "truth.json").is_file()  # left as is for inspection
++
++
++def test_ut11_29_unknown_option_exits_2(
++    tmp_path: Path, inline_pool: None, capsys: pytest.CaptureFixture[str]
++) -> None:
++    """UT11-29 an unknown option (`--bogus`) is an argparse usage error: exit 2."""
++    assert main([*_args(tmp_path / "root"), "--bogus"]) == 2
++    assert "--bogus" in capsys.readouterr().err
++
++
++@pytest.mark.parametrize(
++    "argv",
++    [
++        ["--scale", "tiny"],  # missing --seed
++        ["--seed"],  # missing option value
++    ],
++)
++def test_rf_argparse_usage_errors_exit_2(argv: list[str], inline_pool: None) -> None:
++    """R-46: only what argparse itself detects exits 2."""
++    assert main(argv) == 2
++
++
++@pytest.mark.parametrize(
++    "extra",
++    [
++        ["--seed", "seven"],
++        ["--workers", "0"],
++        ["--start", "2024-13-01"],
++        ["--dirty", "filthy"],
++        ["--fetch-mode", "hourly"],
++        ["--sources", "servicenow,email"],
++    ],
++)
++def test_rf_bad_argument_values_exit_3(tmp_path: Path, extra: list[str], inline_pool: None) -> None:
++    """R-46: a bad argument value is a `SynthUsageError` (exit 3); the root stays untouched."""
++    root = tmp_path / "root"
++
++    assert main([*_args(root), *extra]) == 3
++    assert not root.exists()
++
++
++@pytest.mark.parametrize(
++    "argv",
++    [
++        ["pii-corpus", "--seed", "11", "--n", "10", "--out", "corpus.jsonl"],
++        ["api-pages", "--seed", "1", "--source", "jira", "--entity", "issue", "--rows", "5",
++         "--out", "pages"],
++    ],
++)  # fmt: skip
++def test_rf_subcommands_parse_and_exit_3_until_t11_15(
++    argv: list[str], tmp_path: Path, inline_pool: None, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """U11-24 the `pii-corpus` and `api-pages` forms parse; their bodies arrive with T11-15,
++    so they exit 3 (`SynthUsageError`) and write nothing."""
++    monkeypatch.chdir(tmp_path)
++
++    assert main(argv) == 3
++    assert list(tmp_path.iterdir()) == []
++
++
++def test_rf_default_root_normalizes_scale(
++    tmp_path: Path, inline_pool: None, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """U11-24 default `--root` is `data/synth/<seed>-<scale>/` with the scale normalized
++    (`5m` -> `full`); checked through the refusal of a pre-filled default root."""
++    monkeypatch.chdir(tmp_path)
++    default = tmp_path / "data" / "synth" / "7-full"
++    default.mkdir(parents=True)
++    (default / "keep.txt").write_text("x\n", encoding="utf-8")
++
++    assert main(["--seed", "7", "--scale", "5m"]) == 3
++    assert (default / "keep.txt").is_file()
+diff --git a/tools/synth/_manifest.py b/tools/synth/_manifest.py
+new file mode 100644
+index 0000000..c4c2652
+--- /dev/null
++++ b/tools/synth/_manifest.py
+@@ -0,0 +1,169 @@
++"""Truth manifest and `.synth_root` marker of one generation run (U11-23 steps 6-7).
++
++Private sibling of `tools/synth_data.py` (T11-14 spec note), split off for its 250-line
++budget; imported only by `tools.synth_data`. `build_manifest` assembles `TruthManifest`
++from the catalog's plant targets, the plan's plant sequence numbers (the epic keys and
++Jira ids `plants_delivery` gives E2, E2d, E6p and E6u), the change schedule (T3 share of
++follow-ups with `caused_by`) and the run's sums (row counts, dirty counters, T4 noise
++ratio). Ids are the record ids the pipeline derives: teams
++`servicenow:sys_user_group:<sys_id>`, services and CIs `servicenow:cmdb_ci:<sys_id>`
++(impl 02 `core.service`, `core.ci`), epics `jira:issue:<id>`. `question_set_version` is
++the active one of `config/decisions.yaml`, read through `load_config(profile="synth")`.
++`write_marker` writes `<root>/.synth_root` (`{seed, scale, generator_version,
++params_hash}`), the proof `--overwrite` requires (TH11-07).
++"""
++
++import json
++import os
++from pathlib import Path
++from typing import Final
++
++from herness.core.config import load_config
++from herness.eval.truth import TruthManifest
++from tools.synth import GENERATOR_VERSION
++from tools.synth.catalog_plan import plant_range
++from tools.synth.catalog_rows import Catalog
++from tools.synth.params import SynthParams, params_hash
++from tools.synth.plants_delivery import T2C_FAMILY, epic_month, planned_counts_t2
++from tools.synth.plants_delivery_t6 import T6_DROP, e6_created, find_service, planned_counts_t6
++from tools.synth.shards import CONFIG_DIR, AggregateResult, require_under
++
++MARKER: Final = ".synth_root"
++# design §5.1.5 plant constants recorded in the truth (plants_ops applies the same values)
++T1_METRIC: Final = "mttr_hours"
++T1_LEVER: Final = "mttr"
++T1_MULTIPLIERS: Final = (2.0, 3.0)  # m(t) rises linearly from 2.0 to 3.0 over the span
++T3_PAIRS_FILE: Final = "t3_pairs.parquet"
++T2_MEMBERS_FILE: Final = "t2_members.parquet"
++T5_MULTIPLIER: Final = 2.8
++T6_METRIC: Final = "incident_count"
++
++
++def _team(sys_id: str) -> str:
++    return f"servicenow:sys_user_group:{sys_id}"
++
++
++def _ci(sys_id: str) -> str:
++    return f"servicenow:cmdb_ci:{sys_id}"
++
++
++def _epic(cat: Catalog, service_sys_id: str, seq: int) -> tuple[str, str]:
++    """(issue key, record id) of the plant epic numbered `seq` in the service's project,
++    as `plants_delivery_t6.epic_issue` builds them."""
++    service = find_service(cat, service_sys_id)
++    project = next(p for p in cat.projects if p.key == service.jira_project)
++    return f"{project.key}-{seq}", f"jira:issue:{project.id_base + seq}"
++
++
++def _caused_share(cat: Catalog) -> float:
++    flags = [flag for slot in cat.change_schedule for flag in slot.caused_by]
++    return sum(flags) / len(flags) if flags else 0.0
++
++
++def _delivery(cat: Catalog, params: SynthParams) -> dict[str, object]:
++    p = cat.plants
++    e2_seq, _ = plant_range(cat, planned_counts_t2, ("jira", "issue", epic_month(params)))
++    e6_month = e6_created(cat, params).date().replace(day=1)
++    e6_seq, _ = plant_range(cat, planned_counts_t6, ("jira", "issue", e6_month))
++    e2_key, e2_id = _epic(cat, p.s2, e2_seq)
++    decoy_key, _ = _epic(cat, p.e2d_service, e2_seq + 1)
++    sides: dict[str, dict[str, object]] = {}
++    for side, sys_id, seq, effect in (
++        ("paid", p.s6p, e6_seq, -T6_DROP),
++        ("unpaid", p.s6u, e6_seq + 1, 0.0),
++    ):
++        key, record_id = _epic(cat, sys_id, seq)
++        sides[side] = {"epic_key": key, "epic_record_id": record_id, "service_id": _ci(sys_id)}
++        sides[side] |= {"metric": T6_METRIC, "effect": effect}
++    return {
++        "T2_roi_epic": {
++            "epic_key": e2_key,
++            "epic_record_id": e2_id,
++            "service_id": _ci(p.s2),
++            "cluster_members_file": T2_MEMBERS_FILE,
++            "decoy_epic_key": decoy_key,
++        },
++        "T2c_cluster_fix": {
++            "service_id": _ci(p.s2c),
++            "cluster_members_file": T2_MEMBERS_FILE,
++            "template_id": T2C_FAMILY,
++        },
++        "T6_outcomes": {**sides, "effective_at": p.effective_at},
++    }
++
++
++def _operations(cat: Catalog, agg: AggregateResult) -> dict[str, object]:
++    p = cat.plants
++    team_name = next(t.name for t in cat.teams if t.sys_id == p.t1_team)
++    return {
++        "T1_bad_team": {
++            "team_id": _team(p.t1_team),
++            "team_name": team_name,
++            "service_ids": [_ci(s) for s in p.t1_services],
++            "metric": T1_METRIC,
++            "lever_usd_model": T1_LEVER,
++            "multiplier_start": T1_MULTIPLIERS[0],
++            "multiplier_end": T1_MULTIPLIERS[1],
++        },
++        "T3_change_cluster": {  # C3's changes and follow-ups go to S3's support team
++            "ci_id": _ci(p.c3),
++            "owning_team_id": _team(find_service(cat, p.s3).support_team_sys_id),
++            "pairs_file": T3_PAIRS_FILE,
++            "source_field_share": _caused_share(cat),
++        },
++        "T4_noisy_service": {
++            "service_id": _ci(p.s4),
++            "generated_noise_ratio": agg.generated_noise_ratio,
++        },
++        "T5_confounder": {
++            "team_id": _team(p.t5_team),
++            "service_id": _ci(p.s5),
++            "peak_window": list(p.peak_window),
++            "volume_multiplier": T5_MULTIPLIER,
++        },
++    }
++
++
++def _question_set_version(root: Path) -> str:
++    data = (root / "data").as_posix()
++    cfg = load_config("synth", overrides=(f"paths.data={data}",), config_dir=CONFIG_DIR)
++    return cfg.decisions.question_set_version
++
++
++def build_manifest(
++    seed: int, params: SynthParams, cat: Catalog, agg: AggregateResult, *, root: Path
++) -> TruthManifest:
++    """The truth manifest of a run into the resolved `root` (lake under `<root>/data`)."""
++    plants = _operations(cat, agg) | _delivery(cat, params)
++    return TruthManifest.model_validate(
++        {
++            "seed": seed,
++            "scale": params.scale,
++            "generator_version": GENERATOR_VERSION,
++            "params_hash": params_hash(params),
++            "start": params.start,
++            "end": params.end,
++            "question_set_version": _question_set_version(root),
++            "dataset_root": (root / "data").as_posix(),
++            "row_counts": dict(sorted(agg.row_counts.items())),
++            "dirty": agg.dirty.as_dict(),
++            "plants": {name: plants[name] for name in sorted(plants)},
++        }
++    )
++
++
++def write_marker(root: Path, manifest: TruthManifest) -> Path:
++    """`<root>/.synth_root`, written tmp-then-`os.replace` after the truth files."""
++    path = require_under(root, root / MARKER)
++    body: dict[str, object] = {"seed": manifest.seed, "scale": manifest.scale}
++    body |= {"generator_version": manifest.generator_version, "params_hash": manifest.params_hash}
++    tmp = path.with_name(f"{MARKER}.tmp")
++    try:
++        tmp.write_text(json.dumps(body, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
++        os.replace(tmp, path)
++    finally:
++        tmp.unlink(missing_ok=True)
++    return path
++
++
++__all__ = ["MARKER", "build_manifest", "write_marker"]
+diff --git a/tools/synth/shards.py b/tools/synth/shards.py
+index 5e754c9..6030a1c 100644
+--- a/tools/synth/shards.py
++++ b/tools/synth/shards.py
+@@ -226,22 +226,25 @@ def run_shard(shard: Shard, ctx: WorkerContext) -> ShardResult:
+ 
+ 
+ CONFIG_DIR: Final = Path(__file__).resolve().parents[2] / "config"
+ _STATE: dict[str, Any] = {}
+ 
+ 
+ def _init_worker(root: Path, seed: int, params: SynthParams, cat: Catalog) -> None:
+     """Pool initializer: config profile `synth` with `paths.data = <root>/data` (T10-03).
+-    A failure is kept for `_pool_task` to raise (a raising initializer makes the pool
+-    respawn workers forever)."""
++    Worker logs go to stderr at ERROR (the parent logs the same config warnings once; the
++    CLI's stdout carries only its JSON summary, T11-14). A failure is kept for
++    `_pool_task` to raise (a raising initializer makes the pool respawn workers forever)."""
+     try:
+         from herness.core.config import init_config  # noqa: PLC0415 - worker process only
++        from herness.core.logging import configure_logging  # noqa: PLC0415 - worker only
+         from herness.store.layout import data_layout  # noqa: PLC0415 - worker process only
+ 
++        configure_logging("ERROR")
+         data = (root / "data").as_posix()
+         cfg = init_config("synth", overrides=(f"paths.data={data}",), config_dir=CONFIG_DIR)
+         _STATE["ctx"] = worker_context(root, seed, params, cat, raw_root=data_layout(cfg=cfg).raw)
+     except Exception as exc:  # noqa: BLE001 - reported by _pool_task as FatalError
+         _STATE["error"] = type(exc).__name__
+ 
+ 
+ def _pool_task(shard: Shard) -> ShardResult:
+diff --git a/tools/synth/verify.py b/tools/synth/verify.py
+new file mode 100644
+index 0000000..fddc231
+--- /dev/null
++++ b/tools/synth/verify.py
+@@ -0,0 +1,212 @@
++"""`--verify` of a synthetic root: lake contract and truth counts, determinism hashes (U11-22).
++
++`verify_root` re-reads `<root>/data/raw` with an in-memory DuckDB whose file access is
++limited to that directory (`allowed_directories`, then `enable_external_access = false` and
++`lock_configuration = true`) and checks, per `source/entity`, the 8 metadata columns and
++their spec 02 §3.1 types, non-NULL key columns, `_record_id = _source:_entity:_source_key`,
++NULL `_payload` exactly on tombstones, and that no dot-prefixed file remains. Row counts
++must equal `truth.row_counts`; `duplicate_rows` (rows minus distinct `(_record_id,
++_source_updated_at, _payload)`), `later_versions` (distinct live versions minus distinct
++live record ids) and `tombstones`, recomputed from the lake, must equal `truth.dirty`.
++`content_hashes` is design §5.1.8's per-entity md5 (timestamps rendered in UTC).
++Problems name keys, columns and paths only, never a value (TH11-07). Read-only.
++"""
++
++import dataclasses
++import re
++from collections.abc import Iterator
++from contextlib import contextmanager
++from pathlib import Path
++from typing import Any, Final
++
++import duckdb
++
++from herness.core.errors import ConfigError
++from herness.eval.truth import load_truth
++
++__all__ = ["DIRTY_KEYS", "METADATA_TYPES", "VerifyReport", "content_hashes", "verify_root"]
++
++# spec 02 §3.1 required metadata columns and their DuckDB types; nullable only `_payload`
++METADATA_TYPES: Final = {
++    "_record_id": "VARCHAR",
++    "_source": "VARCHAR",
++    "_entity": "VARCHAR",
++    "_source_key": "VARCHAR",
++    "_source_updated_at": "TIMESTAMP WITH TIME ZONE",
++    "_fetched_at": "TIMESTAMP WITH TIME ZONE",
++    "_deleted": "BOOLEAN",
++    "_payload": "VARCHAR",
++}
++DIRTY_KEYS: Final = ("duplicate_rows", "later_versions", "tombstones")
++_NAME_RE: Final = re.compile(r"[a-z][a-z0-9_]*")
++_READ: Final = "read_parquet($glob, hive_partitioning = true, union_by_name = true)"
++_VERSION: Final = "(_record_id, _source_updated_at, _payload)"
++_CHECKS: Final = f"""
++SELECT
++    count(*) FILTER (WHERE _record_id IS NULL OR _source IS NULL OR _entity IS NULL
++        OR _source_key IS NULL OR _source_updated_at IS NULL OR _fetched_at IS NULL
++        OR _deleted IS NULL),
++    count(*) FILTER (WHERE _record_id <> _source || ':' || _entity || ':' || _source_key
++        OR _source <> $source OR _entity <> $entity),
++    count(*) FILTER (WHERE _deleted <> (_payload IS NULL)),
++    count(*) - count(DISTINCT {_VERSION}),
++    count(DISTINCT {_VERSION}) FILTER (WHERE NOT _deleted)
++        - count(DISTINCT _record_id) FILTER (WHERE NOT _deleted),
++    count(*) FILTER (WHERE _deleted)
++FROM {_READ}
++"""  # noqa: S608 - constant SQL; the glob and the names are bound parameters
++_CHECK_NAMES: Final = (
++    "NULL in a metadata key column",
++    "_record_id differs from _source:_entity:_source_key or the path",
++    "_payload NULL on a live row or set on a tombstone",
++)
++_HASH: Final = f"""
++SELECT md5(string_agg(v, ',' ORDER BY v)) FROM (
++    SELECT _record_id || CAST(_source_updated_at AS VARCHAR) || md5(coalesce(_payload, '')) AS v
++    FROM {_READ}
++)
++"""  # noqa: S608 - constant SQL; the glob is a bound parameter
++
++
++@dataclasses.dataclass(frozen=True, slots=True)
++class VerifyReport:
++    """Outcome of `verify_root`: `ok` when `problems` is empty; lake row counts per
++    `source/entity` and the recomputed `DIRTY_KEYS` counters."""
++
++    ok: bool
++    problems: tuple[str, ...]
++    row_counts: dict[str, int]
++    dirty: dict[str, int]
++
++
++def _raw(root: Path) -> Path:
++    return root.resolve(strict=False) / "data" / "raw"
++
++
++@contextmanager
++def _connect(raw: Path) -> Iterator[duckdb.DuckDBPyConnection]:
++    """In-memory DuckDB that can read files under `raw` only, configuration locked."""
++    con = duckdb.connect(
++        ":memory:",
++        config={"autoinstall_known_extensions": False, "autoload_known_extensions": False},
++    )
++    try:
++        con.execute("SET TimeZone = 'UTC'")
++        con.execute("SET allowed_directories = $dirs", {"dirs": [raw.as_posix() + "/"]})
++        con.execute("SET enable_external_access = false")
++        con.execute("SET lock_configuration = true")
++        yield con
++    finally:
++        con.close()
++
++
++def _entities(raw: Path) -> list[str]:
++    """`source/entity` keys of the lake directories (non-conforming names are skipped and
++    reported by `_dot_files` / the truth comparison)."""
++    if not raw.is_dir():
++        return []
++    return [
++        f"{s.name}/{e.name}"
++        for s in sorted(raw.iterdir())
++        if s.is_dir() and _NAME_RE.fullmatch(s.name)
++        for e in sorted(s.iterdir())
++        if e.is_dir() and _NAME_RE.fullmatch(e.name)
++    ]
++
++
++def _glob(raw: Path, key: str) -> str:
++    return f"{(raw / key).as_posix()}/**/[!.]*.parquet"
++
++
++def _dot_files(raw: Path) -> list[str]:
++    if not raw.is_dir():
++        return []
++    found = [p.relative_to(raw).as_posix() for p in sorted(raw.rglob(".*"))]
++    return [f"data/raw/{rel}: dot-prefixed file or directory remains" for rel in found]
++
++
++def _column_problems(con: duckdb.DuckDBPyConnection, raw: Path, key: str) -> list[str]:
++    sql = f"DESCRIBE SELECT * FROM {_READ}"  # noqa: S608 - constant SQL, bound glob
++    rows = con.execute(sql, {"glob": _glob(raw, key)}).fetchall()
++    types = {str(r[0]): str(r[1]) for r in rows}
++    out = []
++    for name, expected in METADATA_TYPES.items():
++        if name not in types:
++            out.append(f"{key}: metadata column {name} missing")
++        elif types[name] != expected:
++            out.append(f"{key}: metadata column {name} has type {types[name]}, not {expected}")
++    return out
++
++
++def _one(con: duckdb.DuckDBPyConnection, sql: str, params: dict[str, str]) -> tuple[Any, ...]:
++    """The single row of an aggregate query."""
++    row = con.execute(sql, params).fetchone()
++    return () if row is None else tuple(row)
++
++
++def _check_entity(
++    con: duckdb.DuckDBPyConnection, raw: Path, key: str, dirty: dict[str, int]
++) -> tuple[int, list[str]]:
++    """(rows, problems) of one entity; adds its recomputed dirty counters to `dirty`."""
++    params = {"glob": _glob(raw, key)}
++    try:
++        (rows,) = _one(con, f"SELECT count(*) FROM {_READ}", params)  # noqa: S608 - constant
++        problems = _column_problems(con, raw, key)
++        if problems:
++            return int(rows), problems
++        source, entity = key.split("/")
++        found = [int(v) for v in _one(con, _CHECKS, {**params, "source": source, "entity": entity})]
++    except duckdb.Error as exc:
++        return 0, [f"{key}: lake files unreadable ({type(exc).__name__})"]
++    checks = zip(found[:3], _CHECK_NAMES, strict=True)
++    problems = [f"{key}: {n} rows with {what}" for n, what in checks if n]
++    for name, value in zip(DIRTY_KEYS, found[3:], strict=True):
++        dirty[name] += value
++    return int(rows), problems
++
++
++def _truth_problems(
++    truth_rows: dict[str, int], truth_dirty: dict[str, int], report: VerifyReport
++) -> list[str]:
++    out = []
++    for key in sorted(set(truth_rows) | set(report.row_counts)):
++        lake, expected = report.row_counts.get(key, 0), truth_rows.get(key, 0)
++        if lake != expected:
++            out.append(f"{key}: {lake} rows in the lake, truth.row_counts says {expected}")
++    out += [
++        f"dirty.{name}: lake {report.dirty[name]}, truth {truth_dirty.get(name)}"
++        for name in DIRTY_KEYS
++        if report.dirty[name] != truth_dirty.get(name)
++    ]
++    return out
++
++
++def verify_root(root: Path) -> VerifyReport:
++    """Check the lake contract under `<root>/data/raw` and the counts in `<root>/truth`."""
++    raw = _raw(root)
++    problems = _dot_files(raw)
++    counts: dict[str, int] = {}
++    dirty = dict.fromkeys(DIRTY_KEYS, 0)
++    with _connect(raw) as con:
++        for key in _entities(raw):
++            counts[key], found = _check_entity(con, raw, key, dirty)
++            problems += found
++    lake = VerifyReport(ok=False, problems=(), row_counts=counts, dirty=dirty)
++    try:
++        truth = load_truth(root.resolve(strict=False) / "truth")
++    except ConfigError as exc:
++        problems.append(f"truth/truth.json: {exc.message}")
++    else:
++        problems += _truth_problems(truth.row_counts, truth.dirty, lake)
++    return VerifyReport(not problems, tuple(problems), counts, dirty)
++
++
++def content_hashes(root: Path) -> dict[str, str]:
++    """Per `source/entity`: `md5(string_agg(_record_id || _source_updated_at ||
++    md5(coalesce(_payload, '')) ORDER BY 1))` over the lake files (design §5.1.8)."""
++    raw = _raw(root)
++    with _connect(raw) as con:
++        out = {}
++        for key in _entities(raw):
++            out[key] = str(_one(con, _HASH, {"glob": _glob(raw, key)})[0])
++        return out
+diff --git a/tools/synth_data.py b/tools/synth_data.py
+new file mode 100644
+index 0000000..fd74d31
+--- /dev/null
++++ b/tools/synth_data.py
+@@ -0,0 +1,250 @@
++"""Synthetic lake generator: CLI and importable entry (U11-23, U11-24; design §3.1, F11-01).
++
++`uv run python tools/synth_data.py --seed INT --scale tiny|small|full|5m [options]`; the
++`pii-corpus` and `api-pages` forms parse here (bodies: T11-15). `generate` composes
++`tools.synth`. Exit codes (R-46): 0 success; 2 usage error found by argparse itself; 3
++`ConfigError` (`SynthUsageError`: bad argument value, params file or `--overwrite` without
++the `.synth_root` marker; `RootNotEmpty`); 1 anything else, `SchemaViolation` from
++`--verify` included. stdout carries one JSON summary line; output names keys and paths
++only (TH11-07).
++"""
++
++import argparse
++import dataclasses
++import json
++import os
++import shutil
++import sys
++from collections.abc import Callable, Sequence
++from datetime import date
++from pathlib import Path
++from typing import Final
++
++from herness.core import time as clock
++from herness.core.errors import ConfigError, HernessError, SchemaViolation
++from herness.core.logging import configure_logging, get_logger
++from herness.eval.truth import TruthManifest
++from tools.synth._manifest import MARKER, build_manifest, write_marker
++from tools.synth.catalog import build_catalog
++from tools.synth.inbox import write_service_costs
++from tools.synth.params import SOURCES, SynthUsageError, load_params, params_hash
++from tools.synth.pii import build_name_list
++from tools.synth.shards import plan_shards, run_all_shards
++from tools.synth.truth_writer import write_name_directory, write_synth_mappings, write_truth
++from tools.synth.verify import verify_root
++
++__all__ = ["MARKER", "RootNotEmpty", "generate", "main"]
++
++DEFAULT_START: Final = date(2023, 9, 1)
++DEFAULT_END: Final = date(2026, 8, 31)
++SUBCOMMANDS: Final = ("pii-corpus", "api-pages")
++_log = get_logger("synth")
++
++
++class RootNotEmpty(ConfigError):  # noqa: N818 - name fixed by U11-23
++    """The synthetic root is not empty and `--overwrite` was not given (exit 3, R-46)."""
++
++
++@dataclasses.dataclass(frozen=True, slots=True)
++class _Options:
++    """`generate` keyword overrides and their U11-23 defaults."""
++
++    start: date = DEFAULT_START
++    end: date = DEFAULT_END
++    sources: Sequence[str] = SOURCES
++    dirty: str = "default"
++    fetch_mode: str = "initial"
++    params_file: Path | None = None
++    workers: int = dataclasses.field(default_factory=lambda: os.cpu_count() or 1)
++    overwrite: bool = False
++    verify: bool = False
++
++
++def _usage(key: str, reason: str) -> SynthUsageError:
++    return SynthUsageError(f"{key}: {reason}", key=key)
++
++
++def _options(seed: int, overrides: dict[str, object]) -> _Options:
++    unknown = sorted(set(overrides) - {f.name for f in dataclasses.fields(_Options)})
++    if unknown:
++        raise _usage(unknown[0], "is not a generate() option")
++    opts = _Options(**overrides)  # type: ignore[arg-type]  # each value checked below
++    checks: tuple[tuple[str, object, int], ...] = (("seed", seed, 0), ("workers", opts.workers, 1))
++    for key, value, low in checks:
++        if type(value) is not int or value < low:
++            raise _usage(key, f"must be an integer of at least {low}")
++    return opts
++
++
++def _refuse(base: Path, error: ConfigError) -> ConfigError:
++    _log.warning("synth.generate.refused", root=base.as_posix(), reason=error.message)
++    return error
++
++
++def _prepare_root(root: Path, *, overwrite: bool) -> Path:
++    """F11-01 step 2: refuse a non-empty root unless `overwrite` and the marker of a
++    generated root are present; then delete its contents (links are unlinked, never
++    followed). Returns the resolved root, created if missing."""
++    base = root.resolve(strict=False)
++    if base.exists() and not base.is_dir():
++        raise _refuse(base, _usage("root", "is not a directory"))
++    if base.is_dir() and any(base.iterdir()):
++        if not overwrite:
++            msg = "the synthetic root is not empty; --overwrite replaces a generated root"
++            raise _refuse(base, RootNotEmpty(msg, key="root", path=base.as_posix()))
++        marker = base / MARKER
++        if marker.is_symlink() or not marker.is_file():
++            raise _refuse(
++                base, _usage("overwrite", f"needs the {MARKER} marker of a generated root")
++            )
++        for child in sorted(base.iterdir()):
++            if child.is_dir() and not child.is_symlink():
++                shutil.rmtree(child)
++            else:
++                child.unlink()
++    base.mkdir(parents=True, exist_ok=True)
++    return base
++
++
++def _verify(base: Path) -> None:
++    report = verify_root(base)
++    if not report.ok:
++        first, n = report.problems[0], len(report.problems)
++        _log.error("synth.verify.failed", root=base.as_posix(), n_problems=n, first_problem=first)
++        msg = f"the generated root failed --verify ({n} problems; first: {first})"
++        raise SchemaViolation(msg, root=base.as_posix(), n_problems=n)
++
++
++def generate(seed: int, scale: str, root: Path, **overrides: object) -> TruthManifest:
++    """Generate a complete synthetic root (design §3.1 layout plus `.synth_root`) and
++    return its truth manifest. On an error after the root check the root is left as is."""
++    started = clock.monotonic()
++    opts = _options(seed, overrides)
++    params = load_params(
++        scale,
++        start=opts.start,
++        end=opts.end,
++        sources=tuple(opts.sources),
++        dirty=opts.dirty,  # type: ignore[arg-type]  # validated by load_params
++        fetch_mode=opts.fetch_mode,  # type: ignore[arg-type]  # validated by load_params
++        params_file=opts.params_file,
++    )
++    base = _prepare_root(root, overwrite=opts.overwrite)
++    phash = params_hash(params)
++    cat = build_catalog(seed, params)
++    fields = {"seed": seed, "scale": params.scale, "params_hash": phash}
++    _log.info("synth.generate.started", root=base.as_posix(), workers=opts.workers, **fields)
++    plan = plan_shards(cat, params)
++    agg = run_all_shards(plan, cat, params, seed=seed, root=base, workers=opts.workers)
++    if "files" in params.sources:
++        write_service_costs(base, cat)
++    write_name_directory(base, build_name_list(seed))
++    write_synth_mappings(base, cat)
++    manifest = build_manifest(seed, params, cat, agg, root=base)
++    write_truth(base, manifest, parts_dir=agg.parts_dir)
++    write_marker(base, manifest)
++    if opts.verify:
++        _verify(base)
++    seconds = round(clock.monotonic() - started, 3)
++    _log.info("synth.generate.completed", rows_total=agg.rows_written, seconds=seconds, **fields)
++    return manifest
++
++
++# --- CLI ----------------------------------------------------------------------------------
++
++
++def _default_parser() -> argparse.ArgumentParser:
++    epilog = "Other forms: synth_data.py pii-corpus|api-pages --help"
++    parser = argparse.ArgumentParser(prog="synth_data.py", epilog=epilog)
++    parser.add_argument("--seed", required=True)
++    parser.add_argument("--scale", required=True, help="tiny, small, full or 5m (= full)")
++    parser.add_argument("--root", help="default data/synth/<seed>-<scale>/")
++    parser.add_argument("--start", default=DEFAULT_START.isoformat())
++    parser.add_argument("--end", default=DEFAULT_END.isoformat())
++    parser.add_argument("--sources", default=",".join(SOURCES))
++    parser.add_argument("--dirty", default="default", help="none, default or heavy")
++    parser.add_argument("--fetch-mode", default="initial", help="initial or daily")
++    parser.add_argument("--params", help="YAML file overriding generator parameters")
++    parser.add_argument("--workers", help="default os.cpu_count(); never changes content")
++    parser.add_argument("--overwrite", action="store_true")
++    parser.add_argument("--verify", action="store_true")
++    return parser
++
++
++def _sub_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(prog="synth_data.py")
++    sub = parser.add_subparsers(dest="command", required=True)
++    pii = sub.add_parser("pii-corpus", help="spec 10 redaction corpus (T11-15)")
++    pii.add_argument("--n", default="5000")
++    pages = sub.add_parser("api-pages", help="source-shaped JSON pages (T11-15)")
++    for form, names in ((pii, "seed out"), (pages, "seed source entity rows out")):
++        for name in names.split():
++            form.add_argument(f"--{name}", required=True)
++    return parser
++
++
++def _value[T](convert: Callable[[str], T], text: str, key: str) -> T:
++    """A command-line value converted, or `SynthUsageError` naming the option (exit 3)."""
++    try:
++        return convert(text)
++    except ValueError:
++        raise _usage(key, "has an invalid value") from None
++
++
++def _overrides(ns: argparse.Namespace) -> dict[str, object]:
++    out: dict[str, object] = {"start": _value(date.fromisoformat, ns.start, "start")}
++    out["end"] = _value(date.fromisoformat, ns.end, "end")
++    out["sources"] = tuple(s.strip() for s in ns.sources.split(",") if s.strip())
++    out |= {"dirty": ns.dirty, "fetch_mode": ns.fetch_mode, "overwrite": ns.overwrite}
++    out |= {"params_file": Path(ns.params) if ns.params else None, "verify": ns.verify}
++    if ns.workers is not None:
++        out["workers"] = _value(int, ns.workers, "workers")
++    return out
++
++
++def _run(ns: argparse.Namespace) -> int:
++    if getattr(ns, "command", None) is not None:
++        msg = f"command: {ns.command} is not implemented until T11-15"
++        raise SynthUsageError(msg, key="command")
++    started = clock.monotonic()
++    seed = _value(int, ns.seed, "seed")
++    normal = "full" if ns.scale == "5m" else ns.scale  # default root data/synth/<seed>-<scale>
++    root = Path(ns.root) if ns.root else Path("data", "synth", f"{seed}-{normal}")
++    manifest = generate(seed, ns.scale, root, **_overrides(ns))
++    summary: dict[str, object] = {"root": root.resolve(strict=False).as_posix()}
++    summary |= {"rows": sum(manifest.row_counts.values())}
++    summary |= {"seconds": round(clock.monotonic() - started, 3)}
++    summary |= {"params_hash": manifest.params_hash}
++    sys.stdout.write(json.dumps(summary) + "\n")
++    return 0
++
++
++def _failed(ns: argparse.Namespace | None, exc: Exception, code: int) -> int:
++    """Log `synth.generate.failed` and write a one-line reason (keys and paths only)."""
++    seed, scale = getattr(ns, "seed", None), getattr(ns, "scale", None)
++    kind = type(exc).__name__
++    _log.error("synth.generate.failed", seed=seed, scale=scale, error_type=kind, exit_code=code)
++    reason = exc.message if isinstance(exc, HernessError) else "unexpected error"
++    sys.stderr.write(f"synth_data: {kind}: {reason}\n")
++    return code
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    """CLI entry: run the parsed form and map the outcome to an R-46 exit code."""
++    configure_logging("INFO")
++    ns: argparse.Namespace | None = None
++    try:
++        args = list(sys.argv[1:] if argv is None else argv)
++        sub = bool(args) and args[0] in SUBCOMMANDS
++        ns = (_sub_parser() if sub else _default_parser()).parse_args(args)
++        return _run(ns)
++    except SystemExit as exc:  # argparse: usage error (2) or --help (0)
++        return exc.code if isinstance(exc.code, int) else 2
++    except ConfigError as exc:
++        return _failed(ns, exc, 3)
++    except Exception as exc:  # noqa: BLE001 - R-46: every other failure exits 1
++        return _failed(ns, exc, 1)
++
++
++if __name__ == "__main__":
++    sys.exit(main())
