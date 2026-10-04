@@ -73,7 +73,7 @@ def build_decider(  # noqa: PLR0913 - U03-69's keyword-only signature is binding
         client, version, max_concurrency = llm
         votes, temperature = getattr(settings.llm.votes, depth), settings.llm.temperature
         return cls(client, version=version, votes=votes, temperature=temperature,  # type: ignore[no-any-return]
-                   max_concurrency=max_concurrency)  # fmt: skip
+                   max_concurrency=max_concurrency, embed_fn=embed_fn)  # fmt: skip
     if backend is None:
         msg = f"decider {name} is not built by build_decider"
         raise ConfigError(msg)
@@ -82,8 +82,8 @@ def build_decider(  # noqa: PLR0913 - U03-69's keyword-only signature is binding
     if name == "openjev":
         key = secrets.resolve(ref) if secrets.exists(ref) else None
         tag = _image_tag(cfg.deploy.openjev.image)
-        return cls(backend, api_key=key, image_tag=tag, samples=samples)  # type: ignore[no-any-return]
+        return cls(backend, api_key=key, image_tag=tag, samples=samples, embed_fn=embed_fn)  # type: ignore[no-any-return]
     if not secrets.exists(ref):
         msg = "decider jev has no api key"
         raise AuthError(msg)
-    return cls(backend, api_key=secrets.resolve(ref), samples=samples)  # type: ignore[no-any-return]
+    return cls(backend, api_key=secrets.resolve(ref), samples=samples, embed_fn=embed_fn)  # type: ignore[no-any-return]

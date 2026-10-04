@@ -13,6 +13,7 @@ spec's 150k / 20k / 300k / 30k / 500.
 from __future__ import annotations
 
 import dataclasses
+import zlib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final, cast, overload
@@ -179,14 +180,12 @@ def _first_label(req: LLMRequest) -> dict[str, object]:
     return {qid: {"answer": spec["properties"]["answer"]["enum"][0]} for qid, spec in props.items()}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason="T03-21b: shortlist_options (U03-19) has no caller; a > 255-option dynamic question "
-    "reaches the deciders unshortlisted (all 1,000 options in the LLM schema) and the LLM "
-    "decider's Answer validation (distribution <= 255) fails at "
-    "herness/enrich/deciders/llm.py:184, aborting decide",
-)
+def _fake_embed(texts: Sequence[str]) -> np.ndarray:
+    """Deterministic unit vectors (seeded by the text hash): the OI-06 `embed_fn` stand-in."""
+    rows = [np.random.default_rng(zlib.crc32(t.encode())).standard_normal(1024) for t in texts]
+    return np.stack([_unit(r) for r in rows])
+
+
 def test_st03_11_llm_decider_asks_at_most_64_of_1000_dynamic_options(
     jev_env: ProcessState,
 ) -> None:
@@ -203,11 +202,9 @@ def test_st03_11_llm_decider_asks_at_most_64_of_1000_dynamic_options(
 
     client = FakeLLMClient(reply)
     decider = LlmDecider(client, version="local/qwen-test", votes=1, temperature=0.0,
-                         max_concurrency=1)  # fmt: skip
+                         max_concurrency=1, embed_fn=_fake_embed)  # fmt: skip
     item = DecisionInput(record_id="INC1", entity="incident", content_hash="1" * 32,
                          text="Team 7 cannot log in", question_ids=("owning_team",))  # fmt: skip
-    # the expected failure (ValidationError) comes from `decide` itself; every assertion runs
-    # after it, so an AssertionError can never stand in for it (it fails the xfail instead)
     [out] = decider.decide([item], QuestionSet(version=QSV, questions=(question,)))
     assert asked
     assert max(asked) <= 64, asked

@@ -38,7 +38,8 @@ from herness.core.types import (
     SystemBlock,
     TextPart,
 )
-from herness.enrich.deciders.openjev import ERRORS_METRIC, LATENCY_METRIC, _asked
+from herness.enrich.deciders._shortlist import EmbedFn, shortlist_asked
+from herness.enrich.deciders.openjev import ERRORS_METRIC, LATENCY_METRIC
 
 __all__ = ["CompletionClient", "LlmDecider", "load_prompt", "vote_distribution", "vote_schema"]
 __all__ += ["wrap_untrusted"]  # the R-20 wrapper, shared with cluster naming (T03-24)
@@ -53,8 +54,7 @@ _CALL_TIMEOUT_S: Final = 120.0  # per model call; LLMRequest requires one (spec 
 _MAX_OUTPUT_TOKENS: Final = 2_048  # a vote is ~ 15 tokens per question (≤ 64 questions)
 _HEALTH_TIMEOUT_S: Final = 30.0
 _HEALTH_PING: Final = "Reply with OK."
-# RequestMeta.run_id is a str: the null tracer's run id, as the eval judge uses (report).
-_NO_RUN: Final = "run_" + "0" * 26
+_NO_RUN: Final = "run_" + "0" * 26  # RequestMeta.run_id: the null tracer run id (eval judge)
 _BOOL_LABELS: Final = ("true", "false")
 _SCORE_LABELS: Final = ("0", "1", "2", "3")
 _PARAPHRASES: Final = 5
@@ -198,7 +198,7 @@ class LlmDecider:
 
     name = "llm"
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - embed_fn mirrors LayaDecider (OI-06)
         self,
         client: CompletionClient,
         *,
@@ -207,6 +207,7 @@ class LlmDecider:
         temperature: float,
         max_concurrency: int,
         prompt_path: Path = DEFAULT_PROMPT,
+        embed_fn: EmbedFn | None = None,
     ) -> None:
         if isinstance(votes, bool) or votes not in _VOTES:
             msg = "votes must be 1, 3 or 5"
@@ -222,7 +223,7 @@ class LlmDecider:
         self._client = client
         self._votes = votes
         self._temperature = temperature
-        self._max_concurrency = max_concurrency
+        self._max_concurrency, self._embed_fn = max_concurrency, embed_fn
         self._header, self._paraphrases = load_prompt(prompt_path)
 
     @property
@@ -243,7 +244,7 @@ class LlmDecider:
     async def _adecide(
         self, items: Sequence[DecisionInput], questions: QuestionSet
     ) -> list[DecisionOutput]:
-        asked = [_asked(item, questions) for item in items]
+        asked = shortlist_asked(items, questions, self._embed_fn)
         gate = asyncio.Semaphore(self._max_concurrency)
         try:
             async with asyncio.TaskGroup() as group:

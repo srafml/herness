@@ -21,6 +21,7 @@ from pydantic import SecretStr, TypeAdapter, ValidationError
 from herness.core import egress
 from herness.core.errors import ModelUnavailable, OutputValidationError
 from herness.core.types import Answer, DecisionInput, DecisionOutput, PolicyName, Question
+from herness.enrich.deciders._shortlist import EmbedFn
 from herness.enrich.deciders.jev_wire import AdaptiveLimiter, load_wire_body
 from herness.enrich.deciders.openjev import _JevHttpBackend, _listed_models, _Session
 from herness.enrich.settings import JevSettings
@@ -77,6 +78,7 @@ class JevHostedDecider(_JevHttpBackend):
         api_key: SecretStr,
         samples: int | None,
         client_factory: Callable[[], httpx2.Client] | None = None,
+        embed_fn: EmbedFn | None = None,
     ) -> None:
         super().__init__(
             model=settings.model,
@@ -84,6 +86,7 @@ class JevHostedDecider(_JevHttpBackend):
             api_key=api_key,
             samples=samples,
             client_factory=client_factory,
+            embed_fn=embed_fn,
         )
         self._settings = settings
         self._base = settings.base_url.rstrip("/")
