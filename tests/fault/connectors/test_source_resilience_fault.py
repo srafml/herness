@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import datetime
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +49,14 @@ from herness.core.resilience import ProcessState, breaker
 from herness.store.ops import get_watermark, read_all, set_watermark
 
 pytestmark = pytest.mark.fault
+
+
+@pytest.fixture(autouse=True)
+def _reset_config() -> Iterator[None]:
+    """Drop the loaded config after each test, also when it fails."""
+    yield
+    c.reset_config()
+
 
 UTC = datetime.UTC
 _FIELD = "updated"
@@ -145,7 +153,7 @@ def _jira_conn(handler: Callable[[httpx2.Request], httpx2.Response]) -> JiraConn
     )
 
 
-def test_ft01_05_401_on_the_first_page_is_an_auth_error_without_retry_and_opens_the_breaker(
+def test_ft01_05_401_is_an_auth_error_without_retry_and_force_open_opens_the_breaker(
     ops_store: OpsStoreHandle, reset_process_state: ProcessState
 ) -> None:
     """FT01-05 a 401 on the first page: `AuthError`, one request, no `retry` event, and the
@@ -246,4 +254,3 @@ def test_ft01_06_consecutive_503s_open_the_breaker_and_the_job_skips_the_source(
     third = run_job()
     assert (third.status, third.result["skipped_open_circuit"]) == ("done", ["servicenow"])
     assert len(fake.requests) + len(host.token_calls) == calls
-    c.reset_config()
