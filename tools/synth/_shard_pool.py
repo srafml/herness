@@ -33,7 +33,7 @@ def _context(
     root: Path, seed: int, params: SynthParams, cat: Catalog, *, cache: bool = False
 ) -> WorkerContext:
     """Config profile `synth` with `paths.data = <root>/data` (T10-03), then `worker_context`.
-    `cache` fills the process-wide config cache (`init_config`), which only a pool worker owns."""
+    `cache` fills the process-wide config cache with `init_config`, as a pool worker does."""
     from herness.core.config import init_config, load_config  # noqa: PLC0415 - off import path
     from herness.store.layout import data_layout  # noqa: PLC0415 - kept off the import path
 
@@ -75,16 +75,22 @@ def pool_task(shard: Shard) -> ShardResult:
 def run_in_process(
     phases: Sequence[Sequence[Shard]], out: AggregateResult, args: tuple[Any, ...]
 ) -> None:
-    """The one-worker plan without a pool: the same context and plan order as a worker, the
-    config cache left alone, logs at ERROR for the run (as in a worker), and the root logger
-    level restored after it. Failures are `FatalError` naming the shard, as from the pool."""
+    """The one-worker plan without a pool, initialised as a worker is: `init_config` for the
+    `synth` profile and logs at ERROR for the run. The process-wide state this touches (the
+    config cache, the root logger level) is restored in `finally`. Failures are `FatalError`
+    naming the shard, as from the pool."""
+    from herness.core import config as config_module  # noqa: PLC0415 - off import path
+
+    cache = config_module._Cache
+    saved = (cache.config, cache.root)
     root_logger = logging.getLogger()
     previous = root_logger.level
     root_logger.setLevel(logging.ERROR)
     try:
-        ctx = _context(*args)
+        ctx = _context(*args, cache=True)
         for phase in phases:
             for shard in phase:
                 out.add(_run_labelled(shard, ctx))
     finally:
         root_logger.setLevel(previous)
+        cache.config, cache.root = saved

@@ -226,7 +226,11 @@ def run_shard(shard: Shard, ctx: WorkerContext) -> ShardResult:
 
 
 CONFIG_DIR: Final = Path(__file__).resolve().parents[2] / "config"
-_ROWS_PER_WORKER: Final = 10_000  # a spawn worker costs ~1 s on Windows (T11-14b)
+# Planned background rows per spawn worker (T11-14b). Measured on a 32-core Windows host:
+# 23 workers for the 9,430 planned rows (11,361 written) of tiny cost 21 s, one in-process
+# run costs ~3.5 s; each worker adds ~0.8 s of serial start-up. A plan under this share
+# runs in the calling process.
+_ROWS_PER_WORKER: Final = 10_000
 
 
 def run_all_shards(
