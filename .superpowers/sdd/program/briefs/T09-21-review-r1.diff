@@ -1,0 +1,154 @@
+f819e18 test(cli): T09-21 fix round 1 — boundary tests for payload size, run_id precedence and budget grammar
+
+ tests/unit/cli/test_cli_payloads.py |  6 ++++++
+ tests/unit/cli/test_cli_wait.py     | 38 ++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/tests/unit/cli/test_cli_payloads.py b/tests/unit/cli/test_cli_payloads.py
+index 2cbc786..39a6f6b 100644
+--- a/tests/unit/cli/test_cli_payloads.py
++++ b/tests/unit/cli/test_cli_payloads.py
+@@ -52,16 +52,19 @@ def test_ut09_70_review_request_invalid_is_user_error() -> None:
+         p.review_request("funding_review", "huge", [])
+ 
+ 
+ @pytest.mark.parametrize(
+     ("text", "value"),
+     [
+         ("1", Decimal(1)),
+         ("1.00", Decimal(1)),
++        ("2.00", Decimal(2)),
++        ("2,000,000.00", Decimal(2_000_000)),
++        ("1_500_000", Decimal(1_500_000)),
+         ("2000000", Decimal(2_000_000)),
+         ("1,000,000,000,000", Decimal(10**12)),
+         ("1_000_000_000_000.00", Decimal(10**12)),
+     ],
+ )
+ def test_ut09_70_parse_budget_accepts(text: str, value: Decimal) -> None:
+     """UT09-70 digits with `_`/`,` separators and an optional `.00`; 1 to 10^12."""
+     parsed = p.parse_budget_usd(text)
+@@ -72,16 +75,19 @@ def test_ut09_70_parse_budget_accepts(text: str, value: Decimal) -> None:
+ 
+ @pytest.mark.parametrize(
+     "text",
+     [
+         "",
+         "0",
+         "0.00",
+         "1.5",
++        "1.50",
++        "2.5",
++        "2.01",
+         "1.000",
+         "-5",
+         " 5",
+         "5 ",
+         "abc",
+         "1,,000",
+         ",100",
+         "100_",
+diff --git a/tests/unit/cli/test_cli_wait.py b/tests/unit/cli/test_cli_wait.py
+index ea5b6b2..834b196 100644
+--- a/tests/unit/cli/test_cli_wait.py
++++ b/tests/unit/cli/test_cli_wait.py
+@@ -4,28 +4,29 @@ U09-103).
+ ``FakeJobs`` replaces the ``herness.core.jobs`` module reference of ``wait`` (enqueue, get,
+ worker_alive, run_inline); each job id maps to a script of ``JobRow`` states that ``get``
+ walks through, repeating the last one. Run and task reads of ``herness.store.ops`` are faked
+ the same way, and the poll sleep runs on ``fake_clock``.
+ """
+ 
+ from __future__ import annotations
+ 
++import json
+ from collections.abc import Callable
+ from pathlib import Path
+ from types import SimpleNamespace
+ from typing import Any
+ 
+ import pytest
+ from structlog.testing import capture_logs
+ from tests.support.fake_clock import FakeClock
+ 
+ import herness.enrich
+ from herness._cli import wait
+-from herness._cli.output import exit_code_for
++from herness._cli.output import exit_code_for, json_default
+ from herness.cli import GlobalOptions
+ from herness.core import errors as e
+ from herness.core.jobs import JobRow
+ from herness.core.types import JobOutcome
+ from herness.reports import rules
+ from herness.reports.rules import Actor, UserInputError
+ from herness.store import ops
+ 
+@@ -207,16 +208,31 @@ def test_ut09_67_circuit_key_and_run_id_sources(
+     install(FakeJobs(_row("done", payload={"request": {"run_id": RUN}})))
+     assert _follow().run_id == RUN
+     install(FakeJobs(_row("done", payload={"run_id": RUN})))
+     assert _follow().run_id == RUN
+     install(FakeJobs(_row("done", payload={"request": {"kind": "org_review"}, "run_id": 5})))
+     assert _follow().run_id is None
+ 
+ 
++def test_ut09_67_run_id_precedence(install: Callable[[FakeJobs], FakeJobs]) -> None:
++    """UT09-67 run_id: result wins over payload.request, which wins over payload.run_id."""
++    quiet = GlobalOptions(quiet=True, json=True)  # canceled sync rows: no store read, no output
++    payload = {"request": {"run_id": "run_request"}, "run_id": "run_payload"}
++    install(
++        FakeJobs(_row("canceled", kind="sync", result={"run_id": "run_result"}, payload=payload))
++    )
++    assert _follow(quiet).run_id == "run_result"
++    install(FakeJobs(_row("canceled", kind="sync", result={"partial": False}, payload=payload)))
++    assert _follow(quiet).run_id == "run_request"
++    only = {"request": {"kind": "org_review"}, "run_id": "run_payload"}
++    install(FakeJobs(_row("canceled", kind="sync", payload=only)))
++    assert _follow(quiet).run_id == "run_payload"
++
++
+ def test_ut09_67_progress_lines(
+     install: Callable[[FakeJobs], FakeJobs],
+     runs: dict[str, Any],
+     fake_clock: FakeClock,
+     capsys: pytest.CaptureFixture[str],
+ ) -> None:
+     """UT09-67 a progress line on stderr when status, attempts or task counts change."""
+     runs["counts"] = [[], [("analyst", "running", 2)], [("analyst", "running", 2)],
+@@ -410,16 +426,36 @@ def test_ut09_82_payload_enqueued_as_json(install: Callable[[FakeJobs], FakeJobs
+          "kind": "review"}
+     ]  # fmt: skip
+     wait.submit_job(GlobalOptions(), kind="eval", payload={}, gpu_class="none", priority=None)
+     assert fake.enqueued[-1][3] is None
+     edge = {"x": "y" * (65_536 - len('{"x":""}'))}
+     wait.submit_job(GlobalOptions(), kind="sync", payload=edge, gpu_class="none")  # exactly 64 KB
+ 
+ 
++def _sized(n_bytes: int) -> dict[str, object]:
++    """A payload whose JSON text (as submit_job serialises it) is exactly ``n_bytes`` long."""
++    payload: dict[str, object] = {"x": "y" * (n_bytes - len('{"x":""}'))}
++    text = json.dumps(payload, default=json_default, ensure_ascii=False, separators=(",", ":"))
++    assert len(text.encode("utf-8")) == n_bytes
++    return payload
++
++
++def test_ut09_82_payload_size_boundary(install: Callable[[FakeJobs], FakeJobs]) -> None:
++    """UT09-82 65,536 bytes of JSON is enqueued; 65,537 bytes raises before enqueue."""
++    fake = install(FakeJobs(_row()))
++    with pytest.raises(UserInputError, match="job payload too large"):
++        wait.submit_job(GlobalOptions(), kind="sync", payload=_sized(65_537), gpu_class="none")
++    assert fake.calls == []
++    at_limit = _sized(65_536)
++    assert wait.submit_job(GlobalOptions(), kind="sync", payload=at_limit, gpu_class="none") == JOB
++    assert fake.calls[0] == "enqueue"
++    assert fake.enqueued[0][1] == at_limit
++
++
+ def test_ut09_82_unserialisable_payload(install: Callable[[FakeJobs], FakeJobs]) -> None:
+     """UT09-82 a payload json_default cannot encode -> SchemaViolation, nothing enqueued."""
+     fake = install(FakeJobs(_row()))
+     with pytest.raises(e.SchemaViolation, match="not JSON serialisable"):
+         wait.submit_job(GlobalOptions(), kind="sync", payload={"x": object()}, gpu_class="none")
+     assert fake.calls == []
+ 
+ 

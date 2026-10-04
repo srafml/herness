@@ -1,0 +1,1092 @@
+dddf964 feat(cli): T09-21 job submission, following and payloads
+930e9ba wip(T09-21): widen RunRequest.scenarios (T06-21 carry-over)
+
+ herness/_cli/payloads.py                         |  84 ++++
+ herness/_cli/wait.py                             | 254 ++++++++++++
+ herness/harness/swarm/lifecycle.py               |   4 +-
+ tests/unit/cli/test_cli_payloads.py              | 121 ++++++
+ tests/unit/cli/test_cli_wait.py                  | 497 +++++++++++++++++++++++
+ tests/unit/harness/swarm/test_swarm_lifecycle.py |  21 +
+ 6 files changed, 979 insertions(+), 2 deletions(-)
+
+diff --git a/herness/_cli/payloads.py b/herness/_cli/payloads.py
+new file mode 100644
+index 0000000..84e441d
+--- /dev/null
++++ b/herness/_cli/payloads.py
+@@ -0,0 +1,84 @@
++"""Job payload builders of the long-running CLI commands (impl 09 U09-92).
++
++Pure functions: every payload is JSON-serialisable and holds no secret or record text. The
++sync, resume, eval and maintenance payloads belong to their owning specs (R-07, R-09).
++Payload keys follow the U09-92 table (DD-10 default).
++"""
++
++from __future__ import annotations
++
++import re
++from collections.abc import Sequence
++from decimal import Decimal
++from typing import Final, Literal
++
++from pydantic import ValidationError
++
++from herness.harness.swarm import RunRequest
++from herness.metrics.portfolio import Scenario
++from herness.reports.rules import UserInputError
++
++__all__ = ["STAGE_ORDER", "parse_budget_usd", "pipeline_payload", "review_request", "stages_from"]
++
++STAGE_ORDER: Final = ("build", "enrich", "score", "dq", "promote")
++
++_MAX_BUDGET_CHARS: Final = 32
++_BUDGET_RE: Final = re.compile(r"[0-9]+(?:[_,][0-9]+)*(?:\.00)?", re.ASCII)
++_MIN_BUDGET: Final = Decimal(1)
++_MAX_BUDGET: Final = Decimal(10**12)
++_BUDGET_MSG: Final = "Budget must be a whole number of US dollars from 1 to 1,000,000,000,000."
++_BUDGET_FIX: Final = "Use digits with optional `,` or `_` separators, for example 2,000,000."
++
++
++def _check_stage(stage: str) -> None:
++    if stage not in STAGE_ORDER:
++        msg = "unknown stage name"
++        raise UserInputError(msg, hint=f"Use one of: {', '.join(STAGE_ORDER)}.")
++
++
++def stages_from(stage: str) -> list[str]:
++    """``--from-stage S``: the suffix of ``STAGE_ORDER`` starting at ``S`` (U09-92)."""
++    _check_stage(stage)
++    return list(STAGE_ORDER[STAGE_ORDER.index(stage) :])
++
++
++def pipeline_payload(
++    stages: Sequence[str], build_id: str | None, **extra: object
++) -> dict[str, object]:
++    """``{"stages", "build_id", **extra}``; ``extra`` holds ``enrich_stage``, ``depth`` or
++    ``score_steps`` (U09-92). An unknown stage name raises UserInputError."""
++    for stage in stages:
++        _check_stage(stage)
++    return {"stages": list(stages), "build_id": build_id, **extra}
++
++
++def review_request(
++    kind: Literal["funding_review", "org_review"],
++    depth: str,
++    budgets_usd: Sequence[Decimal],
++    question: str | None = None,
++) -> dict[str, object]:
++    """``{"request": RunRequest(...)}`` in JSON form, one ``custom_<int>`` scenario per budget.
++
++    An invalid request (unknown depth, more than five budgets) raises UserInputError.
++    """
++    try:
++        scenarios = [Scenario(name=f"custom_{int(b)}", budget_usd=b) for b in budgets_usd]
++        fields = {"kind": kind, "depth": depth, "scenarios": scenarios, "question": question}
++        request = RunRequest.model_validate(fields)
++    except ValidationError:
++        msg = "invalid review request"
++        hint = "Use a known depth and at most five budgets."
++        raise UserInputError(msg, hint=hint) from None
++    return {"request": request.model_dump(mode="json")}
++
++
++def parse_budget_usd(text: str) -> Decimal:
++    """A whole-dollar budget: digits with optional ``_``/``,`` separators and an optional
++    ``.00``; 1 ≤ value ≤ 10^12, else UserInputError (U09-92). The input is never echoed."""
++    if len(text) > _MAX_BUDGET_CHARS or _BUDGET_RE.fullmatch(text) is None:
++        raise UserInputError(_BUDGET_MSG, hint=_BUDGET_FIX)
++    value = Decimal(text.removesuffix(".00").replace("_", "").replace(",", ""))
++    if not _MIN_BUDGET <= value <= _MAX_BUDGET:
++        raise UserInputError(_BUDGET_MSG, hint=_BUDGET_FIX)
++    return value
+diff --git a/herness/_cli/wait.py b/herness/_cli/wait.py
+new file mode 100644
+index 0000000..2f90ace
+--- /dev/null
++++ b/herness/_cli/wait.py
+@@ -0,0 +1,254 @@
++"""Enqueue, follow and inline-run jobs for the long-running CLI commands (impl 09 U09-90,
++U09-91, U09-103).
++
++Every line written here goes to stderr (progress, the worker warning, detach and failure
++notes), so stdout stays the command's own output (TH09-22). The impl 08 job functions are
++reached through the ``jobs`` module reference at call time. ``--inline`` is admin only
++(TH09-27, R-45).
++"""
++
++from __future__ import annotations
++
++import json
++import sys
++from collections.abc import Mapping
++from dataclasses import dataclass
++from datetime import datetime
++from typing import TYPE_CHECKING, Final, cast
++
++# T09-25: replace _clean with herness._cli.term.safe_terminal_text (U09-100) once term.py exists.
++from herness._cli.output import _clean, exit_code_for_class_name, json_default
++from herness.core import jobs
++from herness.core import time as clock
++from herness.core.errors import SchemaViolation, StoreBusy
++from herness.core.logging import get_logger
++from herness.reports.rules import UserInputError, require_role
++
++if TYPE_CHECKING:
++    from pydantic import JsonValue
++
++    from herness.cli import GlobalOptions
++    from herness.core.jobs import JobRow
++    from herness.core.types import GpuClass, JobKind
++    from herness.reports.rules import Actor
++
++__all__ = ["MAX_FOLLOW_S", "FollowOutcome", "follow_job", "run_job_inline", "submit_job"]
++
++MAX_FOLLOW_S: Final = 172_800  # 48 h bounded wait (ENG §2.5)
++MAX_PAYLOAD_BYTES: Final = 65_536  # spec 08 §4.1
++MAX_BUSY_POLLS: Final = 10
++_TERMINAL: Final = frozenset({"done", "failed", "canceled"})
++_NO_WORKER: Final = (
++    "Warning: No worker is running; the job is queued.\n"
++    "Fix: Start `herness worker` or the `herness-worker` task, or rerun with `--inline` (admin).\n"
++)
++_PARTIAL: Final = "Run `{run_id}` finished partial: some tasks did not finish."
++_CIRCUIT: Final = (
++    "The source circuit is open; this sync was skipped. The next scheduled run retries."
++)
++_MAX_FOLLOW_NOTE: Final = "Still running; detached. Follow with `herness jobs list`."
++
++_log = get_logger("cli")
++
++
++@dataclass(frozen=True)
++class FollowOutcome:
++    """How a followed or inline-run job ended (U09-91)."""
++
++    job: JobRow
++    exit_code: int
++    run_id: str | None
++    detached: bool
++    partial: bool
++    warnings: tuple[str, ...]
++
++
++def _say(text: str) -> None:
++    sys.stderr.write(_clean(text) + "\n")
++
++
++def _warn_no_worker(opts: GlobalOptions, job_id: str) -> None:
++    sys.stderr.write(_NO_WORKER)
++    opts.worker_warned = True
++    _log.warning("cli.worker.absent", job_id=job_id)
++
++
++def submit_job(  # noqa: PLR0913 - U09-90 keywords plus the options and the inline flag
++    opts: GlobalOptions,
++    *,
++    kind: JobKind,
++    payload: dict[str, object],
++    gpu_class: GpuClass,
++    priority: int | None = jobs.MANUAL_PRIORITY,
++    scheduled_for: datetime | None = None,
++    idem_key: str | None = None,
++    inline: bool = False,
++) -> str:
++    """Enqueue one job (U09-90); warn once on stderr when no worker runs, unless ``inline``.
++
++    A payload over 64 KB of JSON raises UserInputError before anything is enqueued.
++    """
++    try:
++        text = json.dumps(payload, default=json_default, ensure_ascii=False, separators=(",", ":"))
++    except (TypeError, ValueError):
++        msg = "job payload is not JSON serialisable"
++        raise SchemaViolation(msg) from None
++    if len(text.encode("utf-8")) > MAX_PAYLOAD_BYTES:
++        msg = "job payload too large"
++        raise UserInputError(msg, hint="Pass fewer or shorter options.")
++    body = cast("dict[str, JsonValue]", json.loads(text))
++    job_id = jobs.enqueue(kind, body, gpu_class, priority, scheduled_for, idem_key=idem_key)
++    _log.info("cli.job.enqueued", job_id=job_id, kind=kind)
++    if not inline and not jobs.worker_alive():
++        _warn_no_worker(opts, job_id)
++    return job_id
++
++
++def _run_id(job: JobRow) -> str | None:
++    """``result.run_id``, else ``payload.request.run_id`` or ``payload.run_id`` (U09-91)."""
++    request = job.payload.get("request")
++    found = [
++        (job.result or {}).get("run_id"),
++        request.get("run_id") if isinstance(request, Mapping) else None,
++        job.payload.get("run_id"),
++    ]
++    return next((value for value in found if isinstance(value, str)), None)
++
++
++def _run_partial(run_id: str | None) -> bool:
++    if run_id is None:
++        return False
++    from herness.store import ops  # noqa: PLC0415 - lazy: the store loads on first follow
++
++    run = ops.get_run(run_id)
++    return run is not None and run.status == "partial"
++
++
++def _failed(opts: GlobalOptions, job: JobRow) -> int:
++    error = job.last_error or {}
++    name = error.get("class")
++    name = name if isinstance(name, str) else "UnknownError"
++    key = error.get("key")
++    code = exit_code_for_class_name(name, key=key if isinstance(key, str) else None)
++    message = error.get("message")
++    if not opts.json:
++        text = message if isinstance(message, str) else ""
++        _say(f"Error: Job `{job.job_id}` failed ({name}): {text}")
++    return code
++
++
++def _terminal(opts: GlobalOptions, job: JobRow, run_id: str | None) -> FollowOutcome:
++    """U09-91 step 5: the R-46 exit code and warnings of a job in a final status."""
++    code, partial = 1, False
++    warnings: tuple[str, ...] = ()
++    result = job.result or {}
++    if job.status == "done":
++        code = 0
++        if result.get("partial") is True or _run_partial(run_id):
++            code, partial, warnings = 6, True, (_PARTIAL.format(run_id=run_id),)
++        elif result.get("outcome") == "skipped_open_circuit":
++            code, warnings = 4, (_CIRCUIT,)
++    elif job.status == "failed":
++        code = _failed(opts, job)
++    elif job.status == "canceled" and not opts.json:
++        _say(f"Error: Job `{job.job_id}` was canceled.")
++    return FollowOutcome(job, code, run_id, False, partial, warnings)
++
++
++@dataclass
++class _Follow:
++    """Per-follow state: the last job row, progress key and consecutive busy polls."""
++
++    opts: GlobalOptions
++    job_id: str
++    job: JobRow | None = None
++    run_id: str | None = None
++    shown: object = None
++    busy: int = 0
++
++    def poll(self) -> JobRow | None:
++        """One ``jobs.get`` (plus progress and worker check); None after a StoreBusy."""
++        try:
++            job = jobs.get(self.job_id)
++            self.run_id = _run_id(job)
++            self._progress(job)
++            if not self.opts.worker_warned and not jobs.worker_alive():
++                _warn_no_worker(self.opts, self.job_id)
++        except StoreBusy:
++            self.busy += 1
++            _log.warning("cli.job.poll_busy", job_id=self.job_id, failures=self.busy)
++            if self.busy >= MAX_BUSY_POLLS:
++                raise
++            return None
++        self.busy, self.job = 0, job
++        return job
++
++    def _progress(self, job: JobRow) -> None:
++        counts: list[tuple[str, str, int]] = []
++        if job.kind == "review" and self.run_id is not None:
++            from herness.store import ops  # noqa: PLC0415 - lazy: the store loads on first follow
++
++            counts = ops.ui_task_status_counts(self.run_id)
++        key = (job.status, job.attempts, tuple(counts))
++        if key == self.shown:
++            return
++        self.shown = key
++        if not self.opts.quiet:
++            line = f"Job `{job.job_id}`: {job.status} (attempt {job.attempts}/{job.max_attempts})"
++            tasks = ", ".join(f"{role} {status} {n}" for role, status, n in counts)
++            _say(line + (f"; tasks: {tasks}" if tasks else ""))
++
++
++def _detached(state: _Follow, job: JobRow, code: int, reason: str, note: str) -> FollowOutcome:
++    _say(note)
++    _log.info("cli.job.detached", job_id=state.job_id, reason=reason)
++    return FollowOutcome(job, code, state.run_id, True, False, ())
++
++
++def _loop(state: _Follow, poll_s: float) -> FollowOutcome:
++    start = clock.now()
++    while True:
++        job = state.poll()
++        if job is not None and job.status in _TERMINAL:
++            return _terminal(state.opts, job, state.run_id)
++        if state.job is not None and (clock.now() - start).total_seconds() >= MAX_FOLLOW_S:
++            return _detached(state, state.job, 0, "max_follow", _MAX_FOLLOW_NOTE)
++        clock.sleep(poll_s)
++
++
++def follow_job(opts: GlobalOptions, job_id: str, *, poll_s: float) -> FollowOutcome:
++    """``--wait``: poll the job until it ends, Ctrl+C (exit 130) or 48 h (exit 0), detached
++    in both latter cases; the job is never canceled (U09-91).
++
++    A failed or canceled job's message is printed in human mode; JSON callers build the error
++    envelope from ``outcome.job.last_error``. An interrupt before the first row is read
++    propagates to ``main`` (exit 130, U09-84).
++    """
++    state = _Follow(opts, job_id)
++    try:
++        return _loop(state, poll_s)
++    except KeyboardInterrupt:
++        if state.job is None:
++            raise
++        note = f"Detached; job `{job_id}` keeps running."
++        return _detached(state, state.job, 130, "interrupt", note)
++
++
++def run_job_inline(opts: GlobalOptions, actor: Actor, job_id: str) -> FollowOutcome:
++    """``--inline`` (admin only, R-45): run the queued job in this process (U09-103)."""
++    require_role(actor, "job_inline")
++    _log.info("cli.job.inline_started", job_id=job_id)
++    outcome = jobs.run_inline(job_id)
++    job = jobs.get(job_id)
++    if outcome.status == "yield":
++        _say(f"Interrupted; job `{job_id}` was released and stays queued.")
++        return FollowOutcome(job, 130, _run_id(job), True, False, ())
++    result = _terminal(opts, job, _run_id(job))
++    _log.info(
++        "cli.job.inline_completed",
++        job_id=job_id,
++        kind=job.kind,
++        status=job.status,
++        exit_code=result.exit_code,
++    )
++    return result
+diff --git a/herness/harness/swarm/lifecycle.py b/herness/harness/swarm/lifecycle.py
+index e3942d5..b096d77 100644
+--- a/herness/harness/swarm/lifecycle.py
++++ b/herness/harness/swarm/lifecycle.py
+@@ -23,16 +23,17 @@ from herness.core.config import config_hash
+ from herness.core.errors import BudgetExceeded, ConfigError, HernessError, NotFound
+ from herness.core.ids import IdKind, canonical_json, new_id, new_ulid, sha256_hex
+ from herness.core.jobs.tasks import claim_task, fail_task
+ from herness.core.logging import get_logger
+ from herness.core.types import Coverage, Depth, EntityScope, RunKind, TaskSpec
+ from herness.harness.findings import compute_dedup_key
+ from herness.harness.pipelines.settings import DepthKnobs, ReviewKind, resolve_knobs
+ from herness.harness.swarm.routing import default_tools, role_budget
++from herness.metrics.portfolio import Scenario
+ from herness.store.ops import (
+     RunRow,
+     insert_run,
+     insert_tasks,
+     run_write,
+     select_runs,
+     select_tasks,
+     set_run_status,
+@@ -78,18 +79,17 @@ class RunRequest(BaseModel):
+ 
+     model_config = ConfigDict(extra="forbid", strict=False)
+ 
+     kind: RunKind
+     depth: Depth = "standard"
+     profile: Literal["local", "hybrid", "premium", "synth"] | None = None
+     question: str | None = Field(default=None, max_length=2_000)
+     focus: EntityScope | None = None
+-    # T04-20: widens to list[Scenario | str] when herness.metrics.portfolio.Scenario lands.
+-    scenarios: list[_ScenarioName] = Field(default=[], max_length=5)
++    scenarios: list[Scenario | _ScenarioName] = Field(default=[], max_length=5)
+     build_id: str | None = Field(default=None, pattern=_BUILD_ID)
+     session_id: str | None = Field(default=None, max_length=64)
+     budget_override: dict[str, int] | None = None
+ 
+     @model_validator(mode="after")
+     def _chat_needs_question(self) -> Self:
+         if self.kind == "chat" and not self.question:
+             msg = "a chat request needs a question"
+diff --git a/tests/unit/cli/test_cli_payloads.py b/tests/unit/cli/test_cli_payloads.py
+new file mode 100644
+index 0000000..2cbc786
+--- /dev/null
++++ b/tests/unit/cli/test_cli_payloads.py
+@@ -0,0 +1,121 @@
++"""Tests for herness._cli.payloads: job payload builders and budget parsing (T09-21, U09-92)."""
++
++from __future__ import annotations
++
++import json
++from decimal import Decimal
++
++import pytest
++
++from herness._cli import payloads as p
++from herness.harness.swarm import RunRequest
++from herness.metrics.portfolio import Scenario
++from herness.reports.rules import UserInputError
++
++pytestmark = pytest.mark.unit
++
++
++def test_ut09_70_budgets_and_stage_suffix() -> None:
++    """UT09-70 budgets `2,000,000` and `1_500_000.00`, stage `dq` -> scenarios and stages."""
++    budgets = [p.parse_budget_usd("2,000,000"), p.parse_budget_usd("1_500_000.00")]
++    assert budgets == [Decimal(2_000_000), Decimal(1_500_000)]
++    payload = p.review_request("funding_review", "standard", budgets)
++    request = payload["request"]
++    assert isinstance(request, dict)
++    assert [s["name"] for s in request["scenarios"]] == ["custom_2000000", "custom_1500000"]
++    assert [s["budget_usd"] for s in request["scenarios"]] == ["2000000", "1500000"]
++    assert (request["kind"], request["depth"], request["question"]) == (
++        "funding_review",
++        "standard",
++        None,
++    )
++    assert json.loads(json.dumps(payload)) == payload  # JSON-serialisable as is
++    stages = p.stages_from("dq")
++    assert stages == ["dq", "promote"]
++    assert p.pipeline_payload(stages, None) == {"stages": ["dq", "promote"], "build_id": None}
++
++
++def test_ut09_70_review_request_round_trips_to_scenarios() -> None:
++    """UT09-70 the `request` payload validates back into a RunRequest with Scenario entries."""
++    payload = p.review_request("org_review", "deep", [Decimal(5)], question="Why?")
++    req = RunRequest.model_validate(payload["request"])
++    assert req.scenarios == [Scenario(name="custom_5", budget_usd=Decimal(5))]
++    assert (req.kind, req.depth, req.question) == ("org_review", "deep", "Why?")
++    assert p.review_request("org_review", "fast", [])["request"]["scenarios"] == []  # type: ignore[index]
++
++
++def test_ut09_70_review_request_invalid_is_user_error() -> None:
++    """UT09-70 more than five budgets or an unknown depth -> UserInputError."""
++    with pytest.raises(UserInputError, match="invalid review request"):
++        p.review_request("funding_review", "standard", [Decimal(n) for n in range(1, 7)])
++    with pytest.raises(UserInputError):
++        p.review_request("funding_review", "huge", [])
++
++
++@pytest.mark.parametrize(
++    ("text", "value"),
++    [
++        ("1", Decimal(1)),
++        ("1.00", Decimal(1)),
++        ("2000000", Decimal(2_000_000)),
++        ("1,000,000,000,000", Decimal(10**12)),
++        ("1_000_000_000_000.00", Decimal(10**12)),
++    ],
++)
++def test_ut09_70_parse_budget_accepts(text: str, value: Decimal) -> None:
++    """UT09-70 digits with `_`/`,` separators and an optional `.00`; 1 to 10^12."""
++    parsed = p.parse_budget_usd(text)
++    assert parsed == value
++    assert parsed == parsed.to_integral_value()
++    assert str(parsed) == str(int(value))
++
++
++@pytest.mark.parametrize(
++    "text",
++    [
++        "",
++        "0",
++        "0.00",
++        "1.5",
++        "1.000",
++        "-5",
++        " 5",
++        "5 ",
++        "abc",
++        "1,,000",
++        ",100",
++        "100_",
++        "1e6",
++        "1_000_000_000_001",
++        "9" * 40,
++    ],
++)
++def test_ut09_70_parse_budget_rejects(text: str) -> None:
++    """UT09-70 anything else (zero, fractions, signs, spaces, > 10^12) -> UserInputError."""
++    with pytest.raises(UserInputError, match="whole number of US dollars"):
++        p.parse_budget_usd(text)
++
++
++def test_ut09_70_pipeline_payload_keys_and_stages() -> None:
++    """UT09-70 DD-10 keys: stages, build_id plus enrich_stage / depth / score_steps."""
++    build = "20260925-101500-ABCDEF"
++    payload = p.pipeline_payload(("enrich",), build, enrich_stage="classify", depth="fast")
++    assert payload == {
++        "stages": ["enrich"],
++        "build_id": build,
++        "enrich_stage": "classify",
++        "depth": "fast",
++    }
++    scored = p.pipeline_payload(p.stages_from("score"), build, score_steps=["funding"])
++    assert scored["stages"] == ["score", "dq", "promote"]
++    assert scored["score_steps"] == ["funding"]
++    assert p.stages_from("build") == list(p.STAGE_ORDER)
++    assert p.STAGE_ORDER == ("build", "enrich", "score", "dq", "promote")
++
++
++def test_ut09_70_unknown_stage_is_user_error() -> None:
++    """UT09-70 an unknown stage name -> UserInputError, in either builder."""
++    with pytest.raises(UserInputError, match="unknown stage"):
++        p.stages_from("deploy")
++    with pytest.raises(UserInputError, match="unknown stage"):
++        p.pipeline_payload(["build", "deploy"], None)
+diff --git a/tests/unit/cli/test_cli_wait.py b/tests/unit/cli/test_cli_wait.py
+new file mode 100644
+index 0000000..ea5b6b2
+--- /dev/null
++++ b/tests/unit/cli/test_cli_wait.py
+@@ -0,0 +1,497 @@
++"""Tests for herness._cli.wait: submit, follow and inline-run jobs (T09-21, U09-90, U09-91,
++U09-103).
++
++``FakeJobs`` replaces the ``herness.core.jobs`` module reference of ``wait`` (enqueue, get,
++worker_alive, run_inline); each job id maps to a script of ``JobRow`` states that ``get``
++walks through, repeating the last one. Run and task reads of ``herness.store.ops`` are faked
++the same way, and the poll sleep runs on ``fake_clock``.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Callable
++from pathlib import Path
++from types import SimpleNamespace
++from typing import Any
++
++import pytest
++from structlog.testing import capture_logs
++from tests.support.fake_clock import FakeClock
++
++import herness.enrich
++from herness._cli import wait
++from herness._cli.output import exit_code_for
++from herness.cli import GlobalOptions
++from herness.core import errors as e
++from herness.core.jobs import JobRow
++from herness.core.types import JobOutcome
++from herness.reports import rules
++from herness.reports.rules import Actor, UserInputError
++from herness.store import ops
++
++pytestmark = pytest.mark.unit
++
++# freezegun's start() reads every attribute of every loaded module. herness.enrich (loaded by
++# herness.cli) is a lazy PEP 562 facade, so resolve its names before `fake_clock` freezes time:
++# resolving them while frozen imports LanceDB and pandas under freezegun, which stalls.
++for _name in dir(herness.enrich):
++    getattr(herness.enrich, _name)
++
++JOB = "job_01"
++RUN = "run_01"
++ADMIN = Actor(user_ref="a" * 32, role="admin", channel="cli", display="root")
++REVIEWER = Actor(user_ref="b" * 32, role="reviewer", channel="cli", display="rev")
++PARTIAL = f"Run `{RUN}` finished partial: some tasks did not finish."
++CIRCUIT = "The source circuit is open; this sync was skipped. The next scheduled run retries."
++DETACHED = f"Detached; job `{JOB}` keeps running."
++
++
++def _row(status: str = "queued", **kw: Any) -> JobRow:
++    values: dict[str, Any] = {
++        "job_id": JOB,
++        "kind": "review",
++        "gpu_class": "none",
++        "status": status,
++        "priority": 80,
++        "attempts": 0,
++        "max_attempts": 3,
++        "payload": {},
++    }
++    values.update(kw)
++    return JobRow(**values)
++
++
++class FakeJobs:
++    """In-test stand-in for the four ``herness.core.jobs`` functions ``wait`` calls."""
++
++    MANUAL_PRIORITY = 80
++
++    def __init__(self, *states: JobRow | BaseException, alive: bool = True) -> None:
++        self.states: list[JobRow | BaseException] = list(states)
++        self.alive = alive
++        self.calls: list[str] = []
++        self.enqueued: list[tuple[Any, ...]] = []
++        self.inline: JobOutcome | BaseException = JobOutcome(status="done")
++
++    def enqueue(self, *args: Any, **kw: Any) -> str:
++        self.calls.append("enqueue")
++        self.enqueued.append((*args, kw))
++        return JOB
++
++    def get(self, job_id: str) -> JobRow:
++        self.calls.append("get")
++        assert job_id == JOB
++        state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
++        if isinstance(state, BaseException):
++            raise state
++        return state
++
++    def worker_alive(self) -> bool:
++        self.calls.append("worker_alive")
++        return self.alive
++
++    def run_inline(self, job_id: str) -> JobOutcome:
++        self.calls.append("run_inline")
++        assert job_id == JOB
++        if isinstance(self.inline, BaseException):
++            raise self.inline
++        return self.inline
++
++
++@pytest.fixture
++def runs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
++    """Fake ``get_run`` / ``ui_task_status_counts``; the dict sets status and task counts."""
++    state: dict[str, Any] = {"status": "done", "counts": [], "reads": 0}
++
++    def get_run(run_id: str) -> object:
++        assert run_id == RUN
++        return SimpleNamespace(status=state["status"])
++
++    def counts(run_id: str) -> list[tuple[str, str, int]]:
++        assert run_id == RUN
++        state["reads"] += 1
++        return list(state["counts"].pop(0) if len(state["counts"]) > 1 else state["counts"][0])
++
++    state["counts"] = [[]]
++    monkeypatch.setattr(ops, "get_run", get_run)
++    monkeypatch.setattr(ops, "ui_task_status_counts", counts)
++    return state
++
++
++@pytest.fixture
++def install(monkeypatch: pytest.MonkeyPatch) -> Callable[[FakeJobs], FakeJobs]:
++    """Install a FakeJobs as the ``jobs`` module reference of ``wait``."""
++
++    def _install(fake: FakeJobs) -> FakeJobs:
++        monkeypatch.setattr(wait, "jobs", fake)
++        return fake
++
++    return _install
++
++
++def _follow(opts: GlobalOptions | None = None) -> wait.FollowOutcome:
++    return wait.follow_job(opts or GlobalOptions(), JOB, poll_s=2.0)
++
++
++# --- UT09-67 terminal statuses -----------------------------------------------------------------
++
++
++@pytest.mark.parametrize(
++    ("final", "run_status", "expected"),
++    [
++        (_row("done", result={"run_id": RUN}), "done", (0, False, ())),
++        (_row("done", result={"run_id": RUN, "partial": True}), "done", (6, True, (PARTIAL,))),
++        (_row("done", result={"run_id": RUN}), "partial", (6, True, (PARTIAL,))),
++        (_row("done", kind="sync", result={"outcome": "skipped_open_circuit"}), "",
++         (4, False, (CIRCUIT,))),
++        (_row("done", kind="sync", result={}), "", (0, False, ())),
++        (_row("done", kind="sync"), "", (0, False, ())),
++        (_row("failed", last_error={"class": "ModelUnavailable", "message": "m"}), "",
++         (9, False, ())),
++        (_row("failed", kind="build_pipeline", last_error={"class": "NoSuchError"}), "",
++         (1, False, ())),
++        (_row("canceled"), "", (1, False, ())),
++    ],
++)  # fmt: skip
++def test_ut09_67_terminal_exit_codes(
++    final: JobRow,
++    run_status: str,
++    expected: tuple[int, bool, tuple[str, ...]],
++    install: Callable[[FakeJobs], FakeJobs],
++    runs: dict[str, Any],
++    fake_clock: FakeClock,
++) -> None:
++    """UT09-67 done 0; partial (result or run status) 6; open circuit 4; failed by class 9/1;
++    canceled 1."""
++    runs["status"] = run_status
++    install(FakeJobs(_row(), _row("running", attempts=1), final))
++    start = fake_clock.now()
++    outcome = _follow(GlobalOptions(quiet=True))
++    assert (outcome.exit_code, outcome.partial, outcome.warnings) == expected
++    assert outcome.job == final
++    assert outcome.detached is False
++    assert outcome.run_id == (RUN if final.result and "run_id" in final.result else None)
++    assert (fake_clock.now() - start).total_seconds() == 4.0  # two polls slept poll_s each
++
++
++def test_ut09_67_failed_and_canceled_messages(
++    install: Callable[[FakeJobs], FakeJobs], capsys: pytest.CaptureFixture[str]
++) -> None:
++    """UT09-67 failed prints class and cleaned `last_error.message`; canceled its line."""
++    bad = {"class": "ModelUnavailable", "message": "model \x1b[31mdown\x07", "key": "x"}
++    install(FakeJobs(_row("failed", last_error=bad)))
++    assert _follow(GlobalOptions(quiet=True)).exit_code == 9
++    err = capsys.readouterr().err
++    assert err == f"Error: Job `{JOB}` failed (ModelUnavailable): model down\n"
++    install(FakeJobs(_row("failed", last_error=None)))
++    assert _follow(GlobalOptions(quiet=True)).exit_code == 1
++    assert "failed (UnknownError)" in capsys.readouterr().err
++    install(FakeJobs(_row("canceled")))
++    assert _follow(GlobalOptions(quiet=True)).exit_code == 1
++    assert capsys.readouterr().err == f"Error: Job `{JOB}` was canceled.\n"
++    install(FakeJobs(_row("canceled")))
++    assert _follow(GlobalOptions(json=True, quiet=True)).exit_code == 1
++    assert capsys.readouterr() == ("", "")  # JSON callers build the envelope from the job
++
++
++def test_ut09_67_circuit_key_and_run_id_sources(
++    install: Callable[[FakeJobs], FakeJobs], runs: dict[str, Any]
++) -> None:
++    """UT09-67 CircuitOpen uses `last_error.key`; run_id from result, request or payload."""
++    model = {"class": "CircuitOpen", "message": "m", "key": "model:reasoning"}
++    install(FakeJobs(_row("failed", last_error=model)))
++    assert _follow().exit_code == 9
++    source = {"class": "CircuitOpen", "message": "m", "key": "jira"}
++    install(FakeJobs(_row("failed", last_error=source)))
++    assert _follow().exit_code == 4
++    install(FakeJobs(_row("done", payload={"request": {"run_id": RUN}})))
++    assert _follow().run_id == RUN
++    install(FakeJobs(_row("done", payload={"run_id": RUN})))
++    assert _follow().run_id == RUN
++    install(FakeJobs(_row("done", payload={"request": {"kind": "org_review"}, "run_id": 5})))
++    assert _follow().run_id is None
++
++
++def test_ut09_67_progress_lines(
++    install: Callable[[FakeJobs], FakeJobs],
++    runs: dict[str, Any],
++    fake_clock: FakeClock,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """UT09-67 a progress line on stderr when status, attempts or task counts change."""
++    runs["counts"] = [[], [("analyst", "running", 2)], [("analyst", "running", 2)],
++                      [("analyst", "done", 2)]]  # fmt: skip
++    running = _row("running", attempts=1, result={"run_id": RUN})
++    install(FakeJobs(_row(), _row(), *[running] * 4, _row("done", result={})))
++    outcome = _follow()
++    assert outcome.exit_code == 0
++    out, err = capsys.readouterr()
++    assert out == ""
++    assert err.splitlines() == [
++        f"Job `{JOB}`: queued (attempt 0/3)",
++        f"Job `{JOB}`: running (attempt 1/3)",
++        f"Job `{JOB}`: running (attempt 1/3); tasks: analyst running 2",
++        f"Job `{JOB}`: running (attempt 1/3); tasks: analyst done 2",
++        f"Job `{JOB}`: done (attempt 0/3)",
++    ]
++    assert runs["reads"] == 4
++    install(FakeJobs(_row(), _row("running"), _row("done")))
++    assert _follow(GlobalOptions(quiet=True)).exit_code == 0
++    assert capsys.readouterr().err == ""
++
++
++def test_ut09_67_store_busy_retried_then_raised(
++    install: Callable[[FakeJobs], FakeJobs], fake_clock: FakeClock
++) -> None:
++    """UT09-67 StoreBusy during a poll is retried (WARNING); ten in a row raise it."""
++    busy = e.StoreBusy("busy")
++    install(FakeJobs(busy, busy, _row(), busy, _row("done")))
++    with capture_logs() as logs:
++        assert _follow(GlobalOptions(quiet=True)).exit_code == 0
++    warned = [x for x in logs if x["event"] == "cli.job.poll_busy"]
++    assert [x["failures"] for x in warned] == [1, 2, 1]
++    assert {x["log_level"] for x in warned} == {"warning"}
++    fake = install(FakeJobs(*[busy] * 10, _row("done")))
++    with pytest.raises(e.StoreBusy):
++        _follow(GlobalOptions(quiet=True))
++    assert fake.calls.count("get") == 10
++
++
++def test_ut09_67_detaches_after_max_follow(
++    install: Callable[[FakeJobs], FakeJobs],
++    fake_clock: FakeClock,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """UT09-67 after MAX_FOLLOW_S (48 h) follow detaches with exit 0 and never cancels."""
++    assert wait.MAX_FOLLOW_S == 172_800
++    start = fake_clock.now()
++    fake = install(FakeJobs(_row("running", attempts=1)))
++    with capture_logs() as logs:
++        outcome = wait.follow_job(GlobalOptions(quiet=True), JOB, poll_s=3600.0)
++    assert (outcome.exit_code, outcome.detached, outcome.partial) == (0, True, False)
++    assert outcome.job.status == "running"
++    assert (fake_clock.now() - start).total_seconds() == wait.MAX_FOLLOW_S
++    assert fake.calls.count("get") == 49
++    assert set(fake.calls) == {"get", "worker_alive"}
++    assert capsys.readouterr().err == "Still running; detached. Follow with `herness jobs list`.\n"
++    assert [x for x in logs if x["event"] == "cli.job.detached"] == [
++        {"event": "cli.job.detached", "log_level": "info", "component": "cli", "job_id": JOB,
++         "reason": "max_follow"}
++    ]  # fmt: skip
++
++
++# --- UT09-68 worker absent ---------------------------------------------------------------------
++
++
++def test_ut09_68_worker_absent_warned_once(
++    install: Callable[[FakeJobs], FakeJobs],
++    fake_clock: FakeClock,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """UT09-68 one warning naming `herness worker` and `--inline`; follow keeps polling."""
++    fake = install(FakeJobs(_row(), _row(), _row(), _row("done"), alive=False))
++    opts = GlobalOptions(quiet=True)
++    with capture_logs() as logs:
++        job_id = wait.submit_job(opts, kind="sync", payload={"source": "jira"}, gpu_class="none")
++        outcome = wait.follow_job(opts, job_id, poll_s=2.0)
++    assert outcome.exit_code == 0
++    assert opts.worker_warned is True
++    err = capsys.readouterr().err
++    assert err == (
++        "Warning: No worker is running; the job is queued.\n"
++        "Fix: Start `herness worker` or the `herness-worker` task, or rerun with `--inline`"
++        " (admin).\n"
++    )
++    assert fake.calls.count("get") == 4  # kept polling while no worker runs
++    absent = [x for x in logs if x["event"] == "cli.worker.absent"]
++    assert absent == [
++        {"event": "cli.worker.absent", "log_level": "warning", "component": "cli", "job_id": JOB}
++    ]
++
++
++def test_ut09_68_follow_warns_when_submit_did_not(
++    install: Callable[[FakeJobs], FakeJobs],
++    fake_clock: FakeClock,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """UT09-68 follow warns once when the worker is absent and no warning was printed yet."""
++    fake = install(FakeJobs(_row(), _row(), _row("done"), alive=False))
++    opts = GlobalOptions(quiet=True)
++    assert wait.follow_job(opts, JOB, poll_s=2.0).exit_code == 0
++    assert capsys.readouterr().err.count("No worker is running") == 1
++    assert opts.worker_warned is True
++    assert fake.calls.count("worker_alive") == 1  # not asked again once warned
++
++
++def test_ut09_68_inline_submit_skips_worker_check(
++    install: Callable[[FakeJobs], FakeJobs], capsys: pytest.CaptureFixture[str]
++) -> None:
++    """UT09-68 a job the caller runs inline is not checked for a worker."""
++    fake = install(FakeJobs(_row(), alive=False))
++    opts = GlobalOptions()
++    assert wait.submit_job(opts, kind="sync", payload={}, gpu_class="none", inline=True) == JOB
++    assert fake.calls == ["enqueue"]
++    assert (opts.worker_warned, capsys.readouterr().err) == (False, "")
++
++
++# --- UT09-69 Ctrl+C ----------------------------------------------------------------------------
++
++
++def test_ut09_69_interrupt_in_sleep_detaches(
++    install: Callable[[FakeJobs], FakeJobs],
++    monkeypatch: pytest.MonkeyPatch,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """UT09-69 KeyboardInterrupt during the poll sleep -> exit 130, detached, job untouched."""
++    fake = install(FakeJobs(_row("running", attempts=1)))
++
++    def interrupted(seconds: float) -> None:
++        raise KeyboardInterrupt
++
++    monkeypatch.setattr(wait.clock, "sleep", interrupted)
++    with capture_logs() as logs:
++        outcome = _follow(GlobalOptions(quiet=True))
++    assert (outcome.exit_code, outcome.detached, outcome.job.status) == (130, True, "running")
++    assert set(fake.calls) == {"get", "worker_alive"}  # nothing cancels or changes the job
++    assert capsys.readouterr().err == DETACHED + "\n"
++    assert [x["reason"] for x in logs if x["event"] == "cli.job.detached"] == ["interrupt"]
++
++
++def test_ut09_69_interrupt_in_poll_detaches(
++    install: Callable[[FakeJobs], FakeJobs],
++    fake_clock: FakeClock,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """UT09-69 KeyboardInterrupt from a later `jobs.get` -> exit 130 with the last job seen."""
++    install(FakeJobs(_row(), KeyboardInterrupt()))
++    outcome = _follow(GlobalOptions(quiet=True))
++    assert (outcome.exit_code, outcome.detached, outcome.job.status) == (130, True, "queued")
++    assert capsys.readouterr().err == DETACHED + "\n"
++
++
++def test_ut09_69_interrupt_before_first_poll_reaches_main(
++    install: Callable[[FakeJobs], FakeJobs],
++) -> None:
++    """UT09-69 an interrupt before any job row is read propagates; U09-84 maps it to 130."""
++    install(FakeJobs(KeyboardInterrupt()))
++    with pytest.raises(KeyboardInterrupt) as exc:
++        _follow()
++    assert exit_code_for(exc.value) == 130
++
++
++# --- UT09-82 payload size ----------------------------------------------------------------------
++
++
++def test_ut09_82_payload_too_large(install: Callable[[FakeJobs], FakeJobs]) -> None:
++    """UT09-82 a 70 KB payload -> UserInputError before enqueue is called."""
++    fake = install(FakeJobs(_row()))
++    with pytest.raises(UserInputError, match="job payload too large"):
++        wait.submit_job(GlobalOptions(), kind="sync", payload={"x": "y" * 70_000}, gpu_class="none")
++    assert fake.calls == []
++
++
++def test_ut09_82_payload_enqueued_as_json(install: Callable[[FakeJobs], FakeJobs]) -> None:
++    """UT09-82 a payload within 64 KB is enqueued in its JSON form with the manual priority."""
++    from decimal import Decimal  # noqa: PLC0415
++
++    fake = install(FakeJobs(_row()))
++    with capture_logs() as logs:
++        job_id = wait.submit_job(
++            GlobalOptions(), kind="review", payload={"b": Decimal(5), "p": Path("a/b")},
++            gpu_class="reasoning", idem_key="k1",
++        )  # fmt: skip
++    assert job_id == JOB
++    assert fake.enqueued == [
++        ("review", {"b": "5", "p": "a/b"}, "reasoning", 80, None, {"idem_key": "k1"})
++    ]
++    enq = [x for x in logs if x["event"] == "cli.job.enqueued"]
++    assert enq == [
++        {"event": "cli.job.enqueued", "log_level": "info", "component": "cli", "job_id": JOB,
++         "kind": "review"}
++    ]  # fmt: skip
++    wait.submit_job(GlobalOptions(), kind="eval", payload={}, gpu_class="none", priority=None)
++    assert fake.enqueued[-1][3] is None
++    edge = {"x": "y" * (65_536 - len('{"x":""}'))}
++    wait.submit_job(GlobalOptions(), kind="sync", payload=edge, gpu_class="none")  # exactly 64 KB
++
++
++def test_ut09_82_unserialisable_payload(install: Callable[[FakeJobs], FakeJobs]) -> None:
++    """UT09-82 a payload json_default cannot encode -> SchemaViolation, nothing enqueued."""
++    fake = install(FakeJobs(_row()))
++    with pytest.raises(e.SchemaViolation, match="not JSON serialisable"):
++        wait.submit_job(GlobalOptions(), kind="sync", payload={"x": object()}, gpu_class="none")
++    assert fake.calls == []
++
++
++# --- UT09-100 run_job_inline -------------------------------------------------------------------
++
++
++def test_ut09_100_reviewer_refused_before_any_call(
++    install: Callable[[FakeJobs], FakeJobs],
++    monkeypatch: pytest.MonkeyPatch,
++    tmp_path: Path,
++) -> None:
++    """UT09-100 a reviewer is refused by require_role before run_inline or get is called."""
++    monkeypatch.chdir(tmp_path)
++    audited: list[tuple[Any, ...]] = []
++    monkeypatch.setattr(rules, "audit", lambda *a, **k: audited.append((*a, k)))
++    fake = install(FakeJobs(_row("done")))
++    with pytest.raises(e.PermissionDenied) as exc:
++        wait.run_job_inline(GlobalOptions(), REVIEWER, JOB)
++    assert exc.value.details["action"] == "job_inline"
++    assert fake.calls == []
++    assert len(audited) == 1
++
++
++def test_ut09_100_admin_done_and_partial(
++    install: Callable[[FakeJobs], FakeJobs], runs: dict[str, Any]
++) -> None:
++    """UT09-100 admin: run_inline `done` -> the job's terminal mapping (0, or 6 partial)."""
++    fake = install(FakeJobs(_row("done", result={"run_id": RUN})))
++    with capture_logs() as logs:
++        outcome = wait.run_job_inline(GlobalOptions(), ADMIN, JOB)
++    assert (outcome.exit_code, outcome.detached, outcome.run_id) == (0, False, RUN)
++    assert fake.calls == ["run_inline", "get"]
++    events = [x for x in logs if x["event"].startswith("cli.job.inline")]
++    assert events == [
++        {"event": "cli.job.inline_started", "log_level": "info", "component": "cli",
++         "job_id": JOB},
++        {"event": "cli.job.inline_completed", "log_level": "info", "component": "cli",
++         "job_id": JOB, "kind": "review", "status": "done", "exit_code": 0},
++    ]  # fmt: skip
++    runs["status"] = "partial"
++    install(FakeJobs(_row("done", result={"run_id": RUN})))
++    outcome = wait.run_job_inline(GlobalOptions(), ADMIN, JOB)
++    assert (outcome.exit_code, outcome.partial, outcome.warnings) == (6, True, (PARTIAL,))
++
++
++def test_ut09_100_yield_detaches(
++    install: Callable[[FakeJobs], FakeJobs], capsys: pytest.CaptureFixture[str]
++) -> None:
++    """UT09-100 run_inline `yield` -> exit 130, detached, job released and queued."""
++    fake = install(FakeJobs(_row()))
++    fake.inline = JobOutcome(status="yield")
++    outcome = wait.run_job_inline(GlobalOptions(), ADMIN, JOB)
++    assert (outcome.exit_code, outcome.detached, outcome.job.status) == (130, True, "queued")
++    assert capsys.readouterr().err == (f"Interrupted; job `{JOB}` was released and stays queued.\n")
++
++
++def test_ut09_100_job_state_error_propagates(install: Callable[[FakeJobs], FakeJobs]) -> None:
++    """UT09-100 a JobStateError from run_inline propagates (U09-84 maps it to exit 1)."""
++    fake = install(FakeJobs(_row()))
++    fake.inline = e.JobStateError("job not claimable")
++    with pytest.raises(e.JobStateError) as exc:
++        wait.run_job_inline(GlobalOptions(), ADMIN, JOB)
++    assert exit_code_for(exc.value) == 1
++    assert fake.calls == ["run_inline"]
++
++
++def test_ut09_100_inline_failed_and_not_terminal(
++    install: Callable[[FakeJobs], FakeJobs], capsys: pytest.CaptureFixture[str]
++) -> None:
++    """UT09-100 inline `done` but the row failed -> class code; a non-terminal row -> 1."""
++    install(FakeJobs(_row("failed", last_error={"class": "StoreBusy", "message": "busy"})))
++    assert wait.run_job_inline(GlobalOptions(), ADMIN, JOB).exit_code == 8
++    install(FakeJobs(_row("running")))
++    assert wait.run_job_inline(GlobalOptions(), ADMIN, JOB).exit_code == 1
++    assert "failed (StoreBusy): busy" in capsys.readouterr().err
+diff --git a/tests/unit/harness/swarm/test_swarm_lifecycle.py b/tests/unit/harness/swarm/test_swarm_lifecycle.py
+index a5a9748..c7af8bb 100644
+--- a/tests/unit/harness/swarm/test_swarm_lifecycle.py
++++ b/tests/unit/harness/swarm/test_swarm_lifecycle.py
+@@ -31,16 +31,17 @@ from herness.harness.swarm.lifecycle import (
+     RunRequest,
+     RunResult,
+     create_run_record,
+     handle_budget_exhausted,
+     request_config_hash,
+     swarm_health,
+ )
+ from herness.harness.swarm.routing import default_tools, role_budget
++from herness.metrics.portfolio import Scenario
+ from herness.store.ops import (
+     RunRow,
+     find_run_by_job,
+     get_run,
+     get_task,
+     insert_run,
+     insert_tasks,
+     run_write,
+@@ -309,16 +310,36 @@ def test_ut06_55_hash_ignores_non_behavioural_fields(cfg: HernessConfig) -> None
+     req = RunRequest(kind="org_review")
+     base = request_config_hash(cfg, req, "local")
+     other = req.model_copy(update={"build_id": "20260101-000000-ABCDEF", "session_id": "s"})
+     assert request_config_hash(cfg, other, "local") == base
+     asked = req.model_copy(update={"question": "q"})
+     assert request_config_hash(cfg, asked, "local") != base
+ 
+ 
++def test_ut06_55_scenario_entry_round_trips_and_hashes(cfg: HernessConfig) -> None:
++    """UT06-55 a `Scenario` entry round-trips through JSON and changes the config hash."""
++    scenario = Scenario(name="custom_2000000", budget_usd=Decimal(2_000_000))
++    req = RunRequest(kind="funding_review", scenarios=[scenario, "base"])
++    dumped = req.model_dump(mode="json")
++    assert dumped["scenarios"][0]["name"] == "custom_2000000"
++    assert dumped["scenarios"][0]["budget_usd"] == "2000000"
++    assert dumped["scenarios"][1] == "base"
++    back = RunRequest.model_validate(dumped)
++    assert back.scenarios == [scenario, "base"]
++    assert RunRequest.model_validate_json(req.model_dump_json()).scenarios == [scenario, "base"]
++    base = request_config_hash(cfg, req.model_copy(update={"scenarios": ["base"]}), "local")
++    first = request_config_hash(cfg, req, "local")
++    assert first != base
++    assert request_config_hash(cfg, back, "local") == first
++    other = Scenario(name="custom_2000000", budget_usd=Decimal(1_000_000))
++    changed = req.model_copy(update={"scenarios": [other, "base"]})
++    assert request_config_hash(cfg, changed, "local") != first
++
++
+ # --- UT06-57 swarm_health ----------------------------------------------------------------------
+ 
+ 
+ def _run(status: str, *, age_h: float, kind: str = "funding_review", job: str | None = None) -> str:
+     run_id = new_id(IdKind.RUN)
+     row = RunRow(
+         run_id=run_id,
+         kind=kind,
