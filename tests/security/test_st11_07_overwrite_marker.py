@@ -47,20 +47,25 @@ def test_st11_07_overwrite_without_marker_exits_3_and_keeps_sentinel(
     assert _SENTINEL.strip() not in captured.err  # error output names paths and keys only
 
 
-def test_st11_07_marker_that_is_a_directory_or_link_is_not_a_marker(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", ["dir", "link"])
+def test_st11_07_marker_that_is_a_directory_or_link_is_not_a_marker(
+    tmp_path: Path, kind: str
+) -> None:
     """ST11-07 a `.synth_root` that is a directory or a symlink does not authorise deletion."""
     target = tmp_path / "elsewhere.json"
     target.write_text("{}", encoding="utf-8")
-    for kind in ("dir", "link"):
-        root = tmp_path / kind
-        root.mkdir()
-        (root / "sentinel.txt").write_text(_SENTINEL, encoding="utf-8")
-        marker = root / ".synth_root"
-        if kind == "dir":
-            marker.mkdir()
-        else:
+    root = tmp_path / kind
+    root.mkdir()
+    (root / "sentinel.txt").write_text(_SENTINEL, encoding="utf-8")
+    marker = root / ".synth_root"
+    if kind == "dir":
+        marker.mkdir()
+    else:
+        try:
             marker.symlink_to(target)
+        except OSError as exc:  # Windows without the symlink privilege (WinError 1314)
+            pytest.skip(f"platform denied symlink creation: {exc}")
 
-        assert main(_argv(root)) == 3
-        assert (root / "sentinel.txt").read_text(encoding="utf-8") == _SENTINEL
+    assert main(_argv(root)) == 3
+    assert (root / "sentinel.txt").read_text(encoding="utf-8") == _SENTINEL
     assert target.read_text(encoding="utf-8") == "{}"
