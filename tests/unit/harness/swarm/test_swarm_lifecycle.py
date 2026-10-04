@@ -36,6 +36,7 @@ from herness.harness.swarm.lifecycle import (
     swarm_health,
 )
 from herness.harness.swarm.routing import default_tools, role_budget
+from herness.metrics.portfolio import Scenario
 from herness.store.ops import (
     RunRow,
     find_run_by_job,
@@ -312,6 +313,26 @@ def test_ut06_55_hash_ignores_non_behavioural_fields(cfg: HernessConfig) -> None
     assert request_config_hash(cfg, other, "local") == base
     asked = req.model_copy(update={"question": "q"})
     assert request_config_hash(cfg, asked, "local") != base
+
+
+def test_ut06_55_scenario_entry_round_trips_and_hashes(cfg: HernessConfig) -> None:
+    """UT06-55 a `Scenario` entry round-trips through JSON and changes the config hash."""
+    scenario = Scenario(name="custom_2000000", budget_usd=Decimal(2_000_000))
+    req = RunRequest(kind="funding_review", scenarios=[scenario, "base"])
+    dumped = req.model_dump(mode="json")
+    assert dumped["scenarios"][0]["name"] == "custom_2000000"
+    assert dumped["scenarios"][0]["budget_usd"] == "2000000"
+    assert dumped["scenarios"][1] == "base"
+    back = RunRequest.model_validate(dumped)
+    assert back.scenarios == [scenario, "base"]
+    assert RunRequest.model_validate_json(req.model_dump_json()).scenarios == [scenario, "base"]
+    base = request_config_hash(cfg, req.model_copy(update={"scenarios": ["base"]}), "local")
+    first = request_config_hash(cfg, req, "local")
+    assert first != base
+    assert request_config_hash(cfg, back, "local") == first
+    other = Scenario(name="custom_2000000", budget_usd=Decimal(1_000_000))
+    changed = req.model_copy(update={"scenarios": [other, "base"]})
+    assert request_config_hash(cfg, changed, "local") != first
 
 
 # --- UT06-57 swarm_health ----------------------------------------------------------------------
