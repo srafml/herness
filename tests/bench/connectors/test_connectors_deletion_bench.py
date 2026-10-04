@@ -72,16 +72,6 @@ def _write_seconds(runner: SyncRunner, batches: list[pa.RecordBatch], rows: int)
     return seconds
 
 
-@pytest.mark.xfail(
-    strict=False,
-    raises=AssertionError,
-    reason=(
-        "BT01-02 open item: DeletionFilter.apply runs pc.is_in with a 100k-id value set per "
-        "10k-row batch (the hash set is rebuilt each call, ~12 ms) and reload() rebuilds the "
-        "array at each checkpoint; ~1.4-1.5x measured (1.3-1.7x over runs) vs the 1.05x target; "
-        "awaiting program ruling"
-    ),
-)
 def test_bt01_02_deletion_filter_overhead_is_at_most_five_percent(
     ops_store: OpsStoreHandle,
     reset_process_state: ProcessState,

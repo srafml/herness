@@ -37,6 +37,7 @@ from herness.core import config as c
 from herness.core import time as clock
 from herness.core.errors import AuthError, HernessError, SourceUnavailable
 from herness.core.resilience import ProcessState
+from herness.core.resilience._state import process_state, require_ops_backend
 from herness.store.ops import set_watermark
 
 pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("guard")]
@@ -111,6 +112,15 @@ def _isolate(
     c.reset_config()
 
 
+def _slice_errors_then_close_breaker() -> list[str]:
+    """The `last_error` of each slice; the 401 force-opens the source breaker (08 §9.2), so
+    close it again for the next phase."""
+    errors = [str(r["last_error"]) for r in slices(_SRC)]
+    require_ops_backend().health_reset([_SRC], NOW)
+    process_state().breakers.pop(_SRC, None)
+    return errors
+
+
 # --- ST01-03: no secret in logs, errors, results, lake or sync_slice --------------------------
 
 
@@ -141,12 +151,12 @@ def test_st01_03_sync_failing_with_401_and_500_leaks_no_secret(
         with pytest.raises(AuthError) as refused:
             runner.run_backfill(_ENT, *window)
         errors.append(refused.value)
-        last_errors += [str(r["last_error"]) for r in slices(_SRC)]
+        last_errors += _slice_errors_then_close_breaker()
         src.data = [500]
         with pytest.raises(SourceUnavailable) as down:
             runner.run_backfill(_ENT, *window)
         errors.append(down.value)
-        last_errors += [str(r["last_error"]) for r in slices(_SRC)]
+        last_errors += _slice_errors_then_close_breaker()
         src.data, src.token = [401], [401]
         with pytest.raises(AuthError) as token_refused:
             runner.run_incremental(_ENT)

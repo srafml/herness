@@ -10,7 +10,6 @@ from __future__ import annotations
 import threading
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
 from herness.core.errors import SchemaViolation
 from herness.store.ops.privacy import deleted_record_ids
@@ -30,12 +29,14 @@ class DeletionFilter:
         self._entity = entity
         self._lock = threading.Lock()
         self._ids: pa.StringArray | None = None
+        self._lookup: frozenset[str] = frozenset()  # hashed once per reload, probed per batch
 
     def reload(self) -> int:
         """Load the current deletion set and return its size."""
         ids = pa.array(deleted_record_ids(self._source, self._entity), type=pa.string())
+        lookup = frozenset(ids.to_pylist())  # `pc.is_in` would rehash the set on every batch
         with self._lock:
-            self._ids = ids
+            self._ids, self._lookup = ids, lookup
         return len(ids)
 
     def apply(self, batch: pa.RecordBatch) -> tuple[pa.RecordBatch, int]:
@@ -44,13 +45,13 @@ class DeletionFilter:
         Raises SchemaViolation when no `reload` has run yet.
         """
         with self._lock:
-            ids = self._ids
+            ids, lookup = self._ids, self._lookup
         if ids is None:
             msg = "deletion set not loaded"
             raise SchemaViolation(msg, source=self._source, entity=self._entity)
         if len(ids) == 0:
             return batch, 0
-        mask = pc.invert(pc.is_in(batch["_record_id"], value_set=ids))
+        mask = pa.array([rid not in lookup for rid in batch["_record_id"].to_pylist()], pa.bool_())
         filtered = batch.filter(mask)
         return filtered, batch.num_rows - filtered.num_rows
 

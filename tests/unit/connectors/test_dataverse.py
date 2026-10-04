@@ -74,6 +74,7 @@ def spy(monkeypatch: pytest.MonkeyPatch, reset_process_state: ProcessState) -> S
     breaker = SpyBreaker()
     monkeypatch.setattr(retry_module, "guard", lambda _key: None)
     monkeypatch.setattr(retry_module, "breaker", lambda _key: breaker)
+    monkeypatch.setattr("herness.connectors.http.breaker", lambda _key: breaker)
     return breaker
 
 

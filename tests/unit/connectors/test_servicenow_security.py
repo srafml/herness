@@ -36,6 +36,7 @@ from herness.connectors.settings import ServiceNowSettings
 from herness.core import config as c
 from herness.core.errors import AuthError, HernessError, SchemaViolation, SourceUnavailable
 from herness.core.resilience import ProcessState
+from herness.core.resilience._state import process_state, require_ops_backend
 from herness.store.ops import get_watermark, set_watermark
 
 pytestmark = pytest.mark.unit
@@ -43,6 +44,15 @@ pytestmark = pytest.mark.unit
 _SRC, _ENT = "servicenow", "incident"
 _INCIDENT = "/api/now/table/incident"
 _AUDIT = "/api/now/table/sys_audit_delete"
+
+
+def _slice_errors_then_close_breaker() -> list[str]:
+    """The `last_error` of each failed slice; the 401 force-opens the source breaker (08 §9.2),
+    so close it again for the next phase."""
+    errors = [str(r["last_error"]) for r in slices(_SRC) if r["last_error"]]
+    require_ops_backend().health_reset([_SRC], datetime.datetime.now(datetime.UTC))
+    process_state().breakers.pop(_SRC, None)
+    return errors
 
 
 @pytest.fixture
@@ -116,12 +126,12 @@ def test_st01_03_servicenow_sync_failing_with_401_and_500_leaks_no_secret(
         with pytest.raises(AuthError) as refused:
             runner.run_backfill(_ENT, *window)
         errors.append(refused.value)
-        last_errors += [str(r["last_error"]) for r in slices(_SRC) if r["last_error"]]
+        last_errors += _slice_errors_then_close_breaker()
         fake.fail[_INCIDENT] = 500
         with pytest.raises(SourceUnavailable) as down:
             runner.run_backfill(_ENT, *window)
         errors.append(down.value)
-        last_errors += [str(r["last_error"]) for r in slices(_SRC) if r["last_error"]]
+        last_errors += _slice_errors_then_close_breaker()
         host.token = [401]
         fake.fail[_INCIDENT] = 401
         clock.now += datetime.timedelta(hours=1)
@@ -189,6 +199,7 @@ def test_st01_02_servicenow_check_next_url_guards_the_connector_itself(
     spy = SpyBreaker()
     monkeypatch.setattr(retry_module, "guard", lambda _key: None)
     monkeypatch.setattr(retry_module, "breaker", lambda _key: spy)
+    monkeypatch.setattr("herness.connectors.http.breaker", lambda _key: spy)
     fake = FakeServiceNow.from_cassette("incident_table", link_next=True, next_host=FOREIGN_HOST)
     http = SourceHttp(mock_client(fake, base_url=env.BASE_URL), breaker_key=_SRC, auth=None)
     cfg = ServiceNowSettings.model_validate(

@@ -23,6 +23,7 @@ from herness.core import egress
 from herness.core import errors as e
 from herness.core import time as clock
 from herness.core.logging import get_logger
+from herness.core.resilience.breaker import breaker
 from herness.core.resilience.classify import classify, parse_retry_after
 from herness.core.resilience.faults import fault_point
 from herness.core.resilience.metrics import record_counter
@@ -229,10 +230,7 @@ class SourceHttp:
     ) -> JsonPage:
         """One GET page with retry; its status is 2xx or in ``allow_status``."""
         kw = self._kw(headers, params)
-        return retry_page(
-            lambda: self._once(lambda: self._client.stream("GET", url, **kw), allow_status),
-            source=self._key,
-        )
+        return self._page(lambda: self._client.stream("GET", url, **kw), allow_status)
 
     def post_json(
         self,
@@ -245,10 +243,10 @@ class SourceHttp:
     ) -> JsonPage:
         """One POST page with retry; its status is 2xx or in ``allow_status``."""
         kw = self._kw(headers, params) | {"json": json_body}
-        return retry_page(
-            lambda: self._once(lambda: self._client.stream("POST", url, **kw), allow_status),
-            source=self._key,
-        )
+        return self._page(lambda: self._client.stream("POST", url, **kw), allow_status)
+
+    def _page(self, send: _Send, allow: frozenset[int]) -> JsonPage:
+        return retry_page(lambda: self._once(send, allow), source=self._key)
 
     def post_form_lines(self, url: str, *, data: Mapping[str, str]) -> Iterator[dict[str, object]]:
         """Streamed form POST, one JSON object per non-empty line (Splunk export); retried until
@@ -279,8 +277,7 @@ class SourceHttp:
 
     def _kw(self, headers: Mapping[str, str] | None, params: object = None) -> dict[str, Any]:
         sent = httpx2.Headers({"User-Agent": _USER_AGENT, "Accept": "application/json"})
-        sent.update(headers or {})
-        return {"headers": sent, "params": params, "auth": self._auth}
+        return {"headers": sent | (headers or {}), "params": params, "auth": self._auth}
 
     def _check(self, response: httpx2.Response, allow: frozenset[int] = frozenset()) -> None:
         """Count the response; raise its mapped error unless its status is in ``allow``."""
@@ -289,6 +286,8 @@ class SourceHttp:
         record_counter(PAGES_METRIC, component="connectors", labels=labels)
         now = self._clock() if self._clock is not None else clock.now()
         if status not in allow and (err := map_http_error(response, now=now)) is not None:
+            if isinstance(err, e.AuthError):  # 08 §9.2: one request, no retry, source breaker open
+                breaker(self._key).force_open(err)
             raise err
 
     def _once(self, send: _Send, allow: frozenset[int]) -> JsonPage:

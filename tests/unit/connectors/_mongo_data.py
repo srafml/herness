@@ -88,7 +88,11 @@ def flaky_find(monkeypatch: pytest.MonkeyPatch, errors: dict[int, PyMongoError])
 class SpyBreaker:
     def __init__(self) -> None:
         self.failures: list[Exception] = []
+        self.forced: list[Exception] = []
         self.successes = 0
+
+    def force_open(self, err: Exception) -> None:
+        self.forced.append(err)
 
     def record_failure(self, err: Exception) -> None:
         self.failures.append(err)
