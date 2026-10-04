@@ -109,6 +109,7 @@ class Turn:
     escalation: tuple[str, str] | None = None
     lock: asyncio.Lock | None = None
     seen: set[str] = field(default_factory=set)
+    done: bool = False  # steps 5i-5j committed
 
 
 def render(text: str, numbers: Sequence[NumberRef]) -> str:
@@ -185,23 +186,25 @@ def finish(
     complete_task(t.task_id, result, writes=writes)
 
 
-def cleanup(env: TurnEnv, t: Turn, exc: HernessError | None) -> None:
-    """Step 6: `error` event (none when the consumer stopped), reply `failed`, run ended."""
+def cleanup(env: TurnEnv, t: Turn, exc: HernessError | None, *, crashed: bool = False) -> None:
+    """Step 6: `error` event (none when the consumer stopped or the worker crashed, whose
+    caller streams its own), reply `failed`, run `failed` (`canceled` on a stop), task dead."""
     if exc is not None:
         hint = exc.hint or ("Try again later." if isinstance(exc, RetryableError) else None)
         t.emit(ErrorEvent(error_type=type(exc).__name__, message=str(exc), hint=hint))
         _log.error("harness.chat.turn_failed", run_id=t.run_id or None,
                    error_type=type(exc).__name__)  # fmt: skip
-    else:
+    elif not crashed:
         _log.info("harness.chat.turn_stopped", run_id=t.run_id or None)
     try:
         update_chat_message(t.reply_id, status="failed")
         if t.run_id:
-            to, now = ("failed" if exc is not None else "canceled"), env.deps.clock()
+            to, now = ("failed" if exc or crashed else "canceled"), env.deps.clock()
             run_write(lambda conn: set_run_status(conn, t.run_id, to, _LIVE_RUN, now=now),
                       op="chat_end_run")  # fmt: skip
         if t.claimed:
-            err = exc if exc is not None else FatalError("chat turn stopped by its consumer")
+            why = "chat turn crashed" if crashed else "chat turn stopped by its consumer"
+            err = exc if exc is not None else FatalError(why)
             fail_task(t.task_id, err, max_task_attempts=1)
     except HernessError as err2:
         _log.warning("harness.chat.cleanup_failed", run_id=t.run_id or None,

@@ -10,10 +10,12 @@ user's question or the answer. Setup as in `tests/integration/harness/_chat_serv
 from __future__ import annotations
 
 import asyncio
+import queue
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, ClassVar
 
 import pytest
 import structlog
@@ -246,3 +248,39 @@ def test_st06_14_no_user_or_answer_text_in_logs(chat_env: Env) -> None:
         assert PLANTED not in line
         assert "handled" not in line
         assert "incidents?" not in line
+
+
+class _RecordingQueue(queue.Queue[Any]):
+    """`queue.Queue` that records its size and every `get` timeout."""
+
+    made: ClassVar[list[int]] = []
+    timeouts: ClassVar[list[float | None]] = []
+
+    def __init__(self, maxsize: int = 0) -> None:
+        super().__init__(maxsize)
+        self.made.append(maxsize)
+
+    def get(self, block: bool = True, timeout: float | None = None) -> Any:
+        self.timeouts.append(timeout)
+        return super().get(block, timeout)
+
+
+def test_st06_11_queue_bound_and_turn_timeout(
+    chat_env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST06-11 the event hand-off is bounded at 1,000 events and every wait for the next
+    event is `chat.budget.wall_clock_s + 30` seconds (U06-129 step 4, §9 constants)."""
+    env = chat_env
+    assert (chat_mod.QUEUE_MAX, chat_mod.QUEUE_GRACE_S) == (1000, 30)
+    fake = SimpleNamespace(Queue=_RecordingQueue, Empty=queue.Empty, Full=queue.Full)
+    monkeypatch.setattr(chat_mod, "queue", fake)
+    _RecordingQueue.made.clear()
+    _RecordingQueue.timeouts.clear()
+    env.script(LIVE, answer_script("Team One had [[n1]] incidents.", [ref("n1", 40)]))
+    env.ask()
+    events = env.turn("live")
+    assert types_of(events)[-1] == "final"
+    assert _RecordingQueue.made == [1000]
+    wall = env.cfg.pipelines.pipelines.chat.budget.wall_clock_s
+    assert _RecordingQueue.timeouts
+    assert set(_RecordingQueue.timeouts) == {wall + 30}

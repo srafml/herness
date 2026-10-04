@@ -116,7 +116,7 @@ Import direction inside `herness.harness` (an `import-linter` "layers" contract,
 
 | Rank | Modules |
 |------|---------|
-| 1 (top) | `herness.harness.pipelines.chat`, `herness.harness.pipelines.chat_support` |
+| 1 (top) | `herness.harness.pipelines.chat`, its private siblings `herness.harness.pipelines._chat_turn` and `herness.harness.pipelines._chat_rows` (T06-25), `herness.harness.pipelines.chat_support` |
 | 2 | `herness.harness.swarm` (all submodules) |
 | 3 | `herness.harness.pipelines.base`, `herness.harness.pipelines.funding_review`, `herness.harness.pipelines.org_review`, `herness.harness.pipelines.settings` |
 | 4 | `herness.harness.blackboard`, `herness.harness.findings`, `herness.harness.budget` |

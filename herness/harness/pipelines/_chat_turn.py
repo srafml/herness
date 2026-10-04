@@ -35,7 +35,9 @@ from herness.core.types import (
     EscalatedEvent,
     EvidenceEvent,
     FinalEvent,
+    ItemResult,
     MemoryRunContext,
+    NumberCheck,
     SqlLimits,
     TaskBudget,
     TokenEvent,
@@ -169,6 +171,7 @@ async def _answer(env: TurnEnv, t: Turn, started: float) -> TurnStatus:
     t.emit(VerificationEvent(result=v, status=status, removed_claims=removed))
     latency_ms = round((clock.monotonic() - started) * 1000)
     finish(env, t, answer, status, latency_ms, ledger)
+    t.done = True
     t.emit(FinalEvent(answer=answer, run_id=t.run_id))
     _log.info(
         "harness.chat.turn_completed",
@@ -316,9 +319,18 @@ async def _verify(
             answer = _answer_of(output, t)
             v = await _check(env, t, answer)
     if v is None:
+        # Nothing was verified: each cited number is `query_failed` (so `passed` is False
+        # whenever the answer cites one); `status` stays authoritative.
+        checks = [
+            NumberCheck(number_id=n.id, query_id=n.query_id, column=n.column, row_key=n.row_key,
+                        claimed=n.value, actual=None, result="query_failed")
+            for n in answer.numbers
+        ]  # fmt: skip
+        item = ItemResult(where="answer", passed=not checks, checks=checks, uncited=[],
+                          unknown_markers=[], bad_refs=[], unverified_findings=[])  # fmt: skip
         empty = VerificationResult(
-            build_id=t.build_id, passed=True, items=[], n_numbers=0, n_failed=0,
-            verified_at=env.deps.clock(), duration_ms=0,
+            build_id=t.build_id, passed=not checks, items=[item], n_numbers=len(checks),
+            n_failed=len(checks), verified_at=env.deps.clock(), duration_ms=0,
         )  # fmt: skip
         return answer, "unverified", empty, []
     if v.passed:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -44,6 +45,7 @@ from herness.core.types import (
     CorrectionCapturedEvent,
     ErrorEvent,
     EscalatedEvent,
+    EvidenceEvent,
     FinalEvent,
     ModeEvent,
     TextPart,
@@ -184,6 +186,9 @@ def test_it06_11_verifier_unavailable_is_unverified(chat_env: Env) -> None:
     events = env.turn("live")
     (verification,) = _of(events, VerificationEvent)
     assert verification.status == "unverified"
+    result = verification.result
+    assert (result.passed, result.n_numbers, result.n_failed) == (False, 1, 1)
+    assert [c.result for c in result.items[0].checks] == ["query_failed"]
     assert types_of(events)[-1] == "final"
     assert _reply(env, message_id)["verified"] == "unverified"
     assert env.memory.saved == []
@@ -299,15 +304,47 @@ def test_it06_34_job_run_twice_no_second_model_call(
     assert first.result["status"] == "verified"
 
 
-def test_it06_34_job_payload_and_session_errors(chat_env: Env) -> None:
-    """IT06-34 a payload without both ids → `ConfigError`; an unknown session → `NotFound`."""
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"session_id": "S"},
+        {"session_id": "S", "message_id": 7},
+        {"session_id": "S", "message_id": "msg_x", "extra": True},
+    ],
+    ids=["missing_id", "non_string_id", "extra_key"],
+)
+def test_it06_34_job_payload_must_be_two_ids(
+    chat_env: Env, monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]
+) -> None:
+    """IT06-34 U06-136 step 1: a payload other than exactly the two id strings →
+    `ConfigError` from the payload check, before any service is built."""
     env = chat_env
-    bad = queue.enqueue("chat", {"session_id": env.session_id}, "reasoning")
-    with pytest.raises(ConfigError):
-        chat_mod.chat_job_handler(_Ctx(bad))  # type: ignore[arg-type]
+
+    def no_service() -> chat_mod.ChatService:
+        msg = "service built before the payload check"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(chat_mod, "_service_from_config", no_service)
+    payload = {k: env.session_id if v == "S" else v for k, v in payload.items()}
+    job_id = queue.enqueue("chat", payload, "reasoning")
+    with pytest.raises(
+        ConfigError, match="chat job payload needs exactly session_id and message_id"
+    ):
+        chat_mod.chat_job_handler(_Ctx(job_id))  # type: ignore[arg-type]
+
+
+def test_it06_34_unknown_session_not_found(chat_env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """IT06-34 U06-136 step 2: an unknown session → `NotFound` before any service is built."""
+    del chat_env
+
+    def no_service() -> chat_mod.ChatService:
+        msg = "service built for an unknown session"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(chat_mod, "_service_from_config", no_service)
     unknown = "ses_" + "0" * 26
     gone = queue.enqueue("chat", {"session_id": unknown, "message_id": "msg_x"}, "reasoning")
-    with pytest.raises(NotFound):
+    with pytest.raises(NotFound, match="chat session not found"):
         chat_mod.chat_job_handler(_Ctx(gone))  # type: ignore[arg-type]
 
 
@@ -556,3 +593,61 @@ def test_it06_13_default_deps_cloud_rule_and_unbound_vectors(chat_env: Env) -> N
     assert hybrid.data_policy_allows_cloud("premium") is False
     with pytest.raises(NotFound):
         local.vectors.search_tickets([0.0], 1, entity=None, service_id=None)
+
+
+def test_it06_11_evidence_once_per_query_id_per_turn(chat_env: Env) -> None:
+    """IT06-11 U06-130 per turn: `run_sql` twice and `list_findings` all return Q1; each call
+    is one `tool` event but Q1 is one `evidence` event, shared by the trace observer and the
+    `ObservedTool` wrapper (one `seen` set per turn)."""
+    env = chat_env
+    found = SimpleNamespace(
+        finding_id="fnd_" + "0" * 26, status="verified", entity_type="team", entity_id="t1",
+        confidence=0.9, numbers=[], claim="Team One is busy", query_ids=[Q1],
+    )  # fmt: skip
+    nulls: dict[str, Any] = dict.fromkeys(
+        ("status", "entity_type", "entity_ids", "task_ids", "author_roles", "min_confidence",
+         "include_superseded", "limit"),
+    )  # fmt: skip
+    steps = [
+        ls.resp(calls=[call("run_sql", "c1", sql="SELECT 1")]),
+        ls.resp(calls=[call("list_findings", "c2", **nulls)]),
+        ls.resp(calls=[call("run_sql", "c3", sql="SELECT 2")]),
+        ls.resp("draft"),
+        final("Team One had [[n1]] incidents.", [ref("n1", 40)]),
+    ]
+    env.script(LIVE, steps)
+    env.ask()
+    events = env.turn("live", past_reader=lambda **_k: [found])
+    tools = _of(events, ToolEvent)
+    assert [(e.name, e.query_id) for e in tools] == [
+        ("run_sql", Q1), ("list_findings", Q1), ("run_sql", Q1),
+    ]  # fmt: skip
+    assert [e.query_id for e in events if isinstance(e, EvidenceEvent)] == [Q1]
+
+
+def test_it06_11_worker_crash_closes_rows(chat_env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """IT06-11 a non-`HernessError` crash inside the turn: one `InternalError` event, and the
+    step 6 cleanup still runs (reply `failed`, run `failed`, task dead, no lease left)."""
+    env = chat_env
+
+    def boom(session_id: str) -> Any:
+        del session_id
+        msg = "bug"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(env.memory, "session_load", boom)
+    message_id = env.ask()
+    with structlog.testing.capture_logs() as logs:
+        events = env.turn("live")
+    assert types_of(events) == ["mode", "error"]
+    assert events[-1] == ErrorEvent(
+        error_type="InternalError", message="chat turn failed", hint=None
+    )
+    assert _reply(env, message_id)["status"] == "failed"
+    (run,) = read_all("SELECT run_id, status FROM run", ())
+    assert run["status"] == "failed"
+    (task,) = select_tasks(run["run_id"])
+    assert task.status == "dead"
+    assert [e["error_type"] for e in logs if e["event"] == "harness.chat.turn_crashed"] == [
+        "RuntimeError"
+    ]

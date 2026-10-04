@@ -27,6 +27,7 @@ from herness.core.resilience import metrics as process_metrics
 from herness.core.types import ChatEvent, ChatMode, ErrorEvent, JobOutcome, ModeEvent
 from herness.harness.llm.registry import LLMRegistry
 from herness.harness.memory import MemoryStore, get_memory_store
+from herness.harness.pipelines._chat_rows import cleanup
 from herness.harness.pipelines._chat_turn import Turn, TurnEnv, run_turn
 from herness.harness.pipelines.chat_support import MODE_MESSAGES
 from herness.harness.swarm.escalation import JobsFacade
@@ -260,6 +261,8 @@ class ChatService:
         except Exception as exc:  # noqa: BLE001 - a bug must not leave the consumer waiting
             _log.error("harness.chat.turn_crashed", error_type=type(exc).__name__)
             turn.emit(ErrorEvent(error_type="InternalError", message="chat turn failed", hint=None))
+            if not turn.done:  # step 6 cleanup: no row, run or task lease left open
+                cleanup(self._env, turn, None, crashed=True)
         finally:
             turn.emit(None)
 
