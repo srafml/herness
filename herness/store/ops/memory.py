@@ -1,10 +1,11 @@
-"""Ops area ``memory`` (impl 07 U07-21 … U07-30, U07-35; owner 07, R-08).
+"""Ops area ``memory`` (impl 07 U07-21 … U07-30, U07-35, U07-101; owner 07, R-08).
 
 The only writer of ``memory_item`` (``memory_fts`` follows through the migration 004 triggers);
 read-only lookups on ``evidence``, ``finding`` and the task checkpoint. Conventions C1 … C7 of
 impl 07 §3.5: with ``conn`` a function joins the caller's ``run_write`` transaction, else it reads
 on this thread's connection or wraps its write in ``run_write(op=<function>)``; SQL is constant
-and bound. Row types and plumbing live in the private sibling ``_memory_rows``.
+and bound. Row types and plumbing live in the private sibling ``_memory_rows``, the purge steps in
+``_memory_purge``.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from herness.core.errors import SchemaViolation, ToolInputError
 from herness.core.ids import canonical_json
 
 from . import core
+from ._memory_purge import PurgeRows, purge_apply, purge_select, purge_selector
 from ._memory_rows import (
     CHECKED,
     COLUMNS,
@@ -71,29 +73,13 @@ from ._memory_rows import (
 )
 
 __all__ = [
-    "UNCHANGED",
-    "EvidenceRow",
-    "FindingFact",
-    "MemoryItemRow",
-    "Selector",
-    "Unchanged",
-    "count_proposals",
-    "entity_candidates",
-    "evidence_rows",
-    "existing_query_ids",
-    "find_memory_item",
-    "finding_facts",
-    "fts_candidates",
-    "fts_check_and_rebuild",
-    "get_memory_items",
-    "get_task_scratchpad",
-    "insert_memory_item",
-    "maintenance_rows",
-    "pending_embedding_count",
-    "session_memory_ids",
-    "touch_memory_items",
+    "UNCHANGED", "EvidenceRow", "FindingFact", "MemoryItemRow", "PurgeRows", "Selector",
+    "Unchanged", "count_proposals", "entity_candidates", "evidence_rows", "existing_query_ids",
+    "find_memory_item", "finding_facts", "fts_candidates", "fts_check_and_rebuild",
+    "get_memory_items", "get_task_scratchpad", "insert_memory_item", "maintenance_rows",
+    "pending_embedding_count", "purge_rows", "session_memory_ids", "touch_memory_items",
     "update_memory_item",
-]
+]  # fmt: skip
 
 _LIVE: Final = ("active", "pending_approval")
 
@@ -387,3 +373,15 @@ def session_memory_ids(session_id: str, *, conn: Conn = None) -> list[str]:
         msg = f"invalid id: {op}"
         raise ToolInputError(msg)
     return [str(r[0]) for r in query(SESSION_IDS, [session_id], conn, op)]
+
+
+def purge_rows(
+    *, record_id: str | None = None, author_ref: str | None = None, dry_run: bool = False,
+    conn: Conn = None,
+) -> PurgeRows:  # fmt: skip
+    """Delete the items citing ``record_id`` or authored by ``author_ref`` and scrub the
+    person from ``provenance_history``; ``dry_run`` only selects (U07-101, R-54, TH07-21)."""
+    op, selector = "purge_rows", purge_selector(record_id, author_ref)
+    if dry_run:
+        return purge_select(selector, conn, op)[0]
+    return write(lambda c: purge_apply(selector, c, op), conn, op)

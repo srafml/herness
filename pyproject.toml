@@ -496,6 +496,10 @@ ignore_imports = [
     # T07-03: private sibling of area `memory` (row types, SQL plumbing), kept apart for the
     # impl 07 §2 line budget of memory.py; no other module imports it.
     "herness.store.ops.memory -> herness.store.ops._memory_rows",
+    # T07-26: private sibling of area `memory` holding the purge_rows steps (U07-101), kept
+    # apart for the impl 07 §2 line budgets; only `memory` imports it, and it reads _memory_rows.
+    "herness.store.ops.memory -> herness.store.ops._memory_purge",
+    "herness.store.ops._memory_purge -> herness.store.ops._memory_rows",
     # T07-04: private sibling of area `closed_loop` (row types, constant SQL, plumbing), kept
     # apart for the impl 07 §2 line budget of closed_loop.py; no other module imports it.
     "herness.store.ops.closed_loop -> herness.store.ops._closed_loop_rows",
