@@ -283,6 +283,8 @@ include_external_packages = false
 name = "herness layers"
 type = "layers"
 layers = [
+    # impl 09 §2: the private CLI package sits above reports and eval (T09-20)
+    "herness._cli",
     "herness.eval | herness.reports",
     "herness.harness",
     "herness.metrics",
@@ -371,6 +373,7 @@ forbidden_modules = [
     "herness.harness",
     "herness.enrich",
     "herness.reports",
+    "herness._cli",
 ]
 
 [[tool.importlinter.contracts]]
@@ -542,6 +545,8 @@ type = "forbidden"
 # herness.core / herness.core.resilience module is listed (T08-23 review I-1).
 source_modules = ["herness.core.*.settings"]
 forbidden_modules = [
+    "herness._cli",
+    "herness.cli",
     "herness.connectors",
     "herness.enrich",
     "herness.eval",

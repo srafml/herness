@@ -83,6 +83,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/cli.py` | Typer root app, entry point, global options, error boundary, worker bootstrap, start-up validation call | `app`, `main`, `GlobalOptions`, `worker_bootstrap`, `run_startup_validation` | L5 | `typer` | 330 |
 | `herness/_cli/__init__.py` | Package marker | none | L5 | — | 5 |
 | `herness/_cli/output.py` | JSON envelope, Error/Fix printing, exit codes | `CliResult`, `CommandResult`, `emit`, `emit_error`, `json_default`, `EXIT_CODES`, `exit_code_for` | L5 | `rich` | 250 |
+| `herness/_cli/_exit_codes.py` | R-46 exit-code table and mapping, private sibling of `output.py`, which re-exports it (T09-20 review round 1) | `EXIT_CODES`, `exit_code_for`, `exit_code_for_class_name` | L5 | none | 120 |
 | `herness/_cli/identity.py` | CLI actor, command→role table, elevation check | `cli_actor`, `COMMAND_ROLES`, `DENIED_ALLOWED`, `WRITE_COMMANDS`, `ELEVATED_COMMANDS`, `check_command_role`, `guarded` | L5 | none | 220 |
 | `herness/_cli/term.py` | Terminal-safe text | `safe_terminal_text` | L5 | none | 60 |
 | `herness/_cli/wait.py` | Enqueue, follow and inline-run jobs | `submit_job`, `follow_job`, `FollowOutcome`, `run_job_inline` | L5 | `rich` | 300 |
