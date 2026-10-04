@@ -226,37 +226,11 @@ def run_shard(shard: Shard, ctx: WorkerContext) -> ShardResult:
 
 
 CONFIG_DIR: Final = Path(__file__).resolve().parents[2] / "config"
-_STATE: dict[str, Any] = {}
-
-
-def _init_worker(root: Path, seed: int, params: SynthParams, cat: Catalog) -> None:
-    """Pool initializer: config profile `synth` with `paths.data = <root>/data` (T10-03).
-    Worker logs go to stderr at ERROR (the parent logs the same config warnings once; the
-    CLI's stdout carries only its JSON summary, T11-14). A failure is kept for
-    `_pool_task` to raise (a raising initializer makes the pool respawn workers forever)."""
-    try:
-        from herness.core.config import init_config  # noqa: PLC0415 - worker process only
-        from herness.core.logging import configure_logging  # noqa: PLC0415 - worker only
-        from herness.store.layout import data_layout  # noqa: PLC0415 - worker process only
-
-        configure_logging("ERROR")
-        data = (root / "data").as_posix()
-        cfg = init_config("synth", overrides=(f"paths.data={data}",), config_dir=CONFIG_DIR)
-        _STATE["ctx"] = worker_context(root, seed, params, cat, raw_root=data_layout(cfg=cfg).raw)
-    except Exception as exc:  # noqa: BLE001 - reported by _pool_task as FatalError
-        _STATE["error"] = type(exc).__name__
-
-
-def _pool_task(shard: Shard) -> ShardResult:
-    ctx = _STATE.get("ctx")
-    if ctx is None:
-        msg = f"synth worker initialisation failed ({_STATE.get('error', 'unknown')})"
-        raise FatalError(msg, shard=label(shard))
-    try:
-        return run_shard(shard, ctx)
-    except Exception as exc:
-        msg = f"synth shard {label(shard)} failed"
-        raise FatalError(msg, shard=label(shard), cause=type(exc).__name__) from exc
+# Planned background rows per spawn worker (T11-14b). Measured on a 32-core Windows host:
+# 23 workers for the 9,430 planned rows (11,361 written) of tiny cost 21 s, one in-process
+# run costs ~3.5 s; each worker adds ~0.8 s of serial start-up. A plan under this share
+# runs in the calling process.
+_ROWS_PER_WORKER: Final = 10_000
 
 
 def run_all_shards(
@@ -268,9 +242,11 @@ def run_all_shards(
     root: Path,
     workers: int,
 ) -> AggregateResult:
-    """Run phase A (incident shards) then phase B (the rest) in a spawn pool of `workers`
-    processes and sum the results in plan order. A worker failure terminates the pool and
-    raises `FatalError` naming the shard; the root is left as is for inspection."""
+    """Run phase A (incident shards) then phase B (the rest) in a spawn pool of at most `workers`
+    processes (in this process when one worker fits the planned rows, T11-14b) and sum the
+    results in plan order. A worker failure terminates the pool and raises `FatalError` naming
+    the shard; the root is left as is for inspection."""
+    from tools.synth import _shard_pool as pool_run  # noqa: PLC0415 - generators import Shard
     from tools.synth.dirty import DirtyCounters  # noqa: PLC0415 - generators import Shard
 
     if workers < 1:
@@ -289,12 +265,16 @@ def run_all_shards(
         [s for s in shards if (s.source, s.entity) == incident],
         [s for s in shards if (s.source, s.entity) != incident],
     )
+    args = (base, seed, params, cat)
+    size = min(workers, len(shards), max(1, sum(s.n_records for s in shards) // _ROWS_PER_WORKER))
+    if size == 1:  # no pool: a worker's start-up costs more than the whole tiny plan
+        pool_run.run_in_process(phases, out, args)
+        return out
     spawn = multiprocessing.get_context("spawn")
-    size = min(workers, len(shards))
-    with spawn.Pool(size, initializer=_init_worker, initargs=(base, seed, params, cat)) as pool:
+    with spawn.Pool(size, initializer=pool_run.init_worker, initargs=args) as pool:
         try:
             for phase in phases:
-                for result in pool.imap(_pool_task, phase):
+                for result in pool.imap(pool_run.pool_task, phase):
                     out.add(result)
         except FatalError:
             pool.terminate()
