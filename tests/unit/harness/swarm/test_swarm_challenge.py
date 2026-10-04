@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Collection, Mapping, Sequence
 
 import pytest
@@ -150,12 +151,22 @@ def test_it06_10_unrelated_or_unmatched_tasks_are_skipped() -> None:
     assert out == challenge.CrosscheckOutcome([], disagree=False, incomplete=False)
 
 
-def test_it06_28_scheduler_dispatches_challenge_roles() -> None:
+def test_it06_28_scheduler_dispatches_challenge_roles(monkeypatch: pytest.MonkeyPatch) -> None:
     """IT06-28 the scheduler seam resolves skeptic and verifier tasks to `challenge` (imported
-    on first dispatch); other roles keep the generic path."""
-    scheduler._ROLE_EXECUTORS.clear()
+    on first dispatch); the verifier adapter forwards `(env, row)`; other roles keep the
+    generic path."""
+    monkeypatch.setattr(scheduler, "_ROLE_EXECUTORS", {})
+    seen: list[tuple[object, object]] = []
+
+    async def fake_verifier(env: object, row: object) -> None:
+        seen.append((env, row))
+
+    monkeypatch.setattr(challenge, "execute_verifier", fake_verifier)
     assert scheduler._executor("analyst") is None
     assert scheduler._executor("skeptic") is challenge.execute_skeptic
     verifier = scheduler._executor("verifier")
     assert verifier is not None
     assert verifier is scheduler._executor("verifier")
+    env, row, ledger = object(), object(), object()
+    asyncio.run(verifier(env, row, ledger))  # type: ignore[arg-type]
+    assert seen == [(env, row)]

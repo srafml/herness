@@ -44,13 +44,15 @@ from herness.core.types import (
     TaskInputs,
     TaskSpec,
     Usage,
+    VerificationRecord,
     VerificationResult,
 )
+from herness.harness.blackboard import Blackboard
 from herness.harness.findings import compute_dedup_key
 from herness.harness.roles import base
 from herness.harness.roles.base import get_role
 from herness.harness.swarm import challenge, hybrid, scheduler
-from herness.harness.swarm._challenge_gate1 import _StoreReader
+from herness.harness.swarm._challenge_gate1 import _StoreReader, _verifier_task
 from herness.harness.swarm.adversarial import build_skeptic_task
 from herness.harness.swarm.routing import default_tools
 from herness.harness.swarm.scheduler import PhaseOutcome, PhaseRunner
@@ -778,6 +780,35 @@ def test_it06_28_large_stage_and_stop(sched: Sched, monkeypatch: pytest.MonkeyPa
     sched.env.plan_ctx = None
     with pytest.raises(ConfigError):
         run(sched, challenge.run_challenge_rounds)
+
+
+def test_it06_29_reload_keeps_only_proposed(sched: Sched) -> None:
+    """IT06-29 a batch member that left `proposed` before its verifier task ran (verified
+    elsewhere, or rejected) is not re-verified: its gate-1 record and status are unchanged and
+    the summary counts it in the batch only (U06-114 step 1)."""
+    ids = _insert_findings(sched, 3)
+    v = setup(sched)
+    marker = VerificationRecord(
+        gate=1, result=_vresult(True).model_copy(update={"duration_ms": 99})
+    )
+    run_write(lambda conn: Blackboard.tx_mark_verified(conn, ids[0], marker), op="test_verify")
+    run_write(
+        lambda conn: Blackboard.tx_reject(conn, ids[1], "skeptic_reject", None, None),
+        op="test_reject",
+    )
+    base_it._insert(_verifier_task(sched.env, ids))
+    base_it._phase(sched, base_it.RecordingCaps(), frozenset({"verifier"}))
+    assert v.batches == [[ids[2]]]
+    [task] = select_tasks(sched.bb.run_id, roles={"verifier"})
+    assert task.result is not None
+    assert task.result["summary"] == "verified 1 of 3"
+    found = get_findings(ids)
+    assert found[ids[0]].status == "verified"
+    first = found[ids[0]].verification
+    assert first is not None
+    assert first.result.duration_ms == 99  # the earlier record, not a second gate-1 record
+    assert (found[ids[1]].status, found[ids[1]].verification) == ("rejected", None)
+    assert found[ids[2]].status == "verified"
 
 
 def test_it06_29_run_without_build_fails_the_batch(sched: Sched) -> None:

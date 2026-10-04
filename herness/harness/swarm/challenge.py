@@ -24,7 +24,7 @@ from pydantic import JsonValue, ValidationError
 from herness.core.errors import ConfigError, FatalError, HernessError
 from herness.core.ids import IdKind, new_id
 from herness.core.logging import get_logger
-from herness.core.types import Challenge, RejectReason, Role
+from herness.core.types import Challenge, RejectReason, Role, TaskSpec
 from herness.harness.blackboard import Blackboard
 from herness.harness.loop import run_agent
 from herness.harness.swarm import scheduler as sch
@@ -59,16 +59,14 @@ from herness.harness.swarm.routing import (
 from herness.harness.swarm.scheduler import PhaseOutcome
 from herness.harness.swarm.tools import build_task_tools
 from herness.store.ops import (
-    count_tasks,
     get_findings,
-    get_task,
     run_write,
     select_tasks,
     update_run_fields,
 )
 
 if TYPE_CHECKING:
-    from herness.core.types import AgentResult, Depth, Finding, TaskSpec, ToolContext
+    from herness.core.types import AgentResult, Depth, Finding, ToolContext
     from herness.harness.budget import RunBudget
     from herness.harness.loop import HarnessHooks
     from herness.harness.swarm.routing import Route, RunEnv
@@ -176,7 +174,7 @@ async def _skeptic(env: RunEnv, row: TaskRow, ledger: RunBudget) -> sch._Outcome
         update={"finding_id": fid, "round": spec.round, "skeptic_task_id": spec.task_id,
                 "votes": votes if len(chs) > 1 else None, "model": route.client_key}
     )  # fmt: skip
-    writes = await asyncio.to_thread(_verdict_writes, env, spec, target, final)
+    writes = _verdict_writes(env, spec, target, final)
     result = map_agent_result(s.runs[-1], extra={"verdict": verdict, "votes": votes})
     result["tokens"] = {
         key: sum(cast("dict[str, int]", map_agent_result(r)["tokens"])[key] for r in s.runs)
@@ -210,19 +208,31 @@ async def _skeptic_input(
     return pack, pseudo
 
 
+_COUNT_SQL: Final = "SELECT count(*) FROM task WHERE run_id = ? AND role IN ('analyst', 'skeptic')"
+_SPEC_SQL: Final = "SELECT spec FROM task WHERE task_id = ?"
+
+
+def _revision(
+    conn: sqlite3.Connection, env: RunEnv, spec: TaskSpec, target: Finding, final: Challenge
+) -> TaskSpec | None:
+    """The revision task, or None at the task cap or without the author's task row; read on
+    the completing transaction's connection (U06-108 step 5)."""
+    used = int(conn.execute(_COUNT_SQL, (spec.run_id,)).fetchone()[0])
+    author = conn.execute(_SPEC_SQL, (target.task_id,)).fetchone()
+    if used >= env.knobs.max_tasks_per_run or author is None:
+        return None
+    return build_revision_task(
+        target, final, skeptic=spec, author=TaskSpec.model_validate_json(author[0]),
+        knobs=env.knobs, new_task_id=_new_task_id,
+    )  # fmt: skip
+
+
 def _verdict_writes(env: RunEnv, spec: TaskSpec, target: Finding, final: Challenge) -> Writes:
     """The challenge append or rejection (and revision task) for `final` (U06-108 step 5)."""
-    fid, now, revision = target.finding_id, env.clock(), None
-    if final.verdict == "revise":
-        used = count_tasks(spec.run_id, roles={"analyst", "skeptic"})
-        author = get_task(target.task_id)
-        if used < env.knobs.max_tasks_per_run and author is not None:
-            revision = build_revision_task(
-                target, final, skeptic=spec, author=author.spec, knobs=env.knobs,
-                new_task_id=_new_task_id,
-            )  # fmt: skip
+    fid, now = target.finding_id, env.clock()
 
     def writes(conn: sqlite3.Connection) -> None:
+        revision = _revision(conn, env, spec, target, final) if final.verdict == "revise" else None
         if final.verdict == "uphold" or revision is not None:
             Blackboard.tx_challenge(conn, fid, final, revision, now)
         else:
