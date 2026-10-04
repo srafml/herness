@@ -19,7 +19,7 @@ import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import pytest
 from tests.support import planner_env as pe
@@ -115,14 +115,20 @@ def test_it06_26_best_of_three_with_judge(planning: tuple[Any, str]) -> None:
     assert client.roles == {"planner": 6, "judge": 10}
 
 
-def _child(args: list[str]) -> subprocess.Popen[str]:
+def _child(args: list[str], stderr: IO[str]) -> subprocess.Popen[str]:
+    """The child with stderr in a file, so a full pipe can never block it (only stdout is
+    read while it runs)."""
     env = dict(os.environ)
     env.pop("HERNESS_FAULTS", None)
     return subprocess.Popen(  # noqa: S603 - fixed argv of the test's own child module
         [sys.executable, "-m", "tests.support.planner_kill", *args],
-        cwd=pe.ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=pe.ROOT, env=env, stdout=subprocess.PIPE, stderr=stderr, text=True,
         encoding="utf-8",
     )  # fmt: skip
+
+
+def _tail(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")[-2000:]
 
 
 def _wait_blocked(proc: subprocess.Popen[str]) -> bool:
@@ -139,16 +145,18 @@ def test_it06_26_resume_after_kill_reuses_judge_choice(
     the stored judge choice from the stored proposals."""
     _hcfg, run_id = planning
     db, cfg = str(ops_store.db_path), tmp_path / "child_cfg"
-    first = _child([str(cfg / "first"), db, run_id, "block"])
-    watchdog = threading.Timer(_CHILD_TIMEOUT_S, first.kill)  # never hang on a stuck child
-    watchdog.start()
-    try:
-        blocked = _wait_blocked(first)
-        first.kill()  # OS-level kill while blocked after the judge completed
-        _out, err = first.communicate(timeout=_CHILD_TIMEOUT_S)
-    finally:
-        watchdog.cancel()
-    assert blocked, err[-2000:]
+    log1, log2 = tmp_path / "first.stderr", tmp_path / "resume.stderr"
+    with log1.open("w", encoding="utf-8") as err_file:
+        first = _child([str(cfg / "first"), db, run_id, "block"], err_file)
+        watchdog = threading.Timer(_CHILD_TIMEOUT_S, first.kill)  # never hang on a stuck child
+        watchdog.start()
+        try:
+            blocked = _wait_blocked(first)
+            first.kill()  # OS-level kill while blocked after the judge completed
+            first.communicate(timeout=_CHILD_TIMEOUT_S)
+        finally:
+            watchdog.cancel()
+    assert blocked, _tail(log1)
     assert first.returncode != 0
     planner_row = get_task_by_dedup(run_id, planner_dedup_key(run_id, "funding_review"))
     assert planner_row is not None
@@ -164,9 +172,10 @@ def test_it06_26_resume_after_kill_reuses_judge_choice(
     assert judge.result["choice"] == 2
     assert [t.role for t in select_tasks(run_id) if t.role == "analyst"] == []  # no plan yet
 
-    second = _child([str(cfg / "resume"), db, run_id, "resume"])
-    out, err = second.communicate(timeout=_CHILD_TIMEOUT_S)
-    assert second.returncode == 0, err[-2000:]
+    with log2.open("w", encoding="utf-8") as err_file:
+        second = _child([str(cfg / "resume"), db, run_id, "resume"], err_file)
+        out, _ = second.communicate(timeout=_CHILD_TIMEOUT_S)
+    assert second.returncode == 0, _tail(log2)
     (result_line,) = [ln for ln in out.splitlines() if ln.startswith(pk.RESULT_PREFIX)]
     result = json.loads(result_line.removeprefix(pk.RESULT_PREFIX))
     assert result == {"outcome": "planned", "calls": {}, "running_reset": 1}

@@ -20,7 +20,15 @@ import pytest
 from pydantic import ValidationError
 from tests.support.harness_fakes import RecordingTracer
 
-from herness.core.errors import ConfigError, FatalError, ModelUnavailable, NotFound
+from herness.core.errors import (
+    BudgetExceeded,
+    ConfigError,
+    EgressBlocked,
+    FatalError,
+    ModelUnavailable,
+    NotFound,
+    RetryableError,
+)
 from herness.core.types import (
     AgentResult,
     EntityScope,
@@ -135,6 +143,7 @@ def test_ut06_58_each_drop_reason_in_order() -> None:
         _item("MTTR_Hours trend for t9", ids=("t9",)),  # unknown entity
         _item("Look at team t3 generally"),  # no metric or table
         _item("mttr_hours_extra of t3"),  # whole-word only: no metric
+        _item("Trend of CORE.INCIDENT for t3"),  # table names are case-sensitive
         _item("Incidents in core.incident for t1", ids=("t1",)),  # covered by deterministic
         _item(kept_obj),  # kept
         _item(kept_obj, ids=("t3",), specialty="delivery"),  # same objective other specialty
@@ -144,7 +153,8 @@ def test_ut06_58_each_drop_reason_in_order() -> None:
     plan, decisions = _post(det, items, _knobs(H_wildcards=3))
     reasons = [d.reason or d.action for d in decisions]
     assert reasons == ["unknown_entity", "no_metric_or_table", "no_metric_or_table",
-                       "already_covered", "kept", "kept", "kept", "over_limit"]  # fmt: skip
+                       "no_metric_or_table", "already_covered", "kept", "kept", "kept",
+                       "over_limit"]  # fmt: skip
     assert [t.objective for t in plan[1:]] == [kept_obj, kept_obj, "Change_Failure_Rate of t4"]
 
 
@@ -209,12 +219,17 @@ def test_st06_04_planner_cannot_change_budget_or_must_cover() -> None:
 
 
 def test_ut06_59_judge_select_ties_and_bad_samples() -> None:
-    """UT06-59 lower index wins a tie; samples of the wrong length are ignored; scores clip."""
+    """UT06-59 lower index wins a tie; samples of the wrong length or with a non-finite score
+    are ignored; scores clip."""
     assert judge_select([[3, 3, 1], [3, 3, 1]], 3) == (0, [3.0, 3.0, 1.0])
     assert judge_select([[1, 2], [9, 9, 9], [2, 1]], 2) == (0, [1.5, 1.5])
     assert judge_select([[-2, 9, 5]], 3) == (1, [0.0, 5.0, 5.0])
     assert judge_select([[1, 2, 3]], 2) == (0, [0.0, 0.0])
     assert judge_select([], 3) == (0, [0.0, 0.0, 0.0])
+    nan, inf = float("nan"), float("inf")
+    assert judge_select([[nan, 1, 1], [1, 2, 3]], 3) == (2, [1.0, 2.0, 3.0])
+    assert judge_select([[1, 2, 3], [nan, 1, 1]], 3) == (2, [1.0, 2.0, 3.0])  # order-free
+    assert judge_select([[inf, 0, 0]], 3) == (0, [0.0, 0.0, 0.0])
 
 
 # --- UT06-60
@@ -273,8 +288,10 @@ class _Store:
     def fail(self, task_id: str, err: Exception, *, max_task_attempts: int) -> str:
         del max_task_attempts
         self.failed.append((task_id, type(err).__name__))
-        self.rows[task_id].status = "pending"
-        return "pending"
+        outcome = "pending" if isinstance(err, RetryableError) else "dead"  # spec 08 rule
+        row = self.rows[task_id]
+        row.status, row.last_error = outcome, {"class": type(err).__name__}
+        return outcome
 
     def complete(self, task_id: str, result: dict[str, object], *, writes: Any = None) -> None:
         del writes
@@ -381,8 +398,8 @@ def _go(env: Any) -> str:
     return asyncio.run(planner.run_planning(env))
 
 
-def test_ut06_58_run_planning_status_branches(store: _Store) -> None:
-    """U06-88 step 1-2: no plan context or planner task raises; done → planned; dead → failed;
+def test_rf_run_planning_status_branches(store: _Store) -> None:
+    """RF U06-88 step 1-2: no plan context or planner task raises; done → planned; dead → failed;
     a lost claim → planned without running anything."""
     with pytest.raises(ConfigError):
         _go(_env(plan_ctx=None))
@@ -399,24 +416,55 @@ def test_ut06_58_run_planning_status_branches(store: _Store) -> None:
         _go(_env())
 
 
-def test_ut06_58_no_usable_proposal_fails_the_planner(
+def test_rf_run_planning_no_usable_proposal_retries(
     store: _Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """U06-88 step 5: failed, invalid and raising samples leave no proposal: fail_task with
-    ModelUnavailable, outcome planned (the loop retries until dead)."""
-    _script(monkeypatch, _agent_result(None, "failed"))
-    assert _go(_env()) == "planned"
-    _script(monkeypatch, _agent_result({"tasks": []}))
-    assert _go(_env()) == "planned"
-    _script(monkeypatch, FatalError("boom"))
-    assert _go(_env()) == "planned"
+    """RF U06-88 step 5: failed, invalid and retryable-raising samples leave no proposal:
+    fail_task with ModelUnavailable, outcome planned (the loop retries until dead)."""
+    row = next(iter(store.rows.values()))
+    for result in (_agent_result(None, "failed"), _agent_result({"tasks": []}),
+                   ModelUnavailable("down")):  # fmt: skip
+        _script(monkeypatch, result)
+        assert _go(_env()) == "planned"
+        assert row.status == "pending"
     assert [name for _, name in store.failed] == [ModelUnavailable.__name__] * 3
 
 
-def test_ut06_58_single_sample_commits_without_judge(
+@pytest.mark.parametrize("err", [BudgetExceeded("run_budget"), EgressBlocked("blocked"),
+                                 ConfigError("bad route"), FatalError("boom")])  # fmt: skip
+def test_rf_run_planning_fatal_sample_fails_with_original_error(
+    store: _Store, monkeypatch: pytest.MonkeyPatch, err: FatalError
+) -> None:
+    """RF U06-88/U06-96: a FatalError from a planner sample is not retried as ModelUnavailable:
+    the planner is failed with the original class (dead at once, as the scheduler does) and no
+    further sample runs."""
+    roles = _script(monkeypatch, err, _agent_result(_PROPOSAL), _agent_result(_PROPOSAL))
+    assert _go(_env("deep")) == "failed"
+    assert roles == ["planner"]
+    row = next(iter(store.rows.values()))
+    assert (row.status, row.last_error) == ("dead", {"class": type(err).__name__})
+    assert store.failed == [(row.task_id, type(err).__name__)]
+
+
+def test_rf_run_planning_fatal_judge_sample_fails_judge_and_planner(
     store: _Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """U06-88 N == 1: choice 0, no judge task; the plan is committed and decisions traced."""
+    """RF U06-88/U06-96: a FatalError from a judge sample fails the judge and the planner with
+    the original class; the plan is not committed."""
+    proposals = [_agent_result(_PROPOSAL) for _ in range(3)]
+    roles = _script(monkeypatch, *proposals, BudgetExceeded("run_budget"))
+    assert _go(_env("deep")) == "failed"
+    assert roles == ["planner"] * 3 + ["judge"]
+    judge = next(r for r in store.rows.values() if r.spec.role == "judge")
+    planner_row = next(r for r in store.rows.values() if r.spec.role == "planner")
+    assert [name for _, name in store.failed] == ["BudgetExceeded"] * 2
+    assert (judge.status, planner_row.status, planner_row.result) == ("dead", "dead", None)
+
+
+def test_rf_run_planning_single_sample_without_judge(
+    store: _Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RF U06-88 N == 1: choice 0, no judge task; the plan is committed and decisions traced."""
     roles = _script(monkeypatch, _agent_result(_PROPOSAL, "partial"))
     env = _env()
     assert _go(env) == "planned"
@@ -433,10 +481,10 @@ def test_ut06_58_single_sample_commits_without_judge(
     assert [e[0] for e in env.tracer.events] == ["plan_decision"]
 
 
-def test_ut06_58_forced_resume_plans_deterministic_only(
+def test_rf_run_planning_forced_resume_deterministic_only(
     store: _Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """U06-88 step 4: `force` on a planner that failed before with `H_wildcards == 0` commits
+    """RF U06-88 step 4: `force` on a planner that failed before with `H_wildcards == 0` commits
     the deterministic tasks without calling a model."""
     roles = _script(monkeypatch)
     row = next(iter(store.rows.values()))
@@ -447,13 +495,15 @@ def test_ut06_58_forced_resume_plans_deterministic_only(
     assert len(row.result["plan"]) == 1  # type: ignore[arg-type]
 
 
-def test_ut06_59_judge_failures_choose_zero(store: _Store, monkeypatch: pytest.MonkeyPatch) -> None:
-    """U06-88 step 6: every judge sample failing → choice 0 (WARNING), judge still completed;
+def test_rf_run_planning_judge_failures_choose_zero(
+    store: _Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RF U06-88 step 6: every judge sample failing → choice 0 (WARNING), judge still completed;
     a judge task that cannot be claimed → choice 0; a done judge's choice is reused."""
     proposals = [_agent_result(_PROPOSAL | {"rationale": f"r{i}"}) for i in range(3)]
     bad = [
-        _agent_result({"choice": 0, "scores": [1.0]}), FatalError("x"),
-        _agent_result(None, "failed"), _agent_result({"choice": 9}), FatalError("y"),
+        _agent_result({"choice": 0, "scores": [1.0]}), ModelUnavailable("x"),
+        _agent_result(None, "failed"), _agent_result({"choice": 9}), ModelUnavailable("y"),
     ]  # fmt: skip
     roles = _script(monkeypatch, *proposals, *bad)
     assert _go(_env("deep")) == "planned"
@@ -481,8 +531,8 @@ def test_ut06_59_judge_failures_choose_zero(store: _Store, monkeypatch: pytest.M
     assert planner_row.result["summary"] == "r2"
 
 
-def test_ut06_58_planner_dedup_key_matches_run_creation() -> None:
-    """U06-88 step 1 finds the planner by the dedup key `create_run_record` writes."""
+def test_rf_planner_dedup_key_matches_run_creation() -> None:
+    """RF U06-88 step 1 finds the planner by the dedup key `create_run_record` writes."""
     from herness.harness.swarm.lifecycle import _planner_spec  # noqa: PLC0415 - test only
 
     spec = _planner_spec(_RUN, "org_review", "standard", _knobs())

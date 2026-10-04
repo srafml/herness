@@ -31,7 +31,8 @@ if TYPE_CHECKING:
 __all__ = ["NOTES_MAX", "PlanDecision", "postprocess_plan"]
 
 NOTES_MAX: Final = 400  # notes a planned item may add to a deterministic task (TH06-04)
-_TABLE_RE: Final = re.compile(r"\b(core|enrich|metrics|score|meta)\.[a-z_]+\b", re.IGNORECASE)
+# Case-sensitive: only metric names match regardless of case (U06-89 step 2b).
+_TABLE_RE: Final = re.compile(r"\b(core|enrich|metrics|score|meta)\.[a-z_]+\b")
 
 type PlanAction = Literal["notes_applied", "kept", "dropped"]
 

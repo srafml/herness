@@ -11,6 +11,7 @@ capped analyst hypothesis whose budget, tools, priority and model role are set h
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -19,7 +20,13 @@ from typing import TYPE_CHECKING, Final, Literal, cast
 
 from pydantic import JsonValue, ValidationError
 
-from herness.core.errors import ConfigError, HernessError, ModelUnavailable, NotFound
+from herness.core.errors import (
+    ConfigError,
+    FatalError,
+    HernessError,
+    ModelUnavailable,
+    NotFound,
+)
 from herness.core.ids import IdKind, new_id
 from herness.core.jobs import claim_task, complete_task, fail_task, save_checkpoint
 from herness.core.logging import get_logger
@@ -87,11 +94,14 @@ def base_priority(rank: int | None, must_cover: bool) -> float:
 def judge_select(samples: Sequence[Sequence[float]], n: int) -> tuple[int, list[float]]:
     """Choice and mean score per proposal over judge samples (U06-90); pure.
 
-    Samples whose length is not `n` are dropped; scores are clipped to 0-5; ties go to the
-    lower index; no kept sample gives `(0, [0.0] * n)`.
+    Samples whose length is not `n` or holding a non-finite score are dropped; scores are
+    clipped to 0-5; ties go to the lower index; no kept sample gives `(0, [0.0] * n)`.
     """
-    kept = [[min(max(float(s), 0.0), SCORE_MAX) for s in sample] for sample in samples]
-    kept = [sample for sample in kept if len(sample) == n]
+    kept = [
+        [min(max(float(s), 0.0), SCORE_MAX) for s in sample]
+        for sample in samples
+        if len(sample) == n and all(math.isfinite(float(s)) for s in sample)
+    ]
     if not kept:
         return 0, [0.0] * n
     means = [sum(sample[i] for sample in kept) / len(kept) for i in range(n)]
@@ -157,13 +167,14 @@ async def run_planning(env: RunEnv) -> Literal["planned", "failed"]:
     if env.force and env.knobs.H_wildcards == 0 and row.last_error is not None:
         await _commit(env, row, (deterministic, []), rationale="", usage=usage)
         return "planned"
-    proposals = await _proposals(env, row, ctx, deterministic, usage)
-    if not proposals:
-        err = ModelUnavailable("planner produced no plan")
-        attempts = env.cfg.swarm.max_task_attempts
-        await env.bb.run_on_writer(partial(fail_task, row.task_id, err, max_task_attempts=attempts))
-        return "planned"
-    choice = await _judge(env, proposals) if len(proposals) > 1 else 0
+    try:
+        proposals = await _proposals(env, row, ctx, deterministic, usage)
+        if not proposals:
+            await _fail(env, row, ModelUnavailable("planner produced no plan"))
+            return "planned"
+        choice = await _judge(env, proposals) if len(proposals) > 1 else 0
+    except FatalError as err:  # U06-96 mapping, as the scheduler (U06-93): dead at once
+        return "failed" if await _fail(env, row, err) == "dead" else "planned"
     chosen = proposals[choice if choice < len(proposals) else 0]
     planned = await asyncio.to_thread(
         partial(
@@ -181,6 +192,19 @@ async def run_planning(env: RunEnv) -> Literal["planned", "failed"]:
         )  # fmt: skip
     await _commit(env, row, planned, rationale=chosen.rationale, usage=usage)
     return "planned"
+
+
+async def _fail(env: RunEnv, row: TaskRow, err: HernessError) -> str:
+    """`fail_task` on the writer with the original error (a FatalError is dead at once)."""
+    attempts = env.cfg.swarm.max_task_attempts
+    outcome: str = await env.bb.run_on_writer(
+        partial(fail_task, row.task_id, err, max_task_attempts=attempts)
+    )
+    _log.warning(
+        "harness.task.failed", run_id=row.spec.run_id, task_id=row.task_id, role=row.spec.role,
+        error_type=type(err).__name__, outcome=outcome,
+    )  # fmt: skip
+    return outcome
 
 
 async def _proposals(
@@ -226,7 +250,11 @@ def _parsed[M: (PlannerOutput, JudgeOutput)](
 
 
 async def _agent(env: RunEnv, spec: TaskSpec, task_input: dict[str, object]) -> AgentResult | None:
-    """One fresh `run_agent` call for `spec` (U06-99 hooks); an agent error ends as None."""
+    """One fresh `run_agent` call for `spec` (U06-99 hooks).
+
+    A retryable or recoverable agent error makes the sample unusable (None); a `FatalError`
+    (budget, egress, config, permission) propagates and fails the task (U06-96).
+    """
     run = env.run
     depth = cast("Depth", run.depth)
     try:
@@ -241,6 +269,8 @@ async def _agent(env: RunEnv, spec: TaskSpec, task_input: dict[str, object]) -> 
             route.role_spec, cast("dict[str, JsonValue]", task_input), ctx, route.client,
             route.config, hooks, resume_from=None,
         )  # fmt: skip
+    except FatalError:
+        raise
     except HernessError as err:
         _log.warning(
             "harness.plan.sample_failed", run_id=run.run_id, task_id=spec.task_id,
@@ -288,11 +318,15 @@ async def _judge(env: RunEnv, proposals: list[PlannerOutput]) -> int:
     }
     samples: list[list[float]] = []
     usage = _Usage()
-    for i in range(row.spec.k_samples):
-        task_input = build_task_input("planner", payload | {"sample_index": i})  # R-20 wrapping
-        out = _parsed(JudgeOutput, await _agent(env, row.spec, task_input), usage)
-        if out is not None:
-            samples.append(list(out.scores))
+    try:
+        for i in range(row.spec.k_samples):
+            task_input = build_task_input("planner", payload | {"sample_index": i})  # R-20
+            out = _parsed(JudgeOutput, await _agent(env, row.spec, task_input), usage)
+            if out is not None:
+                samples.append(list(out.scores))
+    except FatalError as err:
+        await _fail(env, row, err)  # the judge dies with the original error; so does the planner
+        raise
     choice, means = judge_select(samples, len(proposals))
     if not samples:
         _log.warning("harness.plan.judge_failed", run_id=spec.run_id, task_id=row.task_id)
