@@ -9,6 +9,7 @@ the same way, and the poll sleep runs on ``fake_clock``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +21,7 @@ from tests.support.fake_clock import FakeClock
 
 import herness.enrich
 from herness._cli import wait
-from herness._cli.output import exit_code_for
+from herness._cli.output import exit_code_for, json_default
 from herness.cli import GlobalOptions
 from herness.core import errors as e
 from herness.core.jobs import JobRow
@@ -210,6 +211,21 @@ def test_ut09_67_circuit_key_and_run_id_sources(
     assert _follow().run_id == RUN
     install(FakeJobs(_row("done", payload={"request": {"kind": "org_review"}, "run_id": 5})))
     assert _follow().run_id is None
+
+
+def test_ut09_67_run_id_precedence(install: Callable[[FakeJobs], FakeJobs]) -> None:
+    """UT09-67 run_id: result wins over payload.request, which wins over payload.run_id."""
+    quiet = GlobalOptions(quiet=True, json=True)  # canceled sync rows: no store read, no output
+    payload = {"request": {"run_id": "run_request"}, "run_id": "run_payload"}
+    install(
+        FakeJobs(_row("canceled", kind="sync", result={"run_id": "run_result"}, payload=payload))
+    )
+    assert _follow(quiet).run_id == "run_result"
+    install(FakeJobs(_row("canceled", kind="sync", result={"partial": False}, payload=payload)))
+    assert _follow(quiet).run_id == "run_request"
+    only = {"request": {"kind": "org_review"}, "run_id": "run_payload"}
+    install(FakeJobs(_row("canceled", kind="sync", payload=only)))
+    assert _follow(quiet).run_id == "run_payload"
 
 
 def test_ut09_67_progress_lines(
@@ -413,6 +429,26 @@ def test_ut09_82_payload_enqueued_as_json(install: Callable[[FakeJobs], FakeJobs
     assert fake.enqueued[-1][3] is None
     edge = {"x": "y" * (65_536 - len('{"x":""}'))}
     wait.submit_job(GlobalOptions(), kind="sync", payload=edge, gpu_class="none")  # exactly 64 KB
+
+
+def _sized(n_bytes: int) -> dict[str, object]:
+    """A payload whose JSON text (as submit_job serialises it) is exactly ``n_bytes`` long."""
+    payload: dict[str, object] = {"x": "y" * (n_bytes - len('{"x":""}'))}
+    text = json.dumps(payload, default=json_default, ensure_ascii=False, separators=(",", ":"))
+    assert len(text.encode("utf-8")) == n_bytes
+    return payload
+
+
+def test_ut09_82_payload_size_boundary(install: Callable[[FakeJobs], FakeJobs]) -> None:
+    """UT09-82 65,536 bytes of JSON is enqueued; 65,537 bytes raises before enqueue."""
+    fake = install(FakeJobs(_row()))
+    with pytest.raises(UserInputError, match="job payload too large"):
+        wait.submit_job(GlobalOptions(), kind="sync", payload=_sized(65_537), gpu_class="none")
+    assert fake.calls == []
+    at_limit = _sized(65_536)
+    assert wait.submit_job(GlobalOptions(), kind="sync", payload=at_limit, gpu_class="none") == JOB
+    assert fake.calls[0] == "enqueue"
+    assert fake.enqueued[0][1] == at_limit
 
 
 def test_ut09_82_unserialisable_payload(install: Callable[[FakeJobs], FakeJobs]) -> None:
