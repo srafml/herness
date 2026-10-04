@@ -3,7 +3,7 @@
 Importing this package imports nothing eagerly, so `herness.core.config` importing
 `herness.harness.pipelines.settings` loads no other harness module. Each public name maps to its
 owner module and is imported on first attribute access (module `__getattr__`, PEP 562). T06-10
-adds `Pipeline`, `PlanContext` and `get_pipeline` from `.base`; a later card adds `ChatService`.
+adds `Pipeline`, `PlanContext` and `get_pipeline` from `.base`; T06-25 adds `ChatService`.
 """
 
 from importlib import import_module
@@ -14,6 +14,7 @@ _EXPORTS: Final[dict[str, str]] = {
     "Pipeline": "herness.harness.pipelines.base",
     "PlanContext": "herness.harness.pipelines.base",
     "get_pipeline": "herness.harness.pipelines.base",
+    "ChatService": "herness.harness.pipelines.chat",
 }
 
 __all__: tuple[str, ...] = tuple(_EXPORTS)
