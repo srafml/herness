@@ -18,8 +18,11 @@ the embedder raise, so `recall` takes the keyword-only degraded path. BT07-03 pr
 glossary items (policy matrix: active, no review item) and includes the near-duplicate vector
 search and the vector upsert; the embedding there is the hash-seeded `FakeEmbed`.
 
-BT07-01 and BT07-03 are non-strict xfails (OI-7): `VectorIndex.ensure_table` builds no ANN
-index, and the flat LanceDB search over 200k x 1024 floats alone takes about 450 ms here.
+ANN index (T07-27): after seeding, the fixture calls `VectorIndex.refresh_index` (maintenance
+step 8, the production path) and builds the IVF_PQ index; BT07-01 refreshes again after
+planting its matches (an `optimize()`). Before T07-27 the flat LanceDB search over 200k x 1024
+floats alone took about 450 ms (BT07-01 p95 462.9 ms, BT07-03 509.6 ms). The BT07-01 recall
+check measures recall@10 of the indexed search against flat search on the corpus (>= 0.90).
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ import pytest
 from tests.support.bench_stats import REPEATS, report
 from tests.support.make_tiny_st import TINY_ST
 from tests.support.memory_bench_corpus import (
+    near_queries,
     open_store,
     plant_matches,
     query_text,
@@ -45,8 +49,10 @@ from tests.unit.harness.memory._write_env import FakeEmbed, proposal
 from herness.core.config import reset_config
 from herness.enrich import embed
 from herness.harness.memory import MemoryStore
+from herness.harness.memory.store import VectorIndex
 from herness.store.ops import core, reset_connections
 from herness.store.ops.migrate import migrate
+from herness.store.vectors import VectorStore
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -57,6 +63,8 @@ K = 10
 RECALL_P95_MS = 150.0
 DEGRADED_P95_MS = 60.0
 PROPOSE_P95_MS = 200.0
+RECALL_MIN = 0.90  # recall@10 against flat search (T07-27 recall guard)
+RECALL_QUERIES = 100
 
 
 def _p95(samples: list[float]) -> float:
@@ -98,6 +106,10 @@ def corpus(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
         seed_corpus(root, ITEMS)
         seeded = time.perf_counter() - start
         sys.stderr.write(f"BT07 data: {ITEMS} items + vectors seeded in {seeded:.1f} s\n")
+        start = time.perf_counter()
+        refresh = VectorIndex(lambda: VectorStore(root / "vectors")).refresh_index()
+        assert refresh == {"action": "built", "rows": ITEMS}
+        sys.stderr.write(f"BT07 ANN index built in {time.perf_counter() - start:.1f} s\n")
         yield root
     finally:
         reset_connections()
@@ -123,13 +135,6 @@ def real_embed() -> Iterator[Callable[[str], np.ndarray]]:
 
 
 @pytest.mark.timeout(900)
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=False,
-    reason="OI-7: measured recall p95 ~470-680 ms vs 150 ms; `VectorIndex.ensure_table` builds no"
-    " ANN index, so every LanceDB search scans 200k x 1024 floats (~420-470 ms; an IVF_PQ"
-    " index brings the search to ~23 ms)",
-)
 def test_bt07_01_recall_k10_uncached_embedding_p95(
     corpus: Path, real_embed: Callable[[str], np.ndarray]
 ) -> None:
@@ -138,6 +143,8 @@ def test_bt07_01_recall_k10_uncached_embedding_p95(
     queries = [query_text(rng) for _ in range(CALLS * REPEATS + WARM_UP + 1)]  # last: spare probe
     matches = np.stack([real_embed(q) for q in queries])  # one true match per query
     plant_matches(corpus, ITEMS, queries, matches)
+    refreshed = VectorIndex(lambda: VectorStore(corpus / "vectors")).refresh_index()
+    assert refreshed["action"] == "optimized"  # 506 more rows: within 1.2x of the build
     store = open_store(corpus, real_embed)
     probe = store.recall_with_status(queries[-1], k=K)  # not measured: no warm cache
     assert not probe.degraded
@@ -149,6 +156,24 @@ def test_bt07_01_recall_k10_uncached_embedding_p95(
     p95s = _measure(recall)
     p95 = report("BT07-01", "p95_recall", p95s, "ms", f"< {RECALL_P95_MS:g} ms")
     assert p95 < RECALL_P95_MS, f"recall p95 {p95:.1f} ms"
+
+
+def test_bt07_01_recall_at_10_vs_flat(corpus: Path) -> None:
+    """BT07-01 recall guard (T07-27): recall@10 of the indexed search against flat search on
+    the 200k corpus is at least 0.90."""
+    vectors = VectorIndex(lambda: VectorStore(corpus / "vectors"))
+    table = vectors._tbl(latest=True)
+    layers = ["semantic", "procedural", "episodic"]
+    where = "layer IN ('semantic', 'procedural', 'episodic') AND status IN ('active')"
+    recalls: list[float] = []
+    for query in near_queries(RECALL_QUERIES):
+        flat = table.search(query).distance_type("cosine").bypass_vector_index()
+        truth = set(flat.where(where, prefilter=True).limit(K).to_arrow()["memory_id"].to_pylist())
+        found = {memory_id for memory_id, _ in vectors.search(query, layers, ["active"], K)}
+        recalls.append(len(found & truth) / K)
+    recall = float(np.mean(recalls))
+    sys.stderr.write(f"BT07-01 recall@10 vs flat: {recall:.3f} over {RECALL_QUERIES} queries\n")
+    assert recall >= RECALL_MIN, f"recall@10 {recall:.3f}"
 
 
 def test_bt07_02_recall_degraded_p95(corpus: Path) -> None:
@@ -165,12 +190,6 @@ def test_bt07_02_recall_degraded_p95(corpus: Path) -> None:
 
 
 @pytest.mark.timeout(900)
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=False,
-    reason="OI-7: measured propose p95 ~770-1300 ms vs 200 ms; the near-duplicate ANN search of"
-    " step 11 is the same unindexed 200k x 1024 LanceDB scan as BT07-01 (~420-470 ms)",
-)
 def test_bt07_03_propose_excluding_review_p95(corpus: Path) -> None:
     """BT07-03 `propose` of an active human item (no review item), 200k items: p95 < 200 ms."""
     store: MemoryStore = open_store(corpus, FakeEmbed())
