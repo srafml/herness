@@ -452,6 +452,7 @@ def test_ut07_68_target_label_redacted_before_cut(deps: EpisodicDeps, jobs: None
     (note,) = memory_rows()
     assert "[EMAIL_" in note["content"]
     assert PLANTED_EMAIL.split("@", maxsplit=1)[0] not in note["content"]
+    assert note["data"]["entities"] == []  # T07-26b: the redacted label is not cited
 
 
 def test_ut07_68_numeral_bearing_parts_are_left_out(deps: EpisodicDeps, jobs: None) -> None:
@@ -561,3 +562,17 @@ def test_ut07_68_decide_uses_clock_when_now_is_omitted(
     assert _decisions()[0]["decided_at"] == "2026-09-02T12:00:00.000000Z"
     ctx = prior_context(_ctx(seed_run(started=NOW + DAY)), deps=deps)
     assert [i.rec_id for i in ctx.items] == [rid]
+
+
+def test_ut07_68_note_cites_its_named_target_as_entity(deps: EpisodicDeps, jobs: None) -> None:
+    """UT07-68 (T07-26b) the note's `data.entities` is the target its text names, so
+    `purge(record_id)` can erase it; a target left out of the text is not cited."""
+    work = "src:incident:inca"
+    named = _one_rec(target_type="work_item", target_id=work, expected_metric=None)
+    cut = _one_rec(target_id="svc 42", expected_metric=None)
+    decide(named, "rejected", "no", USER, deps=deps, now=NOW)
+    decide(cut, "rejected", "no", USER, deps=deps, now=NOW + timedelta(hours=1))
+    first, second = memory_rows()
+    assert f"(fund for work_item:{work})" in first["content"]
+    assert first["data"]["entities"] == [{"type": "work_item", "id": work}]
+    assert second["data"]["entities"] == []
