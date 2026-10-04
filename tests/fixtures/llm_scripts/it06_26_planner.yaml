@@ -1,0 +1,55 @@
+# T06-15 (IT06-26): deep best-of-3 planner and a 5-sample judge. Each agent run is one turn
+# and one structured final. Proposal i frames the deterministic task with a note and proposes
+# one hypothesis on team t2; every judge sample scores proposal 2 best. Child:
+# tests/support/planner_kill.py.
+- match: {role: planner}
+  turns:
+    - final:
+        text: "Plan proposal 0."
+    - final:
+        output:
+          tasks:
+            - {dedup_key: "c483e16584e6c1a2", specialty: general, objective: "Reframe 0.", entity_type: team, entity_ids: [t1], notes: "framing from proposal 0"}  # pragma: allowlist secret
+            - {dedup_key: null, specialty: ops, objective: "Hypothesis 0: incident volume of team t2 in core.incident.", entity_type: team, entity_ids: [t2], notes: null}
+          rationale: "rationale 0"
+          unknowns: []
+    - final:
+        text: "Plan proposal 1."
+    - final:
+        output:
+          tasks:
+            - {dedup_key: "c483e16584e6c1a2", specialty: general, objective: "Reframe 1.", entity_type: team, entity_ids: [t1], notes: "framing from proposal 1"}  # pragma: allowlist secret
+            - {dedup_key: null, specialty: ops, objective: "Hypothesis 1: incident volume of team t2 in core.incident.", entity_type: team, entity_ids: [t2], notes: null}
+          rationale: "rationale 1"
+          unknowns: []
+    - final:
+        text: "Plan proposal 2."
+    - final:
+        output:
+          tasks:
+            - {dedup_key: "c483e16584e6c1a2", specialty: general, objective: "Reframe 2.", entity_type: team, entity_ids: [t1], notes: "framing from proposal 2"}  # pragma: allowlist secret
+            - {dedup_key: null, specialty: ops, objective: "Hypothesis 2: incident volume of team t2 in core.incident.", entity_type: team, entity_ids: [t2], notes: null}
+          rationale: "rationale 2"
+          unknowns: []
+- match: {role: judge}
+  turns:
+    - final:
+        text: "Scored sample 0."
+    - final:
+        output: {choice: 2, scores: [1.0, 2.0, 4.0], reasons: ["weak", "fair", "best"]}
+    - final:
+        text: "Scored sample 1."
+    - final:
+        output: {choice: 2, scores: [1.0, 2.0, 4.0], reasons: ["weak", "fair", "best"]}
+    - final:
+        text: "Scored sample 2."
+    - final:
+        output: {choice: 2, scores: [1.0, 2.0, 4.0], reasons: ["weak", "fair", "best"]}
+    - final:
+        text: "Scored sample 3."
+    - final:
+        output: {choice: 2, scores: [1.0, 2.0, 4.0], reasons: ["weak", "fair", "best"]}
+    - final:
+        text: "Scored sample 4."
+    - final:
+        output: {choice: 2, scores: [1.0, 2.0, 4.0], reasons: ["weak", "fair", "best"]}
