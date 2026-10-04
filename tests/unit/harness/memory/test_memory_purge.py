@@ -33,7 +33,6 @@ from herness.core import time as clock
 from herness.core.errors import ModelUnavailable, ToolInputError
 from herness.core.ids import new_ulid
 from herness.harness.memory import MemoryStore
-from herness.harness.memory._purge_review import PURGED_FIELDS
 from herness.harness.memory.lifecycle import MemoryLifecycle, purge_args_ok
 from herness.harness.memory.settings import MemoryConfig
 from herness.harness.memory.store import Embedder
@@ -85,7 +84,9 @@ def _seed(content: str, *, author: str = OTHER, status: str = "active", review: 
     if review:  # the design 07 §4.1 memory_write payload shape
         payload = {"memory_id": memory_id, "layer": "semantic", "kind": "glossary",
                    "content": content, "numbers": stored.get("numbers", []),
-                   "entities": entities, "provenance": prov, "flags": []}  # fmt: skip
+                   "entities": entities, "provenance": prov, "flags": ["conflict"],
+                   "conflicts_with": [], "content_hash": "f" * 32, "confidence": 0.8,
+                   "extra_note": f"free text {content}"}  # fmt: skip
         stored["review_item_id"] = shared.create_review_item("memory_write", payload, now=NOW)
     ops.insert_memory_item({
         "memory_id": memory_id, "layer": "semantic", "kind": "glossary", "content": content,
@@ -157,14 +158,11 @@ def _payload_text(item_id: str) -> str:
     return str(rows[0][0])
 
 
-_BLANKS = {"content": "", "statement": "", "entities": [], "numbers": [], "provenance": {},
-           "effective_date": None}  # fmt: skip
-
-
-def _blanked(item_id: str, keys: set[str]) -> None:
-    """Exactly `keys` of the payload's content-bearing fields exist, all blank."""
-    payload = review_of(item_id).payload
-    assert {k: payload[k] for k in PURGED_FIELDS if k in payload} == {k: _BLANKS[k] for k in keys}
+def _write_skeleton(memory_id: str) -> dict[str, Any]:
+    """The purged memory_write payload: structural keys kept, every other key blanked."""
+    return {"memory_id": memory_id, "layer": "semantic", "kind": "glossary", "flags": ["conflict"],
+            "conflicts_with": [], "content": "", "numbers": [], "entities": [], "provenance": {},
+            "content_hash": "", "confidence": None, "extra_note": ""}  # fmt: skip
 
 
 def test_ut07_38_review_payloads_keep_no_purged_data(
@@ -178,7 +176,7 @@ def test_ut07_38_review_payloads_keep_no_purged_data(
     ref = {"id": "n1", "value": 4, "unit": "count", "query_id": "q_" + "a" * 16,
            "column": "n", "row_key": {"key": RECORD.split(":", 2)[2]}}  # fmt: skip
     derived = shared.create_review_item("weight_change", {
-        "source_memory_id": "mem_" + new_ulid(), "statement": PLANTED,
+        "source_memory_id": (source := "mem_" + new_ulid()), "statement": PLANTED,
         "entities": [{"type": "record", "id": RECORD}], "suggested_action": "weight_change",
         "effective_date": "2026-09-01"}, now=NOW)  # fmt: skip
     pending = _seed(PLANTED, status="pending_approval", review=True, numbers=[ref],
@@ -188,9 +186,11 @@ def test_ut07_38_review_payloads_keep_no_purged_data(
 
     assert life.purge(record_id=RECORD, now=NOW) == 1
     assert _ids() == []
-    _blanked(review_id, {"content", "entities", "numbers", "provenance"})
-    _blanked(derived, {"statement", "entities", "effective_date"})  # no key added (ruling)
-    assert review_of(derived).payload["suggested_action"] == "weight_change"  # skeleton
+    assert dict(review_of(review_id).payload) == _write_skeleton(pending)
+    assert dict(review_of(derived).payload) == {  # no key added (ruling)
+        "source_memory_id": source, "statement": "", "entities": [],
+        "suggested_action": "weight_change", "effective_date": None,
+    }  # fmt: skip
     for item_id in (review_id, derived):
         assert PLANTED not in _payload_text(item_id)
         assert RECORD.split(":", 2)[2] not in _payload_text(item_id)
@@ -204,11 +204,11 @@ def test_ut07_38_author_purge_leaves_no_author_in_reviews(
     """UT07-38 purge(author_ref) blanks the review payload provenance naming the person."""
     del ops_store
     life, _ = _lifecycle(tmp_path, monkeypatch)
-    _seed("their correction", author=PERSON, status="pending_approval", review=True)
+    item = _seed("their correction", author=PERSON, status="pending_approval", review=True)
     review_id = memory_rows()[0]["data"]["review_item_id"]
     assert PERSON in _payload_text(review_id)
     assert life.purge(author_ref=PERSON, now=NOW) == 1
-    _blanked(review_id, {"content", "entities", "numbers", "provenance"})
+    assert dict(review_of(review_id).payload) == _write_skeleton(item)
     assert PERSON not in _payload_text(review_id)
 
 

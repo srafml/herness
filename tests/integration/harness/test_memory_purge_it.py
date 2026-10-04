@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import JsonValue
 from tests.support.ops_store import OpsStoreHandle
 from tests.unit.harness.memory._write_env import (
     KIND_DATA,
@@ -54,7 +55,10 @@ def test_it07_11_deletion_step_purges_memory(ops_store: OpsStoreHandle, tmp_path
         redactor=env.redactor, llms=None, allowed_numeral_patterns=(r"(INC|CHG|PRB)\d+",),
         data_root=ops_store.data_root,
     )  # fmt: skip
-    cites = {**KIND_DATA["glossary"], "entities": [{"type": "record", "id": RECORD}]}
+    cites: dict[str, JsonValue] = {
+        **KIND_DATA["glossary"],
+        "entities": [{"type": "record", "id": RECORD}],
+    }
     active = store.propose(proposal("Churn spiked after the kestrel outage.", data=cites))
     pending = store.propose(
         proposal("Backlog means open kestrel tickets.", provenance("agent"), data=cites)

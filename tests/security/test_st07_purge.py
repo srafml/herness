@@ -84,6 +84,16 @@ def _vector_hits(env: Env, store: MemoryStore, texts: list[str]) -> set[str]:
     return hits
 
 
+def _assert_reviews_clean(expected: set[str]) -> None:
+    """Every column of every review item holds no planted text and no record id."""
+    reviews = core.read_all("SELECT * FROM review_item")
+    assert {str(r["item_id"]) for r in reviews} >= expected
+    for row in reviews:
+        text = " ".join(str(row[c]) for c in row.keys())  # noqa: SIM118 - sqlite3.Row keys
+        assert PLANTED not in text
+        assert RECORD not in text
+
+
 def _cites(record_id: str) -> dict[str, JsonValue]:
     """Glossary data citing `record_id` as an entity (the structured citation)."""
     return {**KIND_DATA["glossary"], "entities": [{"type": "record", "id": record_id}]}
@@ -101,9 +111,11 @@ def test_st07_21_purge_leaves_no_text_anywhere(ops_store: OpsStoreHandle, tmp_pa
     active = store.propose(proposal(cited_texts[0], data=_cites(RECORD))).memory_id
     agent = provenance("agent")
     pending = store.propose(proposal(cited_texts[1], agent, data=_cites(RECORD))).memory_id
-    fix = {**KIND_DATA["user_correction"], "statement": f"Weight the {PLANTED} outage lower.",
-           "suggested_action": "weight_change", "effective_date": "2026-09-01",
-           "entities": [{"type": "record", "id": RECORD}]}  # fmt: skip
+    fix: dict[str, JsonValue] = {
+        **KIND_DATA["user_correction"], "statement": f"Weight the {PLANTED} outage lower.",
+        "suggested_action": "weight_change", "effective_date": "2026-09-01",
+        "entities": [{"type": "record", "id": RECORD}],
+    }  # fmt: skip
     session_id, message_id = seed_session()
     via = provenance(via="dashboard", session_id=session_id, source_message_id=message_id)
     correction = store.propose(
@@ -118,7 +130,7 @@ def test_st07_21_purge_leaves_no_text_anywhere(ops_store: OpsStoreHandle, tmp_pa
     assert rows[pending]["status"] == "pending_approval"
     review_id = rows[pending]["data"]["review_item_id"]
     derived = rows[correction]["data"]["derived_review_item_id"]
-    assert PLANTED in shared.get_review_item(derived).payload["statement"]
+    assert PLANTED in str(shared.get_review_item(derived).payload["statement"])
     assert sorted(_fts(PLANTED)) == sorted([active, pending, correction])  # searchable
     assert {active, pending} <= _vector_hits(env, store, cited_texts)
     kept_vectors = env.vectors.vectors(kept)
@@ -138,11 +150,7 @@ def test_st07_21_purge_leaves_no_text_anywhere(ops_store: OpsStoreHandle, tmp_pa
     assert "content" not in skeleton  # no key the derived payload never had
     assert (skeleton["statement"], skeleton["entities"]) == ("", [])
     assert skeleton["effective_date"] is None
-    payloads = core.read_all("SELECT item_id, payload FROM review_item")
-    assert {str(r[0]) for r in payloads} >= {review_id, derived}
-    for _, payload in payloads:  # no text, citation or quoted id left in any review payload
-        assert PLANTED not in str(payload)
-        assert f'"{RECORD}"' not in str(payload)
+    _assert_reviews_clean({review_id, derived})
     assert f'"{RECORD}"' not in _dump(ops_store.db_path)
     review = shared.get_review_item(review_id)
     assert (review.status, review.note, review.payload["content"]) == ("rejected", "purged", "")
