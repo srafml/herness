@@ -16,7 +16,7 @@ from tests.unit.harness.swarm._swarm_findings import finding, number, run_row, t
 from herness.core.errors import ConfigError, ModelUnavailable
 from herness.core.types import Finding
 from herness.harness.pipelines.settings import PipelinesConfig
-from herness.harness.swarm import dedup
+from herness.harness.swarm import _dedup_read, dedup
 
 if TYPE_CHECKING:
     from herness.harness.blackboard import FindingFilter
@@ -160,8 +160,16 @@ class _FakeBoard:
         self.merges: list[tuple[str, list[str]]] = []
 
     async def list_findings(self, flt: FindingFilter) -> list[Finding]:
+        """Same contract as `Blackboard.list_findings`: filters, store order, page limit."""
         self.filters.append(flt)
-        return list(self.findings)
+        assert flt.task_ids is not None
+        assert len(flt.task_ids) <= _dedup_read.TASK_CHUNK
+        hits = [
+            f
+            for f in self.findings
+            if f.status in (flt.status or {"proposed"}) and f.task_id in flt.task_ids
+        ]
+        return sorted(hits, key=lambda f: (f.created_at, f.finding_id))[: flt.limit]
 
     async def merge(self, keep_id: str, dup_ids: list[str]) -> None:
         self.merges.append((keep_id, dup_ids))
@@ -171,12 +179,23 @@ def _env(board: _FakeBoard, depth: str = "standard") -> RunEnv:
     return cast("RunEnv", SimpleNamespace(run=run_row(depth), bb=board, cfg=PipelinesConfig()))
 
 
-def _no_crosscheck(monkeypatch: pytest.MonkeyPatch, ids: set[str] | None = None) -> None:
-    monkeypatch.setattr(dedup, "_crosscheck_task_ids", lambda run_id: set(ids or ()))
+def _no_crosscheck(monkeypatch: pytest.MonkeyPatch, crosscheck: set[str] | None = None) -> None:
+    """The run's tasks: every task of the board's findings; `crosscheck` ones are crosschecks."""
+    cc = crosscheck or set()
+
+    def rows(run_id: str) -> list[SimpleNamespace]:
+        ids = {f"task_{i:026d}" for i in range(1, 400)}
+        return [
+            SimpleNamespace(task_id=t, spec=SimpleNamespace(
+                specialty="crosscheck" if t in cc else "general"))
+            for t in sorted(ids)
+        ]  # fmt: skip
+
+    monkeypatch.setattr(_dedup_read, "select_tasks", rows)
 
 
 def test_it06_27_fast_mode_uses_query_sets(monkeypatch: pytest.MonkeyPatch) -> None:
-    """IT06-27 fast depth: query_set mode without embeddings; components merged on the board."""
+    """IT06-27 (unit-level, fake board) fast depth: query_set mode; components merged."""
     _no_crosscheck(monkeypatch)
 
     def boom(text: str) -> np.ndarray:
@@ -195,7 +214,7 @@ def test_it06_27_fast_mode_uses_query_sets(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_it06_27_embedding_mode_masks_markers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """IT06-27 embedding mode: claim text with markers replaced by <num>; vectors decide."""
+    """IT06-27 (unit-level, fake board) embedding mode: markers masked as <num>."""
     _no_crosscheck(monkeypatch)
     texts: list[str] = []
 
@@ -213,7 +232,7 @@ def test_it06_27_embedding_mode_masks_markers(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_it06_27_crosscheck_findings_are_excluded(monkeypatch: pytest.MonkeyPatch) -> None:
-    """IT06-27 findings authored by crosscheck tasks never join a dedup component."""
+    """IT06-27 (unit-level, fake board) crosscheck-task findings never join a component."""
     _no_crosscheck(monkeypatch, {tid(7)})
     board = _FakeBoard([finding(1), finding(2, task=7)])
     assert asyncio.run(dedup.run_dedup(_env(board, "fast"))) == 0
@@ -222,7 +241,7 @@ def test_it06_27_crosscheck_findings_are_excluded(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.parametrize("exc", [ModelUnavailable("down"), ConfigError("mismatch")])
 def test_it06_27_embedding_failure_degrades(monkeypatch: pytest.MonkeyPatch, exc: Any) -> None:
-    """IT06-27 embedding stub raising: query_set fallback, `harness.dedup.degraded` logged."""
+    """IT06-27 (unit-level, fake board) embedding stub raising: query_set fallback logged."""
     _no_crosscheck(monkeypatch)
 
     def raising(text: str) -> np.ndarray:
@@ -238,3 +257,40 @@ def test_it06_27_embedding_failure_degrades(monkeypatch: pytest.MonkeyPatch, exc
     assert degraded[0]["log_level"] == "warning"
     done = [e for e in logs if e["event"] == "harness.dedup.completed"]
     assert done[0]["mode"] == "query_set"
+
+
+def test_it06_27_reads_more_than_one_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IT06-27 (unit-level, fake board) 1,200 proposed findings over 300 tasks: all are read.
+
+    A 200-task chunk holds 800 findings and fills the 500 page, so it is split and re-read;
+    every finding is deduplicated (3 duplicates merged per task's entity).
+    """
+    _no_crosscheck(monkeypatch)
+    fs = [
+        finding(i, task=1 + (i - 1) // 4, entity=("team", f"t{1 + (i - 1) // 4}"),
+                confidence=1 - ((i - 1) % 4) / 10)
+        for i in range(1, 1_201)
+    ]  # fmt: skip
+    board = _FakeBoard(fs)
+    with structlog.testing.capture_logs() as logs:
+        read = asyncio.run(_dedup_read.read_proposed(cast("Any", board), fs[0].run_id))
+        merged = asyncio.run(dedup.run_dedup(_env(board, "fast")))
+    assert [f.finding_id for f in read] == sorted(f.finding_id for f in fs)
+    assert merged == 900
+    assert len(board.merges) == 300
+    assert any(len(flt.task_ids or ()) == 100 for flt in board.filters)
+    assert not [e for e in logs if e["event"] == "harness.dedup.truncated"]
+
+
+def test_it06_27_single_task_filling_a_page_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IT06-27 (unit-level, fake board) one task with >= 500 findings: WARNING, page kept."""
+    _no_crosscheck(monkeypatch)
+    fs = [finding(i, task=1, entity=("team", f"t{i}")) for i in range(1, 502)]
+    fs.append(finding(600, task=2))
+    board = _FakeBoard(fs)
+    with structlog.testing.capture_logs() as logs:
+        read = asyncio.run(_dedup_read.read_proposed(cast("Any", board), fs[0].run_id))
+    assert len(read) == 501
+    warned = [e for e in logs if e["event"] == "harness.dedup.truncated"]
+    assert len(warned) == 1
+    assert (warned[0]["log_level"], warned[0]["task_id"]) == ("warning", tid(1))

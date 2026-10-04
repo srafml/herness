@@ -11,13 +11,21 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import SqlglotError
 
-from herness.core.types import Challenge, EntityScope, Finding, NumberRef, TaskInputs, TaskSpec
+from herness.core.types import (
+    Challenge,
+    Depth,
+    EntityScope,
+    Finding,
+    NumberRef,
+    TaskInputs,
+    TaskSpec,
+)
 from herness.harness.findings import compute_dedup_key
 from herness.harness.swarm.routing import default_tools, role_budget
 
@@ -42,11 +50,15 @@ _STRICTNESS: Final[dict[str, int]] = {"uphold": 0, "revise": 1, "reject": 2}
 _DEFAULT_ACTION: Final = "Re-examine the claim with an independent query."
 _OBJECTIVE_MAX: Final = 2_000
 _RATIO_UNITS: Final = frozenset({"ratio", "pct"})
-# Revisions and crosschecks have no run row; `default_tools` reads the depth through `knobs`
-# only (U06-101), so this placeholder never changes a tool list.
+# A revision has no run row; `default_tools` reads the depth through `knobs` only (U06-101),
+# so this placeholder never changes its tool list.
 _DEPTH_MODE: Final = "standard"
 # sqlglot's "falling back to Command" warning quotes the SQL text; never log SQL text.
 logging.getLogger("sqlglot").addFilter(lambda r: "unsupported syntax" not in r.getMessage())
+
+
+def _depth(run: RunRow) -> Depth:
+    return cast("Depth", run.depth)
 
 
 def _entity_key(f: Finding) -> str:
@@ -141,7 +153,7 @@ def build_skeptic_task(  # noqa: PLR0913 - U06-107 signature
         objective=objective,
         scope=scope,
         inputs=TaskInputs(finding_ids=[f.finding_id], query_ids=list(f.query_ids)),
-        tools=default_tools("skeptic", "general", _DEPTH_MODE, child_depth=0, knobs=knobs),
+        tools=default_tools("skeptic", "general", _depth(run), child_depth=0, knobs=knobs),
         budget=role_budget("skeptic", knobs),
         round=round_no,
         priority=score,
@@ -235,7 +247,7 @@ def _crosscheck_task(
         objective=objective,
         scope=scope,
         inputs=TaskInputs(finding_ids=[f.finding_id], notes=f"target_number={n.id}"),
-        tools=default_tools("analyst", "crosscheck", _DEPTH_MODE, child_depth=0, knobs=knobs),
+        tools=default_tools("analyst", "crosscheck", _depth(run), child_depth=0, knobs=knobs),
         budget=knobs.analyst_budget,
         priority=0.0,
         model_role="analyst",

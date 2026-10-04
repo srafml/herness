@@ -21,8 +21,7 @@ from herness.core.ids import canonical_json
 from herness.core.logging import get_logger
 from herness.core.numbers import parse_markers
 from herness.enrich.embed import embed_query
-from herness.harness.blackboard import FindingFilter
-from herness.store.ops.runs import select_tasks
+from herness.harness.swarm._dedup_read import read_proposed
 
 if TYPE_CHECKING:
     from herness.core.types import Finding
@@ -33,7 +32,6 @@ __all__ = ["MAX_GROUP", "dedup_components", "run_dedup"]
 type DedupMode = Literal["embedding", "query_set"]
 
 MAX_GROUP: Final = 200
-_LIST_LIMIT: Final = 500
 _NUM_MASK: Final = "<num>"
 _log = get_logger("harness.swarm")
 
@@ -143,12 +141,6 @@ def _masked_claim(claim: str) -> str:
     return "".join([*parts, claim[pos:]])
 
 
-def _crosscheck_task_ids(run_id: str) -> set[str]:
-    """Ids of the run's crosscheck tasks (analyst tasks of specialty `crosscheck`)."""
-    rows = select_tasks(run_id, roles={"analyst"})
-    return {row.task_id for row in rows if row.spec.specialty == "crosscheck"}
-
-
 def _embed_all(findings: Sequence[Finding]) -> dict[str, np.ndarray]:
     return {f.finding_id: embed_query(_masked_claim(f.claim)) for f in findings}
 
@@ -171,13 +163,13 @@ async def run_dedup(env: RunEnv) -> int:
     """Merge duplicate `proposed` findings after fan-out (U06-103); returns the merged count.
 
     Crosscheck-authored findings are left out. Fast runs use `query_set` mode, others embed
-    the claims. Idempotent: merged findings are no longer `proposed`. At most 500 `proposed`
-    findings are read per call (the `list_findings` page limit).
+    the claims. Idempotent: merged findings are no longer `proposed`. Every `proposed` finding
+    is read, in task-id chunks below the page limit (`_dedup_read`). The returned count is the
+    number of duplicate ids passed to `bb.merge`; it may include an id the compare-and-set
+    skipped because it had already left `proposed`.
     """
     run = env.run
-    flt = FindingFilter(run_id=run.run_id, status={"proposed"}, limit=_LIST_LIMIT)
-    excluded = await asyncio.to_thread(_crosscheck_task_ids, run.run_id)
-    findings = [f for f in await env.bb.list_findings(flt) if f.task_id not in excluded]
+    findings = await read_proposed(env.bb, run.run_id)
     mode: DedupMode = "query_set" if run.depth == "fast" else "embedding"
     vectors = await _vectors(env, findings) if mode == "embedding" else None
     if vectors is None:
