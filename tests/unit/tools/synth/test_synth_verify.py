@@ -100,6 +100,17 @@ def test_ut11_26_dot_prefixed_file_is_a_problem(root_copy: Path) -> None:
     assert report.row_counts == _truth(root_copy).row_counts  # the glob never reads it
 
 
+def test_ut11_26_dot_prefixed_directory_is_a_problem(root_copy: Path) -> None:
+    """UT11-26 a dot-prefixed directory left under data/raw (an aborted writer's temp dir)
+    is reported even when it holds no file."""
+    (_raw(root_copy, "servicenow/incident") / ".tmp").mkdir()
+
+    report = verify_root(root_copy)
+
+    assert report.ok is False
+    assert any(".tmp" in p and "dot-prefixed" in p for p in report.problems), report.problems
+
+
 @pytest.mark.parametrize(
     ("key", "column"),
     [
@@ -133,9 +144,9 @@ def test_ut11_26_extra_row_is_a_problem(root_copy: Path) -> None:
     assert any("servicenow/problem" in p and "rows" in p for p in report.problems)
 
 
-def test_rf_record_id_mismatch_and_live_null_payload_are_problems(root_copy: Path) -> None:
-    """U11-22 `_record_id` must equal `_source:_entity:_source_key`; NULL record ids and
-    payload-less live rows are reported (key and column names only)."""
+def test_rf_record_id_mismatch_is_a_problem(root_copy: Path) -> None:
+    """U11-22 `_record_id` must equal `_source:_entity:_source_key`; the mismatch is reported
+    by key and column name, never by the offending value."""
     path = _files(root_copy, "servicenow/sys_user_group")[0]
     table = pq.read_table(path)
     ids = table.column("_record_id").to_pylist()
@@ -186,6 +197,26 @@ def test_ut11_26_content_hashes_per_entity_and_sensitive_to_rows(root_copy: Path
     source = _files(root_copy, "servicenow/problem")[0]
     pq.write_table(pq.read_table(source).slice(0, 1), source.with_name("part-extra.parquet"))
     changed = content_hashes(root_copy)
+    assert changed["servicenow/problem"] != hashes["servicenow/problem"]
+    assert {k: v for k, v in changed.items() if k != "servicenow/problem"} == {
+        k: v for k, v in hashes.items() if k != "servicenow/problem"
+    }
+
+
+def test_ut11_26_content_hashes_react_to_payload(root_copy: Path) -> None:
+    """UT11-26 / design §5.1.8 rewriting one live row's `_payload` (record id and timestamp
+    unchanged) changes that entity's hash and no other."""
+    hashes = content_hashes(root_copy)
+    path = _files(root_copy, "servicenow/problem")[0]
+    table = pq.read_table(path)
+    payloads = table.column("_payload").to_pylist()
+    row = next(i for i, value in enumerate(payloads) if value is not None)
+    payloads[row] = payloads[row][:-1] + ',"edited":true}'  # still a JSON object
+    idx = table.schema.get_field_index("_payload")
+    pq.write_table(table.set_column(idx, table.schema.field(idx), pa.array(payloads)), path)
+
+    changed = content_hashes(root_copy)
+
     assert changed["servicenow/problem"] != hashes["servicenow/problem"]
     assert {k: v for k, v in changed.items() if k != "servicenow/problem"} == {
         k: v for k, v in hashes.items() if k != "servicenow/problem"

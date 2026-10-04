@@ -298,6 +298,30 @@ def test_ut11_29_corrupted_root_with_verify_exits_1(
     assert (root / "truth" / "truth.json").is_file()  # left as is for inspection
 
 
+def test_ut11_29_unexpected_error_exits_1_without_its_text(
+    tmp_path: Path,
+    inline_pool: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """UT11-29 / TH11-07 a non-Herness exception exits 1, and neither stdout nor stderr
+    repeats its message (it could carry generated ticket text or names)."""
+    planted = "Jane Example reported the checkout outage in ticket text"
+
+    def explode(*_args: object, **_kwargs: object) -> TruthManifest:
+        raise ValueError(planted)
+
+    monkeypatch.setattr(synth_data, "generate", explode)
+
+    assert main(_args(tmp_path / "root")) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "ValueError" in captured.err
+    assert planted not in captured.out + captured.err
+    assert "Jane Example" not in captured.err
+
+
 def test_ut11_29_unknown_option_exits_2(
     tmp_path: Path, inline_pool: None, capsys: pytest.CaptureFixture[str]
 ) -> None:
