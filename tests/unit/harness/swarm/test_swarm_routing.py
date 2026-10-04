@@ -141,3 +141,18 @@ def test_ut06_68_writer_budget_needs_tokens_and_caps_wall_clock() -> None:
         update={"analyst_budget": TaskBudget(max_steps=5, max_tokens=5_000, wall_clock_s=50_000)}
     )
     assert role_budget("writer", long, writer_tokens=5_000).wall_clock_s == 86_400
+
+
+@pytest.mark.parametrize("depth", ["fast", "standard", "deep"])
+@pytest.mark.parametrize("child_depth", [0, 1, 2])
+def test_ut06_68_pipeline_stand_in_matches_default_tools(depth: str, child_depth: int) -> None:
+    """UT06-68 the pipelines' analyst tool stand-in (rank 3 may not import the swarm, §2) gives
+    the same list as `default_tools` for every non-crosscheck specialty."""
+    from herness.harness.pipelines import _review_common as common  # noqa: PLC0415 - test only
+
+    knobs = _knobs(depth)
+    for specialty in (s for s in _SPECIALTIES if s != "crosscheck"):
+        args = ("analyst", specialty, depth)
+        assert common.default_tools(*args, child_depth=child_depth, knobs=knobs) == (
+            default_tools(*args, child_depth=child_depth, knobs=knobs)  # type: ignore[arg-type]
+        )
