@@ -160,9 +160,10 @@ def _replay(texts: list[str], count: int, avg_bytes: int) -> list[str]:
 
 @pytest.mark.xfail(
     strict=False,
-    reason="BT10-03 measured median 1,236 records/s (repeats 1,189/1,236/1,248; avg 1.5 KB, "
+    reason="BT10-03 measured ~1,200-1,300 records/s on the 32-core dev box (avg 1.5 KB, "
     "100k-name directory, one core) against >= 5,000: pending bench-owner ruling (T10-15)",
 )
+@pytest.mark.timeout(1800)
 def test_bt10_03_redact_records_per_second(tmp_path: Path) -> None:
     """BT10-03 spec 11 corpus replayed to 100k records of ~1.5 KB, 100k-name directory, one core:
     at least 5,000 records/s (median of three repeats)."""
