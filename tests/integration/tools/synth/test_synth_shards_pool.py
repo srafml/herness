@@ -6,6 +6,7 @@ dot-prefixed file under `data/raw` and writes `servicenow/cmn_department` and
 """
 
 import dataclasses
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from herness.core.errors import FatalError
+from tools.synth import shards as shards_module
 from tools.synth.catalog import Catalog, build_catalog
 from tools.synth.params import SynthParams, load_params
 from tools.synth.shards import AggregateResult, plan_shards, run_all_shards
@@ -47,7 +49,9 @@ def generated(
 ) -> tuple[Path, AggregateResult]:
     root = tmp_path_factory.mktemp("tiny_root")
     shards = plan_shards(cat, params)
-    return root, run_all_shards(shards, cat, params, seed=_SEED, root=root, workers=_WORKERS)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(shards_module, "_ROWS_PER_WORKER", 1)  # tiny would run in process
+        return root, run_all_shards(shards, cat, params, seed=_SEED, root=root, workers=_WORKERS)
 
 
 def test_rf_tiny_generation_lake_has_no_dot_files(generated: tuple[Path, AggregateResult]) -> None:
@@ -97,3 +101,16 @@ def test_rf_worker_failure_raises_fatal_naming_shard(
     bad = dataclasses.replace(good, entity="bogus_entity", index=1)
     with pytest.raises(FatalError, match="servicenow/bogus_entity/2026-06"):
         run_all_shards([good, bad], cat, params, seed=_SEED, root=tmp_path, workers=_WORKERS)
+
+
+def test_rf_in_process_failure_raises_fatal_naming_shard(
+    tmp_path: Path, cat: Catalog, params: SynthParams
+) -> None:
+    """T11-14b the in-process run (one worker fits the plan) raises the same `FatalError`
+    naming the shard, and leaves the root logger level as it found it."""
+    good = plan_shards(cat, params)[0]
+    bad = dataclasses.replace(good, entity="bogus_entity", index=1)
+    before = logging.getLogger().level
+    with pytest.raises(FatalError, match="servicenow/bogus_entity/2026-06"):
+        run_all_shards([good, bad], cat, params, seed=_SEED, root=tmp_path, workers=1)
+    assert logging.getLogger().level == before

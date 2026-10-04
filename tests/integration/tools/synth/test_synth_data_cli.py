@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from herness.core.logging import reset_logging
+from tools.synth import shards
 from tools.synth.verify import content_hashes, verify_root
 from tools.synth_data import main
 
@@ -32,15 +33,19 @@ def _generate(root: Path, seed: int, scale: str, workers: int) -> dict[str, str]
 
 
 def _determinism(tmp_path: Path, seed: int, scale: str) -> None:
+    """`--workers 1` runs in this process at `tiny` (T11-14b); `--workers 8` runs the pool."""
     one = _generate(tmp_path / "w1", seed, scale, 1)
     eight = _generate(tmp_path / "w8", seed, scale, 8)
     assert one
     assert one == eight
 
 
-def test_it11_01_tiny_content_hashes_equal_across_worker_counts(tmp_path: Path) -> None:
-    """IT11-01 seed 7 tiny with `--workers 1` and `--workers 8`: equal `content_hashes`
-    for every `source/entity`."""
+def test_it11_01_tiny_content_hashes_equal_across_worker_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT11-01 seed 7 tiny with `--workers 1` (in process) and `--workers 8` (spawn pool,
+    forced by a one-row worker share): equal `content_hashes` for every `source/entity`."""
+    monkeypatch.setattr(shards, "_ROWS_PER_WORKER", 1)
     _determinism(tmp_path, 7, "tiny")
 
 
