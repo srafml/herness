@@ -9,6 +9,7 @@ from typing import Final
 
 import duckdb
 
+from herness.metrics._scoring_checks import input_digest
 from herness.metrics.context import StepContext, StepResult
 from herness.metrics.evidence import IntoSpec, RecordedQuery, run_recorded
 from herness.metrics.render import render_named
@@ -19,6 +20,7 @@ __all__ = ["ATTRIBUTION_TABLE", "FUNDING_TABLE", "NO_CANDIDATES", "run_funding_s
 ATTRIBUTION_TABLE: Final = "score.funding_attribution"
 FUNDING_TABLE: Final = "score.funding"
 NO_CANDIDATES: Final = "no funding candidates"
+_FACTS: Final = ("metrics.incident_fact", "metrics.change_fact", "metrics.work_item_closure")
 
 
 def run_funding_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> StepResult:
@@ -29,11 +31,10 @@ def run_funding_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> Step
     """
     unconfirmed = bool(unconfirmed_blocks(sc.weights, WEIGHT_USES["funding"]))
     binds = {**sc.binds(), "unconfirmed": unconfirmed}
-    attribution = _store(
-        con, sc, "funding_attribution", binds, IntoSpec(ATTRIBUTION_TABLE, "replace", "query_id")
-    )
+    into = IntoSpec(ATTRIBUTION_TABLE, "replace", "query_id")
+    attribution = _store(con, sc, ("funding_attribution", _FACTS), binds, into)
     into = IntoSpec(FUNDING_TABLE, "replace", "query_ids", (attribution.query_id,))
-    score = _store(con, sc, "funding_score", binds, into)
+    score = _store(con, sc, ("funding_score", (ATTRIBUTION_TABLE, *_FACTS)), binds, into)
     return StepResult(
         row_counts={ATTRIBUTION_TABLE: attribution.row_count, FUNDING_TABLE: score.row_count},
         warnings=[] if score.row_count else [NO_CANDIDATES],
@@ -45,11 +46,16 @@ def run_funding_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> Step
 def _store(
     con: duckdb.DuckDBPyConnection,
     sc: StepContext,
-    name: str,
+    template: tuple[str, tuple[str, ...]],
     binds: Mapping[str, object],
     into: IntoSpec,
 ) -> RecordedQuery:
-    """Render the named template with `binds` and store its result through `run_recorded`."""
-    rendered = render_named(name, {}, binds)
+    """Render the named template with `binds` and store its result through `run_recorded`.
+
+    The context `inputs` digests the query_ids of the input tables read, so a same-build rerun
+    over changed inputs records new evidence instead of a TH04-06 hash conflict (T04-21).
+    """
+    name, tables = template
+    rendered = render_named(name, {"inputs": input_digest(con, tables)}, binds)
     params = {"bind": rendered.bind, "template": rendered.template}
     return run_recorded(con, rendered.sql, params, "score", build_id=sc.build_id, into=into)

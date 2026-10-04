@@ -82,7 +82,7 @@ All paths are repo-relative. Layer L3 per ENG §2.1. `herness.metrics` MUST NOT 
 | `herness/metrics/peers.py` | Peer group resolution | `PeerGroupInfo`, `peer_group` | L3 | `duckdb` | 180 |
 | `herness/metrics/context.py` | Step inputs and outputs shared by step modules (avoids import cycles) | `StepContext`, `StepResult`, `ScoringReport` | L3 | none | 80 |
 | `herness/metrics/scoring.py` | Step runner, validate/metrics/check steps, checkpointing | `ScoringReport`, `run_scoring`, `STEPS`, `run_metrics_step`, `run_check_step`, `missing_required_columns` | L3 | `duckdb` | 390 |
-| `herness/metrics/_scoring_checks.py` | Private: step `check` (U04-59) and its check table (name, severity, input tables) — split from scoring.py for budget (T04-13); `scoring` re-exports `run_check_step` | none public (imported by scoring.py only) | L3 | `duckdb` | 130 |
+| `herness/metrics/_scoring_checks.py` | Private: step `check` (U04-59), its check table (name, severity, required input tables, optional score.* inputs) and `input_digest` (the inputs pin also used by the funding, org and levers steps) — split from scoring.py for budget (T04-13); budget 130 → 180 for the score.* checks (T04-21); `scoring` re-exports `run_check_step` | none public (imported by scoring.py and the step modules only) | L3 | `duckdb` | 180 |
 | `herness/metrics/funding.py` | Funding step (attribution and score) | `run_funding_step` | L3 | `duckdb` | 150 |
 | `herness/metrics/org.py` | Org step | `run_org_step` | L3 | `duckdb` | 110 |
 | `herness/metrics/levers.py` | Levers step | `run_levers_step`, `USD_MODELS`, `LEVER_PLACEHOLDERS` | L3 | `duckdb` | 130 |

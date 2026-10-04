@@ -12,7 +12,7 @@ import duckdb
 
 from herness.core.errors import QueryError, SchemaViolation
 from herness.metrics._catalog_checks import LEVER_PLACEHOLDERS
-from herness.metrics._scoring_checks import existing_tables
+from herness.metrics._scoring_checks import existing_tables, input_digest
 from herness.metrics.context import StepContext, StepResult
 from herness.metrics.evidence import IntoSpec, run_recorded
 from herness.metrics.render import render_named
@@ -21,6 +21,7 @@ __all__ = ["LEVER_PLACEHOLDERS", "LEVER_TABLE", "USD_MODELS", "run_levers_step"]
 
 LEVER_TABLE: Final = "score.action_lever"
 _ORG_TABLE: Final = "score.org"
+_FACTS: Final = ("metrics.incident_fact", "metrics.change_fact")
 # U04-71: the lever models, in design 04 §5.9 order. LEVER_PLACEHOLDERS (the only names a
 # rationale template may use) is defined once in `_catalog_checks` and re-exported here.
 USD_MODELS: Final[tuple[str, ...]] = ("mttr", "repeat", "reopen", "reassign", "sla", "cfr", "noise")
@@ -43,7 +44,9 @@ def run_levers_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> StepR
         msg = "score.org missing; run step org first"
         raise SchemaViolation(msg)
     upstream = _org_query_id(con)
-    rendered = render_named("levers", {}, sc.binds())
+    # `inputs` pins the org and fact rows read (a same-build rerun over new ones is new evidence)
+    inputs = input_digest(con, (_ORG_TABLE, *_FACTS))
+    rendered = render_named("levers", {"inputs": inputs}, sc.binds())
     params = {"bind": rendered.bind, "template": rendered.template}
     into = IntoSpec(LEVER_TABLE, "replace", "query_ids", upstream)
     try:

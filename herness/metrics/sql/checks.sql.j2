@@ -1,10 +1,11 @@
 {#- Scoring invariants of step `check` (impl 04 U04-60, design 04 §10.2).
-    One segment per check, split on the `-- @check <name>` lines; each is a static SELECT
-    returning one row (value DOUBLE, n_bad BIGINT). The only bind is the catalog-derived
-    `s_count_metrics` list. Segment bodies hold no SQL comments (run_recorded rejects them). -#}
--- T04-21: add the score.* checks of U04-60 (score_share_sum ... score_portfolio_blockers,
--- score_unconfirmed_rows) in table order and extend score_evidence_coverage with
--- score.*.query_ids and score.funding_attribution.query_id.
+    One segment per check, split on the `-- @check <name>` lines, in U04-60 order; each is a
+    SELECT returning one row (value DOUBLE, n_bad BIGINT); score_pain_total adds its DD04-11
+    `threshold` column. Runtime values are step binds (p()); the `has_<schema>_<table>`
+    context flags name the optional tables present (U04-59 missing inputs). Segment bodies
+    hold no SQL comments (run_recorded rejects them), so prose lives in this header only:
+    score_pain_total recomputes each record's usd as U04-64 `rec_cost` does (unrounded
+    DOUBLE) and compares the annualized attributed sum with the annualized window total. -#}
 -- @check score_fact_duration_negative
 SELECT CAST(c.n AS DOUBLE) AS value, CAST(c.n AS BIGINT) AS n_bad
 FROM (
@@ -30,6 +31,96 @@ WHERE value < 0 OR numerator < 0 OR denominator < 0 OR sample_size < 0
 SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
 FROM metrics.metric_value
 WHERE list_contains({{ p('s_count_metrics') }}, metric) AND value <> floor(value)
+-- @check score_share_sum
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM (
+  SELECT record_kind, record_id
+  FROM score.funding_attribution
+  GROUP BY record_kind, record_id
+  HAVING sum(share) > 1 + 1e-9
+) r
+-- @check score_share_range
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM score.funding_attribution
+WHERE share <= 0 OR share > 1 + 1e-9
+-- @check score_pain_total
+WITH rec_cost AS (
+  SELECT f.record_id, 'incident' AS record_kind, CAST(f.total_usd AS DOUBLE) AS usd
+  FROM metrics.incident_fact f
+  WHERE NOT f.excluded
+    AND f.opened_at >= {{ p('as_of_ts') }} - to_days({{ p('s_window_days') }})
+    AND f.opened_at < {{ p('as_of_ts') }}
+  UNION ALL
+  SELECT e.event_id, 'event', {{ p('w_triage_minutes') }} / 60.0 * {{ p('w_engineer_hour') }}
+  FROM core.event e
+  WHERE e.ts >= {{ p('as_of_ts') }} - to_days({{ p('s_window_days') }})
+    AND e.ts < {{ p('as_of_ts') }}
+    AND list_contains({{ p('d_noise_severities') }}, e.severity)
+    AND e.incident_id IS NULL
+  UNION ALL
+  SELECT cf.record_id, 'change', {{ p('w_backout_hours') }} * {{ p('w_engineer_hour') }}
+  FROM metrics.change_fact cf
+  JOIN core.change ch ON ch.record_id = cf.record_id
+  WHERE cf.failed
+    AND list_contains({{ p('d_failure_outcomes') }}, ch.outcome)
+    AND cf.actual_end >= {{ p('as_of_ts') }} - to_days({{ p('s_window_days') }})
+    AND cf.actual_end < {{ p('as_of_ts') }}
+),
+annual AS (
+  SELECT
+    CAST(coalesce((SELECT sum(a.share * r.usd)
+                   FROM score.funding_attribution a
+                   JOIN rec_cost r ON r.record_kind = a.record_kind AND r.record_id = a.record_id),
+                  0) * 365 / {{ observed_days() }} AS DOUBLE) AS attributed,
+    CAST(coalesce((SELECT sum(usd) FROM rec_cost), 0) * 365 / {{ observed_days() }} AS DOUBLE)
+      AS total
+)
+SELECT attributed - total AS value,
+       CAST(attributed - total > 0.01 + 1e-9 * total AS BIGINT) AS n_bad,
+       0.01 + 1e-9 * total AS threshold
+FROM annual
+-- @check score_confidence_range
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM score.funding
+WHERE NOT coalesce(confidence BETWEEN 0.05 AND 1, false)
+-- @check score_funding_rank_unique
+SELECT CAST(count(*) - count(DISTINCT rank) AS DOUBLE) AS value,
+       CAST(count(*) - count(DISTINCT rank) AS BIGINT) AS n_bad
+FROM score.funding
+-- @check score_org_z_finite
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM score.org
+WHERE NOT isfinite(z_score) OR NOT isfinite(composite) OR NOT isfinite(trend_slope)
+-- @check score_portfolio_budget
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM (
+  SELECT p.scenario
+  FROM score.portfolio p
+  LEFT JOIN score.funding f ON f.candidate_id = p.candidate_id
+  GROUP BY p.scenario
+  HAVING coalesce(sum(CASE WHEN p.selected THEN ceil(f.effort_cost_usd) END), 0)
+         > floor(min(p.budget_usd))
+) s
+-- @check score_portfolio_parent_child
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM score.portfolio a
+JOIN metrics.work_item_closure wc ON wc.ancestor_record_id = a.candidate_id AND wc.depth >= 1
+JOIN score.portfolio d ON d.scenario = a.scenario AND d.candidate_id = wc.record_id
+WHERE a.selected AND d.selected
+-- @check score_portfolio_blockers
+SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
+FROM (
+  SELECT DISTINCT b.scenario, b.candidate_id
+  FROM score.portfolio b
+  JOIN core.work_item wb ON wb.record_id = b.candidate_id
+  JOIN core.work_item_link l ON l.link_type = 'blocks' AND l.to_key = wb.key
+  JOIN core.work_item wa ON wa.key = l.from_key AND wa.status_category <> 'done'
+  JOIN score.funding fa ON fa.candidate_id = wa.record_id
+  WHERE b.selected
+    AND NOT EXISTS (
+      SELECT 1 FROM score.portfolio s
+      WHERE s.scenario = b.scenario AND s.candidate_id = wa.record_id AND s.selected)
+) x
 -- @check score_evidence_coverage
 SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
 FROM (
@@ -39,9 +130,38 @@ FROM (
   UNION SELECT query_id FROM metrics.change_fact
   UNION SELECT query_id FROM metrics.work_item_fact
   UNION SELECT query_id FROM metrics.metric_value
+  {%- if has_score_funding_attribution %}
+  UNION SELECT query_id FROM score.funding_attribution
+  {%- endif %}
+  {%- if has_score_funding %}
+  UNION SELECT unnest(query_ids) FROM score.funding
+  {%- endif %}
+  {%- if has_score_org %}
+  UNION SELECT unnest(query_ids) FROM score.org
+  {%- endif %}
+  {%- if has_score_action_lever %}
+  UNION SELECT unnest(query_ids) FROM score.action_lever
+  {%- endif %}
+  {%- if has_score_portfolio %}
+  UNION SELECT unnest(query_ids) FROM score.portfolio
+  {%- endif %}
 ) q
 WHERE NOT EXISTS (SELECT 1 FROM meta.evidence e WHERE e.query_id = q.query_id)
 -- @check score_work_item_cycle
 SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
 FROM metrics.work_item_closure
 WHERE depth = 10
+-- @check score_unconfirmed_rows
+SELECT CAST(u.n AS DOUBLE) AS value, CAST(u.n AS BIGINT) AS n_bad
+FROM (
+  SELECT 0
+  {%- if has_score_funding %}
+    + (SELECT count(*) FROM score.funding WHERE unconfirmed)
+  {%- endif %}
+  {%- if has_score_action_lever %}
+    + (SELECT count(*) FROM score.action_lever WHERE unconfirmed)
+  {%- endif %}
+  {%- if has_score_org %}
+    + (SELECT count(*) FROM score.org WHERE unconfirmed)
+  {%- endif %} AS n
+) u

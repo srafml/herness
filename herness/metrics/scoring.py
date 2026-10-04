@@ -22,6 +22,9 @@ from herness.metrics.catalog import MetricCatalog, catalog_from_config, validate
 from herness.metrics.context import ScoringReport, StepContext, StepResult
 from herness.metrics.evidence import IntoSpec, run_recorded
 from herness.metrics.facts import FACT_TABLES
+from herness.metrics.funding import run_funding_step
+from herness.metrics.levers import run_levers_step
+from herness.metrics.org import run_org_step
 from herness.metrics.portfolio import run_portfolio_step
 from herness.metrics.render import render_metric_query
 from herness.metrics.settings import Period, WeightsConfig
@@ -178,11 +181,11 @@ def run_metrics_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> Step
 
 
 # Step functions by name; `validate` runs separately on every call.
-_STEP_FUNCS: dict[str, StepFn | None] = {
+_STEP_FUNCS: dict[str, StepFn] = {
     "metrics": run_metrics_step,
-    "funding": None,  # T04-21: run_funding_step (herness.metrics.funding, T04-15)
-    "org": None,  # T04-21: run_org_step (herness.metrics.org, T04-17)
-    "levers": None,  # T04-21: run_levers_step (herness.metrics.levers, T04-18)
+    "funding": run_funding_step,
+    "org": run_org_step,
+    "levers": run_levers_step,
     "portfolio": run_portfolio_step,
     "check": run_check_step,
 }
@@ -309,15 +312,15 @@ def _execute(
     checkpoint: tuple[dict[str, JsonValue], str],
 ) -> None:
     """Run one pending step, record it and checkpoint it (U04-56 steps 7-9)."""
-    fn = _STEP_FUNCS[step]
-    if fn is None:
-        _log.warning("metrics.scoring.step_unavailable", build_id=sc.build_id, step=step)
-        run.warnings.append(f"step {step} is not available yet; skipped")
-        return
     _log.info("metrics.scoring.step_started", build_id=sc.build_id, step=step)
     start = time.perf_counter()
-    result = _run_step(con, step, fn, sc)
+    result = _run_step(con, step, _STEP_FUNCS[step], sc)
     elapsed = time.perf_counter() - start
+    # T08-05: the resilience buffer flushes through the ops metric writer (R-12).
+    labels = {"step": step}
+    record_histogram(
+        "herness_metrics_step_duration_seconds", elapsed, component="metrics", labels=labels
+    )
     if result.failed_checks:  # dq rows are committed; the step is not checkpointed
         msg = "scoring invariants failed: " + ", ".join(result.failed_checks)
         raise SchemaViolation(msg)
@@ -332,10 +335,6 @@ def _execute(
         step=step,
         duration_ms=run.duration_ms[step],
         rows=rows,
-    )
-    labels = {"step": step}
-    record_histogram(
-        "herness_metrics_step_duration_seconds", elapsed, component="metrics", labels=labels
     )
 
 
@@ -377,7 +376,7 @@ def run_scoring(
             continue
         _execute(con, step, sc, run, ctx, (state, cfg_hash))
         more = index + 1 < len(pending)
-        if ctx is not None and more and step in run.done and ctx.should_yield():
+        if ctx is not None and more and ctx.should_yield():
             run.flags.append("yielded")
             return run.report()
     report = run.report()

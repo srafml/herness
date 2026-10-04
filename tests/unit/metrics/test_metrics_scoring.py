@@ -1,9 +1,9 @@
-"""Tests for herness.metrics.scoring (impl 04 U04-55 … U04-60; T04-13).
+"""Tests for herness.metrics.scoring (impl 04 U04-55 … U04-60; T04-13, T04-21).
 
 `metrics_tiny` with stage 400 facts; the build started 2026-04-01 06:00 UTC, so `as_of` is
 2026-04-01. Most tests use a small catalog (five metrics) to stay fast; UT04-110/UT04-118 run
-the shipped catalog once per module. The steps funding/org/levers/portfolio are not built yet
-(T04-21): a requested one is skipped with a warning and never checkpointed.
+the shipped catalog once per module. Every step of `STEPS` is wired (T04-21); the per-check
+pass/fail fixtures of the score.* checks live in `test_metrics_scoring_checks.py`.
 """
 
 import ast
@@ -37,7 +37,14 @@ pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[3]
 PERIODS = ("week", "month", "quarter", "t12w", "t12m")
-UNBUILT = ("funding", "org", "levers", "portfolio")
+RUN_STEPS = [s for s in STEPS if s != "validate"]
+SCORE_TABLES = (
+    "score.funding_attribution",
+    "score.funding",
+    "score.org",
+    "score.action_lever",
+    "score.portfolio",
+)
 CHECK_NAMES = [name for name, _, _ in _scoring_checks.CHECKS]
 
 
@@ -105,36 +112,47 @@ def test_ut04_110_steps_fixed_order() -> None:
 
 def test_ut04_110_full_run_steps_in_order_and_counts(full: Any) -> None:
     """UT04-110 the shipped catalog on the tiny build: steps in order, report counts from SQL,
-    the unbuilt steps skipped with warnings, the checkpoint saved after each step."""
+    every step wired and run with default steps, the checkpoint saved after each step, and
+    every `error` check passed (acceptance: full `run_scoring` on the tiny build)."""
     con, report, ctx, logs = full
     assert report.build_id == BUILD_ID
-    assert report.steps_done == ["validate", "metrics", "check"]
-    assert report.row_counts == {
-        "metrics.metric_value": _count(con, "SELECT count(*) FROM metrics.metric_value"),
-        "meta.dq_result": len(CHECK_NAMES),
-    }
+    assert report.steps_done == list(STEPS)
+    tables = ("metrics.metric_value", *SCORE_TABLES)
+    expected = {t: _count(con, f"SELECT count(*) FROM {t}") for t in tables}  # noqa: S608
+    assert report.row_counts == {**expected, "meta.dq_result": len(CHECK_NAMES)}
     assert report.row_counts["metrics.metric_value"] > 0
-    assert set(report.duration_ms) == {"metrics", "check"}
+    assert report.row_counts["score.funding"] > 0
+    assert report.row_counts["score.portfolio"] > 0
+    assert set(report.duration_ms) == set(RUN_STEPS)
     assert report.flags == []
-    assert report.warnings == [f"step {s} is not available yet; skipped" for s in UNBUILT]
-    events = [(e["event"], e.get("step")) for e in logs if e["event"].startswith("metrics.scoring")]
-    assert events == [
-        ("metrics.scoring.step_started", "metrics"),
-        ("metrics.scoring.step_completed", "metrics"),
-        *[("metrics.scoring.step_unavailable", s) for s in UNBUILT],
-        ("metrics.scoring.step_started", "check"),
-        ("metrics.scoring.step_completed", "check"),
-        ("metrics.scoring.completed", None),
+    # the tiny weights are unconfirmed: the one warn check fails as a report warning only
+    assert report.warnings == ["check score_unconfirmed_rows failed"]
+    events = [
+        (e["event"], e.get("step"))
+        for e in logs
+        if e["event"].startswith("metrics.scoring") and e["event"] != "metrics.scoring.check_failed"
     ]
+    failed = [
+        (e["check_name"], e["log_level"]) for e in logs if e["event"].endswith("check_failed")
+    ]
+    assert failed == [("score_unconfirmed_rows", "warning")]
+    per_step = [
+        (f"metrics.scoring.{kind}", s)
+        for s in RUN_STEPS
+        for kind in ("step_started", "step_completed")
+    ]
+    assert events == [*per_step, ("metrics.scoring.completed", None)]
     assert [s["scoring"] for s in ctx.saved_states] == [
-        _state(["metrics"]),
-        _state(["metrics", "check"]),
+        _state(RUN_STEPS[: i + 1]) for i in range(len(RUN_STEPS))
     ]
-    assert ctx.heartbeats == ["scoring:metrics", "scoring:check"]
+    assert ctx.heartbeats == [f"scoring:{s}" for s in RUN_STEPS]
     rows = con.execute(
-        "SELECT check_name, passed FROM meta.dq_result WHERE check_name LIKE 'score_%'"
+        "SELECT check_name, severity, passed FROM meta.dq_result WHERE check_name LIKE 'score_%'"
     ).fetchall()
-    assert sorted(rows) == sorted((name, True) for name in CHECK_NAMES)
+    assert sorted(rows) == sorted(
+        (name, severity, name != "score_unconfirmed_rows")
+        for name, severity, _ in _scoring_checks.CHECKS
+    )
 
 
 # --- UT04-118 metrics step coverage ----------------------------------------------------------
@@ -230,20 +248,25 @@ def _step_context(con: duckdb.DuckDBPyConnection) -> StepContext:
 
 
 def test_ut04_111_only_requested_steps(tiny: duckdb.DuckDBPyConnection) -> None:
-    """UT04-111 steps=["org", "levers"]: only those (plus validate); both unbuilt, so skipped
-    with warnings; no metric table written and nothing checkpointed."""
+    """UT04-111 steps=["levers", "metrics", "org"]: only those (plus validate), in `STEPS`
+    order; funding, portfolio and check do not run and write nothing."""
     ctx = FakeJobContext()
     with capture_logs() as logs:
-        report = run_scoring(BUILD_ID, steps=["levers", "org"], con=tiny, ctx=ctx)
-    assert report.steps_done == ["validate"]
-    assert report.warnings == [
-        "step org is not available yet; skipped",
-        "step levers is not available yet; skipped",
-    ]
-    assert "metrics.metric_value" not in _tables(tiny)
-    assert ctx.saved_states == []
-    unavailable = [e["step"] for e in logs if e["event"] == "metrics.scoring.step_unavailable"]
-    assert unavailable == ["org", "levers"]
+        report = run_scoring(BUILD_ID, steps=["levers", "metrics", "org"], con=tiny, ctx=ctx)
+    assert report.steps_done == ["validate", "metrics", "org", "levers"]
+    started = [e["step"] for e in logs if e["event"] == "metrics.scoring.step_started"]
+    assert started == ["metrics", "org", "levers"]
+    assert {"score.org", "score.action_lever"} <= _tables(tiny)
+    assert {"score.funding", "score.funding_attribution", "score.portfolio"}.isdisjoint(
+        _tables(tiny)
+    )
+    assert (
+        _count(
+            tiny, "SELECT count(*) FROM meta.dq_result WHERE check_name <> 'score_metric_disabled'"
+        )
+        == 0
+    )
+    assert ctx.saved_states[-1]["scoring"] == _state(["metrics", "org", "levers"])
 
 
 def test_ut04_111_unknown_step(tiny: duckdb.DuckDBPyConnection) -> None:
@@ -255,19 +278,16 @@ def test_ut04_111_unknown_step(tiny: duckdb.DuckDBPyConnection) -> None:
 
 def test_ut04_111_check_only_skips_missing_inputs(tiny: duckdb.DuckDBPyConnection) -> None:
     """UT04-111 steps=["check"] before metrics ran: checks over metric_value are recorded as
-    passed with details.skipped (information_schema pre-check), the fact check runs."""
+    passed with details.skipped (information_schema pre-check), and so are the score.* checks
+    (no score table exists, so `score_unconfirmed_rows` has no input either); the fact
+    checks run."""
     report = run_scoring(BUILD_ID, steps=["check"], con=tiny)
     assert report.steps_done == ["validate", "check"]
     skipped = {
         name for name in CHECK_NAMES if json.loads(_dq(tiny, name)[0][4]).get("skipped") is True
     }
-    assert skipped == {
-        "score_metric_ratio_range",
-        "score_metric_pct_range",
-        "score_metric_negative",
-        "score_metric_count_integral",
-        "score_evidence_coverage",
-    }
+    assert skipped == set(CHECK_NAMES) - {"score_fact_duration_negative", "score_work_item_cycle"}
+    assert _dq(tiny, "score_unconfirmed_rows") == [("warn", None, 0.0, True, '{"skipped":true}')]
     assert _dq(tiny, "score_metric_pct_range") == [("error", None, 0.0, True, '{"skipped":true}')]
     severity, value, threshold, passed, details = _dq(tiny, "score_fact_duration_negative")[0]
     assert (severity, value, threshold, passed) == ("error", 0.0, 0.0, True)
@@ -322,8 +342,8 @@ def test_ut04_112_yield_after_step(tiny: duckdb.DuckDBPyConnection) -> None:
     resumed = FakeJobContext(state=ctx.saved_states[-1])
     report = run_scoring(BUILD_ID, con=tiny, ctx=resumed)
     assert report.flags == []
-    assert report.steps_done == ["validate", "metrics", "check"]
-    assert set(report.duration_ms) == {"check"}
+    assert report.steps_done == list(STEPS)
+    assert set(report.duration_ms) == set(RUN_STEPS) - {"metrics"}
 
 
 # --- UT04-113 / UT04-114 validate step --------------------------------------------------------
@@ -428,8 +448,12 @@ def test_ut04_115_corrupt_ratio_fails_check(tiny: duckdb.DuckDBPyConnection) -> 
     severity, value, threshold, passed, details = _dq(tiny, "score_metric_ratio_range")[0]
     assert (severity, value, threshold, passed) == ("error", float(bad), 0.0, False)
     assert json.loads(details)["n_bad"] == bad
-    assert ctx.saved_states == []
-    failed = [e for e in logs if e["event"] == "metrics.scoring.check_failed"]
+    assert ctx.saved_states[-1]["scoring"] == _state([s for s in RUN_STEPS if s != "check"])
+    failed = [
+        e
+        for e in logs
+        if e["event"] == "metrics.scoring.check_failed" and e["log_level"] == "error"
+    ]
     assert [(e["check_name"], e["value"], e["threshold"]) for e in failed] == [
         ("score_metric_ratio_range", float(bad), 0)
     ]
@@ -437,7 +461,8 @@ def test_ut04_115_corrupt_ratio_fails_check(tiny: duckdb.DuckDBPyConnection) -> 
 
 def test_ut04_115_each_check_detects_its_violation(tiny: duckdb.DuckDBPyConnection) -> None:
     """UT04-115 one planted violation per base check; `score_work_item_cycle` is a warn (a
-    report warning, not a failed check); every check query is recorded (producer score)."""
+    report warning, not a failed check); every check that ran is recorded (producer score),
+    the score.* checks are skipped (no score table)."""
     run_scoring(BUILD_ID, steps=["metrics"], con=tiny)
     tiny.execute("UPDATE metrics.incident_fact SET resolve_h = -1 WHERE resolve_h IS NOT NULL")
     tiny.execute(
@@ -468,7 +493,11 @@ def test_ut04_115_each_check_detects_its_violation(tiny: duckdb.DuckDBPyConnecti
             "SELECT params FROM meta.evidence WHERE producer = 'score'"
         ).fetchall()
     }
-    assert checks == {f"checks:{name}" for name in CHECK_NAMES}
+    ran = {
+        name for name, _, tables in _scoring_checks.CHECKS if tables and "score." not in tables[0]
+    }
+    assert checks == {f"checks:{name}" for name in ran}
+    assert len(ran) == 7
 
 
 def test_ut04_115_evidence_coverage_counts_distinct_ids(tiny: duckdb.DuckDBPyConnection) -> None:
@@ -732,7 +761,7 @@ def test_ut04_115_same_build_retry_after_config_change(
     use("B")
     retry = FakeJobContext(state=ctx.saved_states[-1])
     report = run_scoring(BUILD_ID, con=tiny, ctx=retry)
-    assert set(report.duration_ms) == {"metrics", "check"}  # stale checkpoint: metrics reran
+    assert set(report.duration_ms) == set(RUN_STEPS)  # stale checkpoint: every step reran
     severity, value, _, passed, _details = _dq(tiny, "score_metric_ratio_range")[0]
     assert (severity, value, passed) == ("error", 0.0, True)
     new_qid = _check_qid(tiny, "score_metric_ratio_range")
@@ -741,5 +770,5 @@ def test_ut04_115_same_build_retry_after_config_change(
     assert retry.saved_states[-1]["scoring"] == {
         "build_id": BUILD_ID,
         "config_hash": hash_b,
-        "steps_done": ["metrics", "check"],
+        "steps_done": RUN_STEPS,
     }

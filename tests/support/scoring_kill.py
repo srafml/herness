@@ -1,12 +1,13 @@
-"""Child process of the scoring crash test (impl 04 FT04-01 metrics part; T04-13).
+"""Child process of the scoring crash test (impl 04 FT04-01; T04-13, T04-21).
 
-Run as ``python -m tests.support.scoring_kill <build.duckdb> <state.json> [block]`` from the
-repository root. The child points scoring at the `metrics_tiny` config (small catalog), opens
-the build file writable and runs `run_scoring` with a job context whose checkpoint state lives
-in ``state.json`` (so it survives the process). With ``block`` the `check` step, after running
-its checks inside the step transaction, prints `BLOCKED_LINE` and sleeps until the parent
-terminates the process (an OS-level kill, no fault point: impl 08's registry is unchanged,
-R-40). Without it the child prints one ``SCORING_RESULT <report json>`` line and exits 0.
+Run as ``python -m tests.support.scoring_kill <build.duckdb> <state.json> [block [<step>]]``
+from the repository root. The child points scoring at the `metrics_tiny` config (small
+catalog), opens the build file writable and runs `run_scoring` with a job context whose
+checkpoint state lives in ``state.json`` (so it survives the process). With ``block`` the
+named step (default `check`), after doing its work inside the step transaction, prints
+`BLOCKED_LINE` and sleeps until the parent terminates the process (an OS-level kill, no fault
+point: impl 08's registry is unchanged, R-40). Without it the child prints one
+``SCORING_RESULT <report json>`` line and exits 0.
 """
 
 from __future__ import annotations
@@ -26,10 +27,13 @@ from tests.support.metrics_tiny import BUILD_ID
 
 from herness.metrics import scoring
 from herness.metrics.context import StepContext, StepResult
+from herness.metrics.scoring import StepFn
 
-BLOCKED_LINE: Final = "SCORING_BLOCKED_IN_CHECK"
+BLOCKED_LINE: Final = "SCORING_BLOCKED_IN_STEP"
 RESULT_PREFIX: Final = "SCORING_RESULT "
-_USAGE: Final = "usage: python -m tests.support.scoring_kill <build.duckdb> <state.json> [block]\n"
+_USAGE: Final = (
+    "usage: python -m tests.support.scoring_kill <build.duckdb> <state.json> [block [<step>]]\n"
+)
 _BLOCK_S: Final = 600.0
 
 
@@ -46,22 +50,26 @@ class FileJobContext(FakeJobContext):
         self._path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
 
 
-def _blocking_check(con: duckdb.DuckDBPyConnection, sc: StepContext) -> StepResult:
-    """The real check step, then hold the open transaction until the process is killed."""
-    scoring.run_check_step(con, sc)
-    sys.stdout.write(BLOCKED_LINE + "\n")
-    sys.stdout.flush()
-    time.sleep(_BLOCK_S)
-    msg = "scoring_kill child was not terminated"
-    raise RuntimeError(msg)
+def _blocking(real: StepFn) -> StepFn:
+    """The real step, then hold its open transaction until the process is killed."""
+
+    def run_step(con: duckdb.DuckDBPyConnection, sc: StepContext) -> StepResult:
+        real(con, sc)
+        sys.stdout.write(BLOCKED_LINE + "\n")
+        sys.stdout.flush()
+        time.sleep(_BLOCK_S)
+        msg = "scoring_kill child was not terminated"
+        raise RuntimeError(msg)
+
+    return run_step
 
 
-def run(db_path: Path, state_path: Path, *, block: bool) -> dict[str, object]:
+def run(db_path: Path, state_path: Path, *, block: str | None) -> dict[str, object]:
     """Run scoring on the build file; the report as a JSON-ready dict."""
     for obj, name, value in patches(small_catalog()):
         setattr(obj, name, value)
-    if block:
-        scoring._STEP_FUNCS["check"] = _blocking_check
+    if block is not None:
+        scoring._STEP_FUNCS[block] = _blocking(scoring._STEP_FUNCS[block])
     con = duckdb.connect(str(db_path))
     try:
         report = scoring.run_scoring(BUILD_ID, con=con, ctx=FileJobContext(state_path))
@@ -73,10 +81,15 @@ def run(db_path: Path, state_path: Path, *, block: bool) -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point: exit 0 after printing the result line, 2 on a usage error."""
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) not in (2, 3) or args[2:] not in ([], ["block"]):
+    extra = args[2:]
+    valid = len(args) >= 2 and (
+        extra in ([], ["block"]) or (len(extra) == 2 and extra[0] == "block")
+    )
+    if not valid or (len(extra) == 2 and extra[1] not in scoring.STEPS[1:]):
         sys.stderr.write(_USAGE)
         return 2
-    report = run(Path(args[0]), Path(args[1]), block=args[2:] == ["block"])
+    block = None if not extra else (extra[1] if len(extra) == 2 else "check")
+    report = run(Path(args[0]), Path(args[1]), block=block)
     sys.stdout.write(RESULT_PREFIX + json.dumps(report, sort_keys=True) + "\n")
     return 0
 
