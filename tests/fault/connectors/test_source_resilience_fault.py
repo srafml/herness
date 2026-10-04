@@ -183,13 +183,6 @@ def test_ft01_05_401_is_an_auth_error_without_retry_and_force_open_opens_the_bre
     assert len(seen) == 1  # the open breaker keeps the next call off the wire
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "FT01-05 open item: no connector or runner path calls breaker.force_open on an "
-        "AuthError (08 §9.2 says spec 01 does); the breaker stays closed after a 401"
-    ),
-)
 def test_ft01_05_auth_error_opens_the_breaker_without_a_manual_force_open(
     ops_store: OpsStoreHandle, reset_process_state: ProcessState
 ) -> None:

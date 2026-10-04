@@ -49,6 +49,9 @@ def _no_breaker(monkeypatch: pytest.MonkeyPatch, reset_process_state: ProcessSta
     import herness.core.resilience.retry as retry_module  # noqa: PLC0415 - test seam
 
     class _Breaker:
+        def force_open(self, err: Exception) -> None:
+            del err
+
         def record_failure(self, err: Exception) -> None:
             del err
 
@@ -58,6 +61,7 @@ def _no_breaker(monkeypatch: pytest.MonkeyPatch, reset_process_state: ProcessSta
     reset_process_state.sleep = lambda _s: None
     monkeypatch.setattr(retry_module, "guard", lambda _key: None)
     monkeypatch.setattr(retry_module, "breaker", lambda _key: _Breaker())
+    monkeypatch.setattr("herness.connectors.http.breaker", lambda _key: _Breaker())
 
 
 def _table(batches: Iterator[pa.RecordBatch]) -> pa.Table:

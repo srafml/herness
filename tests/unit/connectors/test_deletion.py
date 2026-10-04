@@ -104,3 +104,33 @@ def test_pt01_06_apply_never_lets_a_deleted_id_through(
         assert filtered.num_rows + dropped == len(batch_ids)
     finally:
         deletion_module.deleted_record_ids = original  # type: ignore[attr-defined]
+
+
+def test_ut01_25_null_record_id_rows_are_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT01-25 a row with a null `_record_id` is never dropped; only the listed id goes."""
+    monkeypatch.setattr(deletion_module, "deleted_record_ids", lambda _s, _e: ["src:ent:a"])
+    deletion = DeletionFilter("src", "ent")
+    deletion.reload()
+    nullable = pa.schema([pa.field("_record_id", pa.string())])
+    batch = pa.RecordBatch.from_pylist(
+        [{"_record_id": "src:ent:a"}, {"_record_id": None}, {"_record_id": "src:ent:b"}],
+        schema=nullable,
+    )
+    filtered, dropped = deletion.apply(batch)
+    assert dropped == 1
+    assert filtered.column("_record_id").to_pylist() == [None, "src:ent:b"]
+
+
+def test_ut01_25_reload_replaces_the_id_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT01-25 after a reload only the new ids are filtered; the old ones pass again and
+    `ids` and `size` follow the new set."""
+    current = ["src:ent:a"]
+    monkeypatch.setattr(deletion_module, "deleted_record_ids", lambda _s, _e: current)
+    deletion = DeletionFilter("src", "ent")
+    deletion.reload()
+    current[:] = ["src:ent:b", "src:ent:c"]
+    assert deletion.reload() == 2
+    filtered, dropped = deletion.apply(_batch(["src:ent:a", "src:ent:b", "src:ent:c"]))
+    assert dropped == 2
+    assert filtered.column("_record_id").to_pylist() == ["src:ent:a"]
+    assert (deletion.size, deletion.ids.to_pylist()) == (2, ["src:ent:b", "src:ent:c"])

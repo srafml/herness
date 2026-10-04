@@ -64,6 +64,9 @@ class _Spy:
         self.failures: list[Exception] = []
         self.successes = 0
 
+    def force_open(self, err: Exception) -> None:
+        self.failures.append(err)
+
     def record_failure(self, err: Exception) -> None:
         self.failures.append(err)
 
@@ -80,6 +83,7 @@ def _no_breaker(monkeypatch: pytest.MonkeyPatch, reset_process_state: ProcessSta
     spy = _Spy()
     monkeypatch.setattr(retry_module, "guard", lambda _key: None)
     monkeypatch.setattr(retry_module, "breaker", lambda _key: spy)
+    monkeypatch.setattr("herness.connectors.http.breaker", lambda _key: spy)
     return spy
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 import json
 import random
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -42,10 +42,17 @@ from herness.connectors.http import (
     http_client,
 )
 from herness.core import config as c
-from herness.core.errors import RateLimited, SchemaViolation, SourceUnavailable
+from herness.core.errors import (
+    AuthError,
+    HernessError,
+    RateLimited,
+    SchemaViolation,
+    SourceUnavailable,
+)
 from herness.core.jobs.outcomes import decide_failure
 from herness.core.jobs.ports import JobRow
 from herness.core.resilience import ProcessState
+from herness.core.resilience.breaker import CircuitBreaker, breaker
 
 pytestmark = pytest.mark.unit
 
@@ -94,6 +101,39 @@ def test_ut01_62_invalid_json_is_schema_violation(slept: list[float]) -> None:
     with pytest.raises(SchemaViolation, match="malformed JSON"):
         _http(handler).get_json("/api/now/table/incident")
     assert slept == []
+
+
+_CALLS: dict[str, Callable[[SourceHttp], object]] = {
+    "get_json": lambda h: h.get_json("/p"),
+    "post_json": lambda h: h.post_json("/p", json_body={}),
+    "post_form_lines": lambda h: list(h.post_form_lines("/p", data={"q": "1"})),
+}
+
+
+@pytest.mark.parametrize("call", list(_CALLS))
+@pytest.mark.parametrize("status", [401, 403])
+def test_ut01_62_auth_error_force_opens_the_source_breaker_once_without_retry(
+    status: int, call: str, slept: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT01-62 (08 §9.2) a 401/403 page raises AuthError after exactly one request: no retry,
+    `force_open` called once with that error on the breaker of the source key."""
+    handler, seen = sequence(reply(status), reply(body={"result": []}))
+    forced: list[tuple[str, HernessError]] = []
+    original = CircuitBreaker.force_open
+
+    def spy(self: CircuitBreaker, err: HernessError) -> None:
+        forced.append((self.key, err))
+        original(self, err)
+
+    monkeypatch.setattr(CircuitBreaker, "force_open", spy)
+    with pytest.raises(AuthError) as caught:
+        _CALLS[call](_http(handler))
+    assert len(seen) == 1
+    assert slept == []
+    assert len(forced) == 1
+    assert forced[0][0] == "servicenow"
+    assert forced[0][1] is caught.value
+    assert breaker("servicenow").state() == "open"
 
 
 def test_ut01_62_503_twice_then_200_retries_only_that_page(slept: list[float]) -> None:

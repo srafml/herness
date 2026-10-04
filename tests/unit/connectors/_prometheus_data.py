@@ -80,6 +80,9 @@ def stub_resilience(monkeypatch: pytest.MonkeyPatch) -> None:
     """``retry_page`` without an ops store: no breaker guard, a no-op breaker."""
 
     class _Breaker:
+        def force_open(self, err: Exception) -> None:
+            del err
+
         def record_failure(self, err: Exception) -> None:
             del err
 
@@ -88,6 +91,7 @@ def stub_resilience(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(retry_module, "guard", lambda _key: None)
     monkeypatch.setattr(retry_module, "breaker", lambda _key: _Breaker())
+    monkeypatch.setattr("herness.connectors.http.breaker", lambda _key: _Breaker())
 
 
 def rows(batches: list[pa.RecordBatch]) -> list[dict[str, Any]]:

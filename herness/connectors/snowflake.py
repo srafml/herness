@@ -22,6 +22,7 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from snowflake.connector import errors as sfe
 
+from herness.connectors._auth_breaker import open_on_auth
 from herness.connectors.base import KEY_SCHEMA, METADATA_SCHEMA
 from herness.connectors.rows import parse_arrow_timestamps, to_snake
 from herness.connectors.settings import SnowflakeSettings
@@ -88,7 +89,7 @@ def _driver[T](fn: Callable[[], T]) -> T:
     try:
         return fn()
     except sfe.Error as exc:
-        raise _map_sf_error(exc) from None
+        raise open_on_auth(_SOURCE, _map_sf_error(exc)) from None
 
 
 def _quote(name: str) -> str:

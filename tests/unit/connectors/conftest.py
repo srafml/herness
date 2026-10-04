@@ -72,6 +72,8 @@ def mongo_breaker(
     spy = SpyBreaker()
     monkeypatch.setattr(retry_module, "guard", lambda _key: None)
     monkeypatch.setattr(retry_module, "breaker", lambda _key: spy)
+    monkeypatch.setattr("herness.connectors.http.breaker", lambda _key: spy)
+    monkeypatch.setattr("herness.connectors._auth_breaker.breaker", lambda _key: spy)
     return spy
 
 
@@ -95,4 +97,6 @@ def snowflake_env(
     spy = SpyBreaker()
     monkeypatch.setattr(retry_module, "guard", lambda _key: None)
     monkeypatch.setattr(retry_module, "breaker", lambda _key: spy)
+    monkeypatch.setattr("herness.connectors.http.breaker", lambda _key: spy)
+    monkeypatch.setattr("herness.connectors._auth_breaker.breaker", lambda _key: spy)
     return spy
