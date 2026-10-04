@@ -81,6 +81,7 @@ Line budgets are the production-code limit for the file (ENG §2.4 caps every mo
 | `tools/synth/truth_writer.py` | Truth directory writer and synth mappings fragment | `write_truth`, `write_synth_mappings`, `write_name_directory` | Tooling | `pyarrow` | 250 |
 | `tools/synth/inbox.py` | `service_costs.csv` inbox drop | `write_service_costs` | Tooling | — | 100 |
 | `tools/synth/verify.py` | `--verify` lake contract and truth-count check | `VerifyReport`, `verify_root`, `content_hashes` | Tooling | `duckdb` | 250 |
+| `tools/synth/_manifest.py` | Private sibling of `tools/synth_data.py` (T11-14 spec note): `TruthManifest` assembly from the catalog plant targets, the plan's epic sequence numbers, the change schedule and the run sums (U11-23 step 6, `question_set_version` through `load_config(profile="synth")`) and the `.synth_root` marker writer (step 7), split off for the 250-line budget of `synth_data.py`; imported only by `tools.synth_data` | none (private) | Tooling | `herness.eval.truth`, `herness.core.config` | 180 |
 | `tools/synth/pii_corpus.py` | Redaction corpus writer | `write_pii_corpus` | Tooling | — | 200 |
 | `tools/synth/api_pages.py` | Source-shaped JSON pages writer | `write_api_pages` | Tooling | — | 250 |
 | `tools/phase_gate.py` | Phase gate definitions and runner | `GateCheck`, `GATES`, `run_gate`, `main` | Tooling | `subprocess` | 300 |

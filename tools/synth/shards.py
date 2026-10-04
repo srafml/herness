@@ -231,12 +231,15 @@ _STATE: dict[str, Any] = {}
 
 def _init_worker(root: Path, seed: int, params: SynthParams, cat: Catalog) -> None:
     """Pool initializer: config profile `synth` with `paths.data = <root>/data` (T10-03).
-    A failure is kept for `_pool_task` to raise (a raising initializer makes the pool
-    respawn workers forever)."""
+    Worker logs go to stderr at ERROR (the parent logs the same config warnings once; the
+    CLI's stdout carries only its JSON summary, T11-14). A failure is kept for
+    `_pool_task` to raise (a raising initializer makes the pool respawn workers forever)."""
     try:
         from herness.core.config import init_config  # noqa: PLC0415 - worker process only
+        from herness.core.logging import configure_logging  # noqa: PLC0415 - worker only
         from herness.store.layout import data_layout  # noqa: PLC0415 - worker process only
 
+        configure_logging("ERROR")
         data = (root / "data").as_posix()
         cfg = init_config("synth", overrides=(f"paths.data={data}",), config_dir=CONFIG_DIR)
         _STATE["ctx"] = worker_context(root, seed, params, cat, raw_root=data_layout(cfg=cfg).raw)
