@@ -5,13 +5,16 @@ The spawn-pool run (acceptance: tiny generation) is in
 """
 
 import dataclasses
+from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
 
+from herness.core.errors import ConfigError, FatalError
 from tools.synth import _shard_io
+from tools.synth import shards as shards_module
 from tools.synth.catalog import Catalog, build_catalog
 from tools.synth.catalog_plan import background_count
 from tools.synth.params import SynthParams, SynthUsageError, load_params
@@ -19,10 +22,14 @@ from tools.synth.shards import (
     DIMENSIONS,
     AggregateResult,
     Shard,
+    cause_fields,
+    lake_entities,
     plan_shards,
+    prepare_lake,
     require_under,
     run_all_shards,
     run_shard,
+    shard_failure,
     worker_context,
 )
 
@@ -168,3 +175,114 @@ def test_rf_run_all_shards_argument_checks(
     assert out.rows_written == 0
     assert out.generated_noise_ratio == 0.0
     assert (tmp_path / "truth" / ".parts" / "idx").is_dir()
+
+
+def test_rf_lake_entities_adds_task_sla(cat: Catalog, params: SynthParams) -> None:
+    """T11-14c every `(source, entity)` the plan writes, once each in plan order; incident
+    shards also write `servicenow/task_sla`."""
+    entities = lake_entities(plan_shards(cat, params))
+    assert len(entities) == len(set(entities))
+    assert entities[: len(DIMENSIONS)] == [("servicenow", d) for d in DIMENSIONS]
+    incident = entities.index(("servicenow", "incident"))
+    assert entities[incident + 1] == ("servicenow", "task_sla")
+    assert ("monitoring", "metric_daily") in entities
+
+
+def test_rf_prepare_lake_creates_entity_dirs_once(tmp_path: Path) -> None:
+    """T11-14c `prepare_lake` creates each `<raw>/<source>/<entity>/` and reports only the
+    directories it created."""
+    raw = tmp_path / "data" / "raw"
+    (raw / "jira" / "issue").mkdir(parents=True)
+    created = prepare_lake(raw, [("jira", "issue"), ("servicenow", "incident")])
+    assert created == [raw / "servicenow" / "incident"]
+    assert (raw / "servicenow" / "incident").is_dir()
+    assert prepare_lake(raw, [("servicenow", "incident")]) == []
+
+
+@pytest.mark.parametrize(("source", "entity"), [("..", "x"), ("a", "b/../../c"), ("C:", "x")])
+def test_rf_prepare_lake_rejects_invalid_names(tmp_path: Path, source: str, entity: str) -> None:
+    """T11-14c / TH11-07 names go through the lake name allowlist; nothing is created."""
+    with pytest.raises(ConfigError):
+        prepare_lake(tmp_path / "raw", [(source, entity)])
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_rf_run_all_shards_prunes_unused_entity_dirs(
+    tmp_path: Path, cat: Catalog, params: SynthParams, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T11-14c an entity directory created up front but left without rows is removed after
+    a successful run (with its source directory when that is empty too), so `--verify`
+    never sees an entity without files."""
+    shard = next(s for s in plan_shards(cat, params) if s.entity == "cmn_department")
+    extra = [("servicenow", "unused_entity"), ("unused_source", "unused_entity")]
+    monkeypatch.setattr(
+        shards_module, "lake_entities", lambda shards: [*extra, ("servicenow", "cmn_department")]
+    )
+    run_all_shards([shard], cat, params, seed=_SEED, root=tmp_path, workers=1)
+    raw = tmp_path / "data" / "raw"
+    assert sorted(p.name for p in raw.iterdir()) == ["servicenow"]
+    assert [p.name for p in (raw / "servicenow").iterdir()] == ["cmn_department"]
+
+
+class _Recorder:
+    """Stand-in for the module logger: records `(level, event, fields)`."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict[str, object]]] = []
+
+    def __getattr__(self, level: str) -> Callable[..., None]:
+        def record(event: str, **fields: object) -> None:
+            self.events.append((level, event, fields))
+
+        return record
+
+
+def test_rf_shard_failure_logs_synth_shard_failed(
+    cat: Catalog, params: SynthParams, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SN-g `synth.shard.failed` (spec §8.1) is logged where the shard ran, with the shard
+    and the cause's class and message; the returned `FatalError` carries the same."""
+    log = _Recorder()
+    monkeypatch.setattr(shards_module, "_log", log)
+    shard = next(s for s in plan_shards(cat, params) if s.entity == "incident")
+    cause = ConfigError("lake partition resolves outside the raw root")
+    error = shard_failure(shard, cause)
+    assert log.events == [
+        (
+            "error",
+            "synth.shard.failed",
+            {
+                "source": "servicenow",
+                "entity": "incident",
+                "month": "2026-06",
+                "shard": "servicenow/incident/2026-06",
+                "error_type": "ConfigError",
+                "cause_message": "lake partition resolves outside the raw root",
+            },
+        )
+    ]
+    assert isinstance(error, FatalError)
+    assert error.message == "synth shard servicenow/incident/2026-06 failed"
+    assert cause_fields(error) == {
+        "shard": "servicenow/incident/2026-06",
+        "cause": "ConfigError",
+        "cause_message": "lake partition resolves outside the raw root",
+    }
+
+
+def test_rf_shard_failure_keeps_foreign_text_out(
+    cat: Catalog, params: SynthParams, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SN-g / TH11-07 a non-Herness cause travels by class only: its text could carry
+    generated ticket text or names."""
+    log = _Recorder()
+    monkeypatch.setattr(shards_module, "_log", log)
+    shard = plan_shards(cat, params)[0]
+    planted = "Jane Example reported the outage"
+    error = shard_failure(shard, ValueError(planted))
+    assert planted not in repr(log.events)
+    assert log.events[0][2]["error_type"] == "ValueError"
+    assert log.events[0][2]["cause_message"] is None
+    assert cause_fields(error)["cause"] == "ValueError"
+    assert planted not in repr(dict(error.context))
+    assert cause_fields(ValueError(planted)) == {}

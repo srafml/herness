@@ -32,14 +32,13 @@ def _run(root: Path, seed: int, scale: str, workers: int) -> int:
 
 
 def _determinism(tmp_path: Path, seed: int, scale: str) -> None:
-    """`--workers 1` runs in this process (T11-14b) and must succeed; `--workers 8` runs the
-    pool, whose Windows-only `lake partition resolves outside the raw root` failure with many
-    concurrent workers (T11-14c) is an expected failure here, while a differing result is not."""
+    """`--workers 1` runs in this process (T11-14b) and `--workers 8` runs the pool; both must
+    succeed (the Windows pool failure of T11-14c is fixed, so no failure is tolerated) and
+    write equal content."""
     assert _run(tmp_path / "w1", seed, scale, 1) == 0
     one = content_hashes(tmp_path / "w1")
     assert one
-    if _run(tmp_path / "w8", seed, scale, 8) != 0:
-        pytest.xfail("T11-14c: concurrent pool workers can fail in lake partition_dir on Windows")
+    assert _run(tmp_path / "w8", seed, scale, 8) == 0
     assert one == content_hashes(tmp_path / "w8")
 
 

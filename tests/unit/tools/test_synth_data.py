@@ -6,6 +6,7 @@ Generation runs through `generate` with the spawn pool replaced by an in-process
 
 import json
 from collections.abc import Callable, Iterator, Sequence
+from datetime import date
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -15,12 +16,12 @@ from herness.core.errors import ConfigError
 from herness.core.logging import reset_logging
 from herness.eval.truth import TruthManifest, load_truth
 from tools import synth_data
-from tools.synth import GENERATOR_VERSION
+from tools.synth import GENERATOR_VERSION, shards
 from tools.synth.catalog import Catalog
 from tools.synth.dirty import DirtyCounters
 from tools.synth.params import SynthParams, SynthUsageError
 from tools.synth.pii import build_name_list
-from tools.synth.shards import AggregateResult, Shard, run_shard, worker_context
+from tools.synth.shards import AggregateResult, Shard, run_shard, shard_failure, worker_context
 from tools.synth.verify import content_hashes
 from tools.synth_data import RootNotEmpty, generate, main
 
@@ -320,6 +321,46 @@ def test_ut11_29_unexpected_error_exits_1_without_its_text(
     assert "ValueError" in captured.err
     assert planted not in captured.out + captured.err
     assert "Jane Example" not in captured.err
+
+
+def test_ut11_29_pool_failure_logs_shard_and_cause(
+    tmp_path: Path,
+    inline_pool: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """UT11-29 / T11-14c a shard failure from the pool exits 1 and `synth.generate.failed`
+    carries the shard and the cause's class and message; stdout stays empty."""
+    shard = Shard("servicenow", "incident", date(2026, 6, 1), 1, 1, 0)
+    monkeypatch.setattr(shards, "_log", _Recorder())
+    cause = ConfigError("lake partition resolves outside the raw root")
+    failure = shard_failure(shard, cause)
+
+    def fail(*_args: object, **_kwargs: object) -> TruthManifest:
+        raise failure
+
+    monkeypatch.setattr(synth_data, "generate", fail)
+    log = _Recorder()
+    monkeypatch.setattr(synth_data, "_log", log)
+
+    assert main(_args(tmp_path / "root")) == 1
+
+    assert capsys.readouterr().out == ""
+    assert log.events == [
+        (
+            "error",
+            "synth.generate.failed",
+            {
+                "seed": str(_SEED),
+                "scale": "tiny",
+                "error_type": "FatalError",
+                "exit_code": 1,
+                "shard": "servicenow/incident/2026-06",
+                "cause": "ConfigError",
+                "cause_message": "lake partition resolves outside the raw root",
+            },
+        )
+    ]
 
 
 def test_ut11_29_unknown_option_exits_2(

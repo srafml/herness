@@ -23,6 +23,7 @@ from tools.synth.shards import (
     WorkerContext,
     label,
     run_shard,
+    shard_failure,
     worker_context,
 )
 
@@ -60,15 +61,14 @@ def _run_labelled(shard: Shard, ctx: WorkerContext) -> ShardResult:
     try:
         return run_shard(shard, ctx)
     except Exception as exc:
-        msg = f"synth shard {label(shard)} failed"
-        raise FatalError(msg, shard=label(shard), cause=type(exc).__name__) from exc
+        raise shard_failure(shard, exc) from exc
 
 
 def pool_task(shard: Shard) -> ShardResult:
     ctx = _STATE.get("ctx")
     if ctx is None:
         msg = f"synth worker initialisation failed ({_STATE.get('error', 'unknown')})"
-        raise FatalError(msg, shard=label(shard))
+        raise FatalError(msg, shard=label(shard), cause=_STATE.get("error", "unknown"))
     return _run_labelled(shard, ctx)
 
 

@@ -23,7 +23,9 @@ from typing import TYPE_CHECKING, Any, Final
 import numpy as np
 import numpy.typing as npt
 
-from herness.core.errors import FatalError
+from herness.core.errors import FatalError, HernessError
+from herness.core.logging import get_logger
+from tools.synth._shard_lake import lake_entities, prepare_lake, prune_unused
 from tools.synth.catalog_plan import background_count
 from tools.synth.catalog_rows import Catalog, MonthKey
 from tools.synth.params import SynthParams, SynthUsageError
@@ -49,6 +51,8 @@ _ORDER: Final = (
     ("monitoring", "metric_daily"),
 )
 PARTS: Final = Path("truth") / ".parts"
+_CAUSE_KEYS: Final = ("shard", "cause", "cause_message")
+_log = get_logger("synth")
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -225,6 +229,26 @@ def run_shard(shard: Shard, ctx: WorkerContext) -> ShardResult:
     return execute(shard, ctx)
 
 
+def shard_failure(shard: Shard, exc: Exception) -> FatalError:
+    """Log `synth.shard.failed` (spec §8.1, SN-g) where `shard` ran; return the `FatalError`
+    naming it. The cause's message travels only for a `HernessError`, whose messages carry
+    no data; other text could hold generated ticket text or names (TH11-07)."""
+    cause, where = type(exc).__name__, label(shard)
+    text = exc.message if isinstance(exc, HernessError) else None
+    fields = {"source": shard.source, "entity": shard.entity, "month": f"{shard.month:%Y-%m}"}
+    _log.error("synth.shard.failed", **fields, shard=where, error_type=cause, cause_message=text)
+    msg = f"synth shard {where} failed"
+    return FatalError(msg, shard=where, cause=cause, cause_message=text)
+
+
+def cause_fields(exc: BaseException) -> dict[str, object]:
+    """`shard`, `cause` and `cause_message` of a pool `FatalError`, for
+    `synth.generate.failed`; empty for any other error."""
+    if not isinstance(exc, HernessError):
+        return {}
+    return {key: value for key, value in exc.context.items() if key in _CAUSE_KEYS}
+
+
 CONFIG_DIR: Final = Path(__file__).resolve().parents[2] / "config"
 # Planned background rows per spawn worker (T11-14b). Measured on a 32-core Windows host:
 # 23 workers for the 9,430 planned rows (11,361 written) of tiny cost 21 s, one in-process
@@ -260,6 +284,8 @@ def run_all_shards(
     (out.parts_dir / "idx").mkdir(parents=True, exist_ok=True)
     if not shards:
         return out
+    # the workers' raw root (`paths.data = <root>/data`) exists before any of them resolves it
+    created = prepare_lake(require_under(base, base / "data" / "raw"), lake_entities(shards))
     incident = ("servicenow", "incident")
     phases = (
         [s for s in shards if (s.source, s.entity) == incident],
@@ -269,7 +295,17 @@ def run_all_shards(
     size = min(workers, len(shards), max(1, sum(s.n_records for s in shards) // _ROWS_PER_WORKER))
     if size == 1:  # no pool: a worker's start-up costs more than the whole tiny plan
         pool_run.run_in_process(phases, out, args)
-        return out
+    else:
+        _run_pool(size, phases, out, args)
+    prune_unused(created)
+    return out
+
+
+def _run_pool(
+    size: int, phases: Sequence[Sequence[Shard]], out: AggregateResult, args: tuple[Any, ...]
+) -> None:
+    from tools.synth import _shard_pool as pool_run  # noqa: PLC0415 - generators import Shard
+
     spawn = multiprocessing.get_context("spawn")
     with spawn.Pool(size, initializer=pool_run.init_worker, initargs=args) as pool:
         try:
@@ -283,7 +319,6 @@ def run_all_shards(
             pool.terminate()
             msg = "synth shard pool failed"
             raise FatalError(msg, cause=type(exc).__name__) from exc
-    return out
 
 
 __all__ = [
@@ -297,10 +332,14 @@ __all__ = [
     "Shard",
     "ShardResult",
     "WorkerContext",
+    "cause_fields",
     "label",
+    "lake_entities",
     "plan_shards",
+    "prepare_lake",
     "require_under",
     "run_all_shards",
     "run_shard",
+    "shard_failure",
     "worker_context",
 ]
