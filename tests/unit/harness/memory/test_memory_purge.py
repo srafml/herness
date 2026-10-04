@@ -157,11 +157,14 @@ def _payload_text(item_id: str) -> str:
     return str(rows[0][0])
 
 
-def _blanked(item_id: str) -> None:
+_BLANKS = {"content": "", "statement": "", "entities": [], "numbers": [], "provenance": {},
+           "effective_date": None}  # fmt: skip
+
+
+def _blanked(item_id: str, keys: set[str]) -> None:
+    """Exactly `keys` of the payload's content-bearing fields exist, all blank."""
     payload = review_of(item_id).payload
-    assert {k: payload[k] for k in PURGED_FIELDS} == {
-        "content": "", "statement": "", "entities": [], "numbers": [], "provenance": {}
-    }  # fmt: skip
+    assert {k: payload[k] for k in PURGED_FIELDS if k in payload} == {k: _BLANKS[k] for k in keys}
 
 
 def test_ut07_38_review_payloads_keep_no_purged_data(
@@ -177,7 +180,7 @@ def test_ut07_38_review_payloads_keep_no_purged_data(
     derived = shared.create_review_item("weight_change", {
         "source_memory_id": "mem_" + new_ulid(), "statement": PLANTED,
         "entities": [{"type": "record", "id": RECORD}], "suggested_action": "weight_change",
-        "effective_date": None}, now=NOW)  # fmt: skip
+        "effective_date": "2026-09-01"}, now=NOW)  # fmt: skip
     pending = _seed(PLANTED, status="pending_approval", review=True, numbers=[ref],
                     derived_review_item_id=derived)  # fmt: skip
     review_id = memory_rows()[0]["data"]["review_item_id"]
@@ -185,8 +188,10 @@ def test_ut07_38_review_payloads_keep_no_purged_data(
 
     assert life.purge(record_id=RECORD, now=NOW) == 1
     assert _ids() == []
+    _blanked(review_id, {"content", "entities", "numbers", "provenance"})
+    _blanked(derived, {"statement", "entities", "effective_date"})  # no key added (ruling)
+    assert review_of(derived).payload["suggested_action"] == "weight_change"  # skeleton
     for item_id in (review_id, derived):
-        _blanked(item_id)
         assert PLANTED not in _payload_text(item_id)
         assert RECORD.split(":", 2)[2] not in _payload_text(item_id)
         assert (review_of(item_id).status, review_of(item_id).note) == ("rejected", "purged")
@@ -203,7 +208,7 @@ def test_ut07_38_author_purge_leaves_no_author_in_reviews(
     review_id = memory_rows()[0]["data"]["review_item_id"]
     assert PERSON in _payload_text(review_id)
     assert life.purge(author_ref=PERSON, now=NOW) == 1
-    _blanked(review_id)
+    _blanked(review_id, {"content", "entities", "numbers", "provenance"})
     assert PERSON not in _payload_text(review_id)
 
 

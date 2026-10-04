@@ -23,6 +23,7 @@ from tests.unit.harness.memory._write_env import (
     memory_rows,
     proposal,
     provenance,
+    seed_session,
 )
 
 from herness.core.types import Layer, Status
@@ -100,12 +101,15 @@ def test_st07_21_purge_leaves_no_text_anywhere(ops_store: OpsStoreHandle, tmp_pa
     active = store.propose(proposal(cited_texts[0], data=_cites(RECORD))).memory_id
     agent = provenance("agent")
     pending = store.propose(proposal(cited_texts[1], agent, data=_cites(RECORD))).memory_id
-    fix = {**KIND_DATA["business_rule"], "suggested_action": "weight_change",
+    fix = {**KIND_DATA["user_correction"], "statement": f"Weight the {PLANTED} outage lower.",
+           "suggested_action": "weight_change", "effective_date": "2026-09-01",
            "entities": [{"type": "record", "id": RECORD}]}  # fmt: skip
+    session_id, message_id = seed_session()
+    via = provenance(via="dashboard", session_id=session_id, source_message_id=message_id)
     correction = store.propose(
-        proposal(f"Weight the {PLANTED} outage lower.", kind="business_rule", data=fix)
+        proposal(f"Weight the {PLANTED} outage lower.", via, kind="user_correction", data=fix)
     ).memory_id
-    store.approve(correction, "b" * 32)  # creates the derived weight_change review item
+    store.approve(correction, "b" * 32)  # user_correction -> derived weight_change review item
     kept_texts = [("MTTR means the mean time to restore a heron service.", _cites(LONGER)),
                   (f"Heron churn is unrelated to {RECORD} here.", _cites(OTHER)),
                   ("Churn means customers who left the heron service.", None)]  # fmt: skip
@@ -130,6 +134,10 @@ def test_st07_21_purge_leaves_no_text_anywhere(ops_store: OpsStoreHandle, tmp_pa
     assert ops.purge_rows(record_id=RECORD, dry_run=True).deleted_ids == []
     assert _vector_hits(env, store, cited_texts) & {active, pending} == set()
     assert env.vectors.vectors([active, pending, correction]) == {}
+    skeleton = shared.get_review_item(derived).payload
+    assert "content" not in skeleton  # no key the derived payload never had
+    assert (skeleton["statement"], skeleton["entities"]) == ("", [])
+    assert skeleton["effective_date"] is None
     payloads = core.read_all("SELECT item_id, payload FROM review_item")
     assert {str(r[0]) for r in payloads} >= {review_id, derived}
     for _, payload in payloads:  # no text, citation or quoted id left in any review payload

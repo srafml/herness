@@ -155,7 +155,8 @@ def test_ut07_89_author_deletes_and_scrubs_history() -> None:
                {"author_ref": _AUTHOR, "via": "cli"}]  # fmt: skip
     merged = _put("merged", data={"entities": [], "provenance_history": history, "k": 1})
     untouched = _put("untouched", data={"provenance_history": [{"author_ref": _OTHER}]})
-    approved = _put("approved", data={"approved_by": _AUTHOR})  # named outside the history
+    approved = _put("approved", data={"approved_by": _AUTHOR, "rejected_by": _OTHER})
+    rejected = _put("rejected", data={"rejected_by": _AUTHOR, "rejection_note": "n"})
     on_behalf = [{"author_ref": _OTHER, "on_behalf_of": _AUTHOR}]  # not the entry's author
     behalf = _put("behalf", data={"provenance_history": on_behalf})
 
@@ -163,16 +164,16 @@ def test_ut07_89_author_deletes_and_scrubs_history() -> None:
     assert _row(merged)["data"]["provenance_history"] == history  # dry run changes nothing
     real = memory.purge_rows(author_ref=_AUTHOR)
 
-    assert dry == real == PurgeRows([authored], [merged], [])
-    assert sorted(_ids()) == sorted([merged, untouched, approved, behalf])
+    assert dry == real == PurgeRows([authored], sorted([merged, approved, rejected]), [])
+    assert sorted(_ids()) == sorted([merged, untouched, approved, behalf, rejected])
     assert _row(behalf)["data"]["provenance_history"] == on_behalf
-    assert _row(approved)["data"] == {"approved_by": _AUTHOR}  # neither deleted nor changed
+    # ruling #10: the person as approver / rejecter is tombstoned, other deciders kept
+    assert _row(approved)["data"] == {"approved_by": "purged", "rejected_by": _OTHER}
+    assert _row(rejected)["data"] == {"rejected_by": "purged", "rejection_note": "n"}
     data = _row(merged)["data"]
     assert data == {"entities": [], "k": 1,
                     "provenance_history": [{"author_ref": _OTHER, "via": "cli"}]}  # fmt: skip
-    stored = core.read_all(
-        "SELECT data FROM memory_item WHERE memory_id NOT IN (?, ?)", (approved, behalf)
-    )
+    stored = core.read_all("SELECT data FROM memory_item WHERE memory_id <> ?", (behalf,))
     assert not any(_AUTHOR in str(r[0]) for r in stored)
     assert memory.purge_rows(author_ref=_AUTHOR) == PurgeRows([], [], [])
 

@@ -48,11 +48,16 @@ _PURGE_SQL: Final = {
     "author": _PURGE_COLS + "json_extract(provenance,'$.author_ref') = ?",
 }
 _CITE_DEPTH: Final = 4
+# Items naming the person in a history entry, or as the approver or rejecter (tombstoned to
+# "purged", T07-26 review ruling #10).
 _SCRUB_SQL: Final = (
     "SELECT memory_id, data FROM memory_item WHERE EXISTS (SELECT 1 FROM"
     " json_each(data, '$.provenance_history') h WHERE CASE WHEN h.type = 'object'"
-    " THEN json_extract(h.value, '$.author_ref') END = ?)"
+    " THEN json_extract(h.value, '$.author_ref') END = :ref)"
+    " OR json_extract(data, '$.approved_by') = :ref OR json_extract(data, '$.rejected_by') = :ref"
 )
+_DECIDERS: Final = ("approved_by", "rejected_by")
+_TOMBSTONE: Final = "purged"
 _SCRUB_SET: Final = "UPDATE memory_item SET data = ? WHERE memory_id = ?"
 # FTS5 keeps a deleted row's tokens in older segments until they merge: rewrite them (TH07-21).
 _FTS_OPTIMIZE: Final = "INSERT INTO memory_fts(memory_fts) VALUES('optimize')"
@@ -83,12 +88,15 @@ def purge_selector(record_id: object, author_ref: object) -> PurgeSelector:
 
 
 def _without(data: dict[str, JsonValue], author_ref: str) -> dict[str, JsonValue] | None:
-    """``data`` minus the person's ``provenance_history`` entries; None when it names none."""
+    """``data`` minus the person's ``provenance_history`` entries and with ``approved_by`` /
+    ``rejected_by`` equal to the person set to ``"purged"``; None when nothing changes."""
+    new = {**data, **{k: _TOMBSTONE for k in _DECIDERS if data.get(k) == author_ref}}
     history = data.get("provenance_history")
-    if not isinstance(history, list):
-        return None
-    kept = [e for e in history if not (isinstance(e, dict) and e.get("author_ref") == author_ref)]
-    return None if len(kept) == len(history) else {**data, "provenance_history": kept}
+    if isinstance(history, list):
+        new["provenance_history"] = [
+            e for e in history if not (isinstance(e, dict) and e.get("author_ref") == author_ref)
+        ]
+    return None if new == data else new
 
 
 def _cites(value: object, targets: frozenset[str], depth: int) -> bool:
@@ -124,7 +132,7 @@ def purge_select(selector: PurgeSelector, conn: Conn, op: str) -> tuple[PurgeRow
     scrubs: _Scrubs = []
     if how == "author":
         gone = set(deleted)
-        for mid, text in query(_SCRUB_SQL, [value], conn, op):
+        for mid, text in query(_SCRUB_SQL, {"ref": value}, conn, op):
             data = load_typed(text, dict, "memory_item.data", mid) or {}
             if mid not in gone and (new := _without(data, value)) is not None:
                 scrubs.append((str(mid), new))
