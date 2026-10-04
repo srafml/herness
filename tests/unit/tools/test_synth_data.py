@@ -361,22 +361,83 @@ def test_rf_bad_argument_values_exit_3(tmp_path: Path, extra: list[str], inline_
     assert not root.exists()
 
 
+def test_rf_pii_corpus_subcommand_writes_the_corpus(
+    tmp_path: Path, inline_pool: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U11-24 / F11-04 `pii-corpus --seed --n --out` exits 0, writes `n` JSONL lines and
+    prints one JSON summary line (`out`, `rows`, `seconds`)."""
+    out = tmp_path / "corpus" / "pii.jsonl"
+
+    assert main(["pii-corpus", "--seed", "11", "--n", "2000", "--out", str(out)]) == 0
+
+    assert len(out.read_text(encoding="utf-8").splitlines()) == 2000
+    (line,) = capsys.readouterr().out.splitlines()
+    summary = json.loads(line)
+    assert set(summary) == {"out", "rows", "seconds"}
+    assert (Path(summary["out"]), summary["rows"]) == (out.resolve(), 2000)
+
+
+def test_rf_api_pages_subcommand_writes_pages(
+    tmp_path: Path, inline_pool: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U11-24 / F11-05 `api-pages --seed --source --entity --rows --out` exits 0, writes
+    the pages and `manifest.json` and prints one JSON summary line."""
+    out = tmp_path / "pages"
+    argv = ["api-pages", "--seed", "1", "--source", "jira", "--entity", "issue"]
+
+    assert main([*argv, "--rows", "150", "--out", str(out)]) == 0
+
+    names = sorted(p.name for p in out.iterdir())
+    assert names == ["manifest.json", "page-00001.json", "page-00002.json"]
+    (line,) = capsys.readouterr().out.splitlines()
+    summary = json.loads(line)
+    assert set(summary) == {"out", "rows", "pages", "seconds"}
+    assert (summary["rows"], summary["pages"]) == (150, 2)
+
+
 @pytest.mark.parametrize(
     "argv",
     [
-        ["pii-corpus", "--seed", "11", "--n", "10", "--out", "corpus.jsonl"],
-        ["api-pages", "--seed", "1", "--source", "jira", "--entity", "issue", "--rows", "5",
+        ["pii-corpus", "--seed", "11", "--n", "100", "--out", "c.jsonl"],
+        ["pii-corpus", "--seed", "11", "--n", "many", "--out", "c.jsonl"],
+        ["pii-corpus", "--seed", "-1", "--out", "c.jsonl"],
+        ["api-pages", "--seed", "1", "--source", "jira", "--entity", "issue", "--rows", "0",
          "--out", "pages"],
+        ["api-pages", "--seed", "1", "--source", "jira", "--entity", "issue", "--rows", "x",
+         "--out", "pages"],
+        ["api-pages", "--seed", "1", "--source", "email", "--entity", "issue", "--rows", "5",
+         "--out", "pages"],
+        ["api-pages", "--seed", "1", "--source", "servicenow", "--entity", "sys_user",
+         "--rows", "5", "--out", "pages"],
     ],
 )  # fmt: skip
-def test_rf_subcommands_parse_and_exit_3_until_t11_15(
+def test_rf_subcommand_bad_values_exit_3(
     argv: list[str], tmp_path: Path, inline_pool: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """U11-24 the `pii-corpus` and `api-pages` forms parse; their bodies arrive with T11-15,
-    so they exit 3 (`SynthUsageError`) and write nothing."""
+    """R-46 / F11-04, F11-05: a bad subcommand value (`--n 100`, a non-integer, an unknown
+    source or entity) is a `SynthUsageError`: exit 3, nothing written."""
     monkeypatch.chdir(tmp_path)
 
     assert main(argv) == 3
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pii-corpus", "--seed", "11"],  # missing --out
+        ["pii-corpus", "--seed", "11", "--out", "c.jsonl", "--bogus"],
+        ["api-pages", "--seed", "1", "--source", "jira", "--entity", "issue", "--out", "p"],
+        ["api-pages", "--rows"],  # missing option value
+    ],
+)
+def test_rf_subcommand_argparse_errors_exit_2(
+    argv: list[str], tmp_path: Path, inline_pool: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R-46 / F11-05: an option argparse itself rejects exits 2 and writes nothing."""
+    monkeypatch.chdir(tmp_path)
+
+    assert main(argv) == 2
     assert list(tmp_path.iterdir()) == []
 
 
