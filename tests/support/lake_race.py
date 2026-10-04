@@ -14,11 +14,13 @@ from __future__ import annotations
 import multiprocessing
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 from herness.core.errors import ConfigError
 from herness.store.lake import partition_dir
 
 SOURCE = "race"
+_BARRIER_S = 120.0
 
 
 def entity_names(entities: int) -> list[tuple[str, str]]:
@@ -26,13 +28,22 @@ def entity_names(entities: int) -> list[tuple[str, str]]:
     return [(SOURCE, f"e{n}") for n in range(entities)]
 
 
+_START: dict[str, Any] = {}
+
+
+def _init(barrier: Any) -> None:  # pragma: no cover - child
+    _START["barrier"] = barrier
+
+
 def create_partitions(job: tuple[str, int, int]) -> int:  # pragma: no cover - child
-    """Worker: `partition_dir` and `mkdir` of day `slot` in every entity; returns the number
-    of containment failures (`ConfigError`)."""
+    """Worker: wait for every worker (a spawn start takes about a second each, so without
+    the barrier the workers barely overlap), then `partition_dir` and `mkdir` of day `slot`
+    in every entity; returns the number of containment failures (`ConfigError`)."""
     raw, slot, entities = job
     root = Path(raw)
     day = date(2026, 6, 1) + timedelta(days=slot)
     failures = 0
+    _START["barrier"].wait(timeout=_BARRIER_S)
     for source, entity in entity_names(entities):
         try:
             path = partition_dir(root, source, entity, day)
@@ -44,7 +55,10 @@ def create_partitions(job: tuple[str, int, int]) -> int:  # pragma: no cover - c
 
 
 def run(raw: Path, workers: int, entities: int) -> int:
-    """Run the probe in a spawn pool of `workers`; total containment failures."""
+    """Run the probe in a spawn pool of `workers`, one job per worker, all released together
+    by a barrier (a worker blocked on it cannot take a second job); total failures."""
+    ctx = multiprocessing.get_context("spawn")
+    barrier = ctx.Barrier(workers)
     jobs = [(str(raw), slot, entities) for slot in range(workers)]
-    with multiprocessing.get_context("spawn").Pool(workers) as pool:
-        return sum(pool.map(create_partitions, jobs))
+    with ctx.Pool(workers, initializer=_init, initargs=(barrier,)) as pool:
+        return sum(pool.map(create_partitions, jobs, chunksize=1))
