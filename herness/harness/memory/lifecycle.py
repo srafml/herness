@@ -21,6 +21,7 @@ from herness.core.errors import ModelUnavailable, PolicyViolation, ToolInputErro
 from herness.core.logging import get_logger
 from herness.core.redact import Redactor
 from herness.core.types import MemoryItem, Status
+from herness.harness.memory._purge_review import erase_review_item
 from herness.harness.memory.policy import APPROVAL_FLOOR
 from herness.harness.memory.settings import MemoryConfig
 from herness.harness.memory.store import VectorIndex
@@ -29,11 +30,7 @@ from herness.harness.memory.write import MemoryWriter
 from herness.store.errors import NotFoundError, ReviewItemConflict
 from herness.store.ops import core
 from herness.store.ops import memory as ops
-from herness.store.ops.shared import (
-    create_review_item,
-    decide_review_item,
-    update_review_payload,
-)
+from herness.store.ops.shared import create_review_item, decide_review_item
 
 __all__ = ["MemoryLifecycle", "purge_args_ok"]
 
@@ -296,11 +293,7 @@ class MemoryLifecycle:
             # Re-selected inside the transaction: an item that began citing the record since
             # the dry run still has its review payload blanked before its row goes.
             for item_id in rows(dry_run=True, conn=conn).review_item_ids:
-                with suppress(NotFoundError):  # a dangling link must not block the erasure
-                    update_review_payload(item_id, {"content": ""}, conn=conn)
-                with suppress(ReviewItemConflict, NotFoundError):  # raised before any write
-                    decide_review_item(item_id, "rejected", decided_by="system", note="purged",
-                                       now=at, conn=conn)  # fmt: skip
+                erase_review_item(item_id, now=at, conn=conn)
             return rows(conn=conn)
 
         done = core.run_write(tx, op="memory_purge")

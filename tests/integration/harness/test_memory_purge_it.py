@@ -83,6 +83,10 @@ def test_it07_11_deletion_step_purges_memory(ops_store: OpsStoreHandle, tmp_path
     review = ops.get_review_item(review_id)
     assert (review.status, review.decided_by, review.note) == ("rejected", "system", "purged")
     assert review.payload["content"] == ""
+    assert (review.payload["entities"], review.payload["provenance"]) == ([], {})
+    payload = core.read_all("SELECT payload FROM review_item WHERE item_id = ?", (review_id,))
+    assert RECORD not in str(payload[0][0])
+    assert "kestrel" not in str(payload[0][0])
     steps = ops.get_deletion_request(request.request_id).steps
     assert steps["3b"]["counts"] == {"memory_items": 2}
 

@@ -33,6 +33,7 @@ from herness.core import time as clock
 from herness.core.errors import ModelUnavailable, ToolInputError
 from herness.core.ids import new_ulid
 from herness.harness.memory import MemoryStore
+from herness.harness.memory._purge_review import PURGED_FIELDS
 from herness.harness.memory.lifecycle import MemoryLifecycle, purge_args_ok
 from herness.harness.memory.settings import MemoryConfig
 from herness.harness.memory.store import Embedder
@@ -80,12 +81,15 @@ def _seed(content: str, *, author: str = OTHER, status: str = "active", review: 
     memory_id = "mem_" + new_ulid()
     entities = [] if cites is None else [{"type": "record", "id": cites}]
     stored: dict[str, Any] = {"term": "t", "definition": "d", "entities": entities, **data}
-    if review:
-        payload = {"memory_id": memory_id, "content": content}
+    prov = provenance(author_ref=author).model_dump(mode="json")
+    if review:  # the design 07 §4.1 memory_write payload shape
+        payload = {"memory_id": memory_id, "layer": "semantic", "kind": "glossary",
+                   "content": content, "numbers": stored.get("numbers", []),
+                   "entities": entities, "provenance": prov, "flags": []}  # fmt: skip
         stored["review_item_id"] = shared.create_review_item("memory_write", payload, now=NOW)
     ops.insert_memory_item({
         "memory_id": memory_id, "layer": "semantic", "kind": "glossary", "content": content,
-        "data": stored, "provenance": provenance(author_ref=author).model_dump(mode="json"),
+        "data": stored, "provenance": prov,
         "confidence": 0.8, "status": status, "created_at": clock.format_utc(NOW),
         "expires_at": None, "last_used_at": None, "use_count": 0,
     })  # fmt: skip
@@ -146,6 +150,74 @@ def test_ut07_38_vector_failure_then_retry_erases_the_record(
 
     assert life.purge(record_id=RECORD, now=NOW) == 0  # idempotent rerun
     assert _ids() == [other]
+
+
+def _payload_text(item_id: str) -> str:
+    rows = core.read_all("SELECT payload FROM review_item WHERE item_id = ?", (item_id,))
+    return str(rows[0][0])
+
+
+def _blanked(item_id: str) -> None:
+    payload = review_of(item_id).payload
+    assert {k: payload[k] for k in PURGED_FIELDS} == {
+        "content": "", "statement": "", "entities": [], "numbers": [], "provenance": {}
+    }  # fmt: skip
+
+
+def test_ut07_38_review_payloads_keep_no_purged_data(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-38 (T07-26 review ruling, TH07-21) the memory_write payload (content, entities,
+    numbers citing the record by key, provenance) and a derived item's payload (statement,
+    entities) keep nothing of the record's text or id after purge(record_id)."""
+    del ops_store
+    life, _ = _lifecycle(tmp_path, monkeypatch)
+    ref = {"id": "n1", "value": 4, "unit": "count", "query_id": "q_" + "a" * 16,
+           "column": "n", "row_key": {"key": RECORD.split(":", 2)[2]}}  # fmt: skip
+    derived = shared.create_review_item("weight_change", {
+        "source_memory_id": "mem_" + new_ulid(), "statement": PLANTED,
+        "entities": [{"type": "record", "id": RECORD}], "suggested_action": "weight_change",
+        "effective_date": None}, now=NOW)  # fmt: skip
+    pending = _seed(PLANTED, status="pending_approval", review=True, numbers=[ref],
+                    derived_review_item_id=derived)  # fmt: skip
+    review_id = memory_rows()[0]["data"]["review_item_id"]
+    assert RECORD.split(":", 2)[2] in _payload_text(review_id)
+
+    assert life.purge(record_id=RECORD, now=NOW) == 1
+    assert _ids() == []
+    for item_id in (review_id, derived):
+        _blanked(item_id)
+        assert PLANTED not in _payload_text(item_id)
+        assert RECORD.split(":", 2)[2] not in _payload_text(item_id)
+        assert (review_of(item_id).status, review_of(item_id).note) == ("rejected", "purged")
+    assert review_of(review_id).payload["memory_id"] == pending  # the skeleton stays
+
+
+def test_ut07_38_author_purge_leaves_no_author_in_reviews(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-38 purge(author_ref) blanks the review payload provenance naming the person."""
+    del ops_store
+    life, _ = _lifecycle(tmp_path, monkeypatch)
+    _seed("their correction", author=PERSON, status="pending_approval", review=True)
+    review_id = memory_rows()[0]["data"]["review_item_id"]
+    assert PERSON in _payload_text(review_id)
+    assert life.purge(author_ref=PERSON, now=NOW) == 1
+    _blanked(review_id)
+    assert PERSON not in _payload_text(review_id)
+
+
+def test_ut07_38_dangling_review_link_does_not_block(
+    ops_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-38 a linked review item that no longer exists (NotFoundError on both review
+    functions) is skipped: the purge still removes the item."""
+    del ops_store
+    life, fake = _lifecycle(tmp_path, monkeypatch)
+    item = _seed("cites", cites=RECORD, review_item_id="rev_" + new_ulid())
+    assert life.purge(record_id=RECORD, now=NOW) == 1
+    assert _ids() == []
+    assert fake.deleted == [item]
 
 
 def test_ut07_38_item_citing_after_the_dry_run_is_erased_too(

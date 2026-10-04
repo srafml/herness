@@ -100,6 +100,12 @@ def test_st07_21_purge_leaves_no_text_anywhere(ops_store: OpsStoreHandle, tmp_pa
     active = store.propose(proposal(cited_texts[0], data=_cites(RECORD))).memory_id
     agent = provenance("agent")
     pending = store.propose(proposal(cited_texts[1], agent, data=_cites(RECORD))).memory_id
+    fix = {**KIND_DATA["business_rule"], "suggested_action": "weight_change",
+           "entities": [{"type": "record", "id": RECORD}]}  # fmt: skip
+    correction = store.propose(
+        proposal(f"Weight the {PLANTED} outage lower.", kind="business_rule", data=fix)
+    ).memory_id
+    store.approve(correction, "b" * 32)  # creates the derived weight_change review item
     kept_texts = [("MTTR means the mean time to restore a heron service.", _cites(LONGER)),
                   (f"Heron churn is unrelated to {RECORD} here.", _cites(OTHER)),
                   ("Churn means customers who left the heron service.", None)]  # fmt: skip
@@ -107,12 +113,14 @@ def test_st07_21_purge_leaves_no_text_anywhere(ops_store: OpsStoreHandle, tmp_pa
     rows = {r["memory_id"]: r for r in memory_rows()}
     assert rows[pending]["status"] == "pending_approval"
     review_id = rows[pending]["data"]["review_item_id"]
-    assert sorted(_fts(PLANTED)) == sorted([active, pending])  # the plant is searchable
+    derived = rows[correction]["data"]["derived_review_item_id"]
+    assert PLANTED in shared.get_review_item(derived).payload["statement"]
+    assert sorted(_fts(PLANTED)) == sorted([active, pending, correction])  # searchable
     assert {active, pending} <= _vector_hits(env, store, cited_texts)
     kept_vectors = env.vectors.vectors(kept)
     assert sorted(kept_vectors) == kept
 
-    assert store.purge(RECORD) == 2
+    assert store.purge(RECORD) == 3
 
     assert _fts(PLANTED) == []
     assert ops.fts_candidates(PLANTED, layers=LAYERS[:3], statuses=STATUSES[:2],
@@ -121,7 +129,13 @@ def test_st07_21_purge_leaves_no_text_anywhere(ops_store: OpsStoreHandle, tmp_pa
     assert not _found(_dump(ops_store.db_path), PLANTED)
     assert ops.purge_rows(record_id=RECORD, dry_run=True).deleted_ids == []
     assert _vector_hits(env, store, cited_texts) & {active, pending} == set()
-    assert env.vectors.vectors([active, pending]) == {}
+    assert env.vectors.vectors([active, pending, correction]) == {}
+    payloads = core.read_all("SELECT item_id, payload FROM review_item")
+    assert {str(r[0]) for r in payloads} >= {review_id, derived}
+    for _, payload in payloads:  # no text, citation or quoted id left in any review payload
+        assert PLANTED not in str(payload)
+        assert f'"{RECORD}"' not in str(payload)
+    assert f'"{RECORD}"' not in _dump(ops_store.db_path)
     review = shared.get_review_item(review_id)
     assert (review.status, review.note, review.payload["content"]) == ("rejected", "purged", "")
     after = {r["memory_id"]: r for r in memory_rows()}

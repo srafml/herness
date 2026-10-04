@@ -4,7 +4,8 @@ The only writer of ``memory_item`` (``memory_fts`` follows through the migration
 read-only lookups on ``evidence``, ``finding`` and the task checkpoint. Conventions C1 … C7 of
 impl 07 §3.5: with ``conn`` a function joins the caller's ``run_write`` transaction, else it reads
 on this thread's connection or wraps its write in ``run_write(op=<function>)``; SQL is constant
-and bound. Row types and plumbing live in the private sibling ``_memory_rows``.
+and bound. Row types and plumbing live in the private sibling ``_memory_rows``, the purge steps in
+``_memory_purge``.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from herness.core.errors import SchemaViolation, ToolInputError
 from herness.core.ids import canonical_json
 
 from . import core
+from ._memory_purge import PurgeRows, purge_apply, purge_select, purge_selector
 from ._memory_rows import (
     CHECKED,
     COLUMNS,
@@ -51,7 +53,6 @@ from ._memory_rows import (
     EvidenceRow,
     FindingFact,
     MemoryItemRow,
-    PurgeRows,
     Selector,
     Unchanged,
     bad_filter,
@@ -65,9 +66,6 @@ from ._memory_rows import (
     load_typed,
     lookup,
     marks,
-    purge_apply,
-    purge_select,
-    purge_selector,
     query,
     read_error,
     valid_ids,

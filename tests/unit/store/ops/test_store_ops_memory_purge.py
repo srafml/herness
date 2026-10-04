@@ -80,11 +80,29 @@ def _cites(record_id: str, **data: Any) -> dict[str, Any]:
     return {"entities": [{"type": "record", "id": record_id}], **data}
 
 
-def _number(record_id: str) -> dict[str, Any]:
-    """`data` citing `record_id` through a cited number's row key."""
+def _number(value: Any, column: str = "record_id") -> dict[str, Any]:
+    """`data` with one cited number whose row key holds `value` under `column`."""
     ref = {"id": "n1", "value": 3, "unit": "count", "query_id": "q_" + "a" * 16,
-           "column": "n", "row_key": {"record_id": record_id}}  # fmt: skip
+           "column": "n", "row_key": {column: value}}  # fmt: skip
     return {"entities": [], "numbers": [ref]}
+
+
+def test_ut07_89_number_cites_by_record_id_or_key_like_r77() -> None:
+    """UT07-89 (T07-26 review ruling, R-77 as impl 06 U06-144) a cited number cites the
+    record when a string value at depth <= 4 equals the record id or its key; a prefix key,
+    the same key under another source's full id, a deeper or non-string value does not."""
+    by_key = _put("by key", data=_number("INC001", "key"))
+    by_id = _put("by id", data=_number(_RECORD))
+    nested = _put("nested", data=_number({"a": {"b": "INC001"}}, "key"))  # depth 4
+    prefix = _put("prefix key", data=_number("INC0012", "key"))
+    other_source = _put("other source", data=_number("jira:issue:INC001"))
+    too_deep = _put("too deep", data=_number({"a": {"b": {"c": "INC001"}}}, "key"))
+    numeric = _put("numeric", data=_number(1, "key"))
+    kept = sorted([prefix, other_source, too_deep, numeric])
+
+    found = memory.purge_rows(record_id=_RECORD)
+    assert found.deleted_ids == sorted([by_key, by_id, nested])
+    assert sorted(_ids()) == kept
 
 
 def test_ut07_89_record_dry_run_then_real_delete(tmp_path: Path) -> None:
