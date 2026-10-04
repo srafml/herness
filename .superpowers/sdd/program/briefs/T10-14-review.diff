@@ -1,0 +1,1300 @@
+bbfcb30 fix(admin): T10-14 review round 1 (M1, M3-M8)
+63dcfa3 feat(admin): T10-14 config and secrets commands
+0092499 wip(T10-14): config commands and herness.admin layer
+
+ herness/admin/__init__.py                 |  11 +
+ herness/admin/commands_config.py          |  83 +++++++
+ herness/admin/commands_secrets.py         | 138 ++++++++++++
+ pyproject.toml                            |   8 +-
+ tests/integration/admin/test_admin_cli.py | 155 +++++++++++++
+ tests/security/test_st10_admin.py         | 154 +++++++++++++
+ tests/unit/admin/test_admin_config.py     | 264 ++++++++++++++++++++++
+ tests/unit/admin/test_admin_secrets.py    | 352 ++++++++++++++++++++++++++++++
+ tests/unit/repo/test_import_contracts.py  |   2 +-
+ 9 files changed, 1164 insertions(+), 3 deletions(-)
+
+diff --git a/herness/admin/__init__.py b/herness/admin/__init__.py
+new file mode 100644
+index 0000000..7e087fd
+--- /dev/null
++++ b/herness/admin/__init__.py
+@@ -0,0 +1,11 @@
++"""Operator commands, job handlers and doctor checks (impl 10 §3.7; L5 package, R-07).
++
++The ``commands_*`` modules hold the command bodies that impl 09's Typer commands call after the
++role check (T09-24 ``herness._cli.cmd_admin``); each returns a ``CommandResult`` and never prints.
++"""
++
++from __future__ import annotations
++
++__all__: list[str] = []
++
++# T10-19: register_handlers (maintenance job handler)
+diff --git a/herness/admin/commands_config.py b/herness/admin/commands_config.py
+new file mode 100644
+index 0000000..f26860d
+--- /dev/null
++++ b/herness/admin/commands_config.py
+@@ -0,0 +1,83 @@
++"""``herness config validate|show|hash`` behavior (impl 10 U10-65 to U10-67, design 10 §3.7).
++
++Bodies only: impl 09 checks the role, renders the ``CommandResult`` and maps a ``ConfigError``
++raised here at load to exit 3 (R-46). ``config validate`` reports config problems as issue
++lines and exit 1; it never raises for them.
++"""
++
++from __future__ import annotations
++
++import os
++from collections.abc import Sequence
++from pathlib import Path
++from typing import Final
++
++from herness._cli.output import CommandResult
++from herness.core.config import config_hash, effective_dict, load_config, validate
++from herness.core.config_sources import ProfileName, resolve_profile
++from herness.core.config_view import ConfigIssue
++from herness.core.errors import ConfigError
++
++__all__ = ["OFFLINE_HASH_WARNING", "cmd_config_hash", "cmd_config_show", "cmd_config_validate"]
++
++OFFLINE_HASH_WARNING: Final = "config_hash computed without key_id; not comparable to builds"
++_OFFLINE_KEY_ID: Final = "unresolved"
++
++
++def _exit_code(issues: Sequence[ConfigIssue], *, strict: bool) -> int:
++    """U10-65 step 4: 1 on any error; 1 on any warn with ``strict``; else 0 (R-46)."""
++    severities = {issue.severity for issue in issues}
++    return 1 if "error" in severities or (strict and "warn" in severities) else 0
++
++
++def _load_hash(
++    config_dir: Path, profile: ProfileName, *, offline: bool
++) -> tuple[str | None, ConfigIssue | None]:
++    """The config hash, or ``None`` and the load failure as an ``error`` issue."""
++    try:
++        cfg = load_config(profile, config_dir=config_dir)
++    except ConfigError as exc:  # the message names paths and keys only (U10-09)
++        return None, ConfigIssue("error", "config", exc.message[:300], None)
++    return config_hash(cfg, key_id=_OFFLINE_KEY_ID if offline else None), None
++
++
++def cmd_config_validate(
++    *, config_dir: Path, profile: ProfileName | None, offline: bool, strict: bool
++) -> CommandResult:
++    """``herness config validate`` (U10-65): issues, resolved profile and ``config_hash``."""
++    tried = profile if profile is not None else os.environ.get("HERNESS_PROFILE", "local")
++    try:
++        name = resolve_profile(profile, os.environ)  # U10-09 step 1
++    except ConfigError as exc:
++        line = str(ConfigIssue("error", "profile", exc.message, None))
++        failed: dict[str, object] = {"profile": tried, "config_hash": None, "issues": [line]}
++        return CommandResult(ok=False, data=failed, warnings=[], exit_code=1)
++    issues = validate(config_dir, name, offline=offline)
++    digest, load_error = _load_hash(config_dir, name, offline=offline)
++    if load_error is not None and all(issue.severity != "error" for issue in issues):
++        issues = [*issues, load_error]  # the second load failed alone (config changed)
++    lines = [str(issue) for issue in issues]
++    warnings: list[str] = []
++    if offline and digest is not None:
++        note = str(ConfigIssue("warn", "config_hash", OFFLINE_HASH_WARNING, None))
++        lines.append(note)
++        warnings.append(note)
++    # The exit decision covers the validator issues only: the offline hash note is advisory,
++    # so `--offline --strict` on a clean config exits 0 (IT10-11, sub-controller ruling).
++    code = _exit_code(issues, strict=strict)
++    data: dict[str, object] = {"profile": name, "config_hash": digest, "issues": lines}
++    return CommandResult(ok=code == 0, data=data, warnings=warnings, exit_code=code)
++
++
++def cmd_config_show(*, config_dir: Path, profile: ProfileName | None) -> CommandResult:
++    """``herness config show`` (U10-66): the effective config, secrets as ``secret:<name>``."""
++    cfg = load_config(profile, config_dir=config_dir)
++    data = effective_dict(cfg, redact_secrets=True)
++    return CommandResult(ok=True, data=data, warnings=[], exit_code=0)
++
++
++def cmd_config_hash(*, config_dir: Path, profile: ProfileName | None) -> CommandResult:
++    """``herness config hash`` (U10-67)."""
++    cfg = load_config(profile, config_dir=config_dir)
++    data: dict[str, object] = {"config_hash": config_hash(cfg)}
++    return CommandResult(ok=True, data=data, warnings=[], exit_code=0)
+diff --git a/herness/admin/commands_secrets.py b/herness/admin/commands_secrets.py
+new file mode 100644
+index 0000000..4ee41a1
+--- /dev/null
++++ b/herness/admin/commands_secrets.py
+@@ -0,0 +1,138 @@
++"""``herness secrets init|set|status`` behavior (impl 10 U10-68 to U10-70, design 10 §3.7, §5.2).
++
++Bodies only: impl 09 checks the role and the elevated shell, supplies ``prompt`` (hidden console
++input) and ``show`` (a console write that bypasses logging), renders the ``CommandResult`` and
++maps a backend ``ConfigError`` raised here to exit 3 (R-46). Secret values reach the operator
++only through ``show``; ``data``, ``warnings``, errors and logs carry names only (TH10-07).
++"""
++
++from __future__ import annotations
++
++import json
++import secrets as stdlib_secrets
++from collections.abc import Callable
++from datetime import timedelta
++from typing import Final
++
++from herness._cli.output import CommandResult
++from herness.core import time as clock
++from herness.core.audit import last_secret_set_times
++from herness.core.config import HernessConfig, get_config
++from herness.core.errors import ConfigError
++from herness.core.secrets import SecretRef, exists, referenced_secret_names, set_secret
++
++__all__ = ["INIT_NAMES", "cmd_secrets_init", "cmd_secrets_set", "cmd_secrets_status"]
++
++INIT_NAMES: Final = ("redact.hmac_key", "ui_user_ref_key")
++_ESCROWED: Final = "ESCROWED"
++_KEY_BYTES: Final = 32  # secrets.token_hex(32): 64 hex characters (V11.5)
++_MAX_VALUE_BYTES: Final = 16 * 1024  # U10-69 limit: value <= 16 KiB (UTF-8)
++_ROTATE_AFTER: Final = timedelta(days=90)  # design 10 §5.2 rotation policy
++_DIFFER: Final = "values differ"
++_TOO_LONG: Final = "value exceeds 16 KiB"
++_NOT_OBJECT: Final = "a value starting with { must be a JSON object of strings"
++
++
++# --- U10-68 secrets init ---------------------------------------------------------------------
++
++
++def _create(
++    name: str, *, actor: str, prompt: Callable[[str], str], show: Callable[[str], None]
++) -> str:
++    """Steps 2-5 for one absent key: show it once, confirm escrow, then store it."""
++    value = stdlib_secrets.token_hex(_KEY_BYTES)
++    show(
++        f"{name}: {value}\n"
++        "Store this value in the corporate password vault now; it is shown only once."
++    )
++    if prompt(f"Type {_ESCROWED} after storing {name} in the vault") != _ESCROWED:
++        return "not created"
++    set_secret(name, value, actor=actor)
++    return "created"
++
++
++def cmd_secrets_init(
++    *, actor: str, prompt: Callable[[str], str], show: Callable[[str], None]
++) -> CommandResult:
++    """``herness secrets init`` (U10-68): create the two keys if absent, escrow-confirmed."""
++    if get_config().security.secrets.backend != "keyring":  # precondition, before any `show`
++        msg = "secrets init needs the keyring backend"
++        raise ConfigError(msg)
++    rows: list[dict[str, object]] = []
++    warnings: list[str] = []
++    for name in INIT_NAMES:
++        status = "present" if exists(name) else _create(name, actor=actor, prompt=prompt, show=show)
++        rows.append({"name": name, "status": status})
++        if status == "not created":
++            warnings.append(f"{name} not created: escrow not confirmed")
++    code = 1 if warnings else 0
++    return CommandResult(ok=code == 0, data={"secrets": rows}, warnings=warnings, exit_code=code)
++
++
++# --- U10-69 secrets set ----------------------------------------------------------------------
++
++
++def _json_object_of_strings(value: str) -> bool:
++    try:
++        data = json.loads(value)
++    except json.JSONDecodeError:
++        return False
++    return isinstance(data, dict) and all(isinstance(item, str) for item in data.values())
++
++
++def _rejection(v1: str, v2: str) -> str | None:
++    """U10-69 steps 2-3 and the 16 KiB limit; the reason never holds the value."""
++    if v1 != v2:
++        return _DIFFER
++    if len(v1.encode("utf-8")) > _MAX_VALUE_BYTES:
++        return _TOO_LONG
++    if v1.startswith("{") and not _json_object_of_strings(v1):
++        return _NOT_OBJECT
++    return None
++
++
++def cmd_secrets_set(name: str, *, actor: str, prompt: Callable[[str], str]) -> CommandResult:
++    """``herness secrets set NAME`` (U10-69): the value comes from two hidden prompts only."""
++    ref = SecretRef.parse(name)  # step 1: ConfigError (exit 3) before any prompt
++    v1 = prompt(f"Value for {ref.name}")
++    v2 = prompt("Repeat")
++    reason = _rejection(v1, v2)
++    if reason is not None:
++        data = {"name": ref.name, "stored": False}
++        return CommandResult(ok=False, data=data, warnings=[reason], exit_code=1)
++    set_secret(ref.name, v1, actor=actor)  # step 4: validates, audits by name, then writes
++    data = {"name": ref.name, "stored": True}
++    return CommandResult(ok=True, data=data, warnings=[], exit_code=0)
++
++
++# T10-30: cmd_secrets_rekey
++
++
++# --- U10-70 secrets status -------------------------------------------------------------------
++
++
++def cmd_secrets_status(*, cfg: HernessConfig) -> CommandResult:
++    """``herness secrets status`` (U10-70): names, presence and last-set time; never values."""
++    names = referenced_secret_names(cfg)
++    last_set = last_secret_set_times(cfg.paths.logs, names)
++    now = clock.now()
++    rows: list[dict[str, object]] = []
++    missing: list[str] = []
++    stale: list[str] = []
++    for name in names:
++        present, when = exists(name), last_set.get(name)
++        rows.append(
++            {
++                "name": name,
++                "present": present,
++                "last_set": None if when is None else clock.format_utc(when),
++            }
++        )
++        if not present:
++            missing.append(f"secret missing: {name}")
++        if when is not None and now - when > _ROTATE_AFTER:
++            stale.append(f"{name}: last set {(now - when).days} days ago; rotate per policy")
++    code = 1 if missing else 0
++    return CommandResult(
++        ok=code == 0, data={"secrets": rows}, warnings=missing + stale, exit_code=code
++    )
+diff --git a/pyproject.toml b/pyproject.toml
+index d5ddf5c..4ad4ce8 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -278,18 +278,20 @@ output = "coverage.xml"
+ [tool.importlinter]
+ root_packages = ["herness", "tools"]
+ include_external_packages = false
+ 
+ [[tool.importlinter.contracts]]
+ name = "herness layers"
+ type = "layers"
+ layers = [
+-    # impl 09 §2: the private CLI package sits above reports and eval (T09-20)
+-    "herness._cli",
++    # impl 09 §2: the private CLI package sits above reports and eval (T09-20); herness.admin
++    # (impl 10 §3.7, R-07) is L5 beside it, non-independent: admin returns
++    # herness._cli.output.CommandResult and cmd_admin (T09-24) calls the admin bodies.
++    "herness._cli : herness.admin",
+     "herness.eval | herness.reports",
+     "herness.harness",
+     "herness.metrics",
+     "herness.enrich",
+     "herness.connectors | herness.model",
+     "herness.store",
+     "herness.core",
+ ]
+@@ -369,16 +371,17 @@ forbidden_modules = [
+     "herness.model",
+     "herness.connectors",
+     "herness.eval",
+     "herness.metrics",
+     "herness.harness",
+     "herness.enrich",
+     "herness.reports",
+     "herness._cli",
++    "herness.admin",
+ ]
+ 
+ [[tool.importlinter.contracts]]
+ name = "types import only errors and ids"
+ type = "forbidden"
+ source_modules = ["herness.core.types"]
+ forbidden_modules = ["herness.core.time", "herness.core.logging", "herness.core._log_pipeline"]
+ allow_indirect_imports = true
+@@ -541,16 +544,17 @@ type = "forbidden"
+ # impl 08 §2 / R-03 (UT08-103): herness.core.resilience.settings imports only stdlib,
+ # pydantic, herness.core.types and herness.core.errors (third-party part checked by
+ # tools.check_type_ownership and the UT08-103 AST allowlist test). Import-linter matches
+ # whole packages, not name prefixes, so every other Herness top-level package and every
+ # herness.core / herness.core.resilience module is listed (T08-23 review I-1).
+ source_modules = ["herness.core.*.settings"]
+ forbidden_modules = [
+     "herness._cli",
++    "herness.admin",
+     "herness.cli",
+     "herness.connectors",
+     "herness.enrich",
+     "herness.eval",
+     "herness.harness",
+     "herness.metrics",
+     "herness.model",
+     "herness.reports",
+diff --git a/tests/integration/admin/test_admin_cli.py b/tests/integration/admin/test_admin_cli.py
+new file mode 100644
+index 0000000..a13e0c5
+--- /dev/null
++++ b/tests/integration/admin/test_admin_cli.py
+@@ -0,0 +1,155 @@
++"""IT10-11: ``herness config validate`` end to end through the real root app (impl 10 U10-65).
++
++``herness._cli.cmd_admin`` (T09-24) is not on this branch yet, so the test registers a
++test-local ``config validate`` command on ``herness.cli.app`` that does what impl 09 U09-98
++specifies (guarded, options ``--profile/--offline/--strict``, the ``CommandResult`` converted
++and emitted) and drives it through ``herness.cli.main``. T09-24 replaces the wrapper.
++"""
++
++from __future__ import annotations
++
++import json
++import re
++from collections.abc import Iterator
++from pathlib import Path
++from typing import Annotated, cast
++
++import pytest
++import typer
++from tests.support.cli_env import CliEnv
++from tests.support.config_tree import register_checked_names, write_checked_config
++
++from herness import cli
++from herness._cli.identity import guarded
++from herness._cli.output import emit
++from herness.admin.commands_config import OFFLINE_HASH_WARNING, cmd_config_validate
++from herness.reports.rules import Actor
++
++pytestmark = pytest.mark.integration
++
++HASH_RE = re.compile(r"^cfg_[0-9a-f]{16}$")
++LINE_RE = re.compile(r"^(error|warn) \S+ \S+: .+$")
++PATH = "config validate"
++
++
++def _config_validate(
++    ctx: typer.Context,
++    actor: Actor | None,
++    profile: Annotated[str | None, typer.Option("--profile")] = None,
++    offline: Annotated[bool, typer.Option("--offline")] = False,
++    strict: Annotated[bool, typer.Option("--strict")] = False,
++) -> int:
++    """Stand-in for the T09-24 ``config validate`` command (U09-98)."""
++    del actor  # role `any`, denied users included (DENIED_ALLOWED)
++    opts = cast("cli.GlobalOptions", ctx.find_root().obj)
++    result = cmd_config_validate(
++        config_dir=opts.config_dir,
++        profile=profile,  # type: ignore[arg-type]
++        offline=offline,
++        strict=strict,
++    )
++    return emit(opts, result.to_cli_result(PATH))
++
++
++@pytest.fixture
++def registered(cli_env: CliEnv) -> Iterator[CliEnv]:
++    """Register ``config validate`` on the root app; restore the app's groups after."""
++    saved = list(cli.app.registered_groups)
++    group = typer.Typer(name="config")
++    group.command("validate")(guarded(PATH)(_config_validate))
++    cli.app.add_typer(group, name="config")
++    register_checked_names()
++    try:
++        yield cli_env
++    finally:
++        cli.app.registered_groups[:] = saved
++
++
++@pytest.fixture
++def validate_app(registered: CliEnv) -> Path:
++    """A clean, pinned config dir (every offline cross-check passes)."""
++    return write_checked_config(registered.root)
++
++
++def _run(cfg_dir: Path, *extra: str) -> int:
++    args = ["--config-dir", str(cfg_dir), "--json", "config", "validate", *extra]
++    with pytest.raises(SystemExit) as exc:
++        cli.main(args)
++    assert isinstance(exc.value.code, int)
++    return exc.value.code
++
++
++def _envelope(capsys: pytest.CaptureFixture[str], code: int) -> dict[str, object]:
++    out = capsys.readouterr().out
++    assert out.count("\n") == 1  # exactly one JSON object on stdout (TH09-22)
++    payload = json.loads(out)
++    assert set(payload) == {"ok", "command", "data", "warnings", "error"}
++    assert payload["ok"] is (code == 0)
++    assert payload["command"] == PATH
++    assert payload["error"] is None
++    data = payload["data"]
++    assert set(data) == {"schema", "profile", "config_hash", "issues"}
++    assert data["schema"] == "cli/1"
++    assert data["profile"] == "local"
++    assert all(isinstance(line, str) and LINE_RE.fullmatch(line) for line in data["issues"])
++    assert isinstance(payload["warnings"], list)
++    return cast("dict[str, object]", data)
++
++
++def _edit(cfg_dir: Path, old: str, new: str) -> None:
++    path = cfg_dir / "herness.yaml"
++    text = path.read_text(encoding="utf-8")
++    assert old in text
++    path.write_text(text.replace(old, new, 1), encoding="utf-8")
++
++
++def test_it10_11_clean_config_exits_0(
++    validate_app: Path, capsys: pytest.CaptureFixture[str]
++) -> None:
++    """IT10-11 clean config: --offline --strict exits 0; JSON envelope validates."""
++    code = _run(validate_app, "--offline", "--strict")
++    assert code == 0
++    data = _envelope(capsys, code)
++    assert HASH_RE.fullmatch(str(data["config_hash"]))
++    assert data["issues"] == [f"warn config_hash -: {OFFLINE_HASH_WARNING}"]
++
++
++def test_it10_11_warning_only_config_exits_1(
++    validate_app: Path, capsys: pytest.CaptureFixture[str]
++) -> None:
++    """IT10-11 warning-only config: --offline --strict exits 1 (R-46); 0 without --strict."""
++    _edit(validate_app, "d" * 64, '"<sha256>"')
++    code = _run(validate_app, "--offline", "--strict")
++    assert code == 1
++    data = _envelope(capsys, code)
++    assert HASH_RE.fullmatch(str(data["config_hash"]))
++    assert "warn deploy.large.sha256 herness.yaml: " in str(data["issues"])
++    assert _run(validate_app, "--offline") == 0
++    _envelope(capsys, 0)
++
++
++def test_it10_11_error_config_exits_1(
++    validate_app: Path, capsys: pytest.CaptureFixture[str]
++) -> None:
++    """IT10-11 error config (fails to load): --offline --strict exits 1, not 3 (R-46)."""
++    _edit(validate_app, "logging: {level: INFO}", "logging: {level: LOUD}")
++    code = _run(validate_app, "--offline", "--strict")
++    assert code == 1
++    data = _envelope(capsys, code)
++    assert data["config_hash"] is None
++    issues = data["issues"]
++    assert isinstance(issues, list)
++    assert issues[0].startswith("error logging.level herness.yaml: ")
++
++
++def test_it10_11_denied_user_may_validate(
++    registered: CliEnv, capsys: pytest.CaptureFixture[str]
++) -> None:
++    """IT10-11 config validate is allowed for a denied user (DENIED_ALLOWED, role any)."""
++    cfg_dir = registered.write_config(admins=["root-admin"], default_role="denied")
++    assert _run(cfg_dir, "--offline", "--profile", "synth") == 0
++    out = json.loads(capsys.readouterr().out)
++    assert (out["ok"], out["error"]) == (True, None)
++    assert out["data"]["profile"] == "synth"
++    assert out["data"]["issues"]  # the unpinned deploy placeholders of this tree warn (C13)
++    assert _run(cfg_dir, "--offline", "--strict", "--profile", "synth") == 1
+diff --git a/tests/security/test_st10_admin.py b/tests/security/test_st10_admin.py
+new file mode 100644
+index 0000000..0476046
+--- /dev/null
++++ b/tests/security/test_st10_admin.py
+@@ -0,0 +1,154 @@
++"""ST10-36: a viewer cannot run admin commands (impl 10 TH10-01; R-46 exit 11).
++
++``herness._cli.cmd_admin`` (T09-24) is not on this branch yet, so the test registers
++test-local commands on the real root app ``herness.cli.app``: ``secrets set NAME`` is the
++U09-98 wrapper around the real body ``cmd_secrets_set``; ``privacy delete`` and ``deploy up``
++are recording probes (their bodies are T10-19 and T10-24). Each is ``guarded`` by its impl 09
++command path, so ``check_command_role`` decides. T09-24 replaces the wrappers.
++"""
++
++from __future__ import annotations
++
++import json
++from collections.abc import Iterator
++from pathlib import Path
++from typing import Annotated, cast
++
++import pytest
++import typer
++from tests.support.cli_env import CliEnv
++from tests.support.fake_keyring import MemoryKeyring
++
++from herness import cli
++from herness._cli import identity
++from herness._cli.identity import guarded
++from herness._cli.output import emit
++from herness.admin.commands_secrets import cmd_secrets_set
++from herness.reports.rules import Actor, UserInputError
++
++pytestmark = pytest.mark.unit
++
++VALUE = "St10-36-sentinel-value-x9"  # pragma: allowlist secret - test sentinel
++
++
++def _secrets_set(
++    ctx: typer.Context, actor: Actor | None, name: Annotated[str, typer.Argument()]
++) -> int:
++    """Stand-in for the T09-24 ``secrets set NAME`` command (U09-98)."""
++    opts = cast("cli.GlobalOptions", ctx.find_root().obj)
++    if opts.json:
++        msg = "secrets set does not support --json"
++        raise UserInputError(msg)
++    assert actor is not None
++    result = cmd_secrets_set(
++        name, actor=actor.user_ref, prompt=lambda text: typer.prompt(text, hide_input=True)
++    )
++    return emit(opts, result.to_cli_result("secrets set"))
++
++
++def _probe(path: str, ran: list[str]) -> typer.models.CommandFunctionType:
++    def handler(actor: Actor | None) -> int:
++        del actor
++        ran.append(path)  # stands for the job the privacy body would enqueue
++        return 0
++
++    return handler
++
++
++def _class_probe(path: str, ran: list[str]) -> typer.models.CommandFunctionType:
++    # A plain required parameter: `guarded` keeps the string annotations of its signature, so
++    # typer sees `Annotated[...]` metadata only through get_type_hints, which drops it.
++    def handler(actor: Actor | None, gpu_class: str) -> int:
++        del actor, gpu_class
++        ran.append(path)  # stands for the deploy action the body would run
++        return 0
++
++    return handler
++
++
++@pytest.fixture
++def admin_app(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
++    """Register the three commands; the shell counts as elevated so only the role decides."""
++    del cli_env
++    monkeypatch.setattr(identity, "_is_elevated", lambda: True)
++    ran: list[str] = []
++    saved = list(cli.app.registered_groups)
++    secrets_group, privacy, deploy = (typer.Typer(name=n) for n in ("secrets", "privacy", "deploy"))
++    secrets_group.command("set")(guarded("secrets set")(_secrets_set))
++    privacy.command("delete")(guarded("privacy delete")(_probe("privacy delete", ran)))
++    deploy.command("up")(guarded("deploy up")(_class_probe("deploy up", ran)))
++    for group in (secrets_group, privacy, deploy):
++        cli.app.add_typer(group)
++    try:
++        yield ran
++    finally:
++        cli.app.registered_groups[:] = saved
++
++
++def _run(args: list[str]) -> int:
++    with pytest.raises(SystemExit) as exc:
++        cli.main(args)
++    assert isinstance(exc.value.code, int)
++    return exc.value.code
++
++
++def _audit_lines(root: Path) -> list[dict[str, object]]:
++    lines: list[dict[str, object]] = []
++    for path in sorted((root / "data" / "logs").glob("audit-*.jsonl")):
++        lines += [json.loads(raw) for raw in path.read_text(encoding="utf-8").splitlines()]
++    return lines
++
++
++def test_st10_36_viewer_refused_admin_commands(
++    cli_env: CliEnv,
++    admin_app: list[str],
++    fake_keyring: MemoryKeyring,
++    monkeypatch: pytest.MonkeyPatch,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """ST10-36 viewer runs secrets set, privacy delete, deploy up: exit 11 PermissionDenied;
++    no keyring write, no job, no admin_action audit line."""
++    prompts: list[str] = []
++    monkeypatch.setattr(typer, "prompt", lambda text, **_kw: prompts.append(text) or VALUE)
++    cfg_dir = str(cli_env.write_config(admins=["root-admin"], default_role="viewer"))
++    before = dict(fake_keyring.store)
++    for command in (
++        ["secrets", "set", "snow.token"],
++        ["privacy", "delete"],
++        ["deploy", "up", "large"],
++    ):
++        assert _run(["--config-dir", cfg_dir, "--json", *command]) == 11
++        payload = json.loads(capsys.readouterr().out)
++        assert payload["ok"] is False
++        assert (payload["error"]["type"], payload["error"]["exit_code"]) == ("PermissionDenied", 11)
++    assert fake_keyring.store == before
++    assert (admin_app, prompts) == ([], [])
++    lines = _audit_lines(cli_env.root)
++    assert [line["event"] for line in lines] == ["auth"] * 3  # each refusal is audited
++    assert all(line["fields"]["result"] == "denied" for line in lines)  # type: ignore[index]
++    assert not any(line["event"] == "admin_action" for line in lines)
++
++
++def test_st10_36_admin_control_sets_secret(
++    cli_env: CliEnv,
++    admin_app: list[str],
++    fake_keyring: MemoryKeyring,
++    monkeypatch: pytest.MonkeyPatch,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """ST10-36 control: the mapped admin's secrets set stores the value and audits by name."""
++    del admin_app
++    prompts: list[str] = []
++    monkeypatch.setattr(typer, "prompt", lambda text, **_kw: prompts.append(text) or VALUE)
++    cli_env.user = "root-admin"
++    cfg_dir = str(cli_env.write_config(admins=["root-admin"], default_role="viewer"))
++    assert _run(["--config-dir", cfg_dir, "secrets", "set", "snow.token"]) == 0
++    assert prompts == ["Value for snow.token", "Repeat"]
++    assert fake_keyring.store[("herness", "snow.token")] == VALUE
++    actions = [line for line in _audit_lines(cli_env.root) if line["event"] == "admin_action"]
++    assert [line["fields"] for line in actions] == [
++        {"action": "secret_set", "target": "snow.token"}
++    ]
++    out, err = capsys.readouterr()
++    assert VALUE not in out + err
++    assert "snow.token" in out
+diff --git a/tests/unit/admin/test_admin_config.py b/tests/unit/admin/test_admin_config.py
+new file mode 100644
+index 0000000..efd5f7a
+--- /dev/null
++++ b/tests/unit/admin/test_admin_config.py
+@@ -0,0 +1,264 @@
++"""Tests for ``config validate|show|hash`` (impl 10 U10-65 to U10-67; UT10-20, UT10-15, ST10-16).
++
++The bodies return a ``CommandResult`` and never print; a ``ConfigError`` raised at load by
++``config show`` or ``config hash`` propagates for impl 09 to map to exit 3 (R-46).
++"""
++
++from __future__ import annotations
++
++import json
++import re
++from pathlib import Path
++
++import pytest
++from tests.support.config_tree import register_checked_names, write_checked_config
++from tests.support.fake_keyring import MemoryKeyring
++
++from herness._cli.output import CommandResult
++from herness.admin.commands_config import (
++    OFFLINE_HASH_WARNING,
++    cmd_config_hash,
++    cmd_config_show,
++    cmd_config_validate,
++)
++from herness.core import config as c
++from herness.core import config_validate as cv
++from herness.core import redact
++from herness.core import secrets as s
++from herness.core.config_view import ConfigIssue
++from herness.core.errors import ConfigError
++
++pytestmark = pytest.mark.unit
++
++HASH_RE = re.compile(r"^cfg_[0-9a-f]{16}$")
++LINE_RE = re.compile(r"^(error|warn) \S+ \S+: .+$")
++SENTINEL = "SENTINEL-SECRET-adm-4c1e"  # pragma: allowlist secret - test sentinel
++HMAC_KEY = "ab" * 32  # pragma: allowlist secret - 64-hex test key
++HASH_LINE = f"warn config_hash -: {OFFLINE_HASH_WARNING}"
++
++
++@pytest.fixture
++def cfg_dir(tmp_path: Path, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> Path:
++    """The pinned test tree (every offline cross-check passes) with its registry names."""
++    del fake_keyring
++    monkeypatch.delenv("HERNESS_PROFILE", raising=False)
++    register_checked_names()
++    return write_checked_config(tmp_path)
++
++
++def _replace(cfg_dir: Path, old: str, new: str, name: str = "herness.yaml") -> None:
++    path = cfg_dir / name
++    text = path.read_text(encoding="utf-8")
++    assert old in text
++    path.write_text(text.replace(old, new, 1), encoding="utf-8")
++
++
++def _validate(cfg_dir: Path, *, strict: bool, offline: bool = True) -> CommandResult:
++    return cmd_config_validate(config_dir=cfg_dir, profile=None, offline=offline, strict=strict)
++
++
++def _owner_error(cfg: object, *, offline: bool) -> list[ConfigIssue]:
++    del cfg, offline
++    return [ConfigIssue("error", "decisions.primary_decider", "owner check failed", "x.yaml")]
++
++
++# --- UT10-20 cmd_config_validate ------------------------------------------------------------------
++
++
++@pytest.mark.parametrize("strict", [False, True])
++def test_ut10_20_clean_config_exits_0(cfg_dir: Path, strict: bool) -> None:
++    """UT10-20 clean config: exit 0 with and without strict; offline hash note is a warn issue."""
++    result = _validate(cfg_dir, strict=strict)
++    assert (result.ok, result.exit_code) == (True, 0)
++    assert result.data is not None
++    assert result.data["profile"] == "local"
++    assert HASH_RE.fullmatch(str(result.data["config_hash"]))
++    assert result.data["issues"] == [HASH_LINE]
++    assert result.warnings == [HASH_LINE]
++
++
++def test_ut10_20_warning_only_config(cfg_dir: Path) -> None:
++    """UT10-20 warning-only config: exit 0 without strict, 1 with strict (R-46)."""
++    _replace(cfg_dir, "d" * 64, '"<sha256>"')
++    loose, strict = _validate(cfg_dir, strict=False), _validate(cfg_dir, strict=True)
++    assert (loose.ok, loose.exit_code) == (True, 0)
++    assert (strict.ok, strict.exit_code) == (False, 1)
++    assert loose.data is not None
++    issues = loose.data["issues"]
++    assert isinstance(issues, list)
++    assert issues[0].startswith("warn deploy.large.sha256 herness.yaml: ")
++    assert all(LINE_RE.fullmatch(line) for line in issues)
++    assert HASH_RE.fullmatch(str(loose.data["config_hash"]))
++
++
++@pytest.mark.parametrize("strict", [False, True])
++def test_ut10_20_error_config_exits_1(cfg_dir: Path, strict: bool) -> None:
++    """UT10-20 an error issue (owner validator) exits 1 with and without strict."""
++    cv.register_owner_validator("admin.test", _owner_error)
++    result = _validate(cfg_dir, strict=strict)
++    assert (result.ok, result.exit_code) == (False, 1)
++    assert result.data is not None
++    assert "error decisions.primary_decider x.yaml: owner check failed" in result.data["issues"]
++    assert HASH_RE.fullmatch(str(result.data["config_hash"]))
++
++
++def test_ut10_20_load_error_is_an_issue_not_raised(cfg_dir: Path) -> None:
++    """UT10-20 a config that fails to load is reported as issues (exit 1); config_hash null."""
++    _replace(cfg_dir, "logging: {level: INFO}", "logging: {level: LOUD}")
++    result = _validate(cfg_dir, strict=False)
++    assert (result.ok, result.exit_code) == (False, 1)
++    assert result.data is not None
++    assert result.data["config_hash"] is None
++    assert result.data["profile"] == "local"
++    issues = result.data["issues"]
++    assert isinstance(issues, list)
++    assert issues
++    assert all(LINE_RE.fullmatch(line) for line in issues)
++    assert issues[0].startswith("error logging.level herness.yaml: ")
++    assert result.warnings == []
++
++
++def test_ut10_20_unknown_profile_is_an_issue(cfg_dir: Path) -> None:
++    """UT10-20 an unknown profile name is an error issue (exit 1), not an exception."""
++    result = cmd_config_validate(config_dir=cfg_dir, profile="nope", offline=True, strict=False)  # type: ignore[arg-type]
++    assert (result.ok, result.exit_code) == (False, 1)
++    assert result.data == {
++        "profile": "nope",
++        "config_hash": None,
++        "issues": ["error profile -: unknown profile: nope"],
++    }
++
++
++def test_ut10_20_unknown_profile_from_environment_is_named(
++    cfg_dir: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """UT10-20 an unknown HERNESS_PROFILE (no --profile) is reported by the name tried."""
++    monkeypatch.setenv("HERNESS_PROFILE", "nope")
++    result = _validate(cfg_dir, strict=False)
++    assert (result.ok, result.exit_code) == (False, 1)
++    assert result.data == {
++        "profile": "nope",
++        "config_hash": None,
++        "issues": ["error profile -: unknown profile: nope"],
++    }
++
++
++def test_ut10_20_second_load_failure_is_an_error(
++    cfg_dir: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """UT10-20 the hash load failing alone (config changed between loads) is an error issue."""
++    real = c.load_config
++    calls: list[int] = []
++
++    def flaky(*args: object, **kwargs: object) -> c.HernessConfig:
++        calls.append(1)
++        if len(calls) > 1:
++            msg = "config dir not found: config"
++            raise ConfigError(msg)
++        return real(*args, **kwargs)  # type: ignore[arg-type]
++
++    monkeypatch.setattr(c, "load_config", flaky)
++    monkeypatch.setattr("herness.admin.commands_config.load_config", flaky)
++    result = _validate(cfg_dir, strict=False)
++    assert len(calls) == 2
++    assert (result.ok, result.exit_code) == (False, 1)
++    assert result.data is not None
++    assert result.data["config_hash"] is None
++    assert result.data["issues"] == ["error config -: config dir not found: config"]
++
++
++def test_ut10_20_offline_hash_uses_unresolved_key_id(
++    cfg_dir: Path, fake_keyring: MemoryKeyring
++) -> None:
++    """UT10-20 step 3: offline hashes with key_id "unresolved" even when the key exists."""
++    assert redact is not None  # registers the key-id provider of config_hash (U10-11)
++    fake_keyring.store[("herness", "redact.hmac_key")] = HMAC_KEY
++    cfg = c.load_config(config_dir=cfg_dir, env={})
++    offline = _validate(cfg_dir, strict=False).data
++    online = _validate(cfg_dir, strict=False, offline=False).data
++    assert offline is not None
++    assert online is not None
++    assert offline["config_hash"] == c.config_hash(cfg, key_id="unresolved")
++    assert online["config_hash"] == c.config_hash(cfg)
++    assert offline["config_hash"] != online["config_hash"]
++
++
++def test_ut10_20_profile_resolved_from_environment(
++    cfg_dir: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """UT10-20 step 1: no --profile -> HERNESS_PROFILE (U10-09 step 1)."""
++    monkeypatch.setenv("HERNESS_PROFILE", "synth")
++    result = _validate(cfg_dir, strict=True)
++    assert result.data is not None
++    assert result.data["profile"] == "synth"
++    assert result.exit_code == 0
++
++
++def test_ut10_20_online_hash_has_no_offline_note(cfg_dir: Path) -> None:
++    """UT10-20 without --offline the hash uses the key id and no offline note is added."""
++    result = _validate(cfg_dir, strict=False, offline=False)
++    assert result.data is not None
++    assert HASH_RE.fullmatch(str(result.data["config_hash"]))
++    assert HASH_LINE not in result.data["issues"]  # type: ignore[operator]
++    assert result.warnings == []
++
++
++# --- UT10-15 cmd_config_hash ----------------------------------------------------------------------
++
++
++def test_ut10_15_cmd_config_hash_stable(cfg_dir: Path) -> None:
++    """UT10-15 reordered keys and a different logging.level hash equal; ^cfg_[0-9a-f]{16}$."""
++    first = cmd_config_hash(config_dir=cfg_dir, profile=None)
++    assert (first.ok, first.exit_code, first.warnings) == (True, 0, [])
++    _replace(cfg_dir, "logging: {level: INFO}", "logging: {level: DEBUG}")
++    text = (cfg_dir / "herness.yaml").read_text(encoding="utf-8").splitlines(keepends=True)
++    head, rest = text[0], text[1:]
++    (cfg_dir / "herness.yaml").write_text(head + "".join(reversed(_blocks(rest))), "utf-8")
++    second = cmd_config_hash(config_dir=cfg_dir, profile="local")
++    assert first.data == second.data
++    assert first.data is not None
++    assert HASH_RE.fullmatch(str(first.data["config_hash"]))
++
++
++def _blocks(lines: list[str]) -> list[str]:
++    """Top-level YAML blocks (a key line plus its indented continuation lines)."""
++    blocks: list[str] = []
++    for line in lines:
++        if line[:1] in {" ", "\t"} and blocks:
++            blocks[-1] += line
++        else:
++            blocks.append(line)
++    return blocks
++
++
++def test_ut10_15_cmd_config_hash_load_error_propagates(cfg_dir: Path) -> None:
++    """UT10-15 a ConfigError raised at load propagates (impl 09 maps it to exit 3)."""
++    _replace(cfg_dir, "logging: {level: INFO}", "logging: {level: LOUD}")
++    with pytest.raises(ConfigError):
++        cmd_config_hash(config_dir=cfg_dir, profile=None)
++
++
++# --- ST10-16 cmd_config_show ----------------------------------------------------------------------
++
++
++def test_st10_16_cmd_config_show_keeps_secret_refs(
++    cfg_dir: Path, fake_keyring: MemoryKeyring
++) -> None:
++    """ST10-16 config show with sentinel secrets resolved: no sentinel, refs stay secret:<name>."""
++    for name in ("vllm.api_key", "anthropic.api_key"):
++        fake_keyring.store[("herness", name)] = SENTINEL
++    fake_keyring.store[("herness", "redact.hmac_key")] = HMAC_KEY  # must be 64 hex (U10-35)
++    assert s.resolve("vllm.api_key").get_secret_value() == SENTINEL
++    result = cmd_config_show(config_dir=cfg_dir, profile=None)
++    assert (result.ok, result.exit_code, result.warnings) == (True, 0, [])
++    shown = json.dumps(result.data)
++    assert SENTINEL not in shown
++    assert HMAC_KEY not in shown
++    assert "secret:vllm.api_key" in shown
++    assert "secret:anthropic.api_key" in shown
++
++
++def test_st10_16_cmd_config_show_load_error_propagates(tmp_path: Path) -> None:
++    """ST10-16 a missing config dir raises ConfigError (exit 3) without echoing values."""
++    with pytest.raises(ConfigError):
++        cmd_config_show(config_dir=tmp_path / "absent", profile=None)
+diff --git a/tests/unit/admin/test_admin_secrets.py b/tests/unit/admin/test_admin_secrets.py
+new file mode 100644
+index 0000000..e2b9892
+--- /dev/null
++++ b/tests/unit/admin/test_admin_secrets.py
+@@ -0,0 +1,352 @@
++"""Tests for ``secrets init|set|status`` (impl 10 U10-68 to U10-70; UT10-72, UT10-33).
++
++Values reach the operator only through the injected ``show``; they are never placed in
++``data``, ``warnings`` or the audit line (TH10-07). A backend ``ConfigError`` propagates for
++impl 09 to map to exit 3 (R-46).
++"""
++
++from __future__ import annotations
++
++import datetime
++import json
++import re
++from collections.abc import Iterator
++from pathlib import Path
++
++import pytest
++import structlog
++from tests.support.config_tree import write_full_config
++from tests.support.fake_keyring import MemoryKeyring
++
++from herness._cli.output import CommandResult
++from herness.admin.commands_secrets import (
++    INIT_NAMES,
++    cmd_secrets_init,
++    cmd_secrets_set,
++    cmd_secrets_status,
++)
++from herness.core import config as c
++from herness.core import secrets as s
++from herness.core import time as clock
++from herness.core.errors import ConfigError
++
++pytestmark = pytest.mark.unit
++
++USER = "0123456789abcdef0123456789abcdef"  # pragma: allowlist secret - audit actor id
++SVC = "herness"
++VALUE = "Val-adm-9f3a-sentinel-77"  # pragma: allowlist secret - test sentinel
++START = datetime.datetime(2026, 9, 1, tzinfo=datetime.UTC)
++
++
++class SetClock:
++    """Settable ``clock.now``, as the U10-64 audit tests use. The freezegun ``fake_clock``
++    fixture spun at 100 % CPU in a lazy ``herness.enrich`` import with a config loaded."""
++
++    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
++        self.now = START
++        monkeypatch.setattr(clock, "now", lambda: self.now)
++
++    def advance(self, delta: datetime.timedelta) -> None:
++        self.now += delta
++
++
++class Prompt:
++    """Scripted ``prompt``: records each question and returns the queued answers in order."""
++
++    def __init__(self, *answers: str) -> None:
++        self.answers = list(answers)
++        self.questions: list[str] = []
++
++    def __call__(self, question: str) -> str:
++        self.questions.append(question)
++        return self.answers.pop(0)
++
++
++@pytest.fixture
++def cfg(tmp_path: Path, fake_keyring: MemoryKeyring) -> Iterator[c.HernessConfig]:
++    """A cached config (keyring backend; audit lines under ``paths.logs``)."""
++    del fake_keyring
++    yield c.init_config(config_dir=write_full_config(tmp_path), env={})
++    c.reset_config()
++
++
++def _dotenv(root: Path) -> c.HernessConfig:
++    """Cache a ``synth`` config whose secrets backend is the read-only dotenv backend."""
++    cfg_dir = write_full_config(root)
++    herness = cfg_dir / "herness.yaml"
++    text = herness.read_text("utf-8").replace(
++        "security:\n", "security:\n  secrets: {backend: dotenv}\n"
++    )
++    herness.write_text(text, "utf-8")
++    return c.init_config("synth", config_dir=cfg_dir, env={})
++
++
++def _audit_lines(cfg: c.HernessConfig) -> list[dict[str, object]]:
++    lines: list[dict[str, object]] = []
++    for path in sorted(Path(cfg.paths.logs).glob("audit-*.jsonl")):
++        lines += [json.loads(raw) for raw in path.read_text(encoding="utf-8").splitlines()]
++    return lines
++
++
++def _audit_text(cfg: c.HernessConfig) -> str:
++    return "".join(p.read_text("utf-8") for p in Path(cfg.paths.logs).glob("audit-*.jsonl"))
++
++
++def _targets(cfg: c.HernessConfig) -> list[object]:
++    return [line["fields"]["target"] for line in _audit_lines(cfg)]  # type: ignore[index]
++
++
++def _leaks(result: CommandResult, *values: str) -> bool:
++    text = json.dumps(result.data) + json.dumps(result.warnings)
++    return any(value in text for value in values)
++
++
++# --- UT10-72 cmd_secrets_init ---------------------------------------------------------------------
++
++
++def test_ut10_72_init_creates_escrowed_keys(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring
++) -> None:
++    """UT10-72 both keys absent and escrowed: created, 64 hex, shown once, audited by name."""
++    shown: list[str] = []
++    prompt = Prompt("ESCROWED", "ESCROWED")
++    with structlog.testing.capture_logs() as logs:  # before any processor (TH10-07)
++        result = cmd_secrets_init(actor=USER, prompt=prompt, show=shown.append)
++    assert (result.ok, result.exit_code, result.warnings) == (True, 0, [])
++    assert result.data == {
++        "secrets": [
++            {"name": "redact.hmac_key", "status": "created"},
++            {"name": "ui_user_ref_key", "status": "created"},
++        ]
++    }
++    assert INIT_NAMES == ("redact.hmac_key", "ui_user_ref_key")
++    values = [fake_keyring.store[(SVC, name)] for name in INIT_NAMES]
++    assert all(re.fullmatch(r"[0-9a-f]{64}", value) for value in values)
++    assert values[0] != values[1]
++    assert len(shown) == 2
++    for name, value, text in zip(INIT_NAMES, values, shown, strict=True):
++        assert name in text
++        assert value in text
++        assert "password vault" in text
++    assert prompt.questions == [f"Type ESCROWED after storing {n} in the vault" for n in INIT_NAMES]
++    assert not _leaks(result, *values)
++    assert _targets(cfg) == list(INIT_NAMES)
++    assert not any(value in _audit_text(cfg) for value in values)
++    assert not any(value in repr(logs) for value in values)  # never logged, only shown
++
++
++def test_ut10_72_init_refuses_non_keyring_backend(tmp_path: Path) -> None:
++    """UT10-72 precondition backend keyring: dotenv fails fast, before any value is shown."""
++    _dotenv(tmp_path)
++    shown: list[str] = []
++    prompt = Prompt("ESCROWED", "ESCROWED")
++    with pytest.raises(ConfigError, match="secrets init needs the keyring backend"):
++        cmd_secrets_init(actor=USER, prompt=prompt, show=shown.append)
++    assert (shown, prompt.questions) == ([], [])
++
++
++def test_ut10_72_init_unconfirmed_key_is_not_created(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring
++) -> None:
++    """UT10-72 an answer other than ESCROWED stores nothing for that name; exit 1."""
++    shown: list[str] = []
++    result = cmd_secrets_init(actor=USER, prompt=Prompt("no", "ESCROWED"), show=shown.append)
++    assert (result.ok, result.exit_code) == (False, 1)
++    assert result.data == {
++        "secrets": [
++            {"name": "redact.hmac_key", "status": "not created"},
++            {"name": "ui_user_ref_key", "status": "created"},
++        ]
++    }
++    assert (SVC, "redact.hmac_key") not in fake_keyring.store
++    assert (SVC, "ui_user_ref_key") in fake_keyring.store
++    assert result.warnings == ["redact.hmac_key not created: escrow not confirmed"]
++    assert _targets(cfg) == ["ui_user_ref_key"]
++    assert not _leaks(result, *(text.split()[1] for text in shown))
++
++
++def test_ut10_72_init_present_keys_are_kept(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring
++) -> None:
++    """UT10-72 existing keys are reported present; nothing shown, prompted or written."""
++    del cfg
++    fake_keyring.store[(SVC, "redact.hmac_key")] = "ab" * 32
++    fake_keyring.store[(SVC, "ui_user_ref_key")] = VALUE
++    before = dict(fake_keyring.store)
++    shown: list[str] = []
++    prompt = Prompt()
++    result = cmd_secrets_init(actor=USER, prompt=prompt, show=shown.append)
++    assert (result.ok, result.exit_code) == (True, 0)
++    assert result.data == {
++        "secrets": [
++            {"name": "redact.hmac_key", "status": "present"},
++            {"name": "ui_user_ref_key", "status": "present"},
++        ]
++    }
++    assert (shown, prompt.questions, fake_keyring.store) == ([], [], before)
++
++
++def test_ut10_72_init_backend_error_propagates(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring
++) -> None:
++    """UT10-72 a keyring failure is a ConfigError (exit 3) that names no value."""
++    del cfg
++    fake_keyring.error = RuntimeError("backend down")
++    with pytest.raises(ConfigError, match="secret backend unavailable"):
++        cmd_secrets_init(actor=USER, prompt=Prompt(), show=lambda _text: None)
++
++
++# --- UT10-72 cmd_secrets_status -------------------------------------------------------------------
++
++
++def test_ut10_72_status_lists_names_presence_and_last_set(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """UT10-72 status lists names, presence and last-set time from audit; missing -> exit 1."""
++    SetClock(monkeypatch)
++    s.set_secret("redact.hmac_key", "ab" * 32, actor=USER)
++    fake_keyring.store[(SVC, "ui_user_ref_key")] = VALUE  # present, never audited
++    result = cmd_secrets_status(cfg=cfg)
++    assert (result.ok, result.exit_code) == (False, 1)
++    assert result.data is not None
++    rows = result.data["secrets"]
++    assert isinstance(rows, list)
++    by_name = {row["name"]: row for row in rows}
++    assert [row["name"] for row in rows] == s.referenced_secret_names(cfg)
++    assert by_name["redact.hmac_key"] == {
++        "name": "redact.hmac_key",
++        "present": True,
++        "last_set": "2026-09-01T00:00:00.000000Z",
++    }
++    assert by_name["ui_user_ref_key"] == {
++        "name": "ui_user_ref_key",
++        "present": True,
++        "last_set": None,
++    }
++    missing = [row["name"] for row in rows if not row["present"]]
++    assert "vllm.api_key" in missing
++    assert result.warnings == [f"secret missing: {name}" for name in missing]
++    assert not _leaks(result, VALUE, "ab" * 32)
++
++
++def test_ut10_72_status_all_present_and_rotation_warning(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """UT10-72 all present -> exit 0; last_set older than 90 days -> "rotate per policy"."""
++    clk = SetClock(monkeypatch)
++    names = s.referenced_secret_names(cfg)
++    for name in names:
++        fake_keyring.store[(SVC, name)] = "ab" * 32
++    s.set_secret("vllm.api_key", VALUE, actor=USER)
++    clk.advance(datetime.timedelta(days=90))
++    s.set_secret("anthropic.api_key", VALUE, actor=USER)
++    result = cmd_secrets_status(cfg=cfg)
++    assert (result.ok, result.exit_code, result.warnings) == (True, 0, [])
++    clk.advance(datetime.timedelta(seconds=1))
++    result = cmd_secrets_status(cfg=cfg)
++    assert (result.ok, result.exit_code) == (True, 0)
++    assert result.warnings == ["vllm.api_key: last set 90 days ago; rotate per policy"]
++
++
++# --- UT10-33 cmd_secrets_set ----------------------------------------------------------------------
++
++
++def test_ut10_33_cmd_secrets_set_stores_matching_value(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring
++) -> None:
++    """UT10-33 two matching prompts: audit secret_set by name only, then stored; no echo."""
++    prompt = Prompt(VALUE, VALUE)
++    result = cmd_secrets_set("secret:Snow.Token", actor=USER, prompt=prompt)
++    assert (result.ok, result.exit_code, result.warnings) == (True, 0, [])
++    assert result.data == {"name": "snow.token", "stored": True}
++    assert prompt.questions == ["Value for snow.token", "Repeat"]
++    assert fake_keyring.store[(SVC, "snow.token")] == VALUE
++    assert _targets(cfg) == ["snow.token"]
++    assert VALUE not in _audit_text(cfg)
++    assert not _leaks(result, VALUE)
++
++
++@pytest.mark.parametrize(
++    ("answers", "reason"),
++    [
++        ((VALUE, VALUE + "x"), "values differ"),
++        (("{not json", "{not json"), "a value starting with { must be a JSON object of strings"),
++        (('{"a": 1}', '{"a": 1}'), "a value starting with { must be a JSON object of strings"),
++        (('{"a": ["b"]}',) * 2, "a value starting with { must be a JSON object of strings"),
++        (("x" * 16_385,) * 2, "value exceeds 16 KiB"),
++        (("é" * 8_193,) * 2, "value exceeds 16 KiB"),
++    ],
++)
++def test_ut10_33_cmd_secrets_set_rejects(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring, answers: tuple[str, str], reason: str
++) -> None:
++    """UT10-33 mismatch, a non-object JSON value or more than 16 KiB: exit 1, nothing stored."""
++    result = cmd_secrets_set("snow.token", actor=USER, prompt=Prompt(*answers))
++    assert (result.ok, result.exit_code) == (False, 1)
++    assert result.data == {"name": "snow.token", "stored": False}
++    assert result.warnings == [reason]
++    assert fake_keyring.store == {}
++    assert _audit_lines(cfg) == []
++    assert not _leaks(result, *answers)
++
++
++@pytest.mark.parametrize("value", ["x" * 16_384, "é" * 8_192], ids=["ascii", "two-byte"])
++def test_ut10_33_cmd_secrets_set_accepts_exactly_16_kib(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring, value: str
++) -> None:
++    """UT10-33 a value of exactly 16 KiB (16384 UTF-8 bytes) is stored; one byte more is not."""
++    del cfg
++    assert len(value.encode("utf-8")) == 16_384
++    result = cmd_secrets_set("snow.token", actor=USER, prompt=Prompt(value, value))
++    assert (result.ok, result.exit_code, result.warnings) == (True, 0, [])
++    assert (SVC, "snow.token") in fake_keyring.store  # stored in chunks (U10-33)
++    assert s.resolve("snow.token").get_secret_value() == value
++
++
++def test_ut10_33_cmd_secrets_set_json_object_of_strings(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring
++) -> None:
++    """UT10-33 a value starting with { that is a JSON object of strings is stored as typed."""
++    del cfg
++    value = '{"user": "svc-reader", "password": "pw-0123456789"}'  # pragma: allowlist secret
++    result = cmd_secrets_set("snow.creds", actor=USER, prompt=Prompt(value, value))
++    assert result.exit_code == 0
++    assert fake_keyring.store[(SVC, "snow.creds")] == value
++    assert s.resolve_json("snow.creds")["user"].get_secret_value() == "svc-reader"
++
++
++def test_ut10_33_cmd_secrets_set_short_value_raises(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring
++) -> None:
++    """UT10-33 a value of 7 chars: ConfigError from set_secret, nothing audited or stored."""
++    with pytest.raises(ConfigError) as info:
++        cmd_secrets_set("snow.token", actor=USER, prompt=Prompt("7-chars", "7-chars"))
++    assert "7-chars" not in str(info.value)
++    assert (fake_keyring.store, _audit_lines(cfg)) == ({}, [])
++
++
++def test_ut10_33_cmd_secrets_set_bad_name_raises(cfg: c.HernessConfig) -> None:
++    """UT10-33 step 1: an invalid name is a ConfigError before any prompt."""
++    del cfg
++    prompt = Prompt()
++    with pytest.raises(ConfigError, match="invalid secret name"):
++        cmd_secrets_set("bad name!", actor=USER, prompt=prompt)
++    assert prompt.questions == []
++
++
++def test_ut10_33_cmd_secrets_set_backend_error_propagates(
++    cfg: c.HernessConfig, fake_keyring: MemoryKeyring
++) -> None:
++    """UT10-33 F10-05 step 4: backend down -> ConfigError (exit 3); the attempt is audited."""
++    fake_keyring.error = RuntimeError("backend down")
++    with pytest.raises(ConfigError, match="secret backend unavailable") as info:
++        cmd_secrets_set("snow.token", actor=USER, prompt=Prompt(VALUE, VALUE))
++    assert VALUE not in str(info.value)
++    assert _targets(cfg) == ["snow.token"]
++
++
++def test_ut10_33_cmd_secrets_set_dotenv_is_read_only(tmp_path: Path) -> None:
++    """UT10-33 the dotenv backend refuses writes with ConfigError (exit 3)."""
++    _dotenv(tmp_path)
++    with pytest.raises(ConfigError, match="read-only"):
++        cmd_secrets_set("snow.token", actor=USER, prompt=Prompt(VALUE, VALUE))
+diff --git a/tests/unit/repo/test_import_contracts.py b/tests/unit/repo/test_import_contracts.py
+index 31d9296..59a0420 100644
+--- a/tests/unit/repo/test_import_contracts.py
++++ b/tests/unit/repo/test_import_contracts.py
+@@ -21,17 +21,17 @@ BASE = [
+ 
+ 
+ def _exists(module: str) -> bool:
+     path = ROOT / module.replace(".", "/")
+     return (path / "__init__.py").is_file() or path.with_suffix(".py").is_file()
+ 
+ 
+ def _flatten(layers: list[str]) -> list[str]:
+-    return [name.strip() for layer in layers for name in layer.split("|")]
++    return [name.strip() for layer in layers for name in layer.replace(":", "|").split("|")]
+ 
+ 
+ def _config() -> dict[str, Any]:
+     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+     return data["tool"]["importlinter"]
+ 
+ 
+ def test_ut00_58_contracts_match_repository() -> None:
