@@ -40,13 +40,13 @@ from herness.core.types import (
     Question,
     QuestionSet,
 )
+from herness.enrich.deciders._shortlist import EmbedFn, shortlist_asked
 from herness.enrich.deciders.jev_wire import (
     AdaptiveLimiter,
     load_wire_body,
     parse_wire_answers,
     to_wire_questions,
 )
-from herness.enrich.questions import PAIR_QUESTIONS
 from herness.enrich.settings import OpenJevSettings
 
 __all__ = ["ERRORS_METRIC", "LATENCY_METRIC", "OpenJevDecider"]
@@ -60,14 +60,6 @@ _DOWN: Final = (httpx2.ConnectError, httpx2.TimeoutException, httpx2.RemoteProto
 _RETRY_HEADERS: Final = frozenset({"retry-after", "x-ratelimit-reset"})
 
 _log = get_logger("enrich.decider")
-
-
-def _asked(item: DecisionInput, questions: QuestionSet) -> tuple[Question, ...]:
-    """Questions asked for `item` (impl 03 §3.9 shared rules)."""
-    if item.question_ids is not None:
-        return tuple(questions.get(qid) for qid in item.question_ids)
-    subset = questions.for_entity(item.entity).questions
-    return tuple(q for q in subset if q.id not in PAIR_QUESTIONS)
 
 
 def _parse(raw: bytes, asked: Sequence[Question]) -> dict[str, Answer]:
@@ -123,6 +115,7 @@ class _JevHttpBackend:
         api_key: SecretStr | None,
         samples: int | None,
         client_factory: Callable[[], httpx2.Client] | None,
+        embed_fn: EmbedFn | None = None,
     ) -> None:
         if samples is not None and (isinstance(samples, bool) or samples not in _SAMPLES):
             msg = "samples must be None, 1, 3 or 5"
@@ -132,6 +125,7 @@ class _JevHttpBackend:
         self._api_key = api_key
         self._samples = samples
         self._client_factory = client_factory
+        self._embed_fn = embed_fn
 
     def _open_client(self, timeout_s: float | None = None) -> httpx2.Client:
         raise NotImplementedError  # pragma: no cover - every backend overrides it
@@ -154,7 +148,7 @@ class _JevHttpBackend:
     async def _adecide(
         self, items: Sequence[DecisionInput], questions: QuestionSet
     ) -> list[DecisionOutput]:
-        asked = [_asked(item, questions) for item in items]
+        asked = shortlist_asked(items, questions, self._embed_fn)
         client = self._client_factory() if self._client_factory else self._open_client()
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=self._concurrency)
         session = _Session(
@@ -278,6 +272,7 @@ class OpenJevDecider(_JevHttpBackend):
         image_tag: str,
         samples: int | None,
         client_factory: Callable[[], httpx2.Client] | None = None,
+        embed_fn: EmbedFn | None = None,
     ) -> None:
         super().__init__(
             model=settings.model,
@@ -285,6 +280,7 @@ class OpenJevDecider(_JevHttpBackend):
             api_key=api_key,
             samples=samples,
             client_factory=client_factory,
+            embed_fn=embed_fn,
         )
         self._settings = settings
         self.version = f"openjev-{image_tag}/{settings.model}"

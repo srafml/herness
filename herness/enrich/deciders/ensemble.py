@@ -20,7 +20,7 @@ from herness.core.ids import canonical_json
 from herness.core.types import Answer, DecisionInput, DecisionOutput, Question, QuestionSet
 from herness.enrich.cache import DecisionCache, io_error
 from herness.enrich.calibrate import CalibrationStore, apply_temperature
-from herness.enrich.deciders.openjev import _asked
+from herness.enrich.deciders._shortlist import asked_for
 from herness.enrich.questions import question_fingerprint
 
 __all__ = ["EnsembleDecider", "EnsembleMember", "ensemble_version", "pool_log_linear"]
@@ -135,7 +135,7 @@ class EnsembleDecider:
         self._temps = {}
         outputs: list[DecisionOutput] = []
         for item in items:
-            asked = [(q, rows.get((item.content_hash, q.id))) for q in _asked(item, questions)]
+            asked = [(q, rows.get((item.content_hash, q.id))) for q in asked_for(item, questions)]
             answers = {q.id: self._pool(q, member_rows) for q, member_rows in asked if member_rows}
             outputs.append(DecisionOutput(record_id=item.record_id, content_hash=item.content_hash,
                                           decider="ensemble", decider_version=self.version,

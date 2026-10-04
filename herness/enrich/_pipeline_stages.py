@@ -185,7 +185,8 @@ def _teachers(run: Run) -> None:
     for name in ("openjev", "jev"):
         if getattr(run.cfg.models.deciders, name).enabled:
             try:
-                built = build_decider(name, cfg=run.cfg, depth=run.depth, paths=run.paths, llm=None)
+                built = build_decider(name, cfg=run.cfg, depth=run.depth, paths=run.paths, llm=None,
+                                      embed_fn=_embed_fn(run))  # fmt: skip
             except AuthError:  # §6: backend dropped for the run; ConfigError etc. propagate
                 _log.error("enrich.decider.auth_failed", decider=name)
                 run.warnings.append(f"{name}_auth")
@@ -195,7 +196,8 @@ def _teachers(run: Run) -> None:
         return
     try:
         llm = build_decider("llm", cfg=run.cfg, depth=run.depth, paths=run.paths,
-                            llm=run.llm_factory("enrich_decider"))  # fmt: skip
+                            llm=run.llm_factory("enrich_decider"),
+                            embed_fn=_embed_fn(run))  # fmt: skip
     except (ModelUnavailable, CircuitOpen) as exc:
         _log.warning("enrich.decider.unavailable", decider="llm",
                      error_class=type(exc).__name__, deferred=0)  # fmt: skip

@@ -224,3 +224,24 @@ def test_ut03_67_unknown_or_unregistered_name_is_config_error(tmp_path: Path) ->
     registry.reset_registry()
     with pytest.raises(ConfigError, match="unknown decider"):
         build_decider("laya", cfg=_cfg(), depth="deep", paths=_paths(tmp_path), llm=None)
+
+
+def test_ut03_67_embed_fn_reaches_llm_openjev_and_jev(
+    tmp_path: Path, fake_keyring: MemoryKeyring
+) -> None:
+    """UT03-67 (T03-21b) `build_decider` hands its `embed_fn` to llm, openjev and jev, the
+    per-record shortlist of > 255-option questions (U03-19)."""
+    fake_keyring.set_password("herness", "openjev_api_key", _KEY_VALUE)
+    fake_keyring.set_password("herness", "typesafe_api_key", _KEY_VALUE)
+    cfg = _cfg(DecidersSettings(jev=JevSettings(enabled=True)))
+
+    def embed(texts: Any) -> Any:
+        raise AssertionError(texts)
+
+    client = FakeLLMClient(votes_by_seed({}))
+    built = [
+        _build("llm", tmp_path, cfg=cfg, embed_fn=embed, llm=(client, "local/qwen-test", 1)),
+        _build("openjev", tmp_path, cfg=cfg, embed_fn=embed),
+        _build("jev", tmp_path, cfg=cfg, embed_fn=embed),
+    ]
+    assert [d._embed_fn for d in built] == [embed] * 3

@@ -90,6 +90,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design spec's module t
 | `herness/enrich/deciders/jev_hosted.py` | Hosted Jev backend through the egress guard | `JevHostedDecider` | L3 | — | 200 |
 | `herness/enrich/deciders/laya.py` | Laya backend | `LayaDecider` | L3 | `laya`, `torch` | 330 |
 | `herness/enrich/deciders/llm.py` | LLM decider and cluster naming calls | `CompletionClient`, `LlmDecider`, `vote_schema`, `vote_distribution` | L3 | — | 350 |
+| `herness/enrich/deciders/_shortlist.py` | Private sibling of `openjev`, `jev_hosted` and `llm` (T03-21b spec note): the shared questions-asked rule (`asked_for`) and the per-record shortlist of choice questions above 255 options (`shortlist_asked`, U03-19; fails closed without an `embed_fn`) applied before any wire body or schema is built; imported only by the deciders | none (private) | L3 | `numpy` | 100 |
 | `herness/enrich/deciders/ensemble.py` | Log-linear pooling | `pool_log_linear`, `ensemble_version`, `EnsembleMember` | L3 | `numpy` | 200 |
 | `herness/enrich/prompts/enrich_decider.md` | LLM decider prompt with 5 paraphrases | prompt file | — | — | 80 |
 | `herness/enrich/prompts/cluster_namer.md` | Cluster naming prompt | prompt file | — | — | 50 |
