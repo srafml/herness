@@ -65,11 +65,21 @@ _EVIDENCE_PACK_ROLES: Final = frozenset({"skeptic", "writer"})
 type _Outcome = Literal["done", "partial", "pending", "dead", "released"]
 type _Executor = Callable[[RunEnv, "TaskRow", "RunBudget"], Awaitable[None]]
 
-# T06-17: `execute_skeptic` (U06-108) and `execute_verifier` (U06-114) live in
-# `herness.harness.swarm.challenge` and register here; until then a task of these roles has no
-# executor and ends `dead` (`_SEAM_ROLES`).
-_SEAM_ROLES: Final = frozenset({"skeptic", "verifier"})
+# Skeptic (U06-108) and verifier (U06-114) tasks run in `challenge`, which imports this module:
+# it is imported on the first dispatch of such a task (`_executor`), never at the top.
+_CHALLENGE_ROLES: Final = frozenset({"skeptic", "verifier"})
 _ROLE_EXECUTORS: dict[str, _Executor] = {}
+
+
+def _executor(role: str) -> _Executor | None:
+    if role in _CHALLENGE_ROLES and role not in _ROLE_EXECUTORS:
+        from herness.harness.swarm import challenge  # noqa: PLC0415 - import cycle
+
+        _ROLE_EXECUTORS.setdefault("skeptic", challenge.execute_skeptic)
+        _ROLE_EXECUTORS.setdefault(
+            "verifier", lambda env, row, _: challenge.execute_verifier(env, row)
+        )
+    return _ROLE_EXECUTORS.get(role)
 
 
 class _Backstop(Exception):  # noqa: N818 - internal control flow, never escapes this module
@@ -198,12 +208,9 @@ async def execute_task(env: RunEnv, row: TaskRow, ledger: RunBudget, caps: CapTr
     Slot, caps and wake are always released, and the job heartbeat sent, in `finally`.
     """
     try:
-        executor = _ROLE_EXECUTORS.get(row.role)
+        executor = _executor(row.role)
         if executor is not None:
             await executor(env, row, ledger)
-        elif row.role in _SEAM_ROLES:  # T06-17: no executor in the tree yet
-            started = clock.monotonic()
-            _record(row, await _fail(env, row, FatalError(f"no executor for {row.role}")), started)
         else:
             await _guarded(env, row, ledger)
     finally:
