@@ -37,7 +37,7 @@ __all__ = ["TraceType", "Tracer", "llm_call_fields", "tool_call_fields"]
 TraceType = StrEnum(
     "TraceType",
     "llm_call tool_call retry repair fallback guard_stop budget compaction verifier_verdict "
-    "spawn_decision",
+    "spawn_decision plan_decision",
 )
 type _Kind = Literal["eval", "chat", "review"]
 type _Event = dict[str, object]
