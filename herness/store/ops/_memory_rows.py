@@ -9,7 +9,6 @@ the selection and delete steps behind ``memory.purge_rows`` (U07-101, T07-26 spe
 from __future__ import annotations
 
 import enum
-import json
 import re
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
@@ -302,13 +301,24 @@ _PURGE_COLS: Final = (
     "SELECT memory_id, json_extract(data,'$.review_item_id'),"
     " json_extract(data,'$.derived_review_item_id') FROM memory_item WHERE "
 )
+# Structured citations only, compared by equality (T07-26 controller ruling): an entity id or a
+# cited number's row key; free text and other JSON fields never make an item cite a record.
 _PURGE_SQL: Final = {
-    "record": _PURGE_COLS + "instr(content, ?) > 0 OR instr(data, ?) > 0"
-    " OR instr(provenance, ?) > 0",
+    "record": _PURGE_COLS  # noqa: S608 - constant fragments, values bound
+    + "EXISTS (SELECT 1 FROM json_each(data, '$.entities') e"
+    " WHERE CASE WHEN e.type = 'object' THEN json_extract(e.value, '$.id') END = ?)"
+    " OR EXISTS (SELECT 1 FROM json_each(data, '$.numbers') n,"
+    " json_each(CASE WHEN n.type = 'object' THEN n.value END, '$.row_key') k WHERE k.value = ?)",
     "author": _PURGE_COLS + "json_extract(provenance,'$.author_ref') = ?",
 }
-_SCRUB_SQL: Final = "SELECT memory_id, data FROM memory_item WHERE instr(data, ?) > 0"
+_SCRUB_SQL: Final = (
+    "SELECT memory_id, data FROM memory_item WHERE EXISTS (SELECT 1 FROM"
+    " json_each(data, '$.provenance_history') h WHERE CASE WHEN h.type = 'object'"
+    " THEN json_extract(h.value, '$.author_ref') END = ?)"
+)
 _SCRUB_SET: Final = "UPDATE memory_item SET data = ? WHERE memory_id = ?"
+# FTS5 keeps a deleted row's tokens in older segments until they merge: rewrite them (TH07-21).
+_FTS_OPTIMIZE: Final = "INSERT INTO memory_fts(memory_fts) VALUES('optimize')"
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,13 +355,9 @@ def _without(data: dict[str, JsonValue], author_ref: str) -> dict[str, JsonValue
 
 
 def purge_select(selector: PurgeSelector, conn: Conn, op: str) -> tuple[PurgeRows, _Scrubs]:
-    """Steps 1-3: the delete set, the scrub rows (with their new ``data``), the review ids.
-
-    A record id is also matched in its JSON-escaped form inside the JSON columns."""
+    """Steps 1-3: the delete set, the scrub rows (with their new ``data``), the review ids."""
     how, value = selector
-    escaped = json.dumps(value, ensure_ascii=False)[1:-1]
-    rows = query(_PURGE_SQL[how], [value, escaped, escaped] if how == "record" else [value],
-                 conn, op)  # fmt: skip
+    rows = query(_PURGE_SQL[how], [value, value] if how == "record" else [value], conn, op)
     deleted = sorted(str(r[0]) for r in rows)
     reviews = sorted({str(v) for r in rows for v in (r[1], r[2]) if v is not None})
     scrubs: _Scrubs = []
@@ -367,11 +373,14 @@ def purge_select(selector: PurgeSelector, conn: Conn, op: str) -> tuple[PurgeRow
 
 def purge_apply(selector: PurgeSelector, conn: sqlite3.Connection, op: str) -> PurgeRows:
     """Steps 1-7 on the caller's write connection: select, delete in chunks of 500 (trigger
-    ``memory_item_ad`` removes the FTS rows), then store the scrubbed ``data``."""
+    ``memory_item_ad`` removes the FTS rows; ``optimize`` then drops their tokens from the
+    index segments), then store the scrubbed ``data``."""
     found, scrubs = purge_select(selector, conn, op)
     for chunk in batched(found.deleted_ids, _PURGE_CHUNK):
         sql = f"DELETE FROM memory_item WHERE memory_id IN ({marks(len(chunk))})"  # noqa: S608
         conn.execute(sql, chunk)
+    if found.deleted_ids:
+        conn.execute(_FTS_OPTIMIZE)
     for mid, data in scrubs:
         conn.execute(_SCRUB_SET, (core.dump_json(data, field="data"), mid))
     return found

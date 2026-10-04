@@ -1,4 +1,4 @@
-"""Memory item lifecycle: approve, reject, expiry and use counting (impl 07 §3.10, T07-09).
+"""Memory item lifecycle: approve, reject, expiry, use counting and purge (impl 07 §3.10).
 
 Every method writes SQLite first in one `run_write` (statuses re-checked inside it), then
 mirrors the status to LanceDB; a LanceDB failure is logged (`memory.vector.sync_failed`) and
@@ -11,6 +11,7 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import datetime
+from functools import partial
 from typing import Final, Literal, TypeGuard, cast
 
 from pydantic import JsonValue
@@ -28,14 +29,20 @@ from herness.harness.memory.write import MemoryWriter
 from herness.store.errors import NotFoundError, ReviewItemConflict
 from herness.store.ops import core
 from herness.store.ops import memory as ops
-from herness.store.ops.shared import create_review_item, decide_review_item
+from herness.store.ops.shared import (
+    create_review_item,
+    decide_review_item,
+    update_review_payload,
+)
 
-__all__ = ["MemoryLifecycle"]
+__all__ = ["MemoryLifecycle", "purge_args_ok"]
 
 type Conn = sqlite3.Connection
 type Row = ops.MemoryItemRow
 
 _USER_REF_RE: Final = re.compile(r"^[0-9a-f]{32}$")
+_RECORD_ID_RE: Final = re.compile(r"[a-z_]+:[a-z_]+:.+")  # fullmatch: a spec 00 record_id
+_RECORD_ID_MAX: Final = 300
 _ITEM: Final = "memory_item"
 _APPROVE_NOTE_MAX: Final = 500
 _REJECT_NOTE_MAX: Final = 1_000
@@ -54,6 +61,17 @@ def _check(ok: object, what: str) -> None:
     if not ok:
         msg = f"invalid {what}"
         raise ToolInputError(msg)
+
+
+def purge_args_ok(record_id: object, author_ref: object) -> bool:
+    """Exactly one purge selector, on its pattern (U07-57, U07-100 preconditions)."""
+    if author_ref is None and isinstance(record_id, str):
+        return len(record_id) <= _RECORD_ID_MAX and _RECORD_ID_RE.fullmatch(record_id) is not None
+    return (
+        record_id is None
+        and isinstance(author_ref, str)
+        and bool(_USER_REF_RE.fullmatch(author_ref))
+    )
 
 
 def _is_id(value: object) -> TypeGuard[str]:
@@ -254,6 +272,52 @@ class MemoryLifecycle:
             core.run_write(
                 lambda conn: ops.touch_memory_items(ids, now=at, conn=conn), op="memory_record_use"
             )
+
+    def purge(self, *, author_ref: str | None = None, record_id: str | None = None,
+              now: datetime | None = None) -> int:  # fmt: skip
+        """Erase the items citing a record or authored by a person (U07-57, R-54, TH07-21).
+
+        Vectors first, then one transaction for the review items and the rows, so a retry
+        after a failure finds the same ids in SQLite. Logs counts only, never purged text."""
+        if not purge_args_ok(record_id, author_ref):
+            msg = "purge needs exactly one of author_ref, record_id"
+            raise ToolInputError(msg)
+        at, rows = now or clock.now(), partial(ops.purge_rows, record_id=record_id,
+                                               author_ref=author_ref)  # fmt: skip
+        sel = rows(dry_run=True, conn=self._conn())
+        try:
+            self._vectors.delete(sel.deleted_ids)
+        except ModelUnavailable as exc:
+            _log.error("memory.purge.vector_failed", count=len(sel.deleted_ids))
+            msg = "memory vector purge failed"
+            raise ModelUnavailable(msg) from exc
+
+        def tx(conn: Conn) -> ops.PurgeRows:
+            # Re-selected inside the transaction: an item that began citing the record since
+            # the dry run still has its review payload blanked before its row goes.
+            for item_id in rows(dry_run=True, conn=conn).review_item_ids:
+                with suppress(NotFoundError):  # a dangling link must not block the erasure
+                    update_review_payload(item_id, {"content": ""}, conn=conn)
+                with suppress(ReviewItemConflict, NotFoundError):  # raised before any write
+                    decide_review_item(item_id, "rejected", decided_by="system", note="purged",
+                                       now=at, conn=conn)  # fmt: skip
+            return rows(conn=conn)
+
+        done = core.run_write(tx, op="memory_purge")
+        if late := sorted(set(done.deleted_ids) - set(sel.deleted_ids)):
+            self._drop_vectors(late)
+        counts = (len(done.deleted_ids), len(done.scrubbed_ids), len(done.review_item_ids))
+        _log.info("memory.purge.completed", count=counts[0], scrubbed=counts[1],
+                  review_items=counts[2])  # fmt: skip
+        return len(done.deleted_ids)
+
+    def _drop_vectors(self, ids: Sequence[str]) -> None:
+        """Vectors of rows that started citing the record after the dry run; a failure leaves
+        orphans that maintenance deletes (U07-96 step 5)."""
+        try:
+            self._vectors.delete(ids)
+        except ModelUnavailable:
+            _log.warning("memory.vector.sync_failed", op="purge", count=len(ids))
 
     def _redact(self, text: str) -> str:
         found = self._redactor.redact(text)

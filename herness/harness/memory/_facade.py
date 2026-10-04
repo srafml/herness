@@ -21,7 +21,7 @@ from pydantic import JsonValue
 
 from herness.core import time as clock
 from herness.core.config import HernessConfig
-from herness.core.errors import ModelUnavailable
+from herness.core.errors import ModelUnavailable, ToolInputError
 from herness.core.logging import get_logger
 from herness.core.numbers import compile_allowed_patterns
 from herness.core.redact import Redactor, get_redactor
@@ -41,7 +41,7 @@ from herness.harness.llm.settings import ClientConfig
 from herness.harness.memory import _compose as cp
 from herness.harness.memory import chat, episodic, lora, procedural, recommend
 from herness.harness.memory.compactor import ContextCompactor
-from herness.harness.memory.lifecycle import MemoryLifecycle
+from herness.harness.memory.lifecycle import MemoryLifecycle, purge_args_ok
 from herness.harness.memory.maintenance import MaintenanceDeps
 from herness.harness.memory.outcome import OutcomeDeps
 from herness.harness.memory.policy import InjectionScanner
@@ -175,6 +175,14 @@ class MemoryStore:
     def record_use(self, memory_ids: Sequence[str], run_id: str) -> None:
         """Count one use per rendered item (U07-56)."""
         self._lifecycle.record_use(memory_ids, run_id)
+
+    def purge(self, record_id: str | None = None, *, author_ref: str | None = None,
+              now: datetime | None = None) -> int:  # fmt: skip
+        """Privacy erasure (U07-100, R-54): items removed; impl 10 and the CLI audit it."""
+        if not purge_args_ok(record_id, author_ref):
+            msg = "purge needs exactly one of record_id, author_ref"
+            raise ToolInputError(msg)
+        return self._lifecycle.purge(record_id=record_id, author_ref=author_ref, now=now)
 
     def render(self, hits: Sequence[RecallHit], max_tokens: int) -> str:
         """The delimited `<memory_context>` block (U07-46)."""
