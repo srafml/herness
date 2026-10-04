@@ -563,7 +563,7 @@ def test_it02_26_scoring_checkpoint_survives_yield_and_resume(
 ) -> None:
     """IT02-26 (T02-19b, FT04-03-style resume) the real `run_scoring` yields after `metrics`:
     the job state keeps its `scoring` checkpoint next to the build keys; the next attempt
-    resumes at `score` and `run_scoring` skips `metrics` and runs only `check`."""
+    resumes at `score` and `run_scoring` skips `metrics` and runs the remaining steps."""
     _use(monkeypatch, FakeEnrichment())
     ran: list[str] = []
     payload: dict[str, JsonValue] = {"stages": ["build", "enrich", "score"]}
@@ -577,10 +577,9 @@ def test_it02_26_scoring_checkpoint_survives_yield_and_resume(
 
         return run_step
 
-    for name in ("metrics", "check"):
+    later = [s for s in scoring_module.STEPS if s not in ("validate", "metrics")]
+    for name in ("metrics", *later):  # every step a fake: org needs a real metric_value
         monkeypatch.setitem(scoring_module._STEP_FUNCS, name, step(name))
-    # T04-21: remove once funding is wired (portfolio needs score.funding)
-    monkeypatch.setitem(scoring_module._STEP_FUNCS, "portfolio", None)
     outcome = _done(first)
     build_id = str(outcome.result["build_id"])
     assert (outcome.status, ran) == ("yield", ["metrics"])
@@ -595,16 +594,16 @@ def test_it02_26_scoring_checkpoint_survives_yield_and_resume(
     assert (resumed.status, resumed.result["build_id"], ran) == (
         "done",
         build_id,
-        ["metrics", "check"],
+        ["metrics", *later],
     )
     scored = resumed.result["scoring"]
     assert isinstance(scored, dict)
-    assert scored["steps_done"] == ["validate", "metrics", "check"]
+    assert scored["steps_done"] == ["validate", "metrics", *later]
     assert scored["flags"] == []
     final = second.saved_states[-1]
     assert final["stages_done"] == ["build", "enrich", "score"]
     assert isinstance(final["scoring"], dict)
-    assert final["scoring"]["steps_done"] == ["metrics", "check"]
+    assert final["scoring"]["steps_done"] == ["metrics", *later]
     assert _finished_at(env, build_id) == [("building", False)]
 
 

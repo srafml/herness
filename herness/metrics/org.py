@@ -10,7 +10,7 @@ from typing import Final
 import duckdb
 
 from herness.core.errors import QueryError, SchemaViolation
-from herness.metrics._scoring_checks import existing_tables
+from herness.metrics._scoring_checks import existing_tables, input_digest
 from herness.metrics.context import StepContext, StepResult
 from herness.metrics.evidence import IntoSpec, run_recorded
 from herness.metrics.render import render_named
@@ -29,7 +29,11 @@ def run_org_step(con: duckdb.DuckDBPyConnection, sc: StepContext, /) -> StepResu
     if _METRIC_VALUE not in existing_tables(con):
         msg = "metric_value missing; run step metrics first"
         raise SchemaViolation(msg)
-    rendered = render_named("org_score", {}, {**sc.binds(), "unconfirmed": False})
+    # `inputs` pins the metric rows read, so a same-build rerun over new metrics records new
+    # evidence instead of a TH04-06 hash conflict (as the check step does, T04-13/T04-21).
+    inputs = input_digest(con, (_METRIC_VALUE,))
+    binds = {**sc.binds(), "unconfirmed": False}
+    rendered = render_named("org_score", {"inputs": inputs}, binds)
     params = {"bind": rendered.bind, "template": rendered.template}
     into = IntoSpec(ORG_TABLE, "replace", "query_ids")
     try:

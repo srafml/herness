@@ -409,6 +409,30 @@ def test_ut04_99_query_ids_and_evidence(con: duckdb.DuckDBPyConnection) -> None:
     assert len(evidence[0][2]) < SQL_CAP
 
 
+def test_ut04_99_rerun_over_new_org_rows_is_new_evidence(con: duckdb.DuckDBPyConnection) -> None:
+    """UT04-99 (T04-21 input pin) a same-build rerun after `org` rewrote score.org under a new
+    query id (other values, same binds) records new lever evidence instead of a TH04-06
+    "nondeterministic result": the `inputs` digest pins the score.org rows read."""
+    _peers(con, "mttr_hours", MTTR_VALUES)
+    run_levers_step(con, _ctx())
+    first = con.execute(f"SELECT DISTINCT query_ids[1] FROM {LEVER_TABLE}").fetchall()  # noqa: S608
+    con.execute("UPDATE score.org SET value = value * 2 WHERE entity_id = 'T1'")
+    con.execute("UPDATE score.org SET query_ids = ['q_00000000000000bb']")  # the new org run
+    result = run_levers_step(con, _ctx())
+    assert result.row_counts == {LEVER_TABLE: 2}
+    second = con.execute(f"SELECT DISTINCT query_ids FROM {LEVER_TABLE}").fetchall()  # noqa: S608
+    assert len(second) == 1
+    own, upstream = second[0][0]
+    assert (own != first[0][0], upstream) == (True, "q_00000000000000bb")
+    assert _count_evidence(con) == 2
+
+
+def _count_evidence(con: duckdb.DuckDBPyConnection) -> int:
+    row = con.execute("SELECT count(*) FROM meta.evidence WHERE producer = 'score'").fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 def test_ut04_99_empty_score_org_has_no_upstream(con: duckdb.DuckDBPyConnection) -> None:
     """UT04-99 an empty score.org gives an empty, typed action_lever table."""
     assert run_levers_step(con, _ctx()).row_counts == {LEVER_TABLE: 0}
