@@ -564,7 +564,7 @@ def test_it06_24_revision_withdrawn_and_dead(sched: Sched, monkeypatch: pytest.M
 def test_it06_24_seam_roles_and_invalid_checkpoint(
     sched: Sched, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """IT06-24 a skeptic task without its T06-17 executor ends dead; a registered executor is
+    """IT06-24 a skeptic task whose target finding is missing ends dead; a registered executor is
     called; an invalid loop checkpoint fails the task; resources are released every time."""
     run_id = sched.bb.run_id
     fid = "fnd_01HZX3K7M20000000000000000"
