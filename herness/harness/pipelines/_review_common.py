@@ -53,7 +53,9 @@ def base_priority(rank: int | None, must_cover: bool) -> float:
     return float((100 - rank if rank is not None else 0) + (50 if must_cover else 0))
 
 
-# T06-13: replace with herness.harness.swarm.routing.default_tools
+# T06-13: stays a stand-in for herness.harness.swarm.routing.default_tools: the spec 06 §2
+# import-rank rule forbids pipelines (rank 3) importing swarm (rank 2). Guarded by the UT06-68
+# parity test; replacing it needs a spec owner ruling.
 def default_tools(
     role: Role, specialty: Specialty, depth_mode: Depth, *, child_depth: int, knobs: DepthKnobs
 ) -> list[str]:

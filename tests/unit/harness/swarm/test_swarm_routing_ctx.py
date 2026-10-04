@@ -234,7 +234,7 @@ def test_ut06_65_missing_skeptic_final_routes_to_skeptic() -> None:
     )  # fmt: skip
     assert route.client.name == "local-small-cpu"
     assert route.config.name == "local-small-cpu"
-    assert route.client.name == "local-small-cpu"
+    assert route.model_role == "skeptic_final"  # spec 05 registry resolved the base role itself
     assert route.role_spec.name == "skeptic"
     assert (route.off_network, route.fallback_local) == (False, False)
 
@@ -289,10 +289,30 @@ def test_ut06_65_hybrid_cost_cap_falls_back_to_local() -> None:
         profile="hybrid", ledger=_ledger(cap_reached=True),
     )  # fmt: skip
     assert route.client.name == "local-30b"
-    assert route.client.name == "local-30b"
+    assert route.role_spec.name == "skeptic"
     assert route.config.name == "local-30b"
     assert route.model_role == "skeptic_final"
     assert (route.off_network, route.fallback_local) == (False, True)
+
+
+def test_ut06_65_hybrid_without_skeptic_final_cost_cap_reached() -> None:
+    """UT06-65 brief setup: models.yaml without skeptic_final, hybrid, cost cap reached ->
+    skeptic routing (off-network head), then its first local key with fallback_local."""
+    raw = _models(
+        roles={"skeptic": "claude-opus"}, fallback={"skeptic": ["claude-opus", "local-small-cpu"]}
+    )
+    reg = _registry(raw, drop_roles=("skeptic_final",))
+    spec = _spec("skeptic", model_role="skeptic_final")
+    ledger = _ledger(cap_reached=True)
+    route = route_task(spec, llms=reg, depth="standard", profile="hybrid", ledger=ledger)
+    assert reg.model_for("skeptic_final", "standard") == "claude-opus"  # skeptic's routing
+    assert (route.client_key, route.config.name) == ("local-small-cpu", "local-small-cpu")
+    assert (route.off_network, route.fallback_local) == (False, True)
+    strict = route_task(
+        spec, llms=_StrictRegistry(reg), depth="standard", profile="hybrid", ledger=ledger
+    )  # type: ignore[arg-type]
+    assert (strict.model_role, strict.client_key) == ("skeptic", "local-small-cpu")
+    assert (strict.off_network, strict.fallback_local) == (False, True)
 
 
 def test_ut06_65_hybrid_below_cost_cap_stays_off_network() -> None:
