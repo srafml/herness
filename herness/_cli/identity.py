@@ -91,7 +91,7 @@ def _windows_user() -> str:
     buffer = ctypes.create_unicode_buffer(_UNLEN + 1)
     size = wintypes.DWORD(_UNLEN + 1)
     if not api.GetUserNameW(buffer, ctypes.byref(size)):
-        raise ctypes.WinError(ctypes.get_last_error())
+        raise cast("Any", ctypes).WinError(cast("Any", ctypes).get_last_error())
     return str(buffer.value)
 
 

@@ -2,10 +2,10 @@
 
 ``cli_env`` gives a test a temporary working directory, an in-memory keyring holding
 ``ui_user_ref_key``, a patched process-credential lookup (``identity._credential_user``) and a
-``write_config`` helper that writes
-a loadable ``config/`` tree (``tests.support.config_tree.write_full_config``) with
-``security.ui.roles``. It removes the offline environment variables the socket guard sets and
-undoes ``configure_logging`` and the bound ports after the test.
+``write_config`` helper that writes a loadable ``config/`` tree
+(``tests.support.config_tree.write_full_config``) with ``security.ui.roles``. It removes the
+offline environment variables the socket guard sets and undoes ``configure_logging`` and the
+bound ports after the test.
 """
 
 from __future__ import annotations
@@ -72,6 +72,7 @@ def cli_env(
     fake_keyring.store[("herness", "ui_user_ref_key")] = USER_REF_KEY
     env = CliEnv(tmp_path)
     monkeypatch.setattr(identity, "_credential_user", lambda: env.user)
+    monkeypatch.setattr(identity, "_fallback_logged", [])  # the once-per-process warning flag
     try:
         yield env
     finally:
