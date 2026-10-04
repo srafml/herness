@@ -34,6 +34,7 @@ from herness.core.types import (
     RecommendationDraft,
     SimilarOutcome,
 )
+from herness.harness.memory._rec_entities import labels_text
 from herness.harness.memory.policy import check_markers, find_uncited_numerals, keyed_hash
 from herness.harness.memory.settings import FeedbackConfig
 from herness.harness.memory.types import MemoryNotFound
@@ -244,21 +245,17 @@ def _redact(redactor: Redactor, text: str) -> str:
     return text if found is None else found.text
 
 
-def _content(run: ops.RunRow, ordered: Sequence[RecommendationDraft], deps: RecommendDeps) -> str:
+def _content(
+    run: ops.RunRow, ordered: Sequence[RecommendationDraft], deps: RecommendDeps
+) -> tuple[str, list[JsonValue]]:
     """First 10 targets by rank as redacted labels cut to 150 chars; one with a numeral is left
-    out (rec_ids keep it); labels are added while the text fits `content_max` (spec note)."""
-    labels = [_redact(deps.redactor, f"{r.target_type}:{r.target_id}")[:_ID_CHARS]
-              for r in ordered[:_TOP]]  # fmt: skip
-    text = f"Run {run.run_id} ({run.kind}) recorded recommendations"
-    room, shown = deps.content_max - len(text) - _FRAME, list[str]()
-    for label in (t for t in labels if not find_uncited_numerals(t, deps.allowed)):
-        if (room := room - len(label) - len(", ")) < 0:
-            break
-        shown.append(label)
-    text += f" for {', '.join(shown)}" if shown else ""
-    if len(shown) < len(labels):
-        text += " and other targets" if shown else " for other targets"
-    return text + "."
+    out (rec_ids keep it); labels are added while the text fits `content_max` (spec note).
+    Also the `data.entities` of the targets named unchanged in the text (T07-26b)."""
+    tops = [(r.target_type, r.target_id,
+             _redact(deps.redactor, f"{r.target_type}:{r.target_id}")[:_ID_CHARS])
+            for r in ordered[:_TOP]]  # fmt: skip
+    head = f"Run {run.run_id} ({run.kind}) recorded recommendations"
+    return labels_text(head, tops, deps.content_max - len(head) - _FRAME, deps.allowed)
 
 
 def _summary_item(
@@ -267,15 +264,15 @@ def _summary_item(
 ) -> MemoryProposal:  # fmt: skip
     """The numeral-free `run_summary` proposal of U07-78 step 5."""
     top = list(dict.fromkeys(f for r in ordered for f in r.finding_ids))[:_TOP]
+    content, entities = _content(run, ordered, deps)
     data: dict[str, JsonValue] = {
         "run_kind": run.kind, "question": _question(run, deps.redactor), "top_finding_ids": [*top],
-        "rec_ids": list(rec_ids), "dead_task_count": dead_tasks,
+        "rec_ids": list(rec_ids), "dead_task_count": dead_tasks, "entities": entities,
     }  # fmt: skip
     prov = Provenance(author_type="system", author_role=None, author_ref=None,
                       run_id=run.run_id, task_id=None, via="pipeline")  # fmt: skip
-    return MemoryProposal(
-        layer="episodic", kind="run_summary", data=data, confidence=1.0, provenance=prov,
-        content=_content(run, ordered, deps))  # fmt: skip
+    return MemoryProposal(layer="episodic", kind="run_summary", data=data, confidence=1.0,
+                          provenance=prov, content=content)  # fmt: skip
 
 
 def _existing_order(row: ops.RecommendationRow) -> tuple[int, str]:

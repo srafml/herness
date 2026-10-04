@@ -646,3 +646,31 @@ def test_ut07_63_personal_data_in_target_is_masked(env: Env) -> None:
     assert "service:owner " in content
     assert "team:lead " in content
     assert content.endswith(", service:svc_plain.")
+
+
+def test_ut07_63_summary_cites_named_targets_as_entities(env: Env) -> None:
+    """UT07-63 (T07-26b) `data.entities` holds exactly the targets the text names, once each."""
+    f = seed_finding()
+    work = "src:incident:inca"
+    recs = [
+        _draft(1, [f], target_type="work_item", target_id=work),
+        _draft(2, [f], target_id="svc 42"),  # numeral: left out of the text, so not cited
+        _draft(3, [f], target_type="work_item", target_id=work, kind="org_action"),  # same target
+        _draft(4, [f], target_id="svc_z"),
+    ]
+    write_recommendations(RUN_ID, recs, deps=_deps(env), now=NOW)
+    (item,) = memory_rows()
+    assert item["content"].count(f"work_item:{work}") == 2
+    assert "svc 42" not in item["content"]
+    assert item["data"]["entities"] == [
+        {"type": "work_item", "id": work},
+        {"type": "service", "id": "svc_z"},
+    ]
+
+
+def test_ut07_63_summary_does_not_cite_unnamed_targets(env: Env) -> None:
+    """UT07-63 (T07-26b) a target cut from the text (a numeral) is not cited."""
+    f = seed_finding()
+    recs = [_draft(1, [f], target_id="svc 42"), _draft(2, [f], target_id="api-2024")]
+    write_recommendations(RUN_ID, recs, deps=_deps(env), now=NOW)
+    assert memory_rows()[0]["data"]["entities"] == []

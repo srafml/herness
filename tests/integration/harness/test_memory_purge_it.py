@@ -14,16 +14,23 @@ from pathlib import Path
 import pytest
 from pydantic import JsonValue
 from tests.support.ops_store import OpsStoreHandle
+from tests.unit.harness.memory._episodic_env import make_deps, rec_row, seed_recs, seed_run
 from tests.unit.harness.memory._write_env import (
     KIND_DATA,
     PATTERNS,
+    RUN_ID,
     make_writer,
     memory_rows,
     proposal,
     provenance,
+    seed_evidence,
+    seed_finding,
 )
+from tests.unit.harness.memory.test_memory_recommend import QID, _deps, _draft, _run
 
 from herness.harness.memory import MemoryStore
+from herness.harness.memory.episodic import decide
+from herness.harness.memory.recommend import write_recommendations
 from herness.harness.memory.settings import MemoryConfig
 from herness.harness.memory.store import Embedder
 from herness.store import ops
@@ -96,3 +103,39 @@ def test_it07_11_deletion_step_purges_memory(ops_store: OpsStoreHandle, tmp_path
 
     assert store.purge(RECORD, now=NOW) == 0  # the retried step finds nothing
     assert [r["memory_id"] for r in memory_rows()] == [other]
+
+
+def test_it07_11_purge_removes_recommendation_notes(
+    ops_store: OpsStoreHandle, tmp_path: Path
+) -> None:
+    """IT07-11 (T07-26b) the decision_note and run_summary naming `work_item:<record>` carry
+    it as `data.entities`, so `purge(record)` deletes both with their FTS rows and vectors."""
+    env = make_writer(tmp_path)
+    store = MemoryStore(
+        MemoryConfig(injection_patterns=PATTERNS), conn_factory=core.connection,
+        vectors=env.vectors, embedder=Embedder(env.embed, model_name="bge-m3"),
+        redactor=env.redactor, llms=None, allowed_numeral_patterns=(r"(INC|CHG|PRB)\d+",),
+        data_root=ops_store.data_root,
+    )  # fmt: skip
+    record = "src:incident:inca"
+    kept = store.propose(proposal("MTTR means the mean time to restore a service.")).memory_id
+    _run()
+    seed_evidence(QID)
+    target = {"target_type": "work_item", "target_id": record}
+    draft = _draft(1, [seed_finding()], **target)
+    write_recommendations(RUN_ID, [draft], deps=_deps(env), now=NOW)
+    (rid,) = seed_recs([rec_row(seed_run(), NOW, expected_metric=None, **target)])
+    decide(rid, "rejected", "no", REQUESTER, deps=make_deps(env), now=NOW)
+    notes = [r for r in memory_rows() if r["memory_id"] != kept]
+    assert sorted(r["kind"] for r in notes) == ["decision_note", "run_summary"]
+    assert all(record in r["content"] for r in notes)
+    note_ids = [r["memory_id"] for r in notes]
+    assert set(_fts("recommendation")) | set(_fts("recommendations")) == set(note_ids)
+    assert set(env.vectors.vectors(note_ids)) == set(note_ids)
+
+    assert store.purge(record, now=NOW) == 2
+    assert [r["memory_id"] for r in memory_rows()] == [kept]
+    assert _fts("recommendation") == []
+    assert _fts("recommendations") == []
+    assert env.vectors.vectors(note_ids) == {}
+    assert [m.memory_id for m in env.vectors.list_ids("", 1000)] == [kept]

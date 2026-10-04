@@ -230,15 +230,20 @@ def _redact(redactor: Redactor, text: str) -> str:
 
 
 def _note_text(rec_id: str, rec: ops.UiRecommendationRow, decision: str, eff: date,
-               deps: EpisodicDeps) -> str:  # fmt: skip
-    """The decision_note sentence; a target label or date that holds an uncited numeral is
-    left out so the system-text numeral rule cannot reject the decision (T07-16 spec note)."""
-    label = _redact(deps.redactor, f"{rec['target_type']}:{rec['target_id']}")[:_LABEL_MAX]
+               deps: EpisodicDeps) -> tuple[str, list[JsonValue]]:  # fmt: skip
+    """The decision_note sentence and its `data.entities`; a target label or date that holds an
+    uncited numeral is left out so the system-text numeral rule cannot reject the decision
+    (T07-16 spec note). The target is cited only when its label is named unchanged (T07-26b)."""
+    raw = f"{rec['target_type']}:{rec['target_id']}"
+    label = _redact(deps.redactor, raw)[:_LABEL_MAX]
     day = eff.isoformat()
     bad = [find_uncited_numerals(text, deps.allowed) for text in (label, day)]
     target = f"{rec['target_type']} target" if bad[0] else label
     effect = "" if bad[1] else f" with effect from {day}"
-    return f"Recommendation {rec_id} ({rec['kind']} for {target}) was {decision}{effect}."
+    cite: list[JsonValue] = []
+    if target == raw:
+        cite.append({"type": rec["target_type"], "id": rec["target_id"]})
+    return f"Recommendation {rec_id} ({rec['kind']} for {target}) was {decision}{effect}.", cite
 
 
 def _enqueue(rec_id: str, metric: str, eff: date, cfg: OutcomeConfig) -> None:
@@ -272,10 +277,10 @@ def decide(  # noqa: PLR0913 - signature fixed by U07-82
     )  # fmt: skip
     prov = Provenance(author_type="human", author_role=None, author_ref=user_ref, run_id=None,
                       task_id=None, via="dashboard")  # fmt: skip
+    text, cite = _note_text(rec_id, rec, decision, eff.date(), deps)
     note = MemoryProposal(
-        layer="episodic", kind="decision_note", confidence=1.0, provenance=prov,
-        content=_note_text(rec_id, rec, decision, eff.date(), deps),
-        data={"rec_id": rec_id, "decision": decision},
+        layer="episodic", kind="decision_note", confidence=1.0, provenance=prov, content=text,
+        data={"rec_id": rec_id, "decision": decision, "entities": cite},
     )  # fmt: skip
     key = keyed_hash("decision_note:" + rec_id + ":" + decided_text)
 
