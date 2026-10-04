@@ -1,8 +1,7 @@
 """Phase scheduler and task executor of the swarm (impl 06 U06-92 to U06-95, design 06 §5.3).
 
-`PhaseRunner.run_phase` starts the pending tasks of some roles in design 06 §5.4 order under the
-task slots, the per-parent and per-entity caps (`CapTracker`) and budget admission
-(`budget_admits`), and returns once no task of those roles is open (TH06-03, LLM10).
+`PhaseRunner.run_phase` starts pending tasks in design 06 §5.4 order under the task slots, the
+caps (`CapTracker`) and budget admission (`budget_admits`) until none is open (TH06-03).
 `execute_task` runs one claimed task and records its end state through the spec 08 task
 helpers on the Blackboard writer (design 06 §6.1, R-36 for cancellation).
 """
@@ -71,6 +70,10 @@ type _Executor = Callable[[RunEnv, "TaskRow", "RunBudget"], Awaitable[None]]
 # executor and ends `dead` (`_SEAM_ROLES`).
 _SEAM_ROLES: Final = frozenset({"skeptic", "verifier"})
 _ROLE_EXECUTORS: dict[str, _Executor] = {}
+
+
+class _Backstop(Exception):  # noqa: N818 - internal control flow, never escapes this module
+    """The `asyncio.timeout` around `run_agent` expired (stdlib `TimeoutError`, R-22)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +202,8 @@ async def execute_task(env: RunEnv, row: TaskRow, ledger: RunBudget, caps: CapTr
         if executor is not None:
             await executor(env, row, ledger)
         elif row.role in _SEAM_ROLES:  # T06-17: no executor in the tree yet
-            await _fail(env, row, FatalError(f"no executor for role {row.role}"))
+            started = clock.monotonic()
+            _record(row, await _fail(env, row, FatalError(f"no executor for {row.role}")), started)
         else:
             await _guarded(env, row, ledger)
     finally:
@@ -216,7 +220,7 @@ async def _guarded(env: RunEnv, row: TaskRow, ledger: RunBudget) -> None:
     outcome: _Outcome
     try:
         outcome = await _run_agent_task(env, row, ledger)
-    except TimeoutError:  # the wall-clock backstop fired (stdlib, internal only)
+    except _Backstop:  # the wall-clock backstop fired
         outcome = await _complete_timed_out(env, row)
     except asyncio.CancelledError:
         await env.bb.run_on_writer(functools.partial(release_task, row.task_id))  # R-36
@@ -247,10 +251,14 @@ async def _run_agent_task(env: RunEnv, row: TaskRow, ledger: RunBudget) -> _Outc
         "dict[str, JsonValue]", build_task_input(spec.role, spec.model_dump(mode="json"))
     )
     resume = _resume_from(row.checkpoint)
-    async with asyncio.timeout(spec.budget.wall_clock_s + WALL_CLOCK_GRACE_S):
-        res = await run_agent(
-            route.role_spec, task_input, ctx, route.client, route.config, hooks, resume_from=resume
-        )
+    agent = (route.role_spec, task_input, ctx, route.client, route.config, hooks)
+    try:
+        async with asyncio.timeout(spec.budget.wall_clock_s + WALL_CLOCK_GRACE_S) as backstop:
+            res = await run_agent(*agent, resume_from=resume)
+    except TimeoutError:
+        if backstop.expired():
+            raise _Backstop from None
+        raise  # any other TimeoutError is not the backstop: it propagates (ENG §3.4)
     _add_usage(env, spec.role, res)
     if res.status == "failed":
         msg = f"agent failed: task_id={spec.task_id} stop_reason={res.stop_reason}"

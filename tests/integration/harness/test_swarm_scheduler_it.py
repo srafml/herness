@@ -32,7 +32,7 @@ from herness.core import time as clock
 from herness.core.errors import BudgetExceeded, FatalError, ModelUnavailable
 from herness.core.ids import IdKind, new_id
 from herness.core.jobs import claim_task, complete_task
-from herness.core.resilience import ProcessState, bind_ops_backend
+from herness.core.resilience import ProcessState, bind_ops_backend, process_state
 from herness.core.types import (
     AgentResult,
     EntityScope,
@@ -386,8 +386,13 @@ def _result(status: str, stop: str, finding_ids: list[str] | None = None) -> Age
     )
 
 
-def _scripted(monkeypatch: pytest.MonkeyPatch, behaviours: dict[str, _Agent]) -> dict[str, int]:
-    """Replace `run_agent` with the behaviour named by the task objective's first word."""
+def _scripted(
+    monkeypatch: pytest.MonkeyPatch,
+    behaviours: dict[str, _Agent],
+    ctxs: dict[str, Any] | None = None,
+) -> dict[str, int]:
+    """Replace `run_agent` with the behaviour named by the task objective's first word; the
+    task's `ToolContext` is kept in `ctxs` under that word."""
     calls: dict[str, int] = {}
 
     async def fake(role: Any, task_input: Any, ctx: Any, *args: Any, **kw: Any) -> AgentResult:
@@ -395,6 +400,8 @@ def _scripted(monkeypatch: pytest.MonkeyPatch, behaviours: dict[str, _Agent]) ->
         row = _task(ctx.task_id)
         key = row.spec.objective.split()[0]
         calls[key] = calls.get(key, 0) + 1
+        if ctxs is not None:
+            ctxs[key] = ctx
         result: AgentResult = await behaviours[key]()
         return result
 
@@ -430,10 +437,18 @@ def test_it06_24_end_states_per_section_6(sched: Sched, monkeypatch: pytest.Monk
         msg = "run budget exhausted"
         raise BudgetExceeded(msg)
 
+    ctxs: dict[str, Any] = {}
+    posted: list[str] = []
+
+    async def hang_after_posting() -> AgentResult:
+        posted.append(sched.bb.bb.post(ctxs["hang"], **env_mod.args(sched.bb.ops_qid)))
+        return await _hang()
+
     calls = _scripted(
         monkeypatch,
         {"partial": partial, "failed": failed, "retry": retryable, "fatal": fatal,
-         "budget": budget, "hang": _hang},
+         "budget": budget, "hang": hang_after_posting},
+        ctxs,
     )  # fmt: skip
     monkeypatch.setattr(scheduler, "WALL_CLOCK_GRACE_S", 0)
     run_id = sched.bb.run_id
@@ -460,6 +475,8 @@ def test_it06_24_end_states_per_section_6(sched: Sched, monkeypatch: pytest.Monk
     assert hang.status == "done"
     assert hang.result is not None
     assert (hang.result["partial"], hang.result["stop_cause"]) == (True, "wall_clock")
+    assert len(posted) == 1
+    assert hang.result["finding_ids"] == posted  # read back from the database
     assert sched.env.slots.free() == 4
 
 
@@ -518,7 +535,9 @@ def test_it06_24_revision_withdrawn_and_dead(sched: Sched, monkeypatch: pytest.M
     transaction; a dead revision task rejects its finding with `revision_dead`."""
     bbe = sched.bb
     bbe.task_id = env_mod.add_running_task(bbe.run_id, n=7)
-    withdrawn, killed = _finding(bbe), _finding(bbe)
+    withdrawn = _finding(bbe)
+    killed = bbe.bb.post(bbe.ctx(), **env_mod.args(bbe.ops_qid, entity_id="t2", claim="T2 [[n1]]"))
+    assert withdrawn != killed  # two distinct findings: each rejection is asserted on its own
     complete_task(bbe.task_id, {"summary": "poster"})
 
     async def done() -> AgentResult:
@@ -538,9 +557,8 @@ def test_it06_24_revision_withdrawn_and_dead(sched: Sched, monkeypatch: pytest.M
     assert row.result is not None
     assert row.result["withdrawn"] is True
     assert _task(b.task_id).status == "dead"
-    found = get_findings([withdrawn, killed])
-    assert found[withdrawn].status == "rejected"
-    assert found[killed].status == "rejected"
+    assert get_findings([withdrawn])[withdrawn].status == "rejected"  # withdrawn, same tx
+    assert get_findings([killed])[killed].status == "rejected"  # revision_dead after dead
 
 
 def test_it06_24_seam_roles_and_invalid_checkpoint(
@@ -558,6 +576,8 @@ def test_it06_24_seam_roles_and_invalid_checkpoint(
     out = _phase(sched, RecordingCaps(), frozenset({"skeptic"}))
     assert out.blocked == frozenset()
     assert _task(skeptic.task_id).status == "dead"
+    key = (scheduler.TASKS_METRIC, (("outcome", "dead"), ("role", "skeptic")), "harness")
+    assert process_state().metric_buffer.counters.get(key) == 1.0
 
     seen: list[str] = []
 
@@ -602,3 +622,23 @@ def test_it06_24_off_network_writer_never_runs_generic_path(
     row = _task(spec.task_id)
     assert row.status == "dead"
     assert sched.client.calls == 0
+
+
+def test_it06_24_foreign_timeout_is_not_the_backstop(
+    sched: Sched, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT06-24 a TimeoutError raised by the agent itself (the backstop did not expire) is not
+    recorded as a wall-clock partial: it propagates out of the phase; resources are released."""
+
+    async def foreign() -> AgentResult:
+        raise TimeoutError
+
+    _scripted(monkeypatch, {"foreign": foreign})
+    spec = _spec(sched.bb.run_id, objective="foreign timeout")
+    _insert(spec)
+    with pytest.raises(ExceptionGroup) as info:
+        _phase(sched, RecordingCaps())
+    assert info.group_contains(TimeoutError)
+    row = _task(spec.task_id)
+    assert (row.status, row.result) == ("running", None)
+    assert sched.env.slots.free() == 4
