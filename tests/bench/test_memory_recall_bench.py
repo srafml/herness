@@ -122,7 +122,9 @@ def real_embed() -> Iterator[Callable[[str], np.ndarray]]:
         patch.undo()
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.xfail(
+    raises=AssertionError,
     strict=False,
     reason="OI-7: measured recall p95 ~470-680 ms vs 150 ms; `VectorIndex.ensure_table` builds no"
     " ANN index, so every LanceDB search scans 200k x 1024 floats (~420-470 ms; an IVF_PQ"
@@ -133,11 +135,11 @@ def test_bt07_01_recall_k10_uncached_embedding_p95(
 ) -> None:
     """BT07-01 `recall` k = 10 with an uncached query embedding on 200k items: p95 < 150 ms."""
     rng = np.random.default_rng(11)
-    queries = [query_text(rng) for _ in range(CALLS * REPEATS + WARM_UP)]
+    queries = [query_text(rng) for _ in range(CALLS * REPEATS + WARM_UP + 1)]  # last: spare probe
     matches = np.stack([real_embed(q) for q in queries])  # one true match per query
     plant_matches(corpus, ITEMS, queries, matches)
     store = open_store(corpus, real_embed)
-    probe = store.recall_with_status(queries[0], k=K)
+    probe = store.recall_with_status(queries[-1], k=K)  # not measured: no warm cache
     assert not probe.degraded
     assert probe.hits, "the planted match must be found"
 
@@ -162,7 +164,9 @@ def test_bt07_02_recall_degraded_p95(corpus: Path) -> None:
     assert p95 < DEGRADED_P95_MS, f"degraded recall p95 {p95:.1f} ms"
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.xfail(
+    raises=AssertionError,
     strict=False,
     reason="OI-7: measured propose p95 ~770-1300 ms vs 200 ms; the near-duplicate ANN search of"
     " step 11 is the same unindexed 200k x 1024 LanceDB scan as BT07-01 (~420-470 ms)",

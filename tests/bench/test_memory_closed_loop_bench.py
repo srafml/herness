@@ -88,30 +88,7 @@ def _drafts(finding_id: str) -> list[RecommendationDraft]:
     ]
 
 
-def test_bt07_07_write_recommendations_50_under_2s(
-    ops_store: OpsStoreHandle, tmp_path: Path
-) -> None:
-    """BT07-07 `write_recommendations` of 50 recommendations: < 2 s (median of 3 runs)."""
-    del ops_store
-    seed_evidence(QID)
-    store = open_store(tmp_path, FakeEmbed())
-    seconds: list[float] = []
-    for _ in range(REPEATS):
-        run_id = _run_row()
-        finding = seed_finding_for(run_id)
-        drafts = _drafts(finding)
-        start = time.perf_counter()
-        ids = store.write_recommendations(run_id, drafts)
-        seconds.append(time.perf_counter() - start)
-        assert len(ids) == RECS
-    median = report(
-        "BT07-07", "median_write_recommendations", seconds, "s", f"< {WRITE_LIMIT_S:g} s"
-    )
-    assert median < WRITE_LIMIT_S, f"write_recommendations {median:.2f} s"
-    assert core.read_all("SELECT count(*) AS n FROM recommendation")[0]["n"] == RECS * REPEATS
-
-
-def seed_finding_for(run_id: str) -> str:
+def _seed_finding_for(run_id: str) -> str:
     """A verified finding of `run_id` (the recommendation writer checks run ownership)."""
     finding_id = "fnd_" + new_ulid()
     task_id = "task_" + new_ulid()
@@ -128,6 +105,29 @@ def seed_finding_for(run_id: str) -> str:
         (finding_id, run_id, task_id, stamp),
     )
     return finding_id
+
+
+def test_bt07_07_write_recommendations_50_under_2s(
+    ops_store: OpsStoreHandle, tmp_path: Path
+) -> None:
+    """BT07-07 `write_recommendations` of 50 recommendations: < 2 s (median of 3 runs)."""
+    del ops_store
+    seed_evidence(QID)
+    store = open_store(tmp_path, FakeEmbed())
+    seconds: list[float] = []
+    for _ in range(REPEATS):
+        run_id = _run_row()
+        finding = _seed_finding_for(run_id)
+        drafts = _drafts(finding)
+        start = time.perf_counter()
+        ids = store.write_recommendations(run_id, drafts)
+        seconds.append(time.perf_counter() - start)
+        assert len(ids) == RECS
+    median = report(
+        "BT07-07", "median_write_recommendations", seconds, "s", f"< {WRITE_LIMIT_S:g} s"
+    )
+    assert median < WRITE_LIMIT_S, f"write_recommendations {median:.2f} s"
+    assert core.read_all("SELECT count(*) AS n FROM recommendation")[0]["n"] == RECS * REPEATS
 
 
 def test_bt07_08_outcome_job_per_recommendation_under_30s(

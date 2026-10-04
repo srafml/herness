@@ -126,7 +126,9 @@ def _seed_run_with_queries(repeat: int) -> str:
     return run_id
 
 
+@pytest.mark.timeout(900)
 @pytest.mark.xfail(
+    raises=AssertionError,
     strict=False,
     reason="measured promote_procedural ~26-29 s vs 10 s: 525 per-item LanceDB merge_insert"
     " upserts (embed_after_commit, ~42 ms each on a fresh table, slower as versions"
@@ -176,6 +178,7 @@ def _seed_pairs() -> None:
     core.run_write(lambda conn: conn.executemany(_QA_INSERT, rows), op="bench_seed")
 
 
+@pytest.mark.timeout(600)
 def test_bt07_10_lora_export_50k_pairs_under_2min(
     ops_store: OpsStoreHandle, tmp_path: Path
 ) -> None:
