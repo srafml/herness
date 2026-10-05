@@ -1,0 +1,551 @@
+{
+ "core": {
+  "core.change": 10080,
+  "core.event": 42800,
+  "core.incident": 103032,
+  "core.metric_daily": 1753600,
+  "core.org": 12,
+  "core.problem": 1500,
+  "core.service": 400,
+  "core.service_map": 1188,
+  "core.team": 162,
+  "core.work_item": 3998,
+  "core.work_item_link": 473,
+  "core.work_item_transition": 8840
+ },
+ "dq": {
+  "cast_fail:stg.jira_issue.created_at": {
+   "details": {
+    "failed": 0,
+    "non_null": 3998
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.jira_issue.estimate_cost_usd": {
+   "details": {
+    "failed": 0,
+    "non_null": 241
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.jira_issue.resolved_at": {
+   "details": {
+    "failed": 0,
+    "non_null": 3938
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.jira_issue.status_category": {
+   "details": {
+    "failed": 0,
+    "non_null": 3998
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.jira_issue.story_points": {
+   "details": {
+    "failed": 0,
+    "non_null": 2164
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.jira_issue.type": {
+   "details": {
+    "failed": 0,
+    "non_null": 3998
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.mon_event.end_ts": {
+   "details": {
+    "failed": 0,
+    "non_null": 42800
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.mon_event.severity": {
+   "details": {
+    "failed": 0,
+    "non_null": 42800
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.mon_event.ts": {
+   "details": {
+    "failed": 0,
+    "non_null": 42800
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.mon_metric_daily.date": {
+   "details": {
+    "failed": 0,
+    "non_null": 1753600
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.mon_metric_daily.value": {
+   "details": {
+    "failed": 0,
+    "non_null": 1753600
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_change_request.actual_end": {
+   "details": {
+    "failed": 3,
+    "non_null": 10080
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.00029761904761904765
+  },
+  "cast_fail:stg.sn_change_request.actual_start": {
+   "details": {
+    "failed": 2,
+    "non_null": 10078
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.00019845207382417147
+  },
+  "cast_fail:stg.sn_change_request.opened_at": {
+   "details": {
+    "failed": 2,
+    "non_null": 10079
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.00019843238416509574
+  },
+  "cast_fail:stg.sn_change_request.outcome": {
+   "details": {
+    "failed": 580,
+    "non_null": 10080
+   },
+   "passed": false,
+   "severity": "warn",
+   "value": 0.057539682539682536
+  },
+  "cast_fail:stg.sn_change_request.planned_end": {
+   "details": {
+    "failed": 0,
+    "non_null": 10078
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_change_request.planned_start": {
+   "details": {
+    "failed": 3,
+    "non_null": 10080
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.00029761904761904765
+  },
+  "cast_fail:stg.sn_change_request.type": {
+   "details": {
+    "failed": 8,
+    "non_null": 10080
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0007936507936507937
+  },
+  "cast_fail:stg.sn_ci.criticality": {
+   "details": {
+    "failed": 0,
+    "non_null": 400
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_group.active": {
+   "details": {
+    "failed": 0,
+    "non_null": 162
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_incident.acknowledged_at": {
+   "details": {
+    "failed": 25,
+    "non_null": 87564
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0002855054588643735
+  },
+  "cast_fail:stg.sn_incident.business_duration_s": {
+   "details": {
+    "failed": 0,
+    "non_null": 102710
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_incident.closed_at": {
+   "details": {
+    "failed": 31,
+    "non_null": 102583
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0003021943206964117
+  },
+  "cast_fail:stg.sn_incident.customer_impact_minutes": {
+   "details": {
+    "failed": 0,
+    "non_null": 8677
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_incident.made_sla": {
+   "details": {
+    "failed": 0,
+    "non_null": 103032
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_incident.opened_at": {
+   "details": {
+    "failed": 44,
+    "non_null": 103018
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.00042710982546739404
+  },
+  "cast_fail:stg.sn_incident.priority": {
+   "details": {
+    "failed": 104,
+    "non_null": 103032
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.001009395139374175
+  },
+  "cast_fail:stg.sn_incident.reassignment_count": {
+   "details": {
+    "failed": 0,
+    "non_null": 103032
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_incident.reopen_count": {
+   "details": {
+    "failed": 0,
+    "non_null": 103032
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_incident.resolved_at": {
+   "details": {
+    "failed": 34,
+    "non_null": 102701
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.00033105812017409763
+  },
+  "cast_fail:stg.sn_incident.state": {
+   "details": {
+    "failed": 0,
+    "non_null": 103032
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_problem.known_error": {
+   "details": {
+    "failed": 0,
+    "non_null": 1500
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_problem.opened_at": {
+   "details": {
+    "failed": 0,
+    "non_null": 1500
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_problem.resolved_at": {
+   "details": {
+    "failed": 0,
+    "non_null": 1439
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "cast_fail:stg.sn_task_sla.has_breached": {
+   "details": {
+    "failed": 0,
+    "non_null": 103007
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "decision_coverage_incident": {
+   "details": {
+    "covered": 0,
+    "with_text": 0
+   },
+   "passed": false,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "duplicate_key:core.change": {
+   "details": {},
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "duplicate_key:core.event": {
+   "details": {},
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "duplicate_key:core.incident": {
+   "details": {},
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "duplicate_key:core.metric_daily": {
+   "details": {},
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "duplicate_key:core.org": {
+   "details": {},
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "duplicate_key:core.problem": {
+   "details": {},
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "duplicate_key:core.service": {
+   "details": {},
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "duplicate_key:core.team": {
+   "details": {},
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "duplicate_key:core.work_item": {
+   "details": {},
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "incident_service_null": {
+   "details": {
+    "null_rows": 8342,
+    "rows": 103032
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.08096513704480161
+  },
+  "metric_daily_unmapped_service": {
+   "details": {
+    "raw": 1753600,
+    "unmapped": 0
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0
+  },
+  "resolved_before_opened": {
+   "details": {
+    "rows": 102609
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.0005555068268865304
+  },
+  "row_count_drop:core.change": {
+   "details": {
+    "cur": 10080,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.event": {
+   "details": {
+    "cur": 42800,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.incident": {
+   "details": {
+    "cur": 103032,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.metric_daily": {
+   "details": {
+    "cur": 1753600,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.org": {
+   "details": {
+    "cur": 12,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.problem": {
+   "details": {
+    "cur": 1500,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.service": {
+   "details": {
+    "cur": 400,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.service_map": {
+   "details": {
+    "cur": 1188,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.team": {
+   "details": {
+    "cur": 162,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.work_item": {
+   "details": {
+    "cur": 3998,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.work_item_link": {
+   "details": {
+    "cur": 473,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "row_count_drop:core.work_item_transition": {
+   "details": {
+    "cur": 8840,
+    "no_previous_build": true,
+    "prev": 0
+   },
+   "passed": true,
+   "severity": "error",
+   "value": 0.0
+  },
+  "work_item_service_null": {
+   "details": {
+    "null_rows": 969,
+    "rows": 3998
+   },
+   "passed": true,
+   "severity": "warn",
+   "value": 0.2423711855927964
+  }
+ }
+}
