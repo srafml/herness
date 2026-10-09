@@ -220,7 +220,7 @@ line-ending = "lf"
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["herness", "tools"]
+files = ["herness", "app", "tools"]
 plugins = ["pydantic.mypy"]
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
@@ -276,7 +276,7 @@ output = "coverage.json"
 output = "coverage.xml"
 
 [tool.importlinter]
-root_packages = ["herness", "tools"]
+root_packages = ["herness", "app", "tools"]
 include_external_packages = false
 
 [[tool.importlinter.contracts]]
@@ -316,7 +316,7 @@ unmatched_ignore_imports_alerting = "none"
 name = "herness never imports app or tools"
 type = "forbidden"
 source_modules = ["herness"]
-forbidden_modules = ["tools"]
+forbidden_modules = ["app", "tools"]
 
 [[tool.importlinter.contracts]]
 name = "core base order"

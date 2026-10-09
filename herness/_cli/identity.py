@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import ctypes
 import functools
-import getpass
-import importlib
 import inspect
 import os
 import types
@@ -21,6 +19,9 @@ from typer._click.globals import get_current_context
 from herness.core.audit import audit
 from herness.core.errors import ConfigError, PermissionDenied
 from herness.core.logging import get_logger
+from herness.reports._os_user import credential_user, os_user
+from herness.reports._os_user import posix_user as _posix_user
+from herness.reports._os_user import windows_user as _windows_user
 from herness.reports.rules import (
     ROLE_RANK,
     Actor,
@@ -77,36 +78,18 @@ COMMAND_ROLES: Final[Mapping[str, UiRole]] = types.MappingProxyType(
 )
 
 
-_UNLEN: Final = 256  # Windows UNLEN; the buffer holds one more for the terminator
 _fallback_logged: list[bool] = []
 
 
-def _windows_user() -> str:
-    """Bare account name of the calling thread's token (``GetUserNameW``; not the environment)."""
-    from ctypes import wintypes  # noqa: PLC0415 - only meaningful, and only imported, on Windows
-
-    api = cast("Any", ctypes).WinDLL("advapi32", use_last_error=True)
-    api.GetUserNameW.argtypes = [wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
-    api.GetUserNameW.restype = wintypes.BOOL
-    buffer = ctypes.create_unicode_buffer(_UNLEN + 1)
-    size = wintypes.DWORD(_UNLEN + 1)
-    if not api.GetUserNameW(buffer, ctypes.byref(size)):
-        raise cast("Any", ctypes).WinError(cast("Any", ctypes).get_last_error())
-    return str(buffer.value)
-
-
-def _posix_user() -> str:
-    """Account name of the effective uid from the password database (not the environment)."""
-    pwd = cast("Any", importlib.import_module("pwd"))  # POSIX only; typed per platform
-    return str(pwd.getpwuid(cast("Any", os).geteuid()).pw_name)
-
-
 def _credential_user() -> str:
-    """The user from process credentials; empty when the lookup fails."""
-    try:
-        return (_windows_user if os.name == "nt" else _posix_user)()
-    except (OSError, KeyError, AttributeError, ImportError):
-        return ""
+    """The user from process credentials; empty when the lookup fails (``herness.reports``)."""
+    return credential_user(_windows_user, _posix_user)  # module names, so tests can patch them
+
+
+def _warn_fallback() -> None:
+    if not _fallback_logged:
+        _fallback_logged.append(True)
+        _log.warning("cli.identity.fallback", source="getpass")  # no user name: personal data
 
 
 def _os_user() -> str:
@@ -115,12 +98,7 @@ def _os_user() -> str:
     ``getpass.getuser()`` reads ``LOGNAME``, ``USER``, ``LNAME`` and ``USERNAME`` first, so it
     would let any local user claim another account's role (TB10, TH09-27).
     """
-    if name := _credential_user():
-        return name
-    if not _fallback_logged:
-        _fallback_logged.append(True)
-        _log.warning("cli.identity.fallback", source="getpass")  # no user name: personal data
-    return getpass.getuser()
+    return os_user(_credential_user, on_fallback=_warn_fallback)
 
 
 def cli_actor(cfg: HernessConfig, *, need_ref: bool) -> Actor:
