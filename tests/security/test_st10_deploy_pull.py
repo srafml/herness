@@ -8,13 +8,14 @@ is answered by ``fake_runner`` through ``tests.support.pull_host``.
 
 from __future__ import annotations
 
+import posixpath
 import threading
 from pathlib import Path
 
 import pytest
 from tests.support.fake_keyring import MemoryKeyring
 from tests.support.fake_runner import FakeRunner
-from tests.support.pull_host import ACTOR, GGUF, PS, WSL, PullHost, start_pull_host
+from tests.support.pull_host import ACTOR, GGUF, PS, WSL, PullHost, repo_dir, start_pull_host
 
 from herness.admin import deploy, deploy_pull
 from herness.admin.wsl import CmdResult
@@ -94,6 +95,40 @@ def test_st10_20_link_target_must_be_a_blob_name(host: PullHost, target: str) ->
     host.links[host.snapshot(host.cfg.deploy.openjev.model)]["config.json"] = target
     status = deploy_pull.verify_weights(host.cfg, "decider", full=False)["status"]
     assert status == "link_invalid:config.json"
+
+
+@pytest.mark.parametrize("full", [True, False])
+def test_st10_20_large_non_lfs_blob_refused(host: PullHost, full: bool) -> None:
+    """ST10-20 a weight linked to a 40-hex (unhashed) blob over 10 MiB is ``not_lfs``."""
+    model = host.cfg.deploy.reasoning.model
+    blob = f"{repo_dir(model)}/blobs/{'e' * 40}"
+    host.links[host.snapshot(model)]["model.safetensors"] = "../../blobs/" + "e" * 40
+    host.sizes[blob] = 10 * 1024 * 1024 + 1
+    result = deploy_pull.verify_weights(host.cfg, "reasoning", full=full)
+    assert result == {"status": "not_lfs:model.safetensors", "files": "0"}
+    host.sizes[blob] = 10 * 1024 * 1024  # at the limit: allowed, like a small config blob
+    assert deploy_pull.verify_weights(host.cfg, "reasoning", full=full)["status"] == "ok"
+
+
+def test_st10_20_small_non_lfs_config_still_passes(host: PullHost) -> None:
+    """ST10-20 a small 40-hex blob (``config.json``) passes unhashed, by spec design."""
+    model = host.cfg.deploy.reasoning.model
+    assert len(posixpath.basename(host.blob(model, "config.json"))) == 40
+    assert deploy_pull.verify_weights(host.cfg, "reasoning", full=True)["status"] == "ok"
+    hashed = [p for a in host.runner.argvs if "sha256sum" in a for p in a]
+    assert host.blob(model, "config.json") not in hashed
+
+
+@pytest.mark.parametrize(
+    ("stdout", "status"), [("\0", "not_a_link:unknown"), ("\0SNAP/x.bin\0", "not_a_link:x.bin")]
+)
+def test_st10_20_not_a_link_output_starting_with_nul(
+    host: PullHost, stdout: str, status: str
+) -> None:
+    """ST10-20 any output of the non-link listing is refused, even one that starts with NUL."""
+    snap = host.snapshot(host.cfg.deploy.reasoning.model)
+    host.runner.add([*WSL, "find", snap, "-mindepth"], stdout.replace("SNAP", snap))
+    assert deploy_pull.verify_weights(host.cfg, "reasoning", full=True)["status"] == status
 
 
 def test_st10_20_regular_file_in_snapshot_refused(host: PullHost) -> None:

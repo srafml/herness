@@ -15,13 +15,13 @@ import ctypes
 import json
 import os
 import posixpath
-import re
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Final, Literal, NoReturn, cast
 
+from herness.admin import _pull_verify as pv
 from herness.admin import wsl
 from herness.core import egress
 from herness.core import time as clock
@@ -29,7 +29,6 @@ from herness.core.audit import audit, log_lock
 from herness.core.config import HernessConfig, get_config
 from herness.core.egress import EgressGuard, registry_host
 from herness.core.errors import ConfigError, FatalError, PermissionDenied, StoreBusy
-from herness.core.ids import canonical_json
 from herness.core.jobs import worker_alive
 from herness.core.logging import get_logger
 
@@ -46,10 +45,6 @@ _BLOCK_VALUES: Final = ("Block", 4)  # rendered name or NetSecurity Action enum 
 _BLOCK_CMD: Final = (
     f"Set-NetFirewallHyperVVMSetting -Name '{WSL_VM_CREATOR_ID}' -DefaultOutboundAction Block"
 )
-_HASH_BATCH: Final = 100
-_LFS_BLOB: Final = re.compile(r"[0-9a-f]{64}")
-_BLOB_TARGET: Final = re.compile(r"(?:\.\./)+blobs/(?:[0-9a-f]{40}|[0-9a-f]{64})")  # HF links
-_SHA_LINE: Final = re.compile(r"([0-9a-f]{64}) [ *](.+)")
 type WeightClass = Literal["reasoning", "decider", "large"]
 _WEIGHT_CLASSES: Final[tuple[WeightClass, ...]] = ("reasoning", "decider", "large")
 _log = get_logger("admin.deploy")
@@ -205,91 +200,6 @@ def pull_images(cfg: HernessConfig, *, guard: EgressGuard) -> list[dict[str, str
 # --- U10-83 pull_weights, verify_weights -----------------------------------------------------
 
 
-def _hf(cfg: HernessConfig, gpu_class: WeightClass) -> tuple[str, str, str]:
-    """``(model, revision, repo dir)`` of a Hugging Face class (``decider`` is OpenJev)."""
-    section = cfg.deploy.reasoning if gpu_class == "reasoning" else cfg.deploy.openjev
-    repo = f"{cfg.deploy.model_root}/hub/models--{section.model.replace('/', '--')}"
-    return section.model, section.revision, repo
-
-
-def _wsl(cfg: HernessConfig, argv: Sequence[str], timeout_s: float = 600) -> wsl.CmdResult:
-    return wsl.run_wsl(cfg.deploy.wsl_distro, argv, timeout_s=timeout_s)
-
-
-def _sizes(cfg: HernessConfig, paths: Sequence[str]) -> dict[str, int]:
-    """``{path: size}`` from ``stat``; a path without a parsable line is absent (missing)."""
-    found: dict[str, int] = {}
-    for start in range(0, len(paths), _HASH_BATCH):
-        out = _wsl(cfg, ["stat", "-c", "%s=%n", *paths[start : start + _HASH_BATCH]]).stdout
-        for line in out.splitlines():
-            size, _eq, path = line.partition("=")
-            if size.isdigit():
-                found[path] = int(size)
-    return found
-
-
-def _sha256(cfg: HernessConfig, paths: Sequence[str]) -> dict[str, str]:
-    """``{path: hex}`` from ``sha256sum`` batches; missing or garbled lines are left out."""
-    found: dict[str, str] = {}
-    for start in range(0, len(paths), _HASH_BATCH):
-        batch = paths[start : start + _HASH_BATCH]
-        for line in _wsl(cfg, ["sha256sum", *batch], timeout_s=7200).stdout.splitlines():
-            if (match := _SHA_LINE.fullmatch(line)) is not None:
-                found[match.group(2)] = match.group(1)
-    return found
-
-
-def _links(cfg: HernessConfig, snapshot: str, repo: str) -> dict[str, str] | str:
-    """``{relative file: blob path}`` of the snapshot's links, or a failure status."""
-    # ``%l=`` + ``-print0``: the spec's printf format fails the U10-77 pattern (T10-24 ruling)
-    listing = _wsl(cfg, ["find", snapshot, "-type", "l", "-printf", "%l=", "-print0"])
-    # Review round 1: a non-link file is never hash-checked, so any is refused (no ``!``: U10-77)
-    others = ["find", snapshot, "-mindepth", "1", "-not", "-type", "d", "-not", "-type", "l"]
-    other = _wsl(cfg, [*others, "-print0"])
-    if listing.returncode != 0 or other.returncode != 0:
-        return "list_failed"
-    if stray := other.stdout.split("\0")[0]:
-        return f"not_a_link:{posixpath.relpath(stray, snapshot)}"
-    links: dict[str, str] = {}
-    for record in filter(None, listing.stdout.split("\0")):
-        target, _eq, path = record.partition("=")
-        rel = posixpath.relpath(path, snapshot) if path.startswith(snapshot + "/") else ""
-        blob = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
-        shaped = record.count("=") == 1 and _BLOB_TARGET.fullmatch(target) is not None
-        if not (rel and shaped) or posixpath.dirname(blob) != f"{repo}/blobs":
-            return f"link_invalid:{rel or 'unknown'}"
-        links[rel] = blob
-    return links or "snapshot_empty"
-
-
-def _check_files(
-    cfg: HernessConfig, files: dict[str, str], expected: dict[str, str], *, full: bool
-) -> tuple[str, dict[str, int]]:
-    """Steps 3-4: sizes of every file; hashes of ``expected`` blobs when ``full``."""
-    sizes = _sizes(cfg, sorted(set(files.values())))
-    for rel, path in sorted(files.items()):
-        if path not in sizes or (rel in expected and sizes[path] == 0):
-            return f"missing:{rel}", {}
-    if full:
-        hashes = _sha256(cfg, sorted({files[rel] for rel in expected}))
-        for rel, sha in sorted(expected.items()):
-            if hashes.get(files[rel]) != sha:
-                return f"hash_mismatch:{rel}", {}
-    return "ok", {rel: sizes[path] for rel, path in files.items()}
-
-
-def _write_manifest(cfg: HernessConfig, name: str, manifest: dict[str, int]) -> None:
-    """Step 5: ``<paths.data>/deploy/weights-<...>.json``, written atomically."""
-    path = Path(cfg.paths.data) / "deploy" / f"weights-{name}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        tmp.write_text(canonical_json(manifest) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
-
-
 def verify_weights(cfg: HernessConfig, gpu_class: WeightClass, *, full: bool) -> dict[str, str]:
     """Check one class's weights on disk; ``status`` ``ok`` or a reason (U10-83, TH10-30/35)."""
     if gpu_class not in _WEIGHT_CLASSES:
@@ -300,21 +210,21 @@ def verify_weights(cfg: HernessConfig, gpu_class: WeightClass, *, full: bool) ->
         large = cfg.deploy.large
         gguf = f"{cfg.deploy.model_root}/gguf/{large.gguf}"
         expected = {large.gguf: large.sha256}
-        status, manifest = _check_files(cfg, {large.gguf: gguf}, expected, full=full)
+        status, manifest = pv.check_files(cfg, {large.gguf: gguf}, expected, full=full)
         name = f"large-{large.sha256[:12]}"
     else:
-        _model, revision, repo = _hf(cfg, gpu_class)
+        _model, revision, repo = pv.hf_repo(cfg, gpu_class)
         snapshot = f"{repo}/snapshots/{revision}"
-        if _wsl(cfg, ["test", "-d", snapshot]).returncode != 0:
+        if pv.run(cfg, ["test", "-d", snapshot]).returncode != 0:
             return {"status": "snapshot_missing", "files": "0"}
-        links = _links(cfg, snapshot, repo)
+        links = pv.snapshot_links(cfg, snapshot, repo)
         if isinstance(links, str):
             return {"status": links, "files": "0"}
-        lfs = {r: n for r, b in links.items() if _LFS_BLOB.fullmatch(n := posixpath.basename(b))}
-        status, manifest = _check_files(cfg, links, lfs, full=full)
+        lfs = {r: n for r, b in links.items() if pv.LFS_BLOB.fullmatch(n := posixpath.basename(b))}
+        status, manifest = pv.check_files(cfg, links, lfs, full=full)
         name = f"{gpu_class}-{revision}"
     if status == "ok":
-        _write_manifest(cfg, name, manifest)
+        pv.write_manifest(cfg, name, manifest)
     return {"status": status, "files": str(len(manifest))}
 
 
@@ -323,7 +233,7 @@ def pull_weights(cfg: HernessConfig, *, guard: EgressGuard) -> list[dict[str, st
     cfg.deploy.require_pinned()
     deploy = cfg.deploy
     for gpu_class in _WEIGHT_CLASSES[:2]:  # reasoning, decider
-        model, revision, repo = _hf(cfg, gpu_class)
+        model, revision, repo = pv.hf_repo(cfg, gpu_class)
         url = f"https://huggingface.co/{model}/resolve/{revision}"
         guard.check(url, b"", "model_download", "none")
         argv = [
@@ -332,7 +242,7 @@ def pull_weights(cfg: HernessConfig, *, guard: EgressGuard) -> list[dict[str, st
             "-v", deploy.model_root + ":/root/.cache/huggingface", deploy.reasoning.image,
             "download", model, "--revision", revision,
         ]  # fmt: skip
-        if _wsl(cfg, argv, timeout_s=7200).returncode != 0:
+        if pv.run(cfg, argv, timeout_s=7200).returncode != 0:
             msg = f"weight download failed: {gpu_class}"
             _fail(msg, gpu_class=gpu_class, reason="weight_download")
         if gpu_class == "decider":  # V-15: offline resolution picks the pinned snapshot
