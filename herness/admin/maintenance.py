@@ -73,10 +73,13 @@ def select_backup_keep(
 
 
 def _backup_ops(source: Path, temp: Path) -> None:
-    """Online copy of the ops store (consistent under WAL) into ``temp``."""
+    """Online copy of the ops store into ``temp``: a read transaction held on the source pins
+    one WAL snapshot, so writer commits neither tear the copy nor restart the backup."""
     uri = "file:" + quote(source.as_posix(), safe="/:") + "?mode=ro"
-    src = sqlite3.connect(uri, uri=True)
+    src = sqlite3.connect(uri, uri=True, isolation_level=None)
     try:
+        src.execute("BEGIN")
+        src.execute("SELECT count(*) FROM sqlite_master").fetchall()
         dst = sqlite3.connect(temp)
         try:
             src.backup(dst, pages=4096, sleep=0.05)

@@ -1,8 +1,9 @@
 """Fault tests for impl 10 security paths (FT10-01 T10-05, FT10-05 T10-06, FT10-07 T10-11,
-FT10-08 T10-16)."""
+FT10-08 T10-16, FT10-04 T10-20)."""
 
 from __future__ import annotations
 
+import datetime
 import errno
 import json
 import os
@@ -20,7 +21,15 @@ from tests.support.config_tree import write_full_config
 from tests.support.egress_harness import API, audit_fields, make_guard
 from tests.support.egress_harness import load as load_egress
 from tests.support.fake_keyring import MemoryKeyring
+from tests.support.maintenance_env import (  # noqa: F401 - fixture import
+    FakeCtx,
+    MaintEnv,
+    admin_actions,
+    maint_env,
+    plant,
+)
 
+from herness.admin import maintenance
 from herness.core import _redact_pool as redact_pool
 from herness.core import audit as a
 from herness.core import config as c
@@ -187,3 +196,46 @@ def test_ft10_08_egress_log_disk_full_fails_closed(
     assert audit_fields(cfg.paths.logs) == [
         {"egress_id": caught.value.egress_id, "reason": "egress_log_failed"}
     ]
+
+
+# --- FT10-04 (T10-20): backup copy corrupted before integrity_check -------------------------
+
+
+def test_ft10_04_corrupt_copy_fails_without_partial_copy(
+    maint_env: MaintEnv,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FT10-04 the copy is corrupted between backup() and integrity_check: the temp file is
+    deleted, FatalError("backup integrity_check failed") is raised, no ops-<date>.sqlite."""
+    real_backup = maintenance._backup_ops
+
+    def corrupting(source: Path, temp: Path) -> None:
+        real_backup(source, temp)
+        size = temp.stat().st_size
+        with temp.open("r+b") as fh:  # keep the 100-byte header, smash every page after it
+            fh.seek(100)
+            fh.write(b"\xa5" * (size - 100))
+
+    monkeypatch.setattr(maintenance, "_backup_ops", corrupting)
+    now = datetime.datetime(2026, 9, 24, 1, 30, tzinfo=datetime.UTC)
+    plant(maint_env.data / "reports" / "run_1" / "manifest.json")
+    with pytest.raises(FatalError) as caught:
+        maintenance.run_backup(maint_env.cfg, FakeCtx().as_ctx(), now=now)
+    assert type(caught.value) is FatalError
+    assert str(caught.value) == "backup integrity_check failed"
+    ops = maint_env.target / "ops"
+    assert sorted(p.name for p in ops.iterdir()) == []  # no temp, no ops-2026-09-24.sqlite
+    assert not (maint_env.target / "reports").exists()  # the job stops before the mirrors
+    assert admin_actions(maint_env.logs, "backup") == []
+
+
+def test_ft10_04_copy_os_error_names_relative_path(maint_env: MaintEnv) -> None:  # noqa: F811
+    """FT10-04 an OSError while mirroring becomes FatalError("backup copy failed: <relative
+    path>"); the ops copy already made stays valid."""
+    now = datetime.datetime(2026, 9, 24, 1, 30, tzinfo=datetime.UTC)
+    plant(maint_env.data / "reports" / "run_1" / "manifest.json")
+    plant(maint_env.target / "reports", body=b"a file where a directory must go")
+    with pytest.raises(FatalError) as caught:
+        maintenance.run_backup(maint_env.cfg, FakeCtx().as_ctx(), now=now)
+    assert str(caught.value) == "backup copy failed: reports/run_1/manifest.json"
+    assert (maint_env.target / "ops" / "ops-2026-09-24.sqlite").is_file()
