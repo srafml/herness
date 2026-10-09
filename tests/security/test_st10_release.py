@@ -15,6 +15,7 @@ import os
 import shutil
 import socket
 import sys
+import time
 import types
 from pathlib import Path
 from typing import Any
@@ -36,12 +37,13 @@ from tests.support.release_bundle import (
     statement_json,
 )
 
-from herness.admin import attest, commands_deploy
+from herness.admin import _attest_copy, attest, commands_deploy
 from herness.admin.attest import ReleaseBundle, verify_bundle
 from herness.admin.commands_deploy import cmd_deploy_install
 from herness.admin.duckdb_ext import EXT_INSTALL_SCRIPT, install_duckdb_extensions, venv_python
 from herness.admin.wsl import CmdResult
 from herness.core.errors import ConfigError, FatalError
+from herness.core.ids import CROCKFORD_ALPHABET
 
 pytestmark = pytest.mark.unit
 
@@ -233,7 +235,7 @@ def test_st10_24_unpinned_requirements_refused(tmp_path: Path, env: FakeRunner, 
 
 
 def gh_answer_trusting_requirements(root: Path) -> Any:
-    """``fake_gh`` that treats the rewritten ``requirements.txt`` as signed (to reach step 3)."""
+    """``fake_gh`` that treats the rewritten ``requirements.txt`` as signed (to reach step 4)."""
 
     def answer(argv: list[str]) -> CmdResult:
         subject = Path(argv[3])  # in verify_bundle's private copy, never ``root`` (T10-26b)
@@ -783,3 +785,73 @@ def test_st10_61_copy_refuses_non_regular_entries(tmp_path: Path, env: FakeRunne
         verify_bundle(bundle, cfg)
     assert env.calls == []
     assert _private_dirs(cfg) == []
+
+
+def test_st10_61_copy_refuses_duckdb_dir_link_out_of_bundle(
+    tmp_path: Path, env: FakeRunner
+) -> None:
+    """ST10-61 ``duckdb/`` replaced after ``load`` by a directory junction (a dir symlink on
+    POSIX) to an outside dir holding the same file name is refused by the copy's containment
+    check, before any ``gh`` call and with nothing left behind (review round 1, m2)."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    bundle = ReleaseBundle.load(built.root)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "excel.duckdb_extension").write_bytes(EXT_BYTES)
+    shutil.rmtree(built.root / "duckdb")
+    _dir_link(built.root / "duckdb", outside)
+    msg = r"^release bundle invalid: duckdb/excel\.duckdb_extension$"
+    with pytest.raises(ConfigError, match=msg):
+        verify_bundle(bundle, cfg)
+    assert env.calls == []
+    assert _private_dirs(cfg) == []
+
+
+def _old_ulid(age_s: float) -> str:
+    """A canonical ULID whose time is ``age_s`` seconds ago (random part zero)."""
+    ms = int((time.time() - age_s) * 1000)
+    return "".join(CROCKFORD_ALPHABET[(ms >> 5 * (9 - i)) & 31] for i in range(10)) + "0" * 16
+
+
+def test_st10_61_stale_private_copies_swept(tmp_path: Path, env: FakeRunner) -> None:
+    """ST10-61 the next verify sweeps orphan private copies older than 24 h (by the ULID time
+    in the name, else by mtime) and keeps fresh ones, so an in-flight copy is never touched
+    (review round 1, Important #1)."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    area = cfg.paths.data / ".release"
+    old, fresh = area / f".verify-{_old_ulid(25 * 3600)}", area / f".verify-{_old_ulid(3600)}"
+    junk_old, junk_fresh = area / ".verify-junk-old", area / ".verify-junk-fresh"
+    for directory in (old, fresh, junk_old, junk_fresh):
+        (directory / "duckdb").mkdir(parents=True)
+        (directory / "duckdb" / "x.bin").write_bytes(b"x")
+    day_ago = time.time() - 25 * 3600
+    os.utime(junk_old, (day_ago, day_ago))
+    os.utime(fresh, (day_ago, day_ago))  # the ULID time wins over an old mtime
+    with structlog.testing.capture_logs() as logs:
+        summary = verify_bundle(ReleaseBundle.load(built.root), cfg)
+    assert _private_dirs(cfg) == sorted([fresh, junk_fresh, Path(summary["copy"])])
+    swept = sorted(e["path"] for e in logs if e["event"] == "deploy.install.swept")
+    assert swept == sorted([str(old), str(junk_old)])
+
+
+def test_st10_61_cleanup_failure_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ST10-61 a private copy that cannot be removed (a handle held by a scanner) logs
+    ``deploy.install.cleanup_failed`` with its path and does not raise; a copy already gone
+    logs nothing (review round 1, m4)."""
+    private = tmp_path / ".verify-x"
+    (private / "duckdb").mkdir(parents=True)
+    (private / "duckdb" / "x.bin").write_bytes(b"x")
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        msg = "in use"
+        raise PermissionError(msg)
+
+    monkeypatch.setattr(os, "unlink", refuse)
+    with structlog.testing.capture_logs() as logs:
+        _attest_copy.remove_private(private)
+        _attest_copy.remove_private(tmp_path / ".verify-gone")
+    failed = [e for e in logs if e["event"] == "deploy.install.cleanup_failed"]
+    assert failed
+    assert {(e["log_level"], e["path"]) for e in failed} == {("warning", str(private))}

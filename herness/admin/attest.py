@@ -188,7 +188,7 @@ def _check_provenance(rel: str, stdout: str, digest: str) -> None:
 
 def _attested_sbom(bundle: ReleaseBundle, stdout: str, wheel_sha256: str) -> dict[str, Any]:
     """The verified SBOM predicate, attested for this wheel; it must equal the loose
-    ``sbom.cdx.json`` (U10-87 step 2; the subject check is T10-26b defence in depth)."""
+    ``sbom.cdx.json`` (U10-87 step 3; the subject check is T10-26b defence in depth)."""
     try:
         statement = json.loads(stdout)[0]["verificationResult"]["statement"]
         predicate = statement["predicate"]
@@ -250,7 +250,7 @@ def _licences(component: dict[str, Any]) -> list[str]:
 
 
 def _check_licences(components: list[dict[str, Any]], exceptions: Iterable[str]) -> int:
-    """Every component's licences are allowlisted, or it is a listed exception (step 4)."""
+    """Every component's licences are allowlisted, or it is a listed exception (U10-87 step 5)."""
     excepted = {_norm(e) for e in exceptions}
     bad = sorted(
         str(c.get("name"))
