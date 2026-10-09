@@ -29,23 +29,29 @@ def _reset_logging() -> Iterator[None]:
     reset_logging()  # `main` configures process logging
 
 
+_BENCH_FILE = Path("tests", "bench", "test_generator_bench.py").as_posix()
+_INBOX_FILE = Path("tests", "integration", "connectors", "test_sync_jobs_flow.py").as_posix()
+_COVERAGE_FILE = Path("tests", "unit", "test_coverage_targets.py").as_posix()
+# the repo-relative test files the tiny gate selects: its ID collection is limited to them
+_COLLECT = (_BENCH_FILE, _INBOX_FILE, _COVERAGE_FILE)
+
 # fmt: off
 _TINY_PHASE_1 = (
     GateCheck(
         "G1.1", 1, "tiny generator bench", "bench",
-        ("BT11-03", "tests/bench/test_generator_bench.py"), 600,
+        ("BT11-03", _BENCH_FILE), 600,
     ),
     GateCheck(
         "G1.2", 1, "files connector inbox", "pytest",
-        ("IT01-01", "tests/integration/connectors/test_sync_jobs_flow.py"), 600,
+        ("IT01-01", _INBOX_FILE), 600,
     ),
     GateCheck(
         "G1.4", 1, "coverage targets", "pytest",
-        ("UT11-38", "tests/unit/test_coverage_targets.py"), 600,
+        ("UT11-38", _COVERAGE_FILE), 600,
     ),
     GateCheck(
         "G1.8", 1, "test ID no test carries", "pytest",
-        ("UT11-38", "UT99-99", "tests/unit/test_coverage_targets.py"), 600,
+        ("UT11-38", "UT99-99", _COVERAGE_FILE), 600,
     ),
     GateCheck(
         "G1.9", 1, "failing command", "cli",
@@ -66,8 +72,7 @@ def test_it11_30_tiny_phase_1_gate_report_and_exit(
     files the gate selects."""
     monkeypatch.setitem(GATES, 1, _TINY_PHASE_1)
     monkeypatch.delenv("HERNESS_BENCH_DIR", raising=False)
-    paths = [entry for check in _TINY_PHASE_1 for entry in check.selector if "/" in entry]
-    report = phase_gate.run_gate(1, repo_root=_REPO, out_dir=tmp_path, collect_paths=paths)
+    report = phase_gate.run_gate(1, repo_root=_REPO, out_dir=tmp_path, collect_paths=_COLLECT)
     assert not report.passed
     doc = json.loads(report.path.read_text(encoding="utf-8"))
     codes = {c["check_id"]: c["exit_code"] for c in doc["checks"]}
