@@ -27,10 +27,21 @@ from herness.store.ops.shared import get_review_item, list_review_items
 if TYPE_CHECKING:
     from app.common.bootstrap import AppServices
 
-__all__ = ["OPS_READS", "TracePage", "after_write", "ops_read", "read_trace_page"]
+__all__ = ["OPS_READS", "OPS_READ_NAMES", "TracePage", "after_write", "ops_read", "read_trace_page"]
 
+# The U09-52 read functions, named explicitly: a new ui_* helper is never allowlisted implicitly.
+OPS_READ_NAMES: Final = (
+    "ui_evidence_ids_present", "ui_get_evidence_rows", "ui_run_rec_ids", "ui_get_recommendation",
+    "ui_finding_ids_with_status", "ui_finding_query_ids", "ui_finding_status_counts",
+    "ui_task_status_counts", "ui_list_tasks", "ui_list_runs", "ui_list_recommendations",
+    "ui_list_findings_for_entity", "ui_list_run_findings", "ui_jobs_for_run",
+    "ui_latest_decisions", "ui_list_outcomes", "ui_list_memory_items",
+    "ui_list_resilience_events", "ui_list_source_health", "ui_job_exists",
+    "ui_job_status_counts", "ui_oldest_queued_age_s", "ui_failed_jobs_since",
+    "list_review_items", "get_review_item", "status_snapshot",
+)  # fmt: skip
 OPS_READS: Final[Mapping[str, Callable[..., object]]] = {
-    **{n: getattr(ui_reads, n) for n in dir(ui_reads) if n.startswith("ui_") and n != "ui_"},
+    **{n: getattr(ui_reads, n) for n in OPS_READ_NAMES if n.startswith("ui_")},
     "list_review_items": list_review_items,
     "get_review_item": get_review_item,
     "status_snapshot": status_snapshot,
@@ -107,10 +118,11 @@ def _lines(fh: IO[bytes], stopped: list[bool]) -> Iterator[bytes | None]:
         scanned += len(raw)
         line: bytes | None = raw
         if len(raw) > MAX_LINE_BYTES and not raw.endswith(b"\n"):
-            while (rest := fh.readline(_CHUNK)) and not rest.endswith(b"\n"):
+            line = None  # drain the rest of the line; drained bytes count toward the cap
+            while scanned < MAX_SCAN_BYTES and (rest := fh.readline(_CHUNK)):
                 scanned += len(rest)
-            scanned += len(rest)
-            line = None
+                if rest.endswith(b"\n"):
+                    break
         yield line
         if scanned >= MAX_SCAN_BYTES:
             stopped.append(True)

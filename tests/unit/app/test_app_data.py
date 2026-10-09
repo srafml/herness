@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 import streamlit as st
@@ -17,6 +18,7 @@ from app.common.data import TracePage
 from herness.core.errors import ConfigError
 from herness.core.jobs import status_snapshot
 from herness.reports.rules import UserInputError
+from herness.store.ops import ui_reads
 from herness.store.ops.shared import get_review_item
 
 pytestmark = pytest.mark.unit
@@ -118,6 +120,38 @@ def test_ut09_78_scan_cap(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert 0 < len(page.events) < 200
 
 
+def test_ut09_78_scan_cap_applies_inside_long_line(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-78 bytes drained from an over-long line count toward the scan cap."""
+    huge = b'{"type": "x", "pad": "' + b"y" * 4_000_000  # one 4 MB line, no newline yet
+    (root / f"{RUN_ID}.jsonl").write_bytes(huge + b'"}\n' + _event(1, "x").encode() + b"\n")
+    monkeypatch.setattr(data, "MAX_SCAN_BYTES", 200_000)
+    consumed: list[int] = []
+    real_open = Path.open
+
+    class Counting:
+        def __init__(self, fh: Any) -> None:
+            self._fh = fh
+
+        def readline(self, size: int = -1) -> bytes:
+            chunk: bytes = self._fh.readline(size)
+            consumed.append(len(chunk))
+            return chunk
+
+        def __enter__(self) -> Counting:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._fh.close()
+
+    monkeypatch.setattr(Path, "open", lambda self, *a, **k: Counting(real_open(self, *a, **k)))
+    page = data.read_trace_page(RUN_ID, type_filter=None, page=0, include_payload=False)
+    assert page.note == "Trace truncated at 50 MB."
+    assert page.events == []
+    assert sum(consumed) < 400_000  # stopped near the cap, not at the end of the 4 MB line
+
+
 @pytest.mark.parametrize("bad", ["", "run_1", "../../x", RUN_ID.lower(), RUN_ID + "\n"])
 def test_ut09_78_bad_run_id(root: Path, bad: str) -> None:
     """UT09-78 a run_id outside RUN_ID_RE -> UserInputError."""
@@ -158,8 +192,30 @@ def test_ut09_78_ops_read_allowlist(ops_root: OpsStoreHandle) -> None:
     assert data.ops_read("list_review_items") == []
     assert data.OPS_READS["status_snapshot"] is status_snapshot
     assert data.OPS_READS["get_review_item"] is get_review_item
-    assert "ui_job_status_counts" in data.OPS_READS
-    assert {"list_review_items", "get_review_item", "status_snapshot"} <= set(data.OPS_READS)
+    assert set(data.OPS_READS) == _ALLOWLIST
+
+
+_ALLOWLIST = frozenset(
+    {
+        "ui_evidence_ids_present", "ui_get_evidence_rows", "ui_run_rec_ids",
+        "ui_get_recommendation", "ui_finding_ids_with_status", "ui_finding_query_ids",
+        "ui_finding_status_counts", "ui_task_status_counts", "ui_list_tasks", "ui_list_runs",
+        "ui_list_recommendations", "ui_list_findings_for_entity", "ui_list_run_findings",
+        "ui_jobs_for_run", "ui_latest_decisions", "ui_list_outcomes", "ui_list_memory_items",
+        "ui_list_resilience_events", "ui_list_source_health", "ui_job_exists",
+        "ui_job_status_counts", "ui_oldest_queued_age_s", "ui_failed_jobs_since",
+        "list_review_items", "get_review_item", "status_snapshot",
+    }
+)  # fmt: skip
+
+
+def test_ut09_78_allowlist_is_explicit() -> None:
+    """UT09-78 the allowlist is an explicit name list bound to the real functions."""
+    assert len(data.OPS_READ_NAMES) == len(_ALLOWLIST)
+    assert set(data.OPS_READ_NAMES) == _ALLOWLIST
+    for name in data.OPS_READ_NAMES:
+        if name.startswith("ui_"):
+            assert data.OPS_READS[name] is getattr(ui_reads, name)
 
 
 @pytest.mark.parametrize(

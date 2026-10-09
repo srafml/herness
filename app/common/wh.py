@@ -22,6 +22,7 @@ import streamlit as st
 
 from app.common._wh_queries import (
     FORBIDDEN_TEXT_COLUMNS,
+    PARAM_CHECKS,
     NamedQuery,
     ParamSpec,
     check_forbidden_columns,
@@ -45,8 +46,6 @@ __all__ = [
 
 STALE_CONN_GRACE_S: Final = 300
 QUERY_TIMEOUT_S: float = 30  # module attribute so tests can shorten it
-_MAX_STR: Final = 200
-_MAX_LIST: Final = 500
 # U09-63: builds whose meta.evidence lacks result_sample use the `_v1` variant.
 _VARIANTS: Final = {"evidence.meta": ("evidence.meta_v1", ["meta", "evidence", "result_sample"])}
 _COLUMN_SQL: Final = (
@@ -92,11 +91,19 @@ def current_build_id(data_dir: Path) -> str:
 
 
 def _open(build_id: str, layout: DataLayout) -> duckdb.DuckDBPyConnection:
+    """Open read-only, then verify-then-set the hardening; fail closed (U09-60 step 3)."""
     conn = open_readonly(build_id, layout=layout)
-    if conn.execute(_SETTINGS_SQL).fetchone() != (False, True):  # open_readonly may harden
-        for statement in _HARDEN:
-            conn.execute(statement)
-    return conn
+    try:
+        if conn.execute(_SETTINGS_SQL).fetchone() != (False, True):  # open_readonly may harden
+            for statement in _HARDEN:
+                conn.execute(statement)
+        if conn.execute(_SETTINGS_SQL).fetchone() == (False, True):
+            return conn
+    except duckdb.Error:
+        pass  # reported below as a typed error, never a raw DuckDB one
+    conn.close()
+    msg = f"warehouse {build_id} could not be hardened"
+    raise ConfigError(msg, build_id=build_id)
 
 
 class _Pool:
@@ -153,29 +160,13 @@ def get_conn() -> tuple[str, duckdb.DuckDBPyConnection]:
     try:
         return build_id, _pool().get(build_id, layout)
     except (NotFoundError, SchemaViolation):
-        fresh = current_build_id(data_dir)  # retired between check and open: one re-read
-        st.session_state["wh_build_id"] = fresh
+        fresh = _recheck(data_dir, 0)  # retired between check and open: one forced re-read
         try:
             return fresh, _pool().get(fresh, layout)
         except (NotFoundError, SchemaViolation) as exc:
             raise NoCurrentBuild from exc
 
 
-def _short(v: object) -> bool:
-    return isinstance(v, str) and len(v) <= _MAX_STR
-
-
-# Strict checks (U09-62 step 2): `int` refuses bool, `date` refuses datetime.
-_CHECKS: Final[dict[str, Callable[[object], bool]]] = {
-    "str": _short,
-    "int": lambda v: type(v) is int,
-    "float": lambda v: type(v) in {int, float},
-    "bool": lambda v: isinstance(v, bool),
-    "date": lambda v: type(v) is datetime.date,
-    "list_str": lambda v: (
-        isinstance(v, list | tuple) and len(v) <= _MAX_LIST and all(_short(s) for s in v)
-    ),
-}
 _CONVERT: Final[dict[str, Callable[[Any], object]]] = {"float": float, "list_str": tuple}
 
 
@@ -186,7 +177,7 @@ def _bind(nq: NamedQuery, params: Mapping[str, object]) -> tuple[tuple[str, obje
     bound: dict[str, object] = {}
     for key, spec in nq.params.items():
         value = params.get(key, spec.default)
-        if value is not None and not _CHECKS[spec.type](value):
+        if value is not None and not PARAM_CHECKS[spec.type](value):
             msg = f"Parameter {key} has the wrong type or size (expected {spec.type})."
             raise UserInputError(msg)
         if value is None and spec.required:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import textwrap
 from collections.abc import Iterator
 from pathlib import Path
@@ -13,6 +14,7 @@ import pyarrow as pa
 import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
+from structlog.testing import capture_logs
 from tests.support.app_env import (
     QUERIES_FILE,
     plant_scored_build,
@@ -162,16 +164,76 @@ def test_ut09_57_current_build_id_reads_pointer(layout: DataLayout) -> None:
 def test_ut09_57_retired_build_rereads_current(
     monkeypatch: pytest.MonkeyPatch, layout: DataLayout, fc: FakeClock
 ) -> None:
-    """UT09-57 open failure (build retired after the check) -> one re-read of CURRENT."""
-    del fc
+    """UT09-57 open failure (build retired after the check) -> one re-read of CURRENT, recorded
+    like a normal recheck: wh_checked_at updated, toast and `app.warehouse.switched` log."""
     _services(monkeypatch, layout.root)
     gone = build_id(3)
     at = AppTest.from_function(wh_script)
-    at.session_state["wh_build_id"] = gone  # checked just now, file since retired
+    at.session_state["wh_build_id"] = gone  # checked recently, file since retired
     at.session_state["wh_checked_at"] = clock.now()
-    at.run()
+    fc.advance(10)  # inside the 60 s window: no normal recheck
+    with capture_logs() as logs:
+        at.run()
     assert _texts(at) == [A]
     assert not at.exception
+    assert at.session_state["wh_checked_at"] == clock.now()
+    assert _toasts(at) == [f"Data refreshed to build {A}"]
+    switched = [e for e in logs if e["event"] == "app.warehouse.switched"]
+    assert [(e["old_build_id"], e["new_build_id"]) for e in switched] == [(gone, A)]
+
+
+class _FakeConn:
+    """Stands in for an opened reader: records SETs and close; scripted settings/failures."""
+
+    def __init__(self, settings: tuple[bool, bool], *, set_fails: bool = False) -> None:
+        self.settings, self.set_fails = settings, set_fails
+        self.sets: list[str] = []
+        self.closed = False
+
+    def execute(self, sql: str) -> _FakeConn:
+        if sql.startswith("SET"):
+            if self.set_fails:
+                msg = "Invalid Input Error: configuration locked"
+                raise duckdb.InvalidInputException(msg)
+            self.sets.append(sql)
+        return self
+
+    def fetchone(self) -> tuple[bool, bool]:
+        return self.settings
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_ut09_57_unhardened_open_sets_settings(
+    monkeypatch: pytest.MonkeyPatch, layout: DataLayout
+) -> None:
+    """UT09-57 a reader opened without hardening gets both SETs and is then verified."""
+    raw = duckdb.connect(":memory:")
+    monkeypatch.setattr(wh, "open_readonly", lambda *_a, **_k: raw)
+    conn = wh._open(A, layout)
+    assert conn is raw
+    row = conn.execute(wh._SETTINGS_SQL).fetchone()
+    assert row == (False, True)
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    "fake",
+    [
+        _FakeConn((True, False), set_fails=True),  # SET fails
+        _FakeConn((True, False)),  # SETs accepted but the values stay wrong
+    ],
+    ids=["set_fails", "still_wrong"],
+)
+def test_ut09_57_hardening_failure_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, layout: DataLayout, fake: _FakeConn
+) -> None:
+    """UT09-57 hardening that cannot be verified -> connection closed, ConfigError."""
+    monkeypatch.setattr(wh, "open_readonly", lambda *_a, **_k: fake)
+    with pytest.raises(ConfigError, match="could not be hardened"):
+        wh._open(A, layout)
+    assert fake.closed is True
 
 
 def test_ut09_57_no_current_build_in_session(
@@ -275,6 +337,21 @@ def test_ut09_58_valid_file_loads(tmp_path: Path) -> None:
     assert queries["a.c"].row_cap == 7
     with pytest.raises(AttributeError):
         queries["a.c"].row_cap = 1  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("ptype", "default"),
+    [("int", "5"), ("int", True), ("str", 3), ("float", "x"), ("bool", 1), ("list_str", [1])],
+)
+def test_ut09_58_default_type_checked_at_load(tmp_path: Path, ptype: str, default: object) -> None:
+    """UT09-58 a param default that does not match its declared type -> ConfigError at load."""
+    body = (
+        "version: 1\nqueries:\n  a.b:\n    sql: 'SELECT $p AS x'\n"
+        f"    params: {{p: {{type: {ptype}, default: {json.dumps(default)}}}}}\n"
+    )
+    path = _write_yaml(tmp_path, body)
+    with pytest.raises(ConfigError, match=r"^named query a\.b: default of p"):
+        wh.load_named_queries(path, page_row_limit=5000)
 
 
 def test_ut09_58_unreadable_file(tmp_path: Path) -> None:
@@ -414,6 +491,40 @@ def test_ut09_59_alias_and_star_reported() -> None:
         "a.sub: core.problem.root_cause_text",
         "a.unqual: core.incident.close_notes",
     ]
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        ("SELECT i.description FROM core.incident I", "core.incident.description"),
+        ("SELECT description FROM CORE.incident", "core.incident.description"),
+        ('SELECT "I"."DESCRIPTION" FROM "Core"."Incident" "I"', "core.incident.DESCRIPTION"),
+        ("SELECT I.* FROM core.incident i", "core.incident.*"),
+        ("SELECT i FROM core.incident i", "core.incident.*"),
+        ("SELECT to_json(i) FROM core.incident i", "core.incident.*"),
+        ("SELECT x.I FROM core.incident i, metrics.thing x", "core.incident.*"),
+        ("SELECT incident FROM core.incident", "core.incident.*"),
+        ("SELECT to_json(i.*) FROM core.incident i", "core.incident.*"),
+        ("SELECT COLUMNS('desc.*') FROM core.incident", "core.incident.*"),
+        ("SELECT COLUMNS(*) FROM core.incident", "core.incident.*"),
+    ],
+)
+def test_ut09_59_case_whole_row_and_columns_bypasses(sql: str, expected: str) -> None:
+    """UT09-59 case-insensitive identifiers, whole-row references and COLUMNS() are caught."""
+    assert wh.check_forbidden_columns({"a.b": _nq("a.b", sql)}) == [f"a.b: {expected}"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT count(*) AS n FROM core.incident",
+        "SELECT i.number FROM core.incident i WHERE i.number IN (SELECT number FROM core.change)",
+        "SELECT COLUMNS('n.*') FROM metrics.thing",
+    ],
+)
+def test_ut09_59_allowed_shapes(sql: str) -> None:
+    """UT09-59 count(*), allowed columns and COLUMNS() over non-core tables pass the guard."""
+    assert wh.check_forbidden_columns({"a.b": _nq("a.b", sql)}) == []
 
 
 def test_ut09_59_constants() -> None:
