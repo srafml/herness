@@ -6,9 +6,11 @@ and strict patterns for everything that reaches `wsl.exe` or a PowerShell comman
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Final, Literal
@@ -39,8 +41,7 @@ ALLOWED_COMMANDS: Final = frozenset(
         "docker",
     }
 )
-# U10-112: the Herness venv's own interpreter, named by absolute path, is allowed too.
-_VENV_PY: Final = re.compile(r"(?:[A-Za-z]:)?[\\/].*[\\/](?:Scripts[\\/]python\.exe|bin/python3?)")
+_VENV_PY: Final = os.path.normcase(sys.executable)  # U10-112: the running Herness venv only
 MAX_TIMEOUT_S: Final = 7200
 MAX_OUTPUT_BYTES: Final = 16 * 1024 * 1024
 _WSL_ARG: Final = re.compile(r"[A-Za-z0-9._:/@=+,%{}-]{1,512}")
@@ -78,7 +79,7 @@ def run_cmd(
     check: bool = False,
 ) -> CmdResult:
     """Run one allowlisted program with no shell (U10-76); output is capped at 16 MiB."""
-    if not argv or (argv[0] not in ALLOWED_COMMANDS and not _VENV_PY.fullmatch(argv[0])):
+    if not argv or (argv[0] not in ALLOWED_COMMANDS and os.path.normcase(str(argv[0])) != _VENV_PY):
         msg = f"command not allowed: {argv[0] if argv else ''}"
         raise ConfigError(msg)
     elements: Sequence[object] = argv

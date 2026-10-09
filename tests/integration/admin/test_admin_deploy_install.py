@@ -73,6 +73,9 @@ def test_it10_14_deploy_install_into_temp_venv(
     fake_runner.passthrough = True
     fake_runner.add([str(venv_python(venv))], CmdResult(0, json.dumps(row), "", 0.1))
     monkeypatch.setattr(commands_deploy, "_venv_dir", lambda: venv)
+    # The temp venv plays the running Herness venv for U10-112's check (its interpreter call
+    # is answered by fake_runner, so wsl's allowlist is not reached for it).
+    monkeypatch.setattr(sys, "executable", str(venv_python(venv)))
     monkeypatch.setattr(attest, "worker_alive", lambda: False)
 
     result = cmd_deploy_install(built.root, cfg=cfg, actor=USER)

@@ -1,9 +1,6 @@
 """Offline install of the pinned DuckDB extensions from a release bundle (impl 10 U10-112).
 
-impl 01 O-3: the files connector reads ``.xlsx`` with ``autoinstall_known_extensions`` off,
-so ``herness deploy install`` installs ``excel`` from the verified bundle. The venv's own
-``duckdb`` runs ``EXT_INSTALL_SCRIPT`` in a subprocess: a local ``INSTALL '<path>'`` (no
-download; unsigned extensions stay refused), ``LOAD``, and the ``duckdb_extensions()`` row.
+impl 01 O-3: ``.xlsx`` is read with autoinstall off, so the excel extension ships in the bundle.
 """
 
 from __future__ import annotations
@@ -11,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -22,7 +20,7 @@ if TYPE_CHECKING:
     from herness.admin.attest import ReleaseBundle
     from herness.core.config import HernessConfig
 
-__all__ = ["EXT_INSTALL_SCRIPT", "install_duckdb_extensions", "venv_python"]
+__all__ = ["EXT_INSTALL_SCRIPT", "check_extensions", "install_duckdb_extensions", "venv_python"]
 
 _log = get_logger("admin.deploy")
 
@@ -66,6 +64,29 @@ def _refuse(name: str, reason: str, message: str) -> FatalError:
     return FatalError(message)
 
 
+def check_extensions(
+    bundle: ReleaseBundle, cfg: HernessConfig, *, venv: Path
+) -> dict[str, tuple[Path, str]]:
+    """U10-112 pins, files and hashes, and ``venv`` is the running venv; before any change."""
+    pins = cfg.deploy.release.duckdb_extensions
+    if "excel" not in pins:
+        msg = "deploy.release.duckdb_extensions.excel is not pinned"
+        raise ConfigError(msg)
+    files: dict[str, tuple[Path, str]] = {}
+    for name, pin in sorted(pins.items()):
+        path = bundle.duckdb_extensions.get(name)
+        if path is None:
+            msg = f"release bundle invalid: duckdb/{name}.duckdb_extension"
+            raise ConfigError(msg)
+        if _sha256(path) != pin:
+            raise _refuse(name, "extension_hash", f"duckdb extension hash mismatch: {name}")
+        files[name] = (path, pin)
+    if os.path.normcase(venv_python(venv)) != os.path.normcase(sys.executable):
+        msg = "venv is not the running Herness venv"
+        raise ConfigError(msg)
+    return files
+
+
 def _installed_row(name: str, stdout: str) -> dict[str, Any]:
     try:
         row = json.loads(stdout)
@@ -80,37 +101,20 @@ def install_duckdb_extensions(
     bundle: ReleaseBundle, cfg: HernessConfig, *, venv: Path
 ) -> dict[str, str]:
     """Install each pinned extension from the bundle; name → installed version (U10-112)."""
-    pins: dict[str, str] = {str(k): v for k, v in cfg.deploy.release.duckdb_extensions.items()}
-    if "excel" not in pins:
-        msg = "deploy.release.duckdb_extensions.excel is not pinned"
-        raise ConfigError(msg)
-    files: dict[str, Path] = {}
-    for name in sorted(pins):  # every file is checked before any subprocess runs
-        path = bundle.duckdb_extensions.get(name)
-        if path is None:
-            msg = f"release bundle invalid: duckdb/{name}.duckdb_extension"
-            raise ConfigError(msg)
-        if _sha256(path) != pins[name]:
-            raise _refuse(name, "extension_hash", f"duckdb extension hash mismatch: {name}")
-        files[name] = path
-    python = str(venv_python(venv))
+    files = check_extensions(bundle, cfg, venv=venv)  # all checked before any subprocess
     versions: dict[str, str] = {}
-    for name, path in files.items():
-        argv = [python, "-I", "-c", EXT_INSTALL_SCRIPT, str(path), name]
+    for name, (path, pin) in files.items():
+        argv = [str(venv_python(venv)), "-I", "-c", EXT_INSTALL_SCRIPT, str(path), name]
         result = run_cmd(argv, timeout_s=120)
         if result.returncode != 0:
             raise _refuse(name, "extension_install", f"duckdb extension install failed: {name}")
         row = _installed_row(name, result.stdout)
         target = Path(str(row.get("install_path", "")))
-        if not target.is_file() or _sha256(target) != pins[name]:
+        if not target.is_file() or _sha256(target) != pin:
             msg = f"duckdb extension hash mismatch after install: {name}"
             raise _refuse(name, "extension_installed_hash", msg)
-        version = str(row.get("extension_version"))
+        versions[name] = version = str(row.get("extension_version"))
         _log.info(
-            "deploy.install.extension_installed",
-            name=name,
-            extension_version=version,
-            sha256=pins[name],
+            "deploy.install.extension_installed", name=name, extension_version=version, sha256=pin
         )
-        versions[name] = version
     return versions

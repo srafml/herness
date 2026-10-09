@@ -42,6 +42,7 @@ from herness.core.errors import ConfigError, FatalError
 pytestmark = pytest.mark.unit
 
 USER = "0f" * 16  # an audit actor: 32 hex characters
+VENV = Path(sys.prefix)  # the running Herness venv; uv and the interpreter are faked
 
 
 def gh_answer(argv: list[str]) -> CmdResult:
@@ -52,7 +53,7 @@ def gh_answer(argv: list[str]) -> CmdResult:
 @pytest.fixture
 def env(tmp_path: Path, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch) -> FakeRunner:
     """``gh`` via ``fake_gh``; ``uv`` succeeds; the venv interpreter reports ``excel`` loaded."""
-    venv = tmp_path / "venv"
+    venv = VENV
     installed = tmp_path / "home" / "excel.duckdb_extension"
     installed.parent.mkdir()
     installed.write_bytes(EXT_BYTES)
@@ -349,7 +350,7 @@ def test_st10_53_install_audited_with_version_and_sha256(tmp_path: Path, env: Fa
         "detail": [f"sha256:{built.wheel_sha256}", f"ext:excel={built.ext_sha256}"],
     }
     release = tmp_path / ".release" / "1.2.3"
-    python = str(venv_python(tmp_path / "venv"))
+    python = str(venv_python(VENV))
     uv_calls = [c for c in env.calls if c.argv[0] == "uv"]
     assert [(c.argv, c.timeout_s, c.check) for c in uv_calls] == [
         (
@@ -416,7 +417,7 @@ def test_st10_60_altered_extension_refused_before_install(tmp_path: Path, env: F
     _nothing_installed(env, tmp_path)
     env.calls.clear()
     with structlog.testing.capture_logs() as logs, pytest.raises(FatalError, match="excel"):
-        install_duckdb_extensions(ReleaseBundle.load(built.root), cfg, venv=tmp_path / "venv")
+        install_duckdb_extensions(ReleaseBundle.load(built.root), cfg, venv=VENV)
     assert env.calls == []
     refused = [e for e in logs if e["event"] == "deploy.install.refused"]
     assert [e["reason"] for e in refused] == ["extension_hash"]
@@ -508,9 +509,76 @@ def test_st10_60_install_script_rejects_bad_extension_name(
 def test_st10_60_correct_extension_installs_with_sockets_blocked(
     tmp_path: Path, env: FakeRunner, blocked_sockets: list[object]
 ) -> None:
-    """ST10-60 with the correct file the full install completes while every socket connect
-    in this process is refused, and nothing tried one."""
+    """ST10-60 (partial) with the correct file the full install flow completes while every
+    socket connect in *this* (parent) process is refused, and the flow tried none. ``uv`` and
+    the venv interpreter are faked here, so this says nothing about sockets in the DuckDB
+    install subprocess: that check (real ``duckdb`` loading ``excel`` with the network off) is
+    the card's acceptance item, recorded as not run."""
     result = _install(tmp_path)
     assert result.ok
     assert result.data["duckdb_extensions"] == "excel=v1.5.5"
     assert blocked_sockets == []
+
+
+# --- Review round 1 -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("pin", ["e" * 64, None], ids=["wrong-pin", "no-pin"])
+def test_st10_60_extension_pin_checked_before_audit_and_venv_change(
+    tmp_path: Path, env: FakeRunner, pin: str | None
+) -> None:
+    """ST10-60 a wrong or missing ``excel`` pin is refused by install_bundle before the audit
+    line, ``.release`` and any ``uv pip`` step, so the venv is never changed first."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=pin)
+    bundle = ReleaseBundle.load(built.root)
+    summary = verify_bundle(bundle, cfg)
+    with pytest.raises((FatalError, ConfigError), match="excel"):
+        attest.install_bundle(bundle, summary, venv=VENV, actor=USER)
+    _nothing_installed(env, tmp_path)
+    assert list(cfg.paths.logs.glob("audit-*.jsonl")) == []
+
+
+def test_st10_53_other_venv_refused_before_any_change(tmp_path: Path, env: FakeRunner) -> None:
+    """ST10-53 a venv other than the running Herness venv is refused before the audit line,
+    ``.release`` and any ``uv pip`` step."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    bundle = ReleaseBundle.load(built.root)
+    summary = verify_bundle(bundle, cfg)
+    with pytest.raises(ConfigError, match=r"^venv is not the running Herness venv$"):
+        attest.install_bundle(bundle, summary, venv=tmp_path / "venv", actor=USER)
+    _nothing_installed(env, tmp_path)
+
+
+def test_st10_48_copy_skips_hidden_paths(tmp_path: Path, env: FakeRunner) -> None:
+    """ST10-48 hidden files and anything under a hidden directory are not copied into
+    ``.release/<version>/`` (``load`` ignores them, so the copy must too)."""
+    built = build_bundle(tmp_path / "bundle")
+    (built.root / ".cache").mkdir()
+    (built.root / ".cache" / "x.bin").write_bytes(b"x")
+    (built.root / "duckdb" / ".hidden").write_bytes(b"x")
+    (built.root / ".notes").write_bytes(b"x")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    assert cmd_deploy_install(built.root, cfg=cfg, actor=USER).ok
+    release = tmp_path / ".release" / "1.2.3"
+    copied = sorted(p.relative_to(release).as_posix() for p in release.rglob("*"))
+    assert not [name for name in copied if "/." in "/" + name]
+    assert "duckdb/excel.duckdb_extension" in copied
+
+
+@pytest.mark.parametrize(
+    "licenses",
+    [["MIT"], [{"license": "MIT"}], "MIT", [None]],
+    ids=["str-entry", "license-not-object", "not-a-list", "null-entry"],
+)
+def test_st10_24_malformed_licence_entry_refused(
+    tmp_path: Path, env: FakeRunner, licenses: object
+) -> None:
+    """ST10-24 a malformed ``licenses`` value is refused (logged ``licence``), not a crash."""
+    component = {"type": "library", "name": "six", "version": "1.17.0", "licenses": licenses}
+    with structlog.testing.capture_logs() as logs, pytest.raises(FatalError, match="six"):
+        _install(tmp_path, BundleSpec(components=[component]))
+    refused = [e["reason"] for e in logs if e["event"] == "deploy.install.refused"]
+    assert refused == ["licence"]
+    _nothing_installed(env, tmp_path)

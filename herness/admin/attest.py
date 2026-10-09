@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, NoReturn
 
-from herness.admin.duckdb_ext import install_duckdb_extensions, venv_python
+from herness.admin.duckdb_ext import check_extensions, install_duckdb_extensions, venv_python
 from herness.admin.wsl import run_cmd
 from herness.core import config as _config
 from herness.core.audit import audit
@@ -209,9 +209,15 @@ def _check_components(components: list[dict[str, Any]], pins: dict[str, str]) ->
     return len(libs)
 
 
+def _dict(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _licences(component: dict[str, Any]) -> list[str]:
     entries = component.get("licenses") or []
-    found = [e.get("expression") or (e.get("license") or {}).get("id") for e in entries]
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        return []  # malformed: no licence found, so the component is refused (unless excepted)
+    found = [e.get("expression") or _dict(e.get("license")).get("id") for e in entries]
     return [str(item) for item in found] if all(found) else []
 
 
@@ -256,7 +262,13 @@ def verify_bundle(bundle: ReleaseBundle, cfg: HernessConfig) -> dict[str, Any]:
 
 def _copy_bundle(bundle: ReleaseBundle, dest: Path) -> ReleaseBundle:
     """Copy every bundle file into ``dest`` (atomic per file) and load the copy."""
-    sources = [p for p in bundle.root.rglob("*") if p.is_file() and not p.name.startswith(".")]
+    sources = [
+        p
+        for p in bundle.root.rglob("*")
+        if p.is_file()
+        and not p.is_symlink()
+        and not any(part.startswith(".") for part in p.relative_to(bundle.root).parts)
+    ]  # what ``load`` sees: no hidden part, no link
     for source in sources:
         target = dest / source.relative_to(bundle.root)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -291,6 +303,7 @@ def install_bundle(
         msg = "stop the worker before installing"
         raise StoreBusy(msg)
     cfg = get_config()
+    check_extensions(bundle, cfg, venv=venv)  # U10-112 pins before the audit and any venv change
     releases = _repo_root() / ".release"
     copied = _copy_bundle(bundle, releases / bundle.version)
     if _sha256(copied.wheel) != digest:

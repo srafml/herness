@@ -10,7 +10,7 @@ runner runs it; integration tests only).
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import pytest
@@ -33,7 +33,6 @@ class Call:
     stdin: bytes | None
     encoding: str
     check: bool
-    env: Mapping[str, str] | None
 
 
 @dataclass
@@ -60,16 +59,14 @@ class FakeRunner:
         stdin: bytes | None = None,
         encoding: str = "utf-8",
         check: bool = False,
-        env: Mapping[str, str] | None = None,
     ) -> CmdResult:
         args = list(argv)
-        self.calls.append(Call(args, timeout_s, stdin, encoding, check, env))
+        self.calls.append(Call(args, timeout_s, stdin, encoding, check))
         matches = [(p, r) for p, r in self.table if tuple(args[: len(p)]) == p]
         if not matches:
             if self.passthrough:
-                extra = {} if env is None else {"env": env}  # U10-76 has no env parameter
                 return _REAL_RUN_CMD(
-                    args, timeout_s=timeout_s, stdin=stdin, encoding=encoding, check=check, **extra
+                    args, timeout_s=timeout_s, stdin=stdin, encoding=encoding, check=check
                 )
             pytest.fail(f"fake_runner: no entry for argv {args!r}")
         _, responder = max(matches, key=lambda item: len(item[0]))

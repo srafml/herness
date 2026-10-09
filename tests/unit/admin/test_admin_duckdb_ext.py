@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from herness.admin.wsl import CmdResult
 from herness.core.errors import ConfigError, FatalError
 
 pytestmark = pytest.mark.unit
+
+VENV = Path(sys.prefix)  # the running Herness venv: the only one U10-112 accepts
 
 
 def recorded(install_path: Path, *, loaded: bool = True) -> CmdResult:
@@ -52,7 +55,7 @@ def test_ut10_85_right_pin_installs(
     ``deploy.install.extension_installed`` logged."""
     bundle, installed, pin = setup
     cfg = init_release_config(tmp_path, ext_sha256=pin)
-    venv = tmp_path / "venv"
+    venv = VENV
     python = str(venv_python(venv))
     fake_runner.add([python], recorded(installed))
     with structlog.testing.capture_logs() as logs:
@@ -78,7 +81,7 @@ def test_ut10_85_wrong_pin_fails_before_subprocess(
     bundle, _, _ = setup
     cfg = init_release_config(tmp_path, ext_sha256="e" * 64)
     with structlog.testing.capture_logs() as logs, pytest.raises(FatalError) as caught:
-        install_duckdb_extensions(bundle, cfg, venv=tmp_path / "venv")
+        install_duckdb_extensions(bundle, cfg, venv=VENV)
     assert str(caught.value) == "duckdb extension hash mismatch: excel"
     assert fake_runner.calls == []
     refused = [e for e in logs if e["event"] == "deploy.install.refused"]
@@ -92,7 +95,7 @@ def test_ut10_85_no_pin_raises_config_error(
     bundle, _, _ = setup
     cfg = init_release_config(tmp_path, ext_sha256=None)
     with pytest.raises(ConfigError, match=r"^deploy\.release\.duckdb_extensions\.excel is not"):
-        install_duckdb_extensions(bundle, cfg, venv=tmp_path / "venv")
+        install_duckdb_extensions(bundle, cfg, venv=VENV)
     assert fake_runner.calls == []
 
 
@@ -102,7 +105,7 @@ def test_ut10_85_bundle_without_extension_file(tmp_path: Path, fake_runner: Fake
     built = build_bundle(tmp_path / "bundle", BundleSpec(ext_bytes=None))
     cfg = init_release_config(tmp_path, ext_sha256="e" * 64)
     with pytest.raises(ConfigError, match=r"duckdb/excel\.duckdb_extension$"):
-        install_duckdb_extensions(ReleaseBundle.load(built.root), cfg, venv=tmp_path / "v")
+        install_duckdb_extensions(ReleaseBundle.load(built.root), cfg, venv=VENV)
     assert fake_runner.calls == []
 
 
@@ -113,7 +116,7 @@ def test_ut10_85_differing_installed_file_fails(
     bundle, installed, pin = setup
     installed.write_bytes(EXT_BYTES + b"tampered")
     cfg = init_release_config(tmp_path, ext_sha256=pin)
-    venv = tmp_path / "venv"
+    venv = VENV
     fake_runner.add([str(venv_python(venv))], recorded(installed))
     with pytest.raises(FatalError, match="excel"):
         install_duckdb_extensions(bundle, cfg, venv=venv)
@@ -141,7 +144,7 @@ def test_ut10_85_failed_install_raises(
     """UT10-85 non-zero exit, unreadable output or an unloaded extension → FatalError."""
     bundle, _, pin = setup
     cfg = init_release_config(tmp_path, ext_sha256=pin)
-    venv = tmp_path / "venv"
+    venv = VENV
     fake_runner.add([str(venv_python(venv))], result)
     with pytest.raises(FatalError, match=r"^duckdb extension install failed: excel$"):
         install_duckdb_extensions(bundle, cfg, venv=venv)
@@ -156,11 +159,11 @@ def test_ut10_85_venv_python_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert venv_python(tmp_path) == tmp_path / "bin" / "python"
 
 
-def test_ut10_85_runner_allows_only_absolute_venv_interpreter(
+def test_ut10_85_runner_allows_only_the_running_venv_interpreter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """UT10-85 run_cmd accepts the venv interpreter by absolute path (U10-76 extension) and
-    still refuses a bare or misplaced ``python``."""
+    """UT10-85 run_cmd admits ``sys.executable`` (the running Herness venv, U10-76 extension;
+    case-normalised on Windows) and refuses any other interpreter, even a venv-shaped path."""
     started: list[list[str]] = []
 
     def fake_run(argv: list[str], **_kw: Any) -> subprocess.CompletedProcess[bytes]:
@@ -169,9 +172,30 @@ def test_ut10_85_runner_allows_only_absolute_venv_interpreter(
 
     monkeypatch.setattr(wsl.shutil, "which", lambda name: name)
     monkeypatch.setattr(wsl.subprocess, "run", fake_run)
-    for good in (r"C:\herness\.venv\Scripts\python.exe", "/opt/herness/.venv/bin/python"):
-        assert wsl.run_cmd([good, "-I", "-c", "pass"], timeout_s=5).returncode == 0
-    for bad in ("python", "python.exe", r"C:\Windows\python.exe", r"C:\v\Scripts\pythonw.exe"):
+    assert wsl.run_cmd([sys.executable, "-I", "-c", "pass"], timeout_s=5).returncode == 0
+    assert wsl.run_cmd([str(venv_python(VENV)), "-c", "pass"], timeout_s=5).returncode == 0
+    bad = [
+        r"C:\Users\x\Downloads\evil\Scripts\python.exe",
+        "/tmp/a/bin/python",  # noqa: S108 - a path string only
+        "/usr/bin/python3",
+        "python",
+        "python.exe",
+        r"C:\Windows\python.exe",
+        sys.executable + "w",
+        str(VENV / "Scripts" / ".." / "Scripts" / "python.exe"),
+    ]
+    for argv0 in bad:
         with pytest.raises(ConfigError, match="command not allowed"):
-            wsl.run_cmd([bad, "-c", "pass"], timeout_s=5)
+            wsl.run_cmd([argv0, "-c", "pass"], timeout_s=5)
     assert len(started) == 2
+
+
+def test_ut10_85_other_venv_refused_before_subprocess(
+    tmp_path: Path, setup: tuple[ReleaseBundle, Path, str], fake_runner: FakeRunner
+) -> None:
+    """UT10-85 a venv other than the running Herness venv → ConfigError, no subprocess."""
+    bundle, _, pin = setup
+    cfg = init_release_config(tmp_path, ext_sha256=pin)
+    with pytest.raises(ConfigError, match=r"^venv is not the running Herness venv$"):
+        install_duckdb_extensions(bundle, cfg, venv=tmp_path / "other-venv")
+    assert fake_runner.calls == []
