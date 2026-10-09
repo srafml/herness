@@ -130,7 +130,7 @@ def test_ft07_01_store_busy_in_backfill_resumes_idempotently(
     fault_env([])
     outcome, resumed = env.run(FakeCtx(state=ctx.state))
     assert outcome.status == "done"
-    assert [s["step"] for s in resumed.saves] == [6, 7]
+    assert [s["step"] for s in resumed.saves] == [6, 7, 8]
     _backfilled(env, result.memory_id)
     assert list(vector_metas(env)) == [result.memory_id]
 

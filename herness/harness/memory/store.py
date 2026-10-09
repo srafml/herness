@@ -13,7 +13,6 @@ from typing import Final, cast, get_args
 
 import numpy as np
 import pyarrow as pa
-from lancedb.query import LanceVectorQueryBuilder
 from lancedb.table import Table
 
 from herness import enrich
@@ -21,6 +20,7 @@ from herness.core import errors as herr
 from herness.core.errors import ConfigError, ModelUnavailable, ToolInputError
 from herness.core.ids import sha256_hex
 from herness.core.types import Kind, Layer, Status
+from herness.harness.memory import _vector_ann as ann
 from herness.harness.memory.types import MEMORY_ID_RE
 from herness.store.vectors import EMBEDDING_DIM, MEMORY_EMBEDDING_SCHEMA, VectorStore
 
@@ -222,17 +222,17 @@ class VectorIndex:
         if (query := _unit_vector(vector)) is None:
             msg = "invalid query vector"
             raise ToolInputError(msg)
-        layer_values = _filter_values(layers, _LAYERS)
-        status_values = _filter_values(statuses, _STATUSES)
-        if not layer_values or not status_values:
+        layer_in, status_in = _filter_values(layers, _LAYERS), _filter_values(statuses, _STATUSES)
+        if not layer_in or not status_in:
             return []
-        where = f"{_in('layer', layer_values)} AND {_in('status', status_values)}"
-        with _guard("search"):  # distance_type is the current name of the spec's metric()
-            builder = cast("LanceVectorQueryBuilder", self._tbl(latest=True).search(query))
-            builder = builder.distance_type("cosine").where(where, prefilter=True)
-            found = builder.select(["memory_id", "_distance"]).limit(limit).to_arrow()
-            pairs = zip(found["memory_id"].to_pylist(), found["_distance"].to_pylist(), strict=True)
-        return [(str(i), float(d)) for i, d in pairs]
+        where = f"{_in('layer', layer_in)} AND {_in('status', status_in)}"
+        with _guard("search"):  # cosine prefilter search, ANN-indexed above 10,000 rows (T07-27)
+            return ann.nearest(self._tbl(latest=True), query, where, limit)
+
+    def refresh_index(self) -> ann.IndexRefresh:
+        """Build, rebuild or optimize the ANN index (T07-27): maintenance step 8 only."""
+        with _guard("refresh_index"):
+            return ann.refresh(self._tbl(latest=True), self._write_lock)
 
     def vectors(self, memory_ids: Sequence[str]) -> dict[str, np.ndarray]:
         """Read-only float32 vectors of the ids present in the table (200 ids per scan)."""

@@ -75,6 +75,7 @@ def test_it07_10_maintenance_repairs_desynced_stores(
     assert counts["vectors"]["flagged"] == 2
     assert counts["backfill"] == {"embedded": 2, "stopped": False}
     assert counts["templates"] == {"skipped": "no_current_build"}
+    assert counts["index"] == {"action": "optimized", "rows": 3}  # step 8: no index below 10k
     metas = {m.memory_id: m for m in env.vectors.list_ids("", 1000)}
     assert sorted(metas) == sorted([missing, stale, rejected])
     for memory_id in (missing, stale, rejected):

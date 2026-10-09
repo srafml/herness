@@ -2,15 +2,23 @@
 
 Not a test module. `seed_corpus` bulk-inserts `n` active `memory_item` rows (one transaction
 per chunk, the FTS triggers fire) into the migrated ops store selected by the caller and the
-same number of random unit vectors into a LanceDB `memory_embedding` table at `root/vectors`;
+same number of unit vectors into a LanceDB `memory_embedding` table at `root/vectors`;
 seeding is never timed. Item text is drawn from a fixed synthetic vocabulary so keyword
 queries built from it find candidates. `open_store` builds the `MemoryStore` facade on those
 files with a caller-chosen embedding function.
+
+Vectors are clustered (T07-27): each is a unit vector drawn around one of `CLUSTERS` fixed
+topic centres (member-centre cosine about 0.71), as text embeddings cluster by topic. Uniform
+random unit vectors in 1,024 dimensions are all nearly orthogonal, so their "nearest
+neighbours" are noise that no ANN index can recall (T07-27 probe: IVF_PQ recall@10 0.38 with
+every partition probed). `seed_vectors` and `near_queries` serve the recall guard (UT07-92).
 """
 
 from __future__ import annotations
 
+import functools
 import json
+import math
 import sqlite3
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -31,13 +39,17 @@ from herness.store.vectors import EMBEDDING_DIM, MEMORY_EMBEDDING_SCHEMA, Vector
 
 __all__ = [
     "ALLOWED",
+    "CLUSTERS",
     "VOCAB",
+    "cluster_vectors",
     "make_redactor",
     "mem_id",
+    "near_queries",
     "open_store",
     "plant_matches",
     "query_text",
     "seed_corpus",
+    "seed_vectors",
 ]
 
 VOCAB: Final = tuple(f"term{i:04d}" for i in range(3000))
@@ -46,6 +58,8 @@ _KINDS: Final = (
     ("run_summary", "episodic"),
 )  # fmt: skip
 _CHUNK: Final = 20_000
+CLUSTERS: Final = 2000
+_SPREAD: Final = 1.0  # noise norm per unit centre
 ALLOWED: Final = (r"\b(19|20)\d{2}\b", r"(INC|CHG|PRB)\d+")
 _MODEL: Final = "bge-m3"
 _STAMP: Final = "2026-08-01T00:00:00.000000Z"
@@ -94,9 +108,27 @@ def _rows(start: int, count: int, rng: np.random.Generator) -> list[tuple[object
     return out
 
 
+@functools.cache
+def _centres() -> np.ndarray:
+    centres = np.random.default_rng(5).standard_normal((CLUSTERS, EMBEDDING_DIM), dtype=np.float32)
+    return centres / np.linalg.norm(centres, axis=1, keepdims=True)
+
+
+def cluster_vectors(rng: np.random.Generator, count: int) -> np.ndarray:
+    """`count` float32 unit vectors, each around a random topic centre."""
+    noise = rng.standard_normal((count, EMBEDDING_DIM), dtype=np.float32)
+    centres = _centres()[rng.integers(0, CLUSTERS, size=count)]
+    vecs = centres + noise * (_SPREAD / math.sqrt(EMBEDDING_DIM))
+    return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
+
+
+def near_queries(count: int, *, seed: int = 99) -> np.ndarray:
+    """`count` query vectors drawn like corpus vectors (a memory similar to stored ones)."""
+    return cluster_vectors(np.random.default_rng(seed), count)
+
+
 def _vectors(start: int, count: int, rng: np.random.Generator) -> pa.Table:
-    vecs = rng.standard_normal((count, EMBEDDING_DIM), dtype=np.float32)
-    vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
+    vecs = cluster_vectors(rng, count)
     kinds = [_KINDS[(start + i) % len(_KINDS)] for i in range(count)]
     return pa.table(
         {
@@ -125,6 +157,16 @@ def seed_corpus(root: Path, n: int, *, seed: int = 7) -> None:
 
         core.run_write(insert, op="bench_seed")
         table.add(_vectors(start, count, rng))
+
+
+def seed_vectors(root: Path, n: int, *, seed: int = 7) -> None:
+    """`n` corpus vectors only (no `memory_item` rows) in `root/vectors`."""
+    rng = np.random.default_rng(seed)
+    store = VectorStore(root / "vectors")
+    store.ensure_tables()
+    table = store.table("memory_embedding")
+    for start in range(0, n, _CHUNK):
+        table.add(_vectors(start, min(_CHUNK, n - start), rng))
 
 
 def plant_matches(root: Path, first: int, texts: Sequence[str], vectors: np.ndarray) -> None:

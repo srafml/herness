@@ -7,6 +7,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from structlog.testing import capture_logs
 from tests.support.ops_store import OpsStoreHandle
@@ -32,7 +33,9 @@ from herness.core.jobs.handlers import register_handler, resolve_handler, run_ha
 from herness.core.resilience import ProcessState
 from herness.core.types import JobOutcome
 from herness.harness.memory import _maintenance_vectors as mv
+from herness.harness.memory import _vector_ann as ann
 from herness.harness.memory import maintenance
+from herness.harness.memory.store import VectorRow
 from herness.store import warehouse
 from herness.store.errors import NotFoundError
 from herness.store.layout import DataLayout
@@ -41,7 +44,7 @@ from herness.store.ops import memory as ops
 
 pytestmark = pytest.mark.unit
 
-STEPS = ["expire", "promote", "templates", "fts", "vectors", "backfill", "review"]
+STEPS = ["expire", "promote", "templates", "fts", "vectors", "backfill", "review", "index"]
 
 
 @pytest.fixture
@@ -104,7 +107,7 @@ def test_ut07_84_repairs_backfills_and_requests_review(
     assert lists
     assert {a[1] for a, _ in lists} == {1_000}
     steps = [n for n in ctx.notes if n and n.startswith("memory_maintenance step")]
-    assert steps == [f"memory_maintenance step {i}" for i in range(1, 8)]
+    assert steps == [f"memory_maintenance step {i}" for i in range(1, 9)]
     metas = vector_metas(env)
     assert orphan not in metas
     assert metas[stale].status == "active"
@@ -125,7 +128,8 @@ def test_ut07_84_repairs_backfills_and_requests_review(
                                  "statuses": {"active": 4}}  # fmt: skip
     assert counts["backfill"] == {"embedded": 1, "stopped": False}
     assert counts["review"] == 1
-    assert [s["step"] for s in ctx.saves] == [1, 2, 3, 4, 5, 6, 7]
+    assert counts["index"] == {"action": "optimized", "rows": 4}
+    assert [s["step"] for s in ctx.saves] == [1, 2, 3, 4, 5, 6, 7, 8]
     done = [e for e in logs if e["event"] == "memory.maintenance.completed"]
     assert done == [{"event": "memory.maintenance.completed", "log_level": "info",
                      "component": "memory", "job_id": "job_maint", "counts": counts}]  # fmt: skip
@@ -326,6 +330,54 @@ def test_ut07_84_backfill_keeps_flag_when_content_changed(
     assert row_of(moving)["data"]["embedding_pending"] is True
 
 
+# --- step 8 ANN index (T07-27) ------------------------------------------------------------------
+
+
+def test_ut07_84_step8_builds_the_index_at_the_threshold(
+    env: MaintEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-84 step 8 calls `VectorIndex.refresh_index` after step 7: at the threshold the
+    run builds the ANN index; a rerun with no growth optimizes it."""
+    monkeypatch.setattr(ann, "MIN_ROWS", 300)
+    for n in range(300):  # SQLite rows with matching vectors: step 5 keeps them
+        seed_item(content=f"bulk {n}")
+    vecs = np.random.default_rng(4).standard_normal((300, 1024))
+    env.vectors.upsert([
+        VectorRow(r["memory_id"], "semantic", "glossary", "active",
+                  str(r["data"]["content_hash"]), MODEL, vec)
+        for r, vec in zip(memory_rows(), vecs, strict=True)
+    ])  # fmt: skip
+    refreshes = _spy(monkeypatch, "refresh_index", env.vectors)
+    outcome, ctx = env.run()
+    assert outcome.result["index"] == {"action": "built", "rows": 300}
+    assert len(refreshes) == 1
+    assert ctx.notes[-1] == "memory_maintenance step 8"
+    again, _ = env.run()
+    assert again.result["index"] == {"action": "optimized", "rows": 300}
+
+
+def test_ut07_84_step8_model_unavailable_stops_only_the_index_step(
+    env: MaintEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT07-84 a ModelUnavailable from LanceDB stops step 8 only: WARNING
+    `memory.maintenance.index_stopped`, the job is done and the gauges are written."""
+
+    def down() -> None:
+        msg = "memory vector store unavailable: refresh_index"
+        raise ModelUnavailable(msg)
+
+    monkeypatch.setattr(env.vectors, "refresh_index", down)
+    with capture_logs() as logs:
+        outcome, _ = env.run()
+    assert outcome.status == "done"
+    assert outcome.result["index"] == {"action": "stopped", "rows": None}
+    (event,) = [e for e in logs if e["event"] == "memory.maintenance.index_stopped"]
+    assert event["log_level"] == "warning"
+    assert event["reason"] == "memory vector store unavailable: refresh_index"
+    assert any(e["event"] == "memory.maintenance.completed" for e in logs)
+    assert _metrics()
+
+
 # --- step 7 yearly review ---------------------------------------------------------------------
 
 
@@ -454,7 +506,7 @@ def test_ut07_84_yield_saves_step_and_resume_skips_done_steps(
     final, _ = env.run(resumed)
     assert final.status == "done"
     assert len(expires) == 1
-    assert [s["step"] for s in resumed.saves] == [4, 5, 6, 7]
+    assert [s["step"] for s in resumed.saves] == [4, 5, 6, 7, 8]
     assert list(final.result) == STEPS
     assert len(yearly_reviews()) == 1
 
@@ -462,8 +514,8 @@ def test_ut07_84_yield_saves_step_and_resume_skips_done_steps(
 def test_ut07_84_rerun_of_finished_job_is_idempotent(
     env: MaintEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT07-84 re-running a finished job (saved step 7, or a fresh run) duplicates no review
-    item and deletes no vector twice; the saved-step-7 resume expires and deletes nothing."""
+    """UT07-84 re-running a finished job (saved step 8, or a fresh run) duplicates no review
+    item and deletes no vector twice; the saved-step-8 resume expires and deletes nothing."""
     seed_item(kind="business_rule", content="idem rule", created_at=NOW - timedelta(days=400))
     put_vector(env, "mem_" + new_ulid())
     first, ctx = env.run()
@@ -481,7 +533,7 @@ def test_ut07_84_rerun_of_finished_job_is_idempotent(
 
 
 def test_ut07_84_bad_saved_state_starts_over(env: MaintEnv) -> None:
-    """UT07-84 a saved state that is not a step number in 0..7 restarts at step 1."""
+    """UT07-84 a saved state that is not a step number in 0..8 restarts at step 1."""
     outcome, ctx = env.run(FakeCtx(state={"step": "x", "counts": []}))
     assert outcome.status == "done"
     assert ctx.saves[0]["step"] == 1

@@ -8,6 +8,12 @@ vector write after the SQLite commit) and the deterministic test embedder, and p
 human glossary item: the item commits, the vector write fails, and the process is killed by
 the fault plan before `embedding_pending` is recorded. If it survives it prints one line
 ``MEMORY_KILL_SURVIVED <memory_id>`` and exits 0.
+
+Bulk mode (IT07-12, T07-27): ``python -m tests.support.memory_kill --bulk <ops_db> <root> <n>``
+with a ``kill`` rule on ``enrich.after_batch_write`` (kind ``memory_bulk``) bulk-writes ``n``
+active items and their vectors (``memory_bench_corpus.seed_corpus``, vectors at
+``<root>/vectors``) and is killed before ``VectorIndex.refresh_index`` builds the ANN index; if
+it survives it refreshes the index and prints ``MEMORY_KILL_SURVIVED <action>``.
 """
 
 from __future__ import annotations
@@ -18,7 +24,10 @@ from pathlib import Path
 from typing import Final
 
 SURVIVED: Final = "MEMORY_KILL_SURVIVED "
-_USAGE: Final = "usage: python -m tests.support.memory_kill <ops_db> <vectors_dir> <content>\n"
+_USAGE: Final = (
+    "usage: python -m tests.support.memory_kill <ops_db> <vectors_dir> <content>\n"
+    "       python -m tests.support.memory_kill --bulk <ops_db> <root> <n>\n"
+)
 
 
 def run(argv: Sequence[str]) -> str:
@@ -55,13 +64,30 @@ def run(argv: Sequence[str]) -> str:
     return store.propose(proposal(content)).memory_id
 
 
+def run_bulk(argv: Sequence[str]) -> str:
+    """Bulk-write items and vectors, pass the kill point, then refresh the ANN index."""
+    db_path, root, count = Path(argv[0]), Path(argv[1]), int(argv[2])
+    from tests.support.memory_bench_corpus import seed_corpus  # noqa: PLC0415 - child only
+
+    from herness.core.resilience import fault_point  # noqa: PLC0415 - child process only
+    from herness.harness.memory.store import VectorIndex  # noqa: PLC0415 - child only
+    from herness.store.ops import core  # noqa: PLC0415 - child process only
+    from herness.store.vectors import VectorStore  # noqa: PLC0415 - child process only
+
+    core.reset_connections(path=db_path)
+    seed_corpus(root, count)
+    fault_point("enrich.after_batch_write", kind="memory_bulk")  # the kill: before the refresh
+    return VectorIndex(lambda: VectorStore(root / "vectors")).refresh_index()["action"]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point: exit 0 after printing the survival line, 2 on a usage error."""
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 3:
+    bulk = args[:1] == ["--bulk"]
+    if len(args) != 3 + bulk:
         sys.stderr.write(_USAGE)
         return 2
-    sys.stdout.write(SURVIVED + run(args) + "\n")
+    sys.stdout.write(SURVIVED + (run_bulk(args[1:]) if bulk else run(args)) + "\n")
     return 0
 
 

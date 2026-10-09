@@ -1,8 +1,9 @@
 """The `memory_maintenance` job handler (impl 07 U07-96, T07-22; design 07 §5.12).
 
-Seven idempotent steps, each followed by a saved step, a heartbeat and a yield check; a resumed
+Eight idempotent steps, each followed by a saved step, a heartbeat and a yield check; a resumed
 job starts at `ctx.load_state()["step"]`. Steps 5 (vector consistency, TH07-13: SQLite is the
-source of truth) and 6 (backfill) live in the private sibling `_maintenance_vectors`.
+source of truth) and 6 (backfill) live in the private sibling `_maintenance_vectors`; step 8
+(T07-27) refreshes the LanceDB ANN index, off every request path and the SQLite write lock.
 Collaborators come from the one module seam `configure_maintenance` (wired by the T07-23
 composition root). Logs carry ids and counts only, never memory text.
 """
@@ -20,7 +21,7 @@ import duckdb
 from pydantic import JsonValue
 
 from herness.core import time as clock
-from herness.core.errors import ConfigError
+from herness.core.errors import ConfigError, ModelUnavailable
 from herness.core.jobs import JobContext
 from herness.core.logging import get_logger
 from herness.core.types import JobOutcome, MetricSample, Status
@@ -56,7 +57,7 @@ class MaintenanceDeps:
 
     lifecycle: MemoryLifecycle  # step 1
     procedural: ProceduralDeps  # steps 2-3
-    vectors: VectorIndex  # steps 5-6
+    vectors: VectorIndex  # steps 5-6 and 8
     embedder: Embedder  # step 5 model check, step 6 embeddings
     open_current: Callable[[], duckdb.DuckDBPyConnection] = warehouse.open_readonly  # step 3
 
@@ -158,9 +159,19 @@ def _review(r: _Run) -> JsonValue:
                for row in cast("list[Row]", rows))  # fmt: skip
 
 
+def _index(r: _Run) -> JsonValue:
+    """Step 8 (T07-27): build, rebuild or optimize the ANN index; ModelUnavailable stops it."""
+    try:
+        done = r.deps.vectors.refresh_index()
+    except ModelUnavailable as exc:  # vector path down: retried by tomorrow's run
+        _log.warning("memory.maintenance.index_stopped", reason=str(exc))
+        return {"action": "stopped", "rows": None}
+    return {"action": done["action"], "rows": done["rows"]}
+
+
 _STEPS: Final[tuple[tuple[str, Callable[[_Run], JsonValue]], ...]] = (
     ("expire", _expire), ("promote", _promote), ("templates", _templates), ("fts", _fts),
-    ("vectors", _vectors), ("backfill", _backfill), ("review", _review),
+    ("vectors", _vectors), ("backfill", _backfill), ("review", _review), ("index", _index),
 )  # fmt: skip
 
 
@@ -184,7 +195,7 @@ def _finish(r: _Run, counts: Counts) -> JobOutcome:
 
 
 def memory_maintenance_handler(ctx: JobContext) -> JobOutcome:
-    """Daily memory upkeep (U07-96): steps 1-7 with saved progress, then gauges and a log."""
+    """Daily memory upkeep (U07-96): steps 1-8 with saved progress, then gauges and a log."""
     r = _Run(maintenance_deps(), ctx, clock.now())
     state = ctx.load_state()
     start, saved = state.get("step"), state.get("counts")
