@@ -44,6 +44,8 @@ __all__ = [
     "compute_coverage",
     "empty_verification",
     "fill_draft",
+    "removable",
+    "section_default_title",
 ]
 
 DEFAULT_TITLES: Final[Mapping[str, str]] = MappingProxyType(
@@ -53,6 +55,7 @@ FINDINGS_ONLY_MAX: Final = 50
 _EXHAUSTIBLE: Final = frozenset({"planner", "judge", "analyst", "skeptic"})
 _PARAGRAPH: Final = re.compile(r"sections\[(\d+)\]\.paragraphs\[(\d+)\]")
 _INDEXED: Final = re.compile(r"(recommendations|caveats)\[(\d+)\]")
+_SECTION_TITLE: Final = re.compile(r"sections\[(\d+)\]\.title")
 _EMPTY_COVERAGE: Final = Coverage(
     planned_tasks=0, done_tasks=0, dead_tasks=0, must_cover_total=0, must_cover_done=0,
     verified_findings=0, rejected_findings=0, publishable=False,
@@ -169,6 +172,7 @@ class _Drops:
     paragraphs: set[tuple[int, int]] = field(default_factory=set)
     recommendations: set[int] = field(default_factory=set)
     caveats: set[int] = field(default_factory=set)
+    section_titles: set[int] = field(default_factory=set)
     commentary: bool = False
     title: bool = False
 
@@ -178,6 +182,8 @@ class _Drops:
             self.paragraphs.add((int(m.group(1)), int(m.group(2))))
         elif (m := _INDEXED.fullmatch(where)) is not None:
             getattr(self, m.group(1)).add(int(m.group(2)))
+        elif (m := _SECTION_TITLE.fullmatch(where)) is not None:
+            self.section_titles.add(int(m.group(1)))
         elif where == "prior_outcomes_commentary":
             self.commentary = True
         elif where == "title":
@@ -187,12 +193,24 @@ class _Drops:
         return True
 
 
+def removable(where: str) -> bool:
+    """Whether `apply_gate2_removals` can remove or replace the item at `where`."""
+    return _Drops().add(where)
+
+
+def section_default_title(section_id: str) -> str:
+    """The humanized section id (`executive_summary` -> `Executive summary`); `Section` when
+    that holds a digit. Replaces a failing section title (T06-19 review ruling, TH06-08)."""
+    title = section_id.replace("_", " ").capitalize()
+    return "Section" if any(c.isdigit() for c in title) else title
+
+
 def apply_gate2_removals(draft: ReportDraft, failures: Sequence[Failure]) -> ReportDraft:
     """Drop every item that still fails (U06-119, design 06 §5.8 Gate 2); pure.
 
     Indexes refer to `draft`; each failure on a removable item is appended once to `removed`
-    and recommendation ranks are renumbered 1..n. A failure on another item (a section title)
-    removes nothing and is not listed: the final `verify_draft` still fails on it.
+    and recommendation ranks are renumbered 1..n. A failing section title is replaced by
+    `section_default_title`; a failure on any other item removes nothing and is not listed.
     """
     drops, removed = _Drops(), list(draft.removed)
     for f in failures:
@@ -200,9 +218,9 @@ def apply_gate2_removals(draft: ReportDraft, failures: Sequence[Failure]) -> Rep
         if drops.add(f["where"]) and entry not in removed:
             removed.append(entry)  # type: ignore[arg-type]  # the `_Removed` TypedDict shape
     sections = [
-        Section(id=s.id, title=s.title, paragraphs=[
+        Section(id=s.id, paragraphs=[
             p for j, p in enumerate(s.paragraphs) if (i, j) not in drops.paragraphs
-        ])
+        ], title=section_default_title(s.id) if i in drops.section_titles else s.title)
         for i, s in enumerate(draft.sections)
     ]  # fmt: skip
     kept = [r for i, r in enumerate(draft.recommendations) if i not in drops.recommendations]

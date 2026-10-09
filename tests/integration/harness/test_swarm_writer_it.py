@@ -26,16 +26,24 @@ from tests.unit.harness import _verifier_standin as sd
 from tests.unit.harness.swarm import _swarm_drafts as d
 
 from herness.core import time as clock
-from herness.core.errors import ModelUnavailable
+from herness.core.errors import FatalError, ModelUnavailable
 from herness.core.ids import IdKind, new_id
 from herness.core.types import AgentResult, Evidence, Finding, ReportDraft, Usage
 from herness.harness import verifier as verifier_mod
 from herness.harness.blackboard import Blackboard
 from herness.harness.llm.settings import SqlSettings, VerifierSettings
 from herness.harness.swarm import challenge, writer
+from herness.harness.swarm._writer_input import writer_spec
 from herness.harness.warehouse import WarehousePool
 from herness.store import ops
-from herness.store.ops import get_findings, insert_finding, record_evidence, run_write, select_tasks
+from herness.store.ops import (
+    get_findings,
+    insert_finding,
+    insert_tasks,
+    record_evidence,
+    run_write,
+    select_tasks,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -313,3 +321,72 @@ def test_st06_08_writer_numerals_removed_before_draft(
         ("caveats[0]", "gate2"),
     }
     assert draft.verification.passed is True
+
+
+def test_st06_08_section_title_numeral_removed_before_draft(
+    wr: W, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST06-08 (review round 1) the Writer puts an uncited numeral in a section title in every
+    pass: the title is replaced by the section default and listed in `removed`."""
+    good = wr.finding()
+    bad = out(wr.para("Payments had [[n1]] incidents", good))
+    bad["sections"][0]["title"] = "Cut costs 40% now"  # type: ignore[index, call-overload]
+    script(monkeypatch, [bad] * (wr.s.env.knobs.writer_fix_passes + 1))
+    assert wr.step() is False
+    assert "40%" not in wr.path.read_text(encoding="utf-8")
+    draft = wr.draft()
+    assert draft.sections[0].title == "Executive summary"
+    assert draft.removed == [{"where": "sections[0].title", "reason": "gate2"}]
+    assert draft.verification.passed is True
+
+
+# --- review round 1: task-state invariant (U06-115 steps 1 and 11)
+
+
+def _writer_task(w: W, status: str) -> str:
+    spec = writer_spec(w.s.env)
+    run_write(lambda conn: insert_tasks(conn, [spec], now=clock.now()), op="test_writer")
+    run_write(
+        lambda conn: conn.execute("UPDATE task SET status = ? WHERE task_id = ?",
+                                  (status, spec.task_id)),
+        op="test_writer_status",
+    )  # fmt: skip
+    return spec.task_id
+
+
+@pytest.mark.parametrize("status", ["running", "done"])
+def test_it06_30_unrecovered_state_fails_closed(
+    wr: W, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    """IT06-30 a Writer task left `running` (crash not recovered) or `done` without
+    `draft.json` raises FatalError; no model call and no draft or pass file is written."""
+    wr.finding()
+    _writer_task(wr, status)
+    calls = script(monkeypatch, [])
+    with pytest.raises(FatalError, match="invariant"):
+        wr.step()
+    assert calls == []
+    assert not wr.reports.exists() or list(wr.reports.rglob("*.json")) == []
+    assert _writer_row(wr).status == status
+
+
+def test_it06_30_dead_at_entry_writes_findings_only(wr: W, monkeypatch: pytest.MonkeyPatch) -> None:
+    """IT06-30 a Writer task already `dead` at entry gets the findings-only draft, no call."""
+    good = wr.finding()
+    _writer_task(wr, "dead")
+    calls = script(monkeypatch, [])
+    assert wr.step() is False
+    assert calls == []
+    draft = wr.draft()
+    assert draft.mode == "findings_only"
+    assert [p.finding_ids for p in draft.sections[0].paragraphs] == [[good]]
+
+
+def test_it06_30_lost_claim_fails_closed(wr: W, monkeypatch: pytest.MonkeyPatch) -> None:
+    """IT06-30 a pending Writer task whose claim is lost raises FatalError, writes nothing."""
+    wr.finding()
+    monkeypatch.setattr(writer, "claim_task", lambda task_id: False)
+    script(monkeypatch, [])
+    with pytest.raises(FatalError, match="claim lost"):
+        wr.step()
+    assert not wr.path.exists()

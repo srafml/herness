@@ -23,11 +23,9 @@ from typing import TYPE_CHECKING, Final, cast
 from pydantic import JsonValue, ValidationError
 
 from herness.core.errors import ConfigError, FatalError, HernessError
-from herness.core.ids import IdKind, new_id
 from herness.core.jobs import claim_task, complete_task, release_task
 from herness.core.logging import get_logger
-from herness.core.types import EntityScope, ReportDraft, TaskSpec
-from herness.harness.findings import compute_dedup_key
+from herness.core.types import ReportDraft
 from herness.harness.loop import run_agent
 from herness.harness.swarm import hybrid
 from herness.harness.swarm import scheduler as sch
@@ -35,10 +33,14 @@ from herness.harness.swarm._challenge_gate1 import insert, plain_result
 from herness.harness.swarm._draft_checks import Failure
 from herness.harness.swarm._writer_input import (
     WriterInput,
+    entry_state,
     fix_input,
     gather_input,
+    last_pass,
+    log_unremovable,
     task_input_for,
     writer_output,
+    writer_spec,
 )
 from herness.harness.swarm.adversarial import _sql_path
 from herness.harness.swarm.draft_rules import (
@@ -54,8 +56,6 @@ from herness.harness.swarm.draft_rules import (
 from herness.harness.swarm.routing import (
     build_hooks,
     build_tool_context,
-    default_tools,
-    role_budget,
     route_task,
 )
 from herness.harness.swarm.tools import build_task_tools
@@ -71,7 +71,6 @@ __all__ = ["draft_path", "run_writer_step", "write_draft_atomic"]
 
 _log = get_logger("harness.swarm")
 _RUN_ID: Final = re.compile(r"run_[0-9A-HJKMNP-TV-Z]{26}")
-_PASS: Final = re.compile(r"draft\.pass([0-9]+)\.json")
 
 
 # --- U06-121 path and atomic write --------------------------------------------------------------
@@ -103,16 +102,6 @@ def write_draft_atomic(path: Path, draft: ReportDraft) -> None:
         with contextlib.suppress(OSError):
             Path(tmp).unlink()
         raise
-
-
-def _last_pass(path: Path) -> tuple[int, ReportDraft] | None:
-    """The stored pass draft with the highest `k`, for resume (U06-115 step 7)."""
-    names = [p.name for p in path.parent.iterdir()] if path.parent.is_dir() else []
-    found = [int(m.group(1)) for n in names if (m := _PASS.fullmatch(n)) is not None]
-    if not found:
-        return None
-    k = max(found)
-    return k, ReportDraft.model_validate_json(path.with_name(f"draft.pass{k}.json").read_bytes())
 
 
 # --- one Writer task ----------------------------------------------------------------------------
@@ -183,22 +172,6 @@ def _build_id(env: RunEnv) -> str:
     return env.run.build_id
 
 
-def _writer_spec(env: RunEnv) -> TaskSpec:
-    """The Writer task (U06-115 step 1); its dedup key makes it unique per run."""
-    run = env.run
-    scope = EntityScope(entity_type="run", entity_ids=[run.run_id])
-    objective = f"Write the {run.kind} report."
-    tools = default_tools(
-        "writer", "general", cast("Depth", run.depth), child_depth=0, knobs=env.knobs
-    )
-    return TaskSpec(
-        task_id=new_id(IdKind.TASK), run_id=run.run_id, role="writer", objective=objective,
-        scope=scope, tools=tools, model_role="writer",
-        budget=role_budget("writer", env.knobs, writer_tokens=env.writer.tokens_cap),
-        dedup_key=compute_dedup_key("writer", "general", scope, objective),
-    )  # fmt: skip
-
-
 # --- gate 2 -------------------------------------------------------------------------------------
 
 
@@ -231,11 +204,16 @@ async def _write(env: RunEnv, w: _Writer, path: Path) -> bool:
     """Passes, removals, coverage and `draft.json` of one claimed Writer task (steps 5-10)."""
     task_input, pseudo = await task_input_for(env, w.row.spec, w.route, w.wi)
     w.pseudo = pseudo
-    stored = await asyncio.to_thread(_last_pass, path)
+    stored = await asyncio.to_thread(last_pass, path)
     k, draft = stored if stored is not None else (0, await w.draft(task_input, first=True))
     failures, v = await asyncio.to_thread(_evaluate, env, w.wi, draft)
+    on_disk = stored is not None  # a loaded pass file is not re-written (review M2)
     while failures and k < env.knobs.writer_fix_passes:
-        await asyncio.to_thread(write_draft_atomic, path.with_name(f"draft.pass{k}.json"), draft)
+        if not on_disk:
+            await asyncio.to_thread(
+                write_draft_atomic, path.with_name(f"draft.pass{k}.json"), draft
+            )
+        on_disk = False
         report = [i.model_dump(mode="json") for i in v.items if not i.passed]
         fix: dict[str, object] = {
             "previous": writer_output(draft),
@@ -245,6 +223,7 @@ async def _write(env: RunEnv, w: _Writer, path: Path) -> bool:
         draft = await w.draft(task_input | fix_input(w.pseudo, w.row.task_id, fix), first=False)
         k += 1
         failures, v = await asyncio.to_thread(_evaluate, env, w.wi, draft)
+    log_unremovable(env.run.run_id, failures)
     draft = apply_gate2_removals(draft, failures)
     draft = draft.model_copy(update={"ranked_entities": env.pipeline.ranked_entities(draft)})
     v = await asyncio.to_thread(env.verifier.verify_draft, draft, _build_id(env))
@@ -300,31 +279,33 @@ async def _findings_only(env: RunEnv, wi: WriterInput, path: Path) -> bool:
 async def run_writer_step(env: RunEnv) -> bool:
     """Writer, rules, gate 2 with fix passes, coverage and `draft.json` (U06-115); publishable.
 
-    A `done` Writer task with its `draft.json` returns the stored verdict. A retryable failure
-    claims the task again (resuming from the newest pass file); a dead task, or a task that
-    cannot be claimed, gets the findings-only draft. Cancellation releases the task (R-36).
+    `done` with `draft.json` returns the stored verdict; `pending` is claimed and run, and
+    claimed again after a retryable failure (resuming from the newest pass file); `dead` at
+    entry or from `fail_task` gets the findings-only draft. Any other state, or a lost claim,
+    raises `FatalError` and writes nothing (`entry_state`). Cancellation releases (R-36).
     """
     path = draft_path(env.run.run_id, Path(env.hcfg.paths.data) / "reports")
-    spec = _writer_spec(env)
+    spec = writer_spec(env)
     await insert(env, [spec], "swarm_writer_task")
     row = await asyncio.to_thread(get_task_by_dedup, env.run.run_id, spec.dedup_key)
     if row is None:  # pragma: no cover - inserted just above
         msg = f"writer task missing: run_id={env.run.run_id}"
         raise FatalError(msg)
-    if row.status == "done" and path.is_file():
+    state = entry_state(row.status, path.is_file())
+    if state == "stored":
         return ReportDraft.model_validate_json(path.read_bytes()).coverage.publishable
     wi = await gather_input(env)
-    while row.status == "pending" and await env.bb.run_on_writer(
-        functools.partial(claim_task, row.task_id)
-    ):
+    while state == "run":
+        if not await env.bb.run_on_writer(functools.partial(claim_task, row.task_id)):
+            msg = f"writer task claim lost: task_id={row.task_id}"
+            raise FatalError(msg)
         try:
             return await _attempt(env, row, wi, path)
         except asyncio.CancelledError:
             await env.bb.run_on_writer(functools.partial(release_task, row.task_id))
             raise
         except HernessError as err:
-            if await sch._fail(env, row, err) == "dead":
-                break
-        fresh = await asyncio.to_thread(get_task, row.task_id)
-        row = fresh if fresh is not None else row
+            dead = await sch._fail(env, row, err) == "dead"
+            state = "findings_only" if dead else "run"
+        row = await asyncio.to_thread(get_task, row.task_id) or row
     return await _findings_only(env, wi, path)

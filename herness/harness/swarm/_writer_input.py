@@ -14,27 +14,38 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from herness.core.errors import ConfigError, FatalError, HernessError
+from herness.core.ids import IdKind, new_id
 from herness.core.jobs import save_checkpoint
-from herness.core.types import SwarmTaskState
+from herness.core.logging import get_logger
+from herness.core.types import EntityScope, ReportDraft, SwarmTaskState, TaskSpec
+from herness.harness.findings import compute_dedup_key
 from herness.harness.swarm import hybrid
 from herness.harness.swarm._dedup_read import TASK_CHUNK, _read_chunk
 from herness.harness.swarm.dedup import DedupMode, _vectors, dedup_components
-from herness.harness.swarm.draft_rules import DraftExtras, analysis_exhausted
-from herness.harness.swarm.routing import build_task_input
+from herness.harness.swarm.draft_rules import DraftExtras, analysis_exhausted, removable
+from herness.harness.swarm.routing import build_task_input, default_tools, role_budget
 from herness.store.ops import select_tasks
 
 if TYPE_CHECKING:
-    from herness.core.types import Finding, FindingStatus, ReportDraft, TaskSpec
+    from herness.core.types import Depth, Finding, FindingStatus
     from herness.harness.pipelines.base import PlanContext
     from herness.harness.swarm.routing import Route, RunEnv
     from herness.store.ops.runs import TaskRow
 
-__all__ = ["WriterInput", "fix_input", "gather_input", "task_input_for", "writer_output"]
+__all__ = [
+    "WriterInput", "entry_state", "fix_input", "gather_input", "last_pass", "log_unremovable",
+    "task_input_for", "writer_output", "writer_spec",
+]  # fmt: skip
+
+_log = get_logger("harness.swarm")
+_PASS: Final = re.compile(r"draft\.pass([0-9]+)\.json")
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,3 +197,59 @@ def fix_input(
     except hybrid._Unredactable:
         msg = f"fix pass input redaction failed: task_id={task_id}"
         raise FatalError(msg) from None
+
+
+# --- task state and gate 2 diagnostics (T06-19 review round 1) -------------------------------
+
+
+def entry_state(status: str, has_draft: bool) -> Literal["stored", "run", "findings_only"]:
+    """What `run_writer_step` does with the Writer task it finds (U06-115 steps 1 and 11).
+
+    `done` with `draft.json` → the stored verdict; `pending` → claim and run; `dead` → the
+    findings-only draft. Any other state (`running` left by an unrecovered crash, `done`
+    without `draft.json`, an unknown status) breaks the run invariant → `FatalError`.
+    """
+    if status == "done" and has_draft:
+        return "stored"
+    if status in {"pending", "dead"}:
+        return "run" if status == "pending" else "findings_only"
+    msg = f"writer task state invariant broken: status={status} draft_present={has_draft}"
+    raise FatalError(msg)
+
+
+def log_unremovable(run_id: str, failures: Sequence[dict[str, str]]) -> None:
+    """WARNING `harness.gate2.unremovable` per failure gate 2 cannot remove (`where`, `reason`)."""
+    for f in failures:
+        if not removable(f["where"]):
+            _log.warning(
+                "harness.gate2.unremovable", run_id=run_id, where=f["where"], reason=f["reason"]
+            )
+
+
+# --- writer task spec and pass files (moved from writer, T06-19 review round 1) ----------------
+
+
+def writer_spec(env: RunEnv) -> TaskSpec:
+    """The Writer task (U06-115 step 1); its dedup key makes it unique per run."""
+    run = env.run
+    scope = EntityScope(entity_type="run", entity_ids=[run.run_id])
+    objective = f"Write the {run.kind} report."
+    tools = default_tools(
+        "writer", "general", cast("Depth", run.depth), child_depth=0, knobs=env.knobs
+    )
+    return TaskSpec(
+        task_id=new_id(IdKind.TASK), run_id=run.run_id, role="writer", objective=objective,
+        scope=scope, tools=tools, model_role="writer",
+        budget=role_budget("writer", env.knobs, writer_tokens=env.writer.tokens_cap),
+        dedup_key=compute_dedup_key("writer", "general", scope, objective),
+    )  # fmt: skip
+
+
+def last_pass(path: Path) -> tuple[int, ReportDraft] | None:
+    """The stored pass draft with the highest `k`, for resume (U06-115 step 7)."""
+    names = [p.name for p in path.parent.iterdir()] if path.parent.is_dir() else []
+    found = [int(m.group(1)) for n in names if (m := _PASS.fullmatch(n)) is not None]
+    if not found:
+        return None
+    k = max(found)
+    return k, ReportDraft.model_validate_json(path.with_name(f"draft.pass{k}.json").read_bytes())

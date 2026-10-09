@@ -217,7 +217,7 @@ def test_ut06_80_removals_ranks_and_default_title() -> None:
         {"where": "caveats[1]", "reason": "uncited_numeral"},
         {"where": "prior_outcomes_commentary", "reason": "gate2"},
         {"where": "title", "reason": "uncited_numeral"},
-        {"where": "sections[0].title", "reason": "gate2"},
+        {"where": "sections[9].paragraphs[x]", "reason": "gate2"},
     ]
     after = dr.apply_gate2_removals(draft, fails)
     assert [p.text for p in after.sections[0].paragraphs] == ["B [[n1]]"]
@@ -226,10 +226,29 @@ def test_ut06_80_removals_ranks_and_default_title() -> None:
     assert after.prior_outcomes_commentary is None
     assert after.title == "Funding review"
     assert len(after.removed) == 7
-    assert {"where": "sections[0].title", "reason": "gate2"} not in after.removed
+    assert {"where": "sections[9].paragraphs[x]", "reason": "gate2"} not in after.removed
     org = draft.model_copy(update={"kind": "org_review"})
     assert dr.apply_gate2_removals(org, fails[-2:]).title == "Org review"
     assert dr.apply_gate2_removals(draft, []) == draft
+
+
+def test_ut06_80_failing_section_title_replaced_and_listed() -> None:
+    """UT06-80 (review round 1, TH06-08) a failing section title is replaced by the humanized
+    section id and listed once in `removed`; other sections keep their titles."""
+    sections = [
+        {"id": "executive_summary", "title": "Cut costs 40%", "paragraphs": [d.para()]},
+        {"id": "risks_and_caveats", "title": "Risks", "paragraphs": []},
+    ]
+    draft = _fill(d.writer_out(sections=sections))
+    fails = [{"where": "sections[0].title", "reason": "gate2"}] * 2
+    after = dr.apply_gate2_removals(draft, fails)
+    assert [s.title for s in after.sections] == ["Executive summary", "Risks"]
+    assert after.sections[0].paragraphs == draft.sections[0].paragraphs
+    assert after.removed == [{"where": "sections[0].title", "reason": "gate2"}]
+    assert dr.removable("sections[1].title")
+    assert not dr.removable("sections[0].heading")
+    assert dr.section_default_title("org_scorecards") == "Org scorecards"
+    assert dr.section_default_title("q3_2026") == "Section"
 
 
 # --- UT06-81

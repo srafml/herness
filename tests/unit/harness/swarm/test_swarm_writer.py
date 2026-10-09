@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import structlog
 from tests.support.report_drafts import RUN_ID, make_draft
 from tests.unit.harness import _blackboard_env as env_mod
 from tests.unit.harness.swarm import _swarm_drafts as d
@@ -99,13 +100,13 @@ def test_ut06_82_failed_write_removes_temp_and_keeps_old(
 def test_ut06_82_last_pass_highest_k(tmp_path: Path) -> None:
     """UT06-82 resume loads the pass file with the highest `k`; none without a directory."""
     path = writer.draft_path(RUN_ID, tmp_path)
-    assert writer._last_pass(path) is None
+    assert wi_mod.last_pass(path) is None
     path.parent.mkdir()
     (path.parent / "draft.passX.json").write_text("{}", encoding="utf-8")
-    assert writer._last_pass(path) is None
+    assert wi_mod.last_pass(path) is None
     for k in (0, 2, 10):
         writer.write_draft_atomic(path.with_name(f"draft.pass{k}.json"), make_draft(title=f"P{k}"))
-    found = writer._last_pass(path)
+    found = wi_mod.last_pass(path)
     assert found is not None
     assert (found[0], found[1].title) == (10, "P10")
 
@@ -203,3 +204,25 @@ def test_ut06_82_off_network_pack_failure_is_fatal(
     with pytest.raises(FatalError, match="evidence pack unavailable"):
         asyncio.run(wi_mod.task_input_for(env, _spec(), route, _wi([finding(1)])))  # type: ignore[arg-type]
     assert saved == []
+
+
+def test_ut06_82_entry_state_invariant() -> None:
+    """Review round 1 (U06-115 steps 1, 11): done+draft → stored, pending → run, dead →
+    findings-only; running, done without a draft or an unknown status → FatalError."""
+    assert wi_mod.entry_state("done", True) == "stored"
+    assert wi_mod.entry_state("pending", False) == "run"
+    assert wi_mod.entry_state("pending", True) == "run"
+    assert wi_mod.entry_state("dead", False) == "findings_only"
+    for status, has in (("running", False), ("running", True), ("done", False), ("failed", True)):
+        with pytest.raises(FatalError, match="invariant"):
+            wi_mod.entry_state(status, has)
+
+
+def test_ut06_82_log_unremovable_warns_where_and_reason() -> None:
+    """Review round 1 (M4): a failure gate 2 cannot remove logs `harness.gate2.unremovable`
+    with `where` and `reason` only; removable failures log nothing."""
+    fails = [{"where": "sections[0].title", "reason": "gate2"}, {"where": "odd", "reason": "x"}]
+    with structlog.testing.capture_logs() as logs:
+        wi_mod.log_unremovable("run_x", fails)
+    events = [e for e in logs if e["event"] == "harness.gate2.unremovable"]
+    assert [(e["where"], e["reason"], e["log_level"]) for e in events] == [("odd", "x", "warning")]
