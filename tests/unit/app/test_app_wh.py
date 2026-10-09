@@ -557,6 +557,18 @@ def test_ut09_59_allowed_shapes(sql: str) -> None:
             "PIVOT/UNPIVOT",
         ),
         ("PIVOT core.incident ON number USING first(description)", "PIVOT/UNPIVOT"),
+        ("SELECT i.b FROM core.incident AS i(a, b)", "alias column list on i"),
+        ("SELECT b FROM core.incident i(a, b)", "alias column list on i"),
+        ("SELECT q.x FROM (SELECT i.number FROM core.incident i) q(x)", "alias column list on q"),
+        (
+            "WITH c(x) AS (SELECT i.number FROM core.incident i) SELECT c.x FROM c",
+            "alias column list on c",
+        ),
+        ("SELECT * LIKE 'desc%' FROM core.incident", "core.incident.*"),
+        ("SELECT * SIMILAR TO 'desc.*' FROM core.incident", "core.incident.*"),
+        ("SELECT * ILIKE 'DESC%' FROM core.incident", "core.incident.*"),
+        ("SELECT i.* LIKE 'desc%' FROM core.incident i", "core.incident.*"),
+        ("SELECT i.* SIMILAR TO 'desc.*' FROM core.incident i", "core.incident.*"),
     ],
 )
 def test_ut09_59_outer_scopes_and_fail_closed_shapes(sql: str, expected: str) -> None:

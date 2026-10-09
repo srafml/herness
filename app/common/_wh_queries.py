@@ -135,6 +135,8 @@ def _structural(tree: exp.Expr) -> set[str]:
     """Fail-closed shapes: positional refs, PIVOT, non-table sources, SQL-string/file functions."""
     found = {f"positional column reference {p.sql()}" for p in tree.find_all(exp.PositionalColumn)}
     found |= {"PIVOT/UNPIVOT"} if tree.find(exp.Pivot) else set()
+    # a column list on any alias (`i(a, b)`, `q(x)`, `c(x) AS`) renames columns past the guard
+    found |= {f"alias column list on {a.name}" for a in tree.find_all(exp.TableAlias) if a.columns}
     ctes = {cte.alias.casefold() for cte in tree.find_all(exp.CTE)}
     for src in (node.this for node in tree.find_all(exp.From, exp.Join, exp.Lateral)):
         named = isinstance(src, exp.Table) and isinstance(src.this, exp.Identifier)
@@ -153,8 +155,9 @@ def _scope_violations(scope: Scope) -> set[str]:
     core, found = _core_sources(scope), set[str]()
     own = set(_core_sources(scope, outer=False).values())  # stars expand this scope only
     for node in scope.find_all(exp.Column, exp.Columns, exp.Star):
-        star = isinstance(node, exp.Star) and isinstance(node.parent, exp.Select | exp.Columns)
-        if star or isinstance(node, exp.Columns):  # projected `*` and COLUMNS(...)
+        # any bare `*` (projected, `* LIKE`, `* SIMILAR TO`, COLUMNS(*)) except count(*)
+        star = isinstance(node, exp.Star) and not isinstance(node.parent, exp.Count | exp.Column)
+        if star or isinstance(node, exp.Columns):
             found.update(f"{t}.*" for t in own)
         if not isinstance(node, exp.Column):
             continue  # count(*) and similar aggregates read no column
