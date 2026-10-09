@@ -88,6 +88,7 @@ Line budgets are the production-code limit for the file (ENG §2.4 caps every mo
 | `tools/synth/pii_corpus.py` | Redaction corpus writer | `write_pii_corpus` | Tooling | — | 200 |
 | `tools/synth/api_pages.py` | Source-shaped JSON pages writer | `write_api_pages` | Tooling | — | 250 |
 | `tools/phase_gate.py` | Phase gate definitions and runner | `GateCheck`, `GATES`, `run_gate`, `main` | Tooling | `subprocess` | 300 |
+| `tools/_phase_gate_table.py` | Private sibling of `tools/phase_gate.py` (T11-18 review round 1 ruling proposal): `GateCheck` and Table G as `GATES` (re-exported by `tools.phase_gate`), including the coverage checks that write a fresh coverage JSON and apply U11-32 to it, split off for the 300-line budget of `phase_gate.py` once test-ID resolution was added; imported only by `tools.phase_gate` | none (private) | Tooling | — | 120 |
 | `herness/eval/__init__.py` | Package marker | — | L5 | — | 5 |
 | `herness/eval/truth.py` | Truth manifest model and loader (the only module under `herness/` allowed to name truth files, R-64) | `TruthManifest`, `load_truth`, `truth_dir_for`, `plant_value` | L5 | — | 250 |
 | `herness/eval/settings.py` | `config/eval.yaml` section model | `EvalConfig` and nested models | L5 | none beyond the ENG §2.1 settings rule (standard library, pydantic, `herness.core.types`, `herness.core.errors`) | 150 |

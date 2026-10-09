@@ -42,6 +42,10 @@ _TINY_PHASE_1 = (
         ("UT11-38", "tests/unit/test_coverage_targets.py"), 600,
     ),
     GateCheck(
+        "G1.8", 1, "test ID no test carries", "pytest",
+        ("UT11-38", "UT99-99", "tests/unit/test_coverage_targets.py"), 600,
+    ),
+    GateCheck(
         "G1.9", 1, "failing command", "cli",
         (sys.executable, "-c", "raise SystemExit(1)"), 60,
     ),
@@ -53,8 +57,9 @@ def test_it11_30_tiny_phase_1_gate_report_and_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """IT11-30 `run_gate(1)` on the tiny phase 1 gate: the report lists every check with its
-    exit code, duration and log; the real checks pass, the failing one makes the exit 1; the
-    bench check wrote a gate bench file under the out dir."""
+    exit code, duration and log; the real checks pass, the failing one and the one selecting
+    an ID no collected test carries (exit 3, not run) make the exit 1; the bench check wrote a
+    gate bench file under the out dir."""
     monkeypatch.setitem(GATES, 1, _TINY_PHASE_1)
     monkeypatch.delenv("HERNESS_BENCH_DIR", raising=False)
     assert phase_gate.main(["--phase", "1", "--out-dir", str(tmp_path)]) == 1
@@ -62,9 +67,11 @@ def test_it11_30_tiny_phase_1_gate_report_and_exit(
     doc = json.loads(path.read_text(encoding="utf-8"))
     codes = {c["check_id"]: c["exit_code"] for c in doc["checks"]}
     logs = {c["check_id"]: Path(c["log"]).read_text(encoding="utf-8") for c in doc["checks"]}
-    assert codes == {"G1.1": 0, "G1.2": 0, "G1.4": 0, "G1.9": 1}, logs
+    assert codes == {"G1.1": 0, "G1.2": 0, "G1.4": 0, "G1.8": 3, "G1.9": 1}, logs
     assert doc["passed"] is False
-    assert all(c["duration_s"] > 0 for c in doc["checks"])
+    ran = [c for c in doc["checks"] if c["check_id"] != "G1.8"]
+    assert all(c["duration_s"] > 0 and c["problems"] == [] for c in ran)
+    assert doc["checks"][3]["problems"] == ["unknown test ID UT99-99"]
     (bench_file,) = (tmp_path / "data" / "bench").glob("*.json")
     bench_doc = json.loads(bench_file.read_text(encoding="utf-8"))
     assert bench_doc["gate"] is True
