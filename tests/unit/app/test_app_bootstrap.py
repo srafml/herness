@@ -63,7 +63,8 @@ def test_ut09_77_builds_services_in_order(boot: list[str]) -> None:
     assert memory is services.memory
     ref = user_ref_for("ops-lead", USER_REF_KEY.encode())
     assert dict(services.roster) == {ref: "ops-lead"}
-    assert services.queries == {}  # T09-14 seam
+    assert "build.meta" in services.queries  # step 10: named queries loaded and guarded (T09-14)
+    assert services.queries["org.list"].row_cap == services.cfg.app.app.page_row_limit
     assert services.started_at.tzinfo is not None
 
 

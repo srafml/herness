@@ -1,0 +1,270 @@
+# Dashboard named queries (impl 09 U09-63; design §5.3). Loaded and validated by
+# app.common.wh.load_named_queries (U09-61): one parameterised SELECT each, every `$name`
+# declared under `params`, and the raw-text guard (no forbidden `core` column, no `core` star).
+# Only these `core` columns are read: record_id, number, opened_at, priority, project, type,
+# team_id, org_id, service_id, name, parent_org_id. Row caps default to `app.page_row_limit`.
+version: 1
+queries:
+  build.meta:
+    params:
+      build_id: {type: str, required: true}
+    row_cap: 1
+    sql: >-
+      SELECT build_id, started_at, finished_at, source_watermarks, status
+      FROM meta.build WHERE build_id = $build_id
+
+  home.builds:
+    row_cap: 4
+    sql: >-
+      SELECT build_id, started_at, finished_at, status
+      FROM meta.build ORDER BY started_at DESC, build_id DESC
+
+  home.dq_failed:
+    row_cap: 200
+    sql: >-
+      SELECT check_name, severity, value, threshold, details
+      FROM meta.dq_result WHERE passed = false ORDER BY severity, check_name
+
+  funding.ranking_by_priority:
+    params: &funding_params
+      candidate_type: {type: str}
+      project: {type: str}
+      org_id: {type: str}
+      min_confidence: {type: float}
+      top_n: {type: int, default: 100}
+    row_cap: 500
+    sql: >-
+      SELECT f.candidate_id, f.candidate_type, f.title, f.annual_pain_usd,
+      f.addressable_pain_usd, f.expected_reduction, f.n_incidents, f.confidence,
+      f.strategic_weight, f.effort_cost_usd, f.priority, f.wsjf, f.rank, f.unconfirmed,
+      f.flags, f.query_ids, w.project, w.team_id, t.org_id
+      FROM score.funding f
+      LEFT JOIN core.work_item w ON w.record_id = f.candidate_id
+      LEFT JOIN core.team t ON t.team_id = w.team_id
+      WHERE ($candidate_type IS NULL OR f.candidate_type = $candidate_type)
+      AND ($project IS NULL OR w.project = $project)
+      AND ($org_id IS NULL OR t.org_id IN
+      (SELECT c.org_id FROM metrics.org_closure c WHERE c.ancestor_org_id = $org_id))
+      AND ($min_confidence IS NULL OR f.confidence >= $min_confidence)
+      ORDER BY f.priority DESC NULLS LAST, f.candidate_id
+      LIMIT $top_n
+
+  funding.ranking_by_wsjf:
+    params: *funding_params
+    row_cap: 500
+    sql: >-
+      SELECT f.candidate_id, f.candidate_type, f.title, f.annual_pain_usd,
+      f.addressable_pain_usd, f.expected_reduction, f.n_incidents, f.confidence,
+      f.strategic_weight, f.effort_cost_usd, f.priority, f.wsjf, f.rank, f.unconfirmed,
+      f.flags, f.query_ids, w.project, w.team_id, t.org_id
+      FROM score.funding f
+      LEFT JOIN core.work_item w ON w.record_id = f.candidate_id
+      LEFT JOIN core.team t ON t.team_id = w.team_id
+      WHERE ($candidate_type IS NULL OR f.candidate_type = $candidate_type)
+      AND ($project IS NULL OR w.project = $project)
+      AND ($org_id IS NULL OR t.org_id IN
+      (SELECT c.org_id FROM metrics.org_closure c WHERE c.ancestor_org_id = $org_id))
+      AND ($min_confidence IS NULL OR f.confidence >= $min_confidence)
+      ORDER BY f.wsjf DESC NULLS LAST, f.candidate_id
+      LIMIT $top_n
+
+  funding.attribution:
+    params:
+      candidate_id: {type: str, required: true}
+    row_cap: 500
+    sql: >-
+      SELECT candidate_id, record_id, record_kind, tier, weight, share, pain_usd, quality,
+      query_id
+      FROM score.funding_attribution WHERE candidate_id = $candidate_id
+      ORDER BY tier, pain_usd DESC, record_id
+
+  funding.projects:
+    row_cap: 1000
+    sql: >-
+      SELECT DISTINCT w.project FROM core.work_item w
+      WHERE w.type IN ('initiative', 'epic', 'feature') AND w.project IS NOT NULL
+      ORDER BY w.project
+
+  org.list:
+    sql: >-
+      SELECT o.org_id, o.name, o.parent_org_id FROM core.org o ORDER BY o.name, o.org_id
+
+  portfolio.scenarios:
+    row_cap: 100
+    sql: >-
+      SELECT DISTINCT scenario, budget_usd, solver_status FROM score.portfolio
+      ORDER BY scenario
+
+  portfolio.rows:
+    params:
+      scenario: {type: str, required: true}
+    row_cap: 2000
+    sql: >-
+      SELECT p.candidate_id, f.title, p.selected, p.order_rank, p.expected_impact_usd,
+      f.effort_cost_usd, p.flags, p.query_ids
+      FROM score.portfolio p LEFT JOIN score.funding f USING (candidate_id)
+      WHERE p.scenario = $scenario
+      ORDER BY p.order_rank NULLS LAST, p.candidate_id
+
+  org.metrics:
+    params:
+      entity_type: {type: str, required: true}
+    row_cap: 200
+    sql: >-
+      SELECT DISTINCT metric FROM score.org WHERE entity_type = $entity_type ORDER BY metric
+
+  org.scores:
+    params:
+      entity_type: {type: str, required: true}
+      metric: {type: str, required: true}
+      org_id: {type: str}
+    sql: >-
+      SELECT s.entity_type, s.entity_id, s.metric, s.value, s.peer_group, s.peer_median,
+      s.z_score, s.trend_slope, s.sample_size, s.composite, s.rank, s.unconfirmed, s.flags,
+      s.query_ids
+      FROM score.org s
+      LEFT JOIN core.team t ON s.entity_type = 'team' AND t.team_id = s.entity_id
+      LEFT JOIN core.service v ON s.entity_type = 'service' AND v.service_id = s.entity_id
+      WHERE s.entity_type = $entity_type AND s.metric = $metric
+      AND ($org_id IS NULL OR (CASE s.entity_type WHEN 'team' THEN t.org_id
+      WHEN 'service' THEN v.org_id WHEN 'org' THEN s.entity_id END) IN
+      (SELECT c.org_id FROM metrics.org_closure c WHERE c.ancestor_org_id = $org_id))
+      ORDER BY s.rank NULLS LAST, s.entity_id
+
+  org.trend:
+    params:
+      metric: {type: str, required: true}
+      entity_type: {type: str, required: true}
+      entity_id: {type: str, required: true}
+      period: {type: str, required: true}
+    row_cap: 8
+    sql: >-
+      SELECT period_start, value, numerator, denominator, sample_size, unit, flags, query_id
+      FROM metrics.metric_value
+      WHERE metric = $metric AND entity_type = $entity_type AND entity_id = $entity_id
+      AND period = $period
+      ORDER BY period_start DESC LIMIT 8
+
+  levers.list:
+    params:
+      entity_type: {type: str}
+      entity_id: {type: str}
+    sql: >-
+      SELECT entity_type, entity_id, metric, target_kind, current_value, target_value,
+      delta_usd, rationale_template, template_params, unconfirmed, query_ids
+      FROM score.action_lever
+      WHERE ($entity_type IS NULL OR entity_type = $entity_type)
+      AND ($entity_id IS NULL OR entity_id = $entity_id)
+      ORDER BY delta_usd DESC NULLS LAST, entity_id, metric
+
+  entities.teams:
+    sql: >-
+      SELECT t.team_id, t.name, t.org_id FROM core.team t ORDER BY t.name, t.team_id
+
+  entities.services:
+    sql: >-
+      SELECT s.service_id, s.name, s.org_id FROM core.service s ORDER BY s.name, s.service_id
+
+  clusters.root_causes:
+    row_cap: 200
+    sql: >-
+      SELECT DISTINCT root_cause_category FROM enrich.cluster
+      WHERE root_cause_category IS NOT NULL ORDER BY root_cause_category
+
+  clusters.list:
+    params:
+      service_id: {type: str}
+      root_cause: {type: str}
+      min_size: {type: int}
+    row_cap: 500
+    sql: >-
+      SELECT cluster_id, label, root_cause_category, size, first_seen, last_seen, top_terms,
+      service_ids
+      FROM enrich.cluster
+      WHERE ($service_id IS NULL OR list_contains(service_ids, $service_id))
+      AND ($root_cause IS NULL OR root_cause_category = $root_cause)
+      AND ($min_size IS NULL OR size >= $min_size)
+      ORDER BY size DESC, cluster_id
+
+  clusters.size_over_time:
+    params:
+      cluster_id: {type: str, required: true}
+    row_cap: 60
+    sql: >-
+      SELECT date_trunc('month', opened_at) AS month, count(*) AS incidents
+      FROM metrics.incident_fact WHERE cluster_id = $cluster_id
+      GROUP BY date_trunc('month', opened_at) ORDER BY month
+
+  clusters.members:
+    params:
+      cluster_id: {type: str, required: true}
+    row_cap: 20
+    sql: >-
+      SELECT i.number, i.opened_at, i.priority, t.text, m.membership_prob
+      FROM enrich.cluster_member m
+      JOIN core.incident i ON i.record_id = m.record_id
+      LEFT JOIN enrich.text_redacted t ON t.record_id = m.record_id
+      WHERE m.cluster_id = $cluster_id
+      ORDER BY m.membership_prob DESC, i.number
+
+  metrics.values:
+    params:
+      metrics: {type: list_str, required: true}
+      period: {type: str, required: true}
+      entity_type: {type: str}
+      entity_id: {type: str}
+      project: {type: str}
+    sql: >-
+      SELECT v.metric, v.entity_type, v.entity_id, v.period, v.period_start, v.value,
+      v.numerator, v.denominator, v.sample_size, v.unit, v.flags, v.query_id
+      FROM metrics.metric_value v
+      WHERE list_contains($metrics, v.metric) AND v.period = $period
+      AND ($entity_type IS NULL OR v.entity_type = $entity_type)
+      AND ($entity_id IS NULL OR v.entity_id = $entity_id)
+      AND ($project IS NULL OR v.entity_type <> 'work_item' OR v.entity_id IN
+      (SELECT w.record_id FROM core.work_item w WHERE w.project = $project))
+      ORDER BY v.metric, v.period_start DESC, v.entity_type, v.entity_id
+
+  change.link_counts:
+    row_cap: 10
+    sql: >-
+      SELECT method, count(*) AS links FROM enrich.incident_change_link
+      GROUP BY method ORDER BY method
+
+  change.caused_incidents:
+    params:
+      service_id: {type: str}
+      team_id: {type: str}
+    row_cap: 500
+    sql: >-
+      SELECT f.number, f.opened_at, f.priority, f.service_id, f.team_id, l.change_id,
+      l.method, l.score
+      FROM metrics.incident_fact f
+      JOIN enrich.incident_change_link l ON l.incident_id = f.record_id
+      WHERE ($service_id IS NULL OR f.service_id = $service_id)
+      AND ($team_id IS NULL OR f.team_id = $team_id)
+      ORDER BY f.opened_at DESC, f.number
+
+  evidence.meta:
+    params:
+      ids: {type: list_str, required: true}
+    row_cap: 50
+    sql: >-
+      SELECT query_id, sql, params, row_count, executed_at, result_sample
+      FROM meta.evidence WHERE list_contains($ids, query_id) ORDER BY query_id
+
+  # Variant for builds whose meta.evidence has no result_sample column (wh.query picks it).
+  evidence.meta_v1:
+    params:
+      ids: {type: list_str, required: true}
+    row_cap: 50
+    sql: >-
+      SELECT query_id, sql, params, row_count, executed_at
+      FROM meta.evidence WHERE list_contains($ids, query_id) ORDER BY query_id
+
+  review.label_text:
+    params:
+      record_id: {type: str, required: true}
+    row_cap: 1
+    sql: >-
+      SELECT t.text FROM enrich.text_redacted t WHERE t.record_id = $record_id
