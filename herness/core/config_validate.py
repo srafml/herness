@@ -114,7 +114,7 @@ def _compose_rule(services: Mapping[str, Any], name: str, gpu_class: str) -> str
 
 def _c08a(x: CheckContext) -> Iterator[Hit]:
     services = _compose_services(x.compose_path)
-    if isinstance(services, str):  # a missing file is a warn until T10-23 ships docker/
+    if isinstance(services, str):  # a missing file is a warn (a checkout without docker/)
         where = f"{_GPU}.classes"
         yield (where, services, "warn") if "missing" in services else (where, services)
     for gpu_class, spec in items(x.tree, f"{_GPU}.classes"):

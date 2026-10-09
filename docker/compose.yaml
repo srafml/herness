@@ -1,5 +1,5 @@
-# Test-local copy of docker/compose.yaml (impl 10 U10-80: design 10 §5.6.2 verbatim plus
-# `environment: *offline` on llamacpp-large). The repository file itself lands with T10-23.
+# GPU model servers (impl 10 U10-80): design 10 §5.6.2 verbatim plus `environment: *offline`
+# on llamacpp-large. Values come from deploy.env_file (`herness deploy render`, U10-79).
 name: herness
 x-gpu: &gpu
   deploy: {resources: {reservations: {devices: [{driver: nvidia, count: all, capabilities: [gpu]}]}}}

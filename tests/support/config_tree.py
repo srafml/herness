@@ -18,7 +18,7 @@ REPO = Path(__file__).resolve().parents[2]
 SHIPPED = REPO / "config"
 FIXTURES = REPO / "tests" / "unit" / "core" / "fixtures"
 RESILIENCE_FIXTURE = FIXTURES / "resilience.yaml"
-COMPOSE_FIXTURE = FIXTURES / "compose.yaml"  # U10-80 test copy until T10-23 ships docker/
+COMPOSE_FILE = REPO / "docker" / "compose.yaml"  # U10-80, the repository file (T10-23)
 
 HERNESS_YAML = """\
 version: 1
@@ -86,7 +86,7 @@ def write_checked_config(root: Path) -> Path:
     """``write_full_config`` with pinned deploy values plus ``<root>/docker/compose.yaml``.
 
     Every offline cross-check (U10-20) passes on this tree: C13 finds no placeholder and
-    C08a finds the compose file (the U10-80 test copy).
+    C08a finds the compose file (a copy of the repository U10-80 file).
     """
     cfg = write_full_config(root)
     text = (cfg / "herness.yaml").read_text(encoding="utf-8")
@@ -94,7 +94,7 @@ def write_checked_config(root: Path) -> Path:
         text = text.replace(f'"{placeholder}"', value)
     (cfg / "herness.yaml").write_text(text, encoding="utf-8")
     (root / "docker").mkdir()
-    shutil.copyfile(COMPOSE_FIXTURE, root / "docker" / "compose.yaml")
+    shutil.copyfile(COMPOSE_FILE, root / "docker" / "compose.yaml")
     return cfg
 
 
