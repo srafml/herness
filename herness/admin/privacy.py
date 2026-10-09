@@ -248,8 +248,8 @@ def _rebuild(run: _Run, counts: _Counts) -> JobOutcome | None:
         set_deletion_status(run.request.request_id, "failed")
         msg = "privacy rebuild failed"
         raise FatalError(msg, request_id=run.request.request_id)
-    nxt = _enqueue_build(run)
-    return _continue(run, nxt, wait=wait + 1, rebuilds=rebuilds + 1, since=run.now)
+    nxt = _enqueue_build(run)  # keep the original step-5 time: a failed rebuild is no leftover
+    return _continue(run, nxt, wait=wait + 1, rebuilds=rebuilds + 1, since=since)
 
 
 def _finish(run: _Run) -> None:

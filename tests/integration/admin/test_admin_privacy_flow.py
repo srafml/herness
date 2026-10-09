@@ -8,16 +8,21 @@ The rebuild is a fake impl 08 job completion.
 
 from __future__ import annotations
 
+import datetime
 import json
+from typing import Any
 
 import pytest
 from tests.support.privacy_env import (  # noqa: F401 - fixture import
+    BASE,
     H_OTHER,
     H_RID,
     LATER,
     NEW_BUILD,
+    NOW,
     OLD_BUILD,
     OTHER,
+    OTHER_DESC,
     RID,
     PrivacyEnv,
     privacy_env,
@@ -25,6 +30,7 @@ from tests.support.privacy_env import (  # noqa: F401 - fixture import
 from tests.unit.enrich._purge_support import QSV
 
 from herness.core.errors import StoreBusy
+from herness.core.jobs.ports import require_jobs_backend
 from herness.enrich.cache import DecisionCache
 from herness.store import warehouse
 from herness.store.ops import core
@@ -149,3 +155,50 @@ def test_it10_06_leftover_build_holding_the_record_fails_step5_closed(
     assert req.steps["5"]["counts"]["builds_left"] == 0
     assert not warehouse.build_path(target).exists()
     assert not warehouse.build_path(OLD_BUILD).exists()
+
+
+FAILED_BUILD = "20261002-091000-ABCDEF"  # the first privacy rebuild, after the step-5 time
+SECOND_BUILD = "20261002-100000-ABCDEF"  # the re-enqueued rebuild, promoted
+
+
+def _finish_job(job_id: str, status: str) -> None:
+    """Fake impl 08 end of a ``build_pipeline`` job."""
+    stamp = "2026-10-02T10:20:00.000000Z"
+    sql = "UPDATE job SET status = ?, started_at = ?, finished_at = ? WHERE job_id = ?"
+    core.run_write(lambda c: c.execute(sql, (status, stamp, stamp, job_id)), op="test_finish_job")
+
+
+def _latest_continuation() -> dict[str, Any]:
+    rows = require_jobs_backend().list_jobs(status="queued", kind="maintenance", limit=20)
+    found = [dict(r.payload) for r in rows if "request_id" in r.payload]
+    return max(found, key=lambda p: int(p["wait"]))
+
+
+def test_it10_06_failed_rebuild_then_promoted_rebuild_completes_step5(
+    privacy_env: PrivacyEnv,  # noqa: F811
+) -> None:
+    """IT10-06 / review I4 the first privacy rebuild fails (its build file stays: cleanup_builds
+    keeps the newest failed build) and the re-enqueued one is promoted. The step-5 time stays
+    the original one across the re-enqueue, so the failed build, started after it, is no
+    leftover: step 5 ends ``done`` and the request completes. The pre-deletion build is gone."""
+    env = privacy_env
+    first = env.run(dict(BASE))
+    build_job = str(first.result["waiting_for"])
+    env.make_build(FAILED_BUILD, [(OTHER, OTHER_DESC, H_OTHER)], status="failed")
+    _finish_job(build_job, "failed")
+    cont = _latest_continuation()
+    again = env.run(cont, now=NOW + datetime.timedelta(minutes=31))
+    second_job = str(again.result["waiting_for"])
+    assert second_job != build_job
+    cont2 = _latest_continuation()
+    env.make_build(SECOND_BUILD, [(OTHER, OTHER_DESC, H_OTHER)])  # promoted, CURRENT
+    _finish_job(second_job, "done")
+    env.run(cont2, now=NOW + datetime.timedelta(minutes=91))
+
+    req = env.request()
+    assert (req.status, req.steps["5"]["status"]) == ("done", "done")
+    assert req.steps["5"]["counts"]["builds_left"] == 0
+    assert (cont2["rebuilds"], cont2["rebuild_at"]) == (1, cont["rebuild_at"])
+    assert warehouse.read_current() == SECOND_BUILD
+    assert not warehouse.build_path(OLD_BUILD).exists()
+    assert env.build_record_ids(FAILED_BUILD) == [OTHER]  # kept, and it never held the record
