@@ -122,6 +122,7 @@ Line budgets are production lines including docstrings. "Extra imports" lists im
 | `herness/store/ops/privacy.py` | Ops-store area `privacy` (R-08): `deletion_request` rows and the deletion-set read (the scrubs of `evidence.result_sample` and `finding.numbers` are impl 05's U05-75 and impl 06's U06-144, R-77) | `DeletionRequest`, `create_deletion_request`, `get_deletion_request`, `open_deletion_request`, `set_deletion_status`, `record_deletion_step`, `deleted_record_ids` | L1 | none | 250 |
 | `herness/core/errors.py` (owned by impl 00; this spec declares two attribute sets, R-19) | `EgressBlocked.egress_id`, `EgressBlocked.reason`, `ConfigError.issues` | `EgressBlocked`, `ConfigError` | L0 | none | +30 lines |
 | `herness/admin/rekey.py` | Redaction key rotation job | `run_rekey`, `rekey_labels`, `build_rekey_map` | L5 | `pyarrow.parquet` | 360 |
+| `herness/admin/_rekey_labels.py` | Private sibling of `rekey.py` (T10-30 fix round 1): label staging with a manifest bound to the live parts, verified swap-in after the key swap | `rekey_labels`, `commit_labels` (re-exported by `rekey.py`) | L5 | `pyarrow.parquet` | 240 |
 | `config/herness.yaml` | Root config template (§4.2 of design 10) | — | config | — | 110 |
 | `config/profiles/local.yaml`, `hybrid.yaml`, `premium.yaml`, `synth.yaml` | Profile overlays | — | config | — | 40 each |
 | `docker/compose.yaml` | GPU model servers (design 10 §5.6.2, verbatim) | — | deploy | — | 90 |

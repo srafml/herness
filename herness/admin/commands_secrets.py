@@ -1,4 +1,5 @@
-"""``herness secrets init|set|status`` behavior (impl 10 U10-68 to U10-70, design 10 §3.7, §5.2).
+"""``herness secrets init|set|status|rekey`` behavior (impl 10 U10-68 to U10-71, design 10 §3.7,
+§5.2, §5.3).
 
 Bodies only: impl 09 checks the role and the elevated shell, supplies ``prompt`` (hidden console
 input) and ``show`` (a console write that bypasses logging), renders the ``CommandResult`` and
@@ -16,12 +17,21 @@ from typing import Final
 
 from herness._cli.output import CommandResult
 from herness.core import time as clock
-from herness.core.audit import last_secret_set_times
+from herness.core.audit import audit, last_secret_set_times
 from herness.core.config import HernessConfig, get_config
-from herness.core.errors import ConfigError
-from herness.core.secrets import SecretRef, exists, referenced_secret_names, set_secret
+from herness.core.errors import ConfigError, HernessError
+from herness.core.jobs.ports import require_jobs_backend
+from herness.core.jobs.scheduler import NEXT_KEY_REF, schedule_rekey
+from herness.core.secrets import (
+    SecretRef,
+    delete_secret,
+    exists,
+    referenced_secret_names,
+    set_secret,
+)
 
-__all__ = ["INIT_NAMES", "cmd_secrets_init", "cmd_secrets_set", "cmd_secrets_status"]
+__all__ = ["INIT_NAMES", "cmd_secrets_init", "cmd_secrets_rekey", "cmd_secrets_set"]
+__all__ += ["cmd_secrets_status"]
 
 INIT_NAMES: Final = ("redact.hmac_key", "ui_user_ref_key")
 _ESCROWED: Final = "ESCROWED"
@@ -105,7 +115,40 @@ def cmd_secrets_set(name: str, *, actor: str, prompt: Callable[[str], str]) -> C
     return CommandResult(ok=True, data=data, warnings=[], exit_code=0)
 
 
-# T10-30: cmd_secrets_rekey
+# --- U10-71 secrets rekey --------------------------------------------------------------------
+
+
+def _fail(warning: str) -> CommandResult:
+    return CommandResult(ok=False, data={}, warnings=[warning], exit_code=1)
+
+
+def cmd_secrets_rekey(
+    *, actor: str, prompt: Callable[[str], str], show: Callable[[str], None]
+) -> CommandResult:
+    """``herness secrets rekey`` (U10-71): stage an escrowed ``redact.hmac_key.next`` and plan
+    the ``maintenance`` rekey job; the old key stays active until that job swaps it."""
+    if exists(NEXT_KEY_REF):
+        return _fail("a rekey is already staged")
+    if _create(NEXT_KEY_REF, actor=actor, prompt=prompt, show=show) != "created":  # steps 1-2
+        return _fail(f"{NEXT_KEY_REF} not created: escrow not confirmed")
+    try:
+        job_id = schedule_rekey()  # step 3
+    except HernessError:
+        # Typed planning failures (ConfigError, StoreBusy, ...): unstage so the command can be
+        # rerun. Should a job row exist anyway, it fails "no staged key"; the old key stays.
+        delete_secret(NEXT_KEY_REF, actor=actor)
+        raise
+    row = require_jobs_backend().get_job(job_id)
+    when = None if row is None else row.scheduled_for
+    if when is None:  # job planned but its row is unreadable: say so, never audit "None"
+        audit("admin_action", actor, action="redact_rekey", target="staged")
+        data: dict[str, object] = {"job_id": job_id, "planned_at": None}
+        warning = f"rekey job {job_id} planned; planned time unknown, see `herness status`"
+        return CommandResult(ok=True, data=data, warnings=[warning], exit_code=0)
+    planned = clock.format_utc(when)
+    audit("admin_action", actor, action="redact_rekey", target="staged", detail=planned)
+    data = {"job_id": job_id, "planned_at": planned}
+    return CommandResult(ok=True, data=data, warnings=[], exit_code=0)
 
 
 # --- U10-70 secrets status -------------------------------------------------------------------

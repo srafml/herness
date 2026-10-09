@@ -13,6 +13,8 @@ from typing import Final
 
 from pydantic import JsonValue
 
+from herness.core import time as clock
+from herness.core.config import get_config
 from herness.core.errors import ConfigError, FatalError
 from herness.core.jobs.ports import JobContext
 from herness.core.types import JobOutcome
@@ -32,11 +34,19 @@ def _placeholder(action: str, owner: str) -> _Unit:
     return unit
 
 
+def _rekey(ctx: JobContext) -> JobOutcome:
+    """``run_rekey`` on the cached config at the current time; imported lazily so the table
+    does not load DuckDB and pyarrow for the other actions."""
+    from herness.admin.rekey import run_rekey  # noqa: PLC0415 - lazy, see docstring
+
+    return run_rekey(get_config(), ctx, now=clock.now())
+
+
 _ACTIONS: Final[Mapping[str, _Unit]] = {
     "backup": _placeholder("backup", "T10-20"),  # T10-20: run_backup (U10-96)
     "purge": _placeholder("purge", "T10-20"),  # T10-20: run_purge (U10-98)
     "privacy_delete": _placeholder("privacy_delete", "T10-29"),  # T10-29: run_privacy_delete
-    "rekey": _placeholder("rekey", "T10-30"),  # T10-30: run_rekey (U10-101)
+    "rekey": lambda ctx, _purge: _rekey(ctx),  # T10-30: run_rekey (U10-101)
 }
 
 
