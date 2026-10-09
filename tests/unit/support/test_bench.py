@@ -191,3 +191,27 @@ def test_ut11_58_no_record_writes_nothing(
     result = pytester.runpytest_inprocess(*_PLUGINS, "-q")
     assert result.ret == 0
     assert not (pytester.path / "data" / "bench").exists()
+
+
+_FLAG_TEST = """
+import os
+from tests.support.bench import bench_flag
+
+def test_inner(request):
+    assert "HERNESS_BENCH_FULL" not in os.environ
+    assert bench_flag(request.config, "HERNESS_BENCH_FULL") == "1"
+    assert bench_flag(request.config, "HERNESS_BENCH_GATE") is None
+"""
+
+
+def test_ut11_58_bench_variables_leave_the_environment(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT11-58 the `HERNESS_BENCH_*` variables move from `os.environ` into the config at
+    configure (impl 10 reads every other `HERNESS_*` variable as a config override and rejects
+    unknown keys, in-process and in child processes); `bench_flag` reads them."""
+    monkeypatch.setenv("HERNESS_BENCH_FULL", "1")
+    monkeypatch.delenv("HERNESS_BENCH_GATE", raising=False)
+    pytester.makepyfile(test_inner=_FLAG_TEST)
+    result = pytester.runpytest_inprocess(*_PLUGINS, "-q")
+    result.assert_outcomes(passed=1)
