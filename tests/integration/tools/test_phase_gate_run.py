@@ -20,6 +20,8 @@ from tools.phase_gate import GATES, GateCheck
 
 pytestmark = pytest.mark.integration
 
+_REPO = Path(__file__).resolve().parents[3]
+
 
 @pytest.fixture(autouse=True)
 def _reset_logging() -> Iterator[None]:
@@ -58,21 +60,25 @@ def test_it11_30_tiny_phase_1_gate_report_and_exit(
 ) -> None:
     """IT11-30 `run_gate(1)` on the tiny phase 1 gate: the report lists every check with its
     exit code, duration and log; the real checks pass, the failing one and the one selecting
-    an ID no collected test carries (exit 3, not run) make the exit 1; the bench check wrote a
-    gate bench file under the out dir."""
+    an ID no collected test carries (exit 3, not run) make the gate fail; the bench check wrote
+    a gate bench file under the out dir and its exit code follows the recorded BT11-03 verdict
+    (the plumbing is under test, not the host's speed). ID collection is limited to the test
+    files the gate selects."""
     monkeypatch.setitem(GATES, 1, _TINY_PHASE_1)
     monkeypatch.delenv("HERNESS_BENCH_DIR", raising=False)
-    assert phase_gate.main(["--phase", "1", "--out-dir", str(tmp_path)]) == 1
-    (path,) = (tmp_path / "data" / "reports" / "gates").glob("phase1-*.json")
-    doc = json.loads(path.read_text(encoding="utf-8"))
+    paths = [entry for check in _TINY_PHASE_1 for entry in check.selector if "/" in entry]
+    report = phase_gate.run_gate(1, repo_root=_REPO, out_dir=tmp_path, collect_paths=paths)
+    assert not report.passed
+    doc = json.loads(report.path.read_text(encoding="utf-8"))
     codes = {c["check_id"]: c["exit_code"] for c in doc["checks"]}
     logs = {c["check_id"]: Path(c["log"]).read_text(encoding="utf-8") for c in doc["checks"]}
-    assert codes == {"G1.1": 0, "G1.2": 0, "G1.4": 0, "G1.8": 3, "G1.9": 1}, logs
+    (bench_file,) = (tmp_path / "data" / "bench").glob("*.json")
+    bench_doc = json.loads(bench_file.read_text(encoding="utf-8"))
+    (record,) = bench_doc["records"]
+    assert (record["target_id"], bench_doc["gate"]) == ("BT11-03", True)
+    bench_code = 0 if record["passed"] else 1
+    assert codes == {"G1.1": bench_code, "G1.2": 0, "G1.4": 0, "G1.8": 3, "G1.9": 1}, logs
     assert doc["passed"] is False
     ran = [c for c in doc["checks"] if c["check_id"] != "G1.8"]
     assert all(c["duration_s"] > 0 and c["problems"] == [] for c in ran)
     assert doc["checks"][3]["problems"] == ["unknown test ID UT99-99"]
-    (bench_file,) = (tmp_path / "data" / "bench").glob("*.json")
-    bench_doc = json.loads(bench_file.read_text(encoding="utf-8"))
-    assert bench_doc["gate"] is True
-    assert [r["target_id"] for r in bench_doc["records"]] == ["BT11-03"]

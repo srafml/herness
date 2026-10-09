@@ -84,9 +84,12 @@ def command_for(check: GateCheck, out_dir: Path) -> tuple[list[str], dict[str, s
     return argv, {**_BENCH_ENV, **bench_dir} if check.kind == "bench" else {}
 
 
-def collect_test_ids(repo_root: Path, index_path: Path) -> frozenset[str] | None:
-    """Every test ID in the tree (U11-31 `--collect-test-ids`), or None when collection fails."""
-    argv = [*PYTEST, "--collect-only", "-q", f"--collect-test-ids={index_path}"]
+def collect_test_ids(
+    repo_root: Path, index_path: Path, *, paths: Sequence[str] | None = None
+) -> frozenset[str] | None:
+    """Every test ID under `paths` (default: the whole tree; U11-31 `--collect-test-ids`),
+    or None when collection fails."""
+    argv = [*PYTEST, "--collect-only", "-q", f"--collect-test-ids={index_path}", *(paths or ())]
     try:
         subprocess.run(  # noqa: S603 - fixed argument list, no shell
             argv, cwd=repo_root, capture_output=True, timeout=1800, check=False
@@ -154,14 +157,19 @@ def _write_report(path: Path, phase: int, results: Sequence[CheckResult]) -> Non
     os.replace(tmp, path)
 
 
-def _known_ids(checks: Sequence[GateCheck], repo_root: Path, folder: Path) -> frozenset[str] | None:
+def _known_ids(
+    checks: Sequence[GateCheck], repo_root: Path, folder: Path, paths: Sequence[str] | None
+) -> frozenset[str] | None:
     if any(_TEST_ID.fullmatch(entry) for check in checks for entry in check.selector):
-        return collect_test_ids(repo_root, folder / "test-ids.json")
+        return collect_test_ids(repo_root, folder / "test-ids.json", paths=paths)
     return frozenset()
 
 
-def run_gate(phase: int, *, repo_root: Path, out_dir: Path) -> GateReport:
+def run_gate(
+    phase: int, *, repo_root: Path, out_dir: Path, collect_paths: Sequence[str] | None = None
+) -> GateReport:
     """Run every check of `phase` (KeyError for a phase with no gate); write the report.
+    `collect_paths` limits the test-ID collection (default: the whole tree).
 
     Raises OSError when the report folder or file cannot be written.
     """
@@ -171,7 +179,7 @@ def run_gate(phase: int, *, repo_root: Path, out_dir: Path) -> GateReport:
     logs = reports / f"phase{phase}-{stamp}"
     logs.mkdir(parents=True, exist_ok=True)
     (reports / "coverage.json").unlink(missing_ok=True)  # never gate on a stale file
-    known = _known_ids(checks, repo_root, logs)
+    known = _known_ids(checks, repo_root, logs, collect_paths)
     results: list[CheckResult] = []
     for index, check in enumerate(checks, start=1):
         log_path = logs / f"{index:02d}-{check.check_id}-{check.kind}.log"
@@ -193,7 +201,7 @@ def run_gate(phase: int, *, repo_root: Path, out_dir: Path) -> GateReport:
 
 def _dry_run(phase: int, out_dir: Path) -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        known = _known_ids(GATES[phase], REPO_ROOT, Path(tmp))
+        known = _known_ids(GATES[phase], REPO_ROOT, Path(tmp), None)
     for check in GATES[phase]:
         argv, extra_env = command_for(check, out_dir)
         env = "".join(f"{key}={value} " for key, value in extra_env.items())

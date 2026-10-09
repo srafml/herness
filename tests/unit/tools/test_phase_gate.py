@@ -124,7 +124,7 @@ def test_ut11_112_unknown_test_ids_fail_the_check_without_running(
 ) -> None:
     """UT11-112 a check selecting an ID that no collected test carries fails with exit code
     3 and its unknown IDs in the report, without running; resolved checks still run."""
-    monkeypatch.setattr(phase_gate, "collect_test_ids", lambda *_: frozenset({"UT11-38"}))
+    monkeypatch.setattr(phase_gate, "collect_test_ids", lambda *_, **__: frozenset({"UT11-38"}))
     missing = GateCheck("G99.1", 99, "x", "bench", ("UT11-38", "BT02-01"), 60)
     monkeypatch.setitem(GATES, 99, (missing, _py("G99.2", "pass")))
     assert phase_gate.main(["--phase", "99", "--out-dir", str(tmp_path)]) == 1
@@ -136,12 +136,35 @@ def test_ut11_112_unknown_test_ids_fail_the_check_without_running(
     assert not (tmp_path / "data" / "bench").exists()
 
 
+def test_ut11_112_collection_paths_pass_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT11-112 `run_gate(collect_paths=...)` limits the test-ID collection to those paths;
+    `collect_test_ids` puts them after its options (default: the whole tree)."""
+    seen: list[object] = []
+
+    def fake(_root: Path, _index: Path, *, paths: list[str] | None = None) -> frozenset[str]:
+        seen.append(paths)
+        return frozenset({"UT11-38"})
+
+    monkeypatch.setattr(phase_gate, "collect_test_ids", fake)
+    monkeypatch.setitem(GATES, 99, (GateCheck("G99.1", 99, "x", "pytest", ("UT11-38",), 60),))
+
+    def ran(check: GateCheck, *, log_path: Path, **_: object) -> phase_gate.CheckResult:
+        return phase_gate.CheckResult(check.check_id, check.kind, (), 0, 0.0, log_path)
+
+    monkeypatch.setattr(phase_gate, "_execute", ran)
+    report = phase_gate.run_gate(99, repo_root=tmp_path, out_dir=tmp_path, collect_paths=["t"])
+    assert seen == [["t"]]
+    assert report.results[0].problems == ()
+
+
 def test_ut11_112_failed_collection_and_unset_variable_fail_the_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT11-112 a failed test-ID collection fails every ID check; a cli check naming an
     unset `$VAR` fails fast with a clear problem (exit code 3)."""
-    monkeypatch.setattr(phase_gate, "collect_test_ids", lambda *_: None)
+    monkeypatch.setattr(phase_gate, "collect_test_ids", lambda *_, **__: None)
     monkeypatch.delenv("PHASE_GATE_COMPARE_RUNS", raising=False)
     ids = GateCheck("G99.1", 99, "x", "pytest", ("UT11-38",), 60)
     var = GateCheck("G99.2", 99, "x", "cli", ("x", "$PHASE_GATE_COMPARE_RUNS"), 60)
@@ -245,7 +268,7 @@ def test_ut11_112_dry_run_lists_phase_1(
     """UT11-112 `--phase 1 --dry-run` lists G1.1-G1.4 with their commands and the IDs no
     collected test carries, and runs nothing."""
     known = {c for check in GATES[1] for c in check.selector} - {"BT02-01"}
-    monkeypatch.setattr(phase_gate, "collect_test_ids", lambda *_: frozenset(known))
+    monkeypatch.setattr(phase_gate, "collect_test_ids", lambda *_, **__: frozenset(known))
     assert phase_gate.main(["--phase", "1", "--dry-run"]) == 0
     out = capsys.readouterr().out
     listed = [line.split()[0] for line in out.splitlines() if line.startswith("G")]
