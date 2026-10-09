@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import functools
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -20,8 +21,10 @@ from tests.support.ops_store import OpsStoreHandle
 from tests.support.worker_env import WorkerEnv, worker_env  # noqa: F401 - fixture import
 
 from herness import admin
+from herness.admin import _privacy_steps as steps
 from herness.admin import privacy
 from herness.admin.maintenance import handle_maintenance
+from herness.core.config import get_config
 from herness.core.errors import ConfigError, FatalError, ModelUnavailable, StoreBusy
 from herness.core.jobs import resolve_handler
 from herness.core.jobs.ports import JobContext, require_jobs_backend
@@ -30,8 +33,8 @@ from herness.core.types import JobOutcome
 from herness.model.promote import CleanupReport
 from herness.store.lake_purge import LakePurgeResult
 from herness.store.ops import privacy as ops_privacy
+from herness.store.ops.core import _drop_cached, read_all
 from herness.store.ops.core import connection as core_connection
-from herness.store.ops.core import read_all
 
 pytestmark = pytest.mark.unit
 
@@ -127,16 +130,26 @@ class Fakes:
         self.audits.append((args, kwargs))
         self.events.append("audit")
 
+    def list_builds(self, *, layout: Any = None) -> list[Any]:
+        """Build files on disk after cleanup: CURRENT plus whatever ``left`` names."""
+        del layout
+        current = [SimpleNamespace(build_id=self.current, is_current=True)] if self.current else []
+        return current + [SimpleNamespace(build_id=b, is_current=False) for b in self.left]
 
-@pytest.fixture
-def fakes(ops_store: OpsStoreHandle, monkeypatch: pytest.MonkeyPatch) -> Fakes:
-    del ops_store
-    f = Fakes()
+    left: list[str] = field(default_factory=list)  # build files cleanup_builds kept
+
+
+def _patch(monkeypatch: pytest.MonkeyPatch, f: Fakes) -> None:
+    """Step bodies live in ``_privacy_steps``; jobs, builds and audit in ``privacy``."""
     for name, value in {
         "purge_record_ids": f.lake,
         "purge_record": f.enrich,
         "scrub_record_from_evidence": f.evidence,
         "scrub_record_from_findings": f.findings,
+        "list_builds": f.list_builds,
+    }.items():
+        monkeypatch.setattr(steps, name, value)
+    for name, value in {
         "enqueue": f.enqueue,
         "get_job": f.get_job,
         "read_current": f.read_current,
@@ -144,6 +157,13 @@ def fakes(ops_store: OpsStoreHandle, monkeypatch: pytest.MonkeyPatch) -> Fakes:
         "audit": f.audit,
     }.items():
         monkeypatch.setattr(privacy, name, value)
+
+
+@pytest.fixture
+def fakes(ops_store: OpsStoreHandle, monkeypatch: pytest.MonkeyPatch) -> Fakes:
+    del ops_store
+    f = Fakes()
+    _patch(monkeypatch, f)
     return f
 
 
@@ -226,10 +246,10 @@ def test_ut10_69_step4_failure_then_rerun_skips_done_steps(fakes: Fakes) -> None
     assert outcome == JobOutcome(status="done", result={"waiting_for": "job_" + "1".zfill(26)})
 
 
-def test_ut10_69_continuation_completes_and_pass2_repeats_3_and_3b(fakes: Fakes) -> None:
+def test_ut10_69_continuation_completes_and_step7_repeats_3_3b_and_4(fakes: Fakes) -> None:
     """UT10-69 a done build with a newer CURRENT runs cleanup_builds(post, keep_last=1); the
-    request is done, audited with the record_id only; lake pass 2 removed a late row, so
-    steps 3 and 3b run again: memory_purge is called after step 3 and again in step 7."""
+    request is done, audited with the record_id only; step 7 runs lake pass 2 and then steps
+    3, 3b and 4 again (SN-T10-29-a): memory_purge is called after step 3 and again in step 7."""
     fakes.lake_rows = [2, 1]
     _, cont = _first_visit(fakes)
     fakes.job_status[cont["build_job_id"]] = "done"
@@ -238,7 +258,7 @@ def test_ut10_69_continuation_completes_and_pass2_repeats_3_and_3b(fakes: Fakes)
 
     assert fakes.events == [
         "lake", "enrich", "memory", "evidence", "findings",
-        "cleanup", "audit", "lake", "enrich", "memory",
+        "cleanup", "audit", "lake", "enrich", "memory", "evidence", "findings",
     ]  # fmt: skip
     assert fakes.memory_calls == [RID, RID]
     assert fakes.cleanup_now == [later]
@@ -246,9 +266,10 @@ def test_ut10_69_continuation_completes_and_pass2_repeats_3_and_3b(fakes: Fakes)
     assert req.status == "done"
     assert req.completed_at == later
     assert _status(req.steps) == dict.fromkeys(["1", "2", "3", "3b", "4", "5", "6", "7"], "done")
-    assert req.steps["5"]["counts"] == {"builds_deleted": 1, "builds_retired": 0}
-    assert req.steps["7"]["counts"]["rows_removed"] == 1
-    assert req.steps["7"]["counts"]["memory_items"] == 4
+    assert req.steps["5"]["counts"] == {"builds_deleted": 1, "builds_retired": 0, "builds_left": 0}
+    seven = req.steps["7"]["counts"]
+    assert (seven["rows_removed"], seven["memory_items"], seven["evidence_rows"]) == (1, 4, 1)
+    assert (seven["finding_rows"], seven["trace_files"]) == (2, 0)
     assert fakes.audits == [
         (("admin_action", "system"), {"action": "privacy_delete", "target": RID})
     ]
@@ -256,18 +277,20 @@ def test_ut10_69_continuation_completes_and_pass2_repeats_3_and_3b(fakes: Fakes)
     assert outcome.result["request_id"] == req.request_id
 
 
-def test_ut10_69_pass2_without_rows_does_not_repeat(fakes: Fakes) -> None:
-    """UT10-69 lake pass 2 removing nothing does not repeat steps 3 and 3b."""
+def test_ut10_69_step7_repeats_even_without_lake_rows(fakes: Fakes) -> None:
+    """UT10-69 / SN-T10-29-a lake pass 2 removing nothing still repeats steps 3, 3b and 4:
+    memory, evidence, findings and traces can cite the record again during the rebuild wait."""
     _, cont = _first_visit(fakes)
     fakes.job_status[cont["build_job_id"]] = "done"
     _run(fakes, cont)
-    assert fakes.memory_calls == [RID]
-    assert fakes.events[-2:] == ["audit", "lake"]
+    assert fakes.memory_calls == [RID, RID]
+    assert fakes.events[-6:] == ["audit", "lake", "enrich", "memory", "evidence", "findings"]
+    assert _request().steps["7"]["counts"]["rows_removed"] == 0
 
 
-def test_ut10_69_step7_retry_repeats_3b_after_partial_pass(fakes: Fakes) -> None:
-    """UT10-69 step 7 failing in its repeated 3b after pass 2 removed rows: the retry finds no
-    lake rows but still repeats 3 and 3b (the failed record carries rows_removed)."""
+def test_ut10_69_step7_failure_then_retry_completes(fakes: Fakes) -> None:
+    """UT10-69 step 7 failing in its repeated 3b: the request is already done (step 6), step 7
+    is recorded failed with the error class; the retry repeats 3, 3b and 4 and completes."""
     fakes.lake_rows = [0, 1]
     _, cont = _first_visit(fakes)
     fakes.job_status[cont["build_job_id"]] = "done"
@@ -276,14 +299,38 @@ def test_ut10_69_step7_retry_repeats_3b_after_partial_pass(fakes: Fakes) -> None
         _run(fakes, cont)
     req = _request()
     assert req.status == "done"  # step 6 already ran
-    assert req.steps["7"]["status"] == "failed"
-    assert req.steps["7"]["error"] == "ModelUnavailable"
+    assert (req.steps["7"]["status"], req.steps["7"]["error"]) == ("failed", "ModelUnavailable")
     assert req.steps["7"]["counts"]["rows_removed"] == 1
     _run(fakes, cont)
     req = _request()
     assert req.steps["7"]["status"] == "done"
     assert fakes.memory_calls == [RID, RID, RID]
     assert fakes.events.count("audit") == 1
+
+
+@pytest.mark.parametrize("why", ["pinned by a run", "kept failed build", "retired, not deleted"])
+def test_ut10_69_older_build_left_fails_step5_retryably(fakes: Fakes, why: str) -> None:
+    """UT10-69 / I1 a build file older than the step-5 time that cleanup_builds kept (pinned by
+    a run or job, the newest failed build, a retired build) fails step 5 with StoreBusy and
+    the count only; the retry once it is gone completes. ``deferred`` stays empty."""
+    del why
+    _, cont = _first_visit(fakes)
+    fakes.job_status[cont["build_job_id"]] = "done"
+    fakes.left = [OLDER_BUILD]
+    with capture_logs() as logs, pytest.raises(StoreBusy, match="older warehouse builds remain"):
+        _run(fakes, cont)
+    req = _request()
+    assert (req.status, req.steps["5"]["status"], req.steps["5"]["error"]) == (
+        "running",
+        "failed",
+        "StoreBusy",
+    )
+    assert req.steps["5"]["counts"]["builds_left"] == 1
+    assert "6" not in req.steps
+    assert all(RID not in repr(entry) for entry in logs)
+    fakes.left = ["20260924-125900-ABCDEF"]  # a build newer than the step-5 time is no leftover
+    _run(fakes, cont)
+    assert _request().status == "done"
 
 
 def test_ut10_69_done_build_without_current_is_not_accepted(fakes: Fakes) -> None:
@@ -462,11 +509,9 @@ def test_ut10_69_failed_request_continuation_is_fatal(fakes: Fakes) -> None:
 def test_ut10_69_trace_files_citing_record_are_deleted(fakes: Fakes) -> None:
     """UT10-69 step 4 deletes ``data/traces/*.jsonl`` files whose bytes contain the record_id
     (also across a read-chunk boundary) and keeps the others."""
-    from herness.core.config import get_config  # noqa: PLC0415
-
     traces = get_config().paths.data / "traces"
     traces.mkdir(parents=True)
-    pad = b"x" * (privacy.TRACE_CHUNK - 5)
+    pad = b"x" * (steps.TRACE_CHUNK - 5)
     (traces / "run_a.jsonl").write_bytes(b'{"sql":"' + RID.encode() + b'"}\n')
     (traces / "run_b.jsonl").write_bytes(pad + RID.encode() + b"\n")
     (traces / "run_c.jsonl").write_bytes(b'{"sql":"servicenow:incident:INC0043"}\n')
@@ -476,39 +521,49 @@ def test_ut10_69_trace_files_citing_record_are_deleted(fakes: Fakes) -> None:
     assert _request().steps["4"]["counts"]["trace_files"] == 2
 
 
+def test_ut10_69_trace_with_longer_id_sharing_the_prefix_is_deleted_whole(fakes: Fakes) -> None:
+    """UT10-69 (review A1, spec-mandated) a trace citing only a longer ID that has the record_id
+    as a prefix is deleted whole: U10-99 matches bytes, and boundary matching would fail open
+    (the record-id charset includes ``.``, ``:``, ``/`` and ``+``)."""
+    traces = get_config().paths.data / "traces"
+    traces.mkdir(parents=True)
+    (traces / "run_other.jsonl").write_bytes(b'{"row":"' + RID.encode() + b'1"}\n')
+    (traces / "run_dot.jsonl").write_bytes(b"see " + RID.encode() + b".\n")
+    _run(fakes, dict(BASE))
+    assert list(traces.iterdir()) == []
+    assert _request().steps["4"]["counts"]["trace_files"] == 2
+
+
+class _Spy:
+    """One ops connection stand-in that records statements and forwards them."""
+
+    def __init__(self, real: Any, events: list[str], *, busy: bool = False) -> None:
+        self.real, self.events, self.busy = real, events, busy
+        self.issued: list[str] = []
+
+    def execute(self, sql: str, *args: Any) -> Any:
+        self.issued.append(sql)
+        if "wal_checkpoint" in sql:
+            self.events.append("checkpoint")
+            if self.busy:
+                return SimpleNamespace(fetchone=lambda: (1, 5, 2))
+        return self.real.execute(sql, *args)
+
+
 def test_ut10_69_steps_run_with_secure_delete_and_checkpoint(
     fakes: Fakes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """UT10-69 / TH10-42 every step runs with ``secure_delete`` on the ops connection and step
-    4 ends with a WAL truncate, after its scrubs, so deleted rows survive in neither freed
-    pages nor old WAL frames."""
-    real, issued = core_connection(), []
-
-    class Spy:
-        def execute(self, sql: str) -> Any:
-            issued.append(sql)
-            if "wal_checkpoint" in sql:
-                fakes.events.append("checkpoint")
-            return real.execute(sql)
-
-    monkeypatch.setattr(privacy, "connection", Spy)
+    4 ends with a WAL truncate, after its scrubs; without a reopen there is no VACUUM."""
+    real = core_connection()
+    spy = _Spy(real, fakes.events)
+    monkeypatch.setattr(steps, "connection", lambda: spy)
     _run(fakes, dict(BASE))
     assert real.execute("PRAGMA secure_delete").fetchone()[0] == 1
-    assert issued.count("PRAGMA secure_delete = ON") == 6  # steps 1, 2, 3, 3b, 4 and 5
-    assert issued.count("PRAGMA wal_checkpoint(TRUNCATE)") == 1
+    assert spy.issued.count("PRAGMA secure_delete = ON") == 6  # steps 1, 2, 3, 3b, 4 and 5
+    assert spy.issued.count("PRAGMA wal_checkpoint(TRUNCATE)") == 1
+    assert "VACUUM" not in spy.issued
     assert fakes.events[-2:] == ["findings", "checkpoint"]
-
-
-class _BusyCheckpoint:
-    """An ops connection whose WAL checkpoint reports busy (a reader holds a snapshot)."""
-
-    def __init__(self, real: Any) -> None:
-        self.real = real
-
-    def execute(self, sql: str, *args: Any) -> Any:
-        if "wal_checkpoint" in sql:
-            return SimpleNamespace(fetchone=lambda: (1, 5, 2))
-        return self.real.execute(sql, *args)
 
 
 def test_ut10_69_busy_checkpoint_fails_step4_retryably(
@@ -517,7 +572,8 @@ def test_ut10_69_busy_checkpoint_fails_step4_retryably(
     """UT10-69 a checkpoint that cannot complete fails step 4 with StoreBusy (retried) instead
     of reporting the scrub done while deleted bytes remain in the WAL."""
     real = core_connection()
-    monkeypatch.setattr(privacy, "connection", lambda: _BusyCheckpoint(real))
+    busy = _Spy(real, fakes.events, busy=True)
+    monkeypatch.setattr(steps, "connection", lambda: busy)
     with pytest.raises(StoreBusy, match="checkpoint busy"):
         _run(fakes, dict(BASE))
     req = _request()
@@ -527,9 +583,111 @@ def test_ut10_69_busy_checkpoint_fails_step4_retryably(
         "StoreBusy",
     )
     assert req.steps["4"]["counts"]["evidence_rows"] == 1  # partial counts are kept
-    monkeypatch.setattr(privacy, "connection", core_connection)
+    assert "vacuum_owed" not in req.steps["4"]["counts"]
+    monkeypatch.setattr(steps, "connection", core_connection)
     _run(fakes, dict(BASE))
     assert _request().steps["4"]["status"] == "done"
+
+
+def _raiser(exc: BaseException) -> Callable[..., Any]:
+    def call(*_args: Any) -> Any:
+        raise exc
+
+    return call
+
+
+def _sqlite_error(text: str, code: int) -> sqlite3.OperationalError:
+    exc = sqlite3.OperationalError(text)
+    exc.sqlite_errorcode = code
+    return exc
+
+
+@pytest.mark.parametrize("code", [5, 6, 517])  # BUSY, LOCKED, BUSY_SNAPSHOT (extended)
+def test_ut10_69_busy_or_locked_pragma_is_store_busy(
+    fakes: Fakes, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """UT10-69 (review minor 1) SQLITE_BUSY / SQLITE_LOCKED (also extended codes) from the
+    maintenance PRAGMAs, which run outside run_write, are StoreBusy (retried), not FatalError;
+    another sqlite3 error becomes FatalError naming its class only."""
+    locked = SimpleNamespace(execute=_raiser(_sqlite_error("database is locked", code)))
+    monkeypatch.setattr(steps, "connection", lambda: locked)
+    with pytest.raises(StoreBusy):
+        _run(fakes, dict(BASE))
+    assert _request().steps["1"]["error"] == "StoreBusy"
+    broken = SimpleNamespace(execute=_raiser(_sqlite_error("disk I/O error", 10)))
+    monkeypatch.setattr(steps, "connection", lambda: broken)
+    with pytest.raises(FatalError, match="step 1 failed: OperationalError"):
+        _run(fakes, dict(BASE))
+
+
+def test_ut10_69_connection_reopened_mid_step_is_vacuumed(
+    fakes: Fakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-69 / I3 run_write dropping the thread's connection mid-step (failed ROLLBACK) loses
+    ``secure_delete``: the step ends with VACUUM on the new connection (secure_delete on again);
+    when the step fails after such a reopen, VACUUM is owed and runs first on the retry."""
+    vacuums: list[int] = []
+    real_vacuum = steps.vacuum
+
+    def counted_vacuum() -> None:
+        vacuums.append(1)
+        real_vacuum()
+
+    monkeypatch.setattr(steps, "vacuum", counted_vacuum)
+    calls: list[str] = []
+
+    def reopening_memory(record_id: str) -> int:
+        calls.append(record_id)
+        _drop_cached(close=True)  # what run_write does when ROLLBACK fails
+        if len(calls) == 1:
+            msg = "memory store busy"
+            raise StoreBusy(msg)
+        return 2
+
+    def run() -> JobOutcome:
+        ctx = _ctx(dict(BASE))
+        return privacy.run_privacy_delete(get_config(), ctx, now=NOW, memory_purge=reopening_memory)
+
+    with pytest.raises(StoreBusy):
+        run()
+    req = _request()
+    assert (req.steps["3b"]["status"], req.steps["3b"]["counts"]) == ("failed", {"vacuum_owed": 1})
+    assert vacuums == []
+    run()
+    req = _request()
+    assert req.steps["3b"]["status"] == "done"
+    assert req.steps["3b"]["counts"] == {"vacuumed": 1, "memory_items": 2}
+    assert vacuums == [1, 1]  # the owed one first, then the one for this attempt's reopen
+    assert core_connection().execute("PRAGMA secure_delete").fetchone()[0] == 1
+
+
+def test_ut10_69_reopen_check_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT10-69 / I3 when the connection cannot be checked, it counts as reopened (VACUUM)."""
+    monkeypatch.setattr(steps, "connection", _raiser(StoreBusy("ops store busy")))
+    assert steps.reopened(cast("sqlite3.Connection", object())) is True
+
+
+def test_ut10_69_failure_to_record_failure_keeps_step_error(
+    fakes: Fakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-69 (review minor 2) when recording the failed step itself raises, the step error
+    still propagates and the secondary error is logged by class only."""
+    fakes.fail["evidence"] = [ModelUnavailable("down")]
+    real_record = ops_privacy.record_deletion_step
+
+    def record(*args: Any, **kwargs: Any) -> None:
+        if kwargs.get("status") == "failed":
+            msg = "ops store busy"
+            raise StoreBusy(msg)
+        real_record(*args, **kwargs)
+
+    monkeypatch.setattr(privacy, "record_deletion_step", record)
+    with capture_logs() as logs, pytest.raises(ModelUnavailable):
+        _run(fakes, dict(BASE))
+    secondary = [e for e in logs if e.get("event") == "admin.privacy.step_record_failed"]
+    assert [(e["step"], e["error_type"]) for e in secondary] == [("4", "StoreBusy")]
+    assert all(RID not in repr(entry) for entry in logs)
+    assert "4" not in _request().steps
 
 
 # --- UT10-69: dispatch and the memory_purge binding (U10-104, U10-75) ----------------------
@@ -582,9 +740,8 @@ def test_ut10_69_registered_binding_routes_step_3b_to_memory_store_purge(
         "purge_record_ids": f.lake,
         "purge_record": f.enrich,
         "scrub_record_from_evidence": f.evidence,
-        "read_current": f.read_current,
     }.items():
-        monkeypatch.setattr(privacy, name, value)
+        monkeypatch.setattr(steps, name, value)
     store = FakeMemoryStore()
     monkeypatch.delitem(process_state().handlers, "maintenance")
     binding: Callable[[str], int] = lambda rid: store.purge(record_id=rid)  # noqa: E731

@@ -14,6 +14,7 @@ import pytest
 from tests.support.privacy_env import (  # noqa: F401 - fixture import
     H_OTHER,
     H_RID,
+    LATER,
     NEW_BUILD,
     OLD_BUILD,
     OTHER,
@@ -23,10 +24,14 @@ from tests.support.privacy_env import (  # noqa: F401 - fixture import
 )
 from tests.unit.enrich._purge_support import QSV
 
+from herness.core.errors import StoreBusy
 from herness.enrich.cache import DecisionCache
 from herness.store import warehouse
+from herness.store.ops import core
 
 pytestmark = pytest.mark.integration
+
+RETIRED_BUILD = "20260930-120000-ABCDEF"  # retired before the deletion
 
 
 def _audits(env: PrivacyEnv) -> list[dict[str, object]]:
@@ -92,3 +97,55 @@ def test_it10_06_privacy_delete_end_to_end(
     assert env.build_record_ids(NEW_BUILD) == [OTHER]
     # audit: one admin_action naming only the record_id
     assert _audits(env) == [{"action": "privacy_delete", "target": RID}]
+
+
+def _set_run(status: str, build: str) -> None:
+    """A review run pinned to ``build`` (non-terminal runs pin their build, U02-105)."""
+    sql = (
+        "INSERT INTO run (run_id, kind, depth, profile, config_hash, build_id, status, started_at)"
+        " VALUES ('run_pinned', 'org_review', 'fast', 'local', ?, ?, ?, ?)"
+        " ON CONFLICT (run_id) DO UPDATE SET status = excluded.status"
+    )
+    stamp = "2026-10-02T08:00:00.000000Z"
+    params = ("cfg_" + "0" * 16, build, status, stamp)
+    core.run_write(lambda c: c.execute(sql, params), op="test_pin_run")
+
+
+@pytest.mark.parametrize("leftover", ["pinned promoted build", "pinned retired build"])
+def test_it10_06_leftover_build_holding_the_record_fails_step5_closed(
+    privacy_env: PrivacyEnv,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    leftover: str,
+) -> None:
+    """IT10-06 / review I1 the real cleanup_builds keeps a pre-deletion build file that still
+    holds the record (pinned by a running run; a retired build pinned the same way) and does
+    not report it as deferred. Step 5 is recorded failed (StoreBusy, retried by impl 08) with
+    the leftover counted, stays failed on a retry while the file remains, and is done only once
+    no older build file remains."""
+    env = privacy_env
+    target = OLD_BUILD
+    if leftover == "pinned retired build":
+        target = RETIRED_BUILD
+        env.make_build(RETIRED_BUILD, [(RID, "retired copy", H_RID)], status="retired")
+    assert RID in env.build_record_ids(target)
+    with pytest.raises(StoreBusy, match="older warehouse builds remain"):
+        env.delete_end_to_end(monkeypatch, during_wait=lambda: _set_run("running", target))
+    req = env.request()
+    assert (req.status, req.steps["5"]["status"], req.steps["5"]["error"]) == (
+        "running",
+        "failed",
+        "StoreBusy",
+    )
+    assert req.steps["5"]["counts"]["builds_left"] == 1
+    assert "6" not in req.steps
+    assert RID in env.build_record_ids(target)  # the reason step 5 is not done
+    with pytest.raises(StoreBusy):  # the impl 08 retry while the file remains
+        env.run(env.continuation(), now=LATER)
+    assert env.request().steps["5"]["status"] == "failed"
+    _set_run("done", target)
+    env.run(env.continuation(), now=LATER)
+    req = env.request()
+    assert (req.status, req.steps["5"]["status"]) == ("done", "done")
+    assert req.steps["5"]["counts"]["builds_left"] == 0
+    assert not warehouse.build_path(target).exists()
+    assert not warehouse.build_path(OLD_BUILD).exists()

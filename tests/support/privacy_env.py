@@ -34,6 +34,7 @@ from tests.unit.harness.memory._write_env import (
     provenance,
 )
 
+from herness.admin import _privacy_steps as steps
 from herness.admin import privacy
 from herness.connectors.deletion import DeletionFilter
 from herness.core import redact
@@ -137,23 +138,27 @@ class PrivacyEnv:
 
     # --- warehouse --------------------------------------------------------------------------
 
-    def make_build(self, build: str, rows: list[tuple[str, str, str]]) -> None:
-        """A promoted build whose ``enrich.text_redacted`` holds ``(record_id, text, hash)``."""
+    def make_build(
+        self, build: str, rows: list[tuple[str, str, str]], *, status: str = "promoted"
+    ) -> None:
+        """A build whose ``enrich.text_redacted`` holds ``(record_id, text, hash)``; a
+        ``promoted`` one becomes ``CURRENT``."""
         path = warehouse.build_path(build)
         path.parent.mkdir(parents=True, exist_ok=True)
         with duckdb.connect(str(path)) as con:
             con.execute(SETTINGS_SQL.read_text("utf-8"))
             con.execute(
                 "INSERT INTO meta.build (build_id, started_at, finished_at, status)"
-                " VALUES (?, now(), now(), 'promoted')",
-                [build],
+                " VALUES (?, now(), now(), ?)",
+                [build, status],
             )
             for rid, text, digest in rows:
                 con.execute(
                     "INSERT INTO enrich.text_redacted VALUES (?, 'incident', ?, ?)",
                     [rid, text, digest],
                 )
-        _warehouse_rw.write_current(build)
+        if status == "promoted":
+            _warehouse_rw.write_current(build)
 
     def build_record_ids(self, build: str) -> list[str]:
         with duckdb.connect(str(warehouse.build_path(build)), read_only=True) as con:
@@ -239,11 +244,39 @@ class PrivacyEnv:
         found = [r for r in rows if "request_id" in r.payload]
         return dict(found[0].payload)
 
-    def delete_end_to_end(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    def recite_during_wait(self) -> str:
+        """During the rebuild wait an analyst run cites the record again (review I2): a new
+        memory item, an evidence sample and a trace. Returns the new memory ID."""
+        cites: dict[str, Any] = {
+            **KIND_DATA["glossary"],
+            "entities": [{"type": "record", "id": RID}],
+        }
+        again = self.memory.propose(proposal(f"Repeat {DESC} outage noted.", data=cites))
+        sample = json.dumps([{"record_id": RID, "description": DESC}])
+        core.run_write(
+            lambda c: c.execute(
+                "INSERT INTO evidence (query_id, run_id, build_id, sql, params, result_hash,"
+                " row_count, result_sample, executed_at, duration_ms) VALUES"
+                " ('q_5555555555555555', NULL, ?, 'select 2', '{}', ?, 1, ?, ?, 1)",
+                (OLD_BUILD, "e" * 64, sample, "2026-10-02T09:10:00.000000Z"),
+            ),
+            op="test_recite",
+        )
+        line = json.dumps({"rows": [{"record_id": RID, "description": DESC}]})
+        (self.data / "traces" / "run_cccc.jsonl").write_text(line + "\n", encoding="utf-8")
+        return again.memory_id
+
+    def delete_end_to_end(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        during_wait: Callable[[], object] | None = None,
+        memory_purge: Callable[[str], int] | None = None,
+    ) -> dict[str, Any]:
         """The IT10-06 flow: a sync whose deletion set predates step 1 commits the record
         between steps 1 and 2 and again after lake pass 1 (the late row); a sync reloaded
-        after step 1 drops it; the rebuild completes (fake impl 08); the continuation runs
-        steps 5 to 7. Returns both outcomes and the rows each sync dropped."""
+        after step 1 drops it; the rebuild completes (fake impl 08), ``during_wait`` runs; the
+        continuation runs steps 5 to 7. Returns both outcomes and the rows each sync dropped."""
         stale = self.filter()
         real = purge_record_ids
         seen: dict[str, Any] = {}
@@ -256,11 +289,12 @@ class PrivacyEnv:
                 seen["before_pass1"] = self.lake_ids().count(RID)
             return real(ids)
 
-        monkeypatch.setattr(privacy, "purge_record_ids", lake)
-        seen["first"] = self.run(dict(BASE))
+        monkeypatch.setattr(steps, "purge_record_ids", lake)
+        seen["first"] = self.run(dict(BASE), memory_purge=memory_purge)
         self.complete_build(str(seen["first"].result["waiting_for"]))
+        seen["wait"] = during_wait() if during_wait is not None else None
         seen["late"] = self.sync([(RID, DESC, 4)], filt=stale)  # after lake pass 1
-        seen["last"] = self.run(self.continuation(), now=LATER)
+        seen["last"] = self.run(self.continuation(), now=LATER, memory_purge=memory_purge)
         return seen
 
     def run(

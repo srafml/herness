@@ -4,11 +4,14 @@ F10-13; R-54, R-57, R-77; TH10-42, TH10-50).
 Step results go on the ``deletion_request`` row (U10-105); a ``done`` step is skipped on retry.
 A failing step records ``failed`` with the error class only, leaves the request ``running``
 and re-raises (``StoreBusy``, ``ModelUnavailable`` and ``FatalError`` as they are, anything
-else as ``FatalError``). Messages and logs never carry the record ID or record text. Steps
-run with ``secure_delete`` on and steps 4 and 7 checkpoint the WAL, so deleted ops-store bytes
-survive neither in freed pages nor in old WAL frames (TH10-42). Step 5 waits for the rebuild
-through continuation jobs (payload adds ``request_id``, ``build_job_id``, ``wait``,
-``rebuilds``, ``rebuild_at``).
+else as ``FatalError``); a failure to record it is logged by class and the step error still
+propagates. Messages and logs never carry the record ID or record text. Ops-store hygiene
+(``secure_delete``, WAL truncation, ``VACUUM`` after a mid-step reopen) and the step bodies
+live in ``_privacy_steps``. Step 5 waits for the rebuild through continuation jobs (payload
+adds ``request_id``, ``build_job_id``, ``wait``, ``rebuilds``, ``rebuild_at``) and is done
+only when no build file older than the step-5 time remains besides the new ``CURRENT``.
+Step 7 (spec note SN-T10-29-a) repeats steps 3, 3b and 4 unconditionally after lake pass 2:
+memory, evidence, findings and traces can cite the record again during the rebuild wait.
 """
 
 from __future__ import annotations
@@ -16,11 +19,11 @@ from __future__ import annotations
 import dataclasses
 import datetime
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import Final, Literal
 
 from pydantic import JsonValue
 
+from herness.admin import _privacy_steps as steps
 from herness.admin.commands_data import _validate as validate_request
 from herness.core import time as clock
 from herness.core.audit import audit
@@ -32,13 +35,8 @@ from herness.core.jobs import get as get_job
 from herness.core.jobs.ports import JobContext
 from herness.core.logging import get_logger
 from herness.core.types import JobOutcome
-from herness.enrich import purge_record
 from herness.model.promote import cleanup_builds
-from herness.store.lake_purge import purge_record_ids
 from herness.store.layout import data_layout
-from herness.store.ops.core import connection, run_write
-from herness.store.ops.evidence import scrub_record_from_evidence
-from herness.store.ops.findings import scrub_record_from_findings
 from herness.store.ops.privacy import (
     DeletionRequest,
     create_deletion_request,
@@ -49,18 +47,16 @@ from herness.store.ops.privacy import (
 )
 from herness.store.warehouse import read_current
 
-__all__ = ["TRACE_CHUNK", "run_privacy_delete"]
+__all__ = ["run_privacy_delete"]
 
 type _Step = Literal["1", "2", "3", "3b", "4", "5", "6", "7"]
 type _Counts = dict[str, int]
 
-TRACE_CHUNK: Final = 1 << 20
 _WAIT: Final = datetime.timedelta(minutes=30)
 _MAX_REBUILDS: Final = 3
 _PRIORITY: Final = 80  # the U10-73 priority of the request's own job
 _BUILD_PRIORITY: Final = 60
 _NIGHTLY: Final[dict[str, JsonValue]] = {"stages": ["build", "enrich", "score", "dq", "promote"]}
-_BUILD_TIME: Final = "%Y%m%d-%H%M%S"
 _log = get_logger("admin.privacy")
 
 
@@ -81,6 +77,11 @@ class _Run:
     def done(self, step: _Step) -> bool:
         return self.request.steps.get(step, {}).get("status") == "done"
 
+    def vacuum_owed(self, step: _Step) -> bool:
+        """A failed earlier attempt of ``step`` deleted on a connection without secure_delete."""
+        prior = self.request.steps.get(step, {})
+        return prior.get("status") == "failed" and prior.get("counts", {}).get("vacuum_owed") == 1
+
 
 def _escalate(run_id: str, step: str, exc: Exception) -> FatalError | None:
     """Log the failure; None when ``exc`` is re-raised as is, else the FatalError to raise."""
@@ -92,21 +93,42 @@ def _escalate(run_id: str, step: str, exc: Exception) -> FatalError | None:
     return FatalError(msg)
 
 
+def _record_failure(run: _Run, step: _Step, counts: _Counts, exc: Exception) -> None:
+    """Record ``failed``; a failure to record is logged by class, never raised over ``exc``."""
+    rid = run.request.request_id
+    try:
+        record_deletion_step(
+            rid, step, status="failed", at=run.now, counts=counts, error=type(exc).__name__
+        )
+    except Exception as secondary:  # noqa: BLE001 - the step error is the one that propagates
+        error = type(secondary).__name__
+        _log.error("admin.privacy.step_record_failed", request_id=rid, step=step, error_type=error)
+
+
 def _step(
     run: _Run, step: _Step, work: Callable[[_Counts], JobOutcome | None]
 ) -> JobOutcome | None:
-    """Run ``work`` unless ``step`` is done; record ``done`` (unless it returned an outcome)
-    or ``failed`` with the counts gathered so far and the error class, then re-raise."""
+    """Run ``work`` unless ``step`` is done, with ``secure_delete`` on; a connection reopened
+    mid-step is followed by ``VACUUM`` (owed to the retry when the step fails). Record ``done``
+    (unless it returned an outcome) or ``failed`` with the counts so far, then re-raise."""
     if run.done(step):
         return None
     counts: _Counts = {}
+    conn = None
     try:
-        connection().execute("PRAGMA secure_delete = ON")  # again: run_write may reopen it
+        if run.vacuum_owed(step):
+            steps.vacuum()
+            counts["vacuumed"] = 1
+        conn = steps.secure()
         outcome = work(counts)
+        if steps.reopened(conn):
+            steps.vacuum()
+            counts["vacuumed"] = 1
     except Exception as exc:
-        rid, err = run.request.request_id, type(exc).__name__
-        record_deletion_step(rid, step, status="failed", at=run.now, counts=counts, error=err)
-        fatal = _escalate(rid, step, exc)
+        if run.vacuum_owed(step) if conn is None else steps.reopened(conn):
+            counts["vacuum_owed"] = 1
+        _record_failure(run, step, counts, exc)
+        fatal = _escalate(run.request.request_id, step, exc)
         if fatal is None:
             raise
         raise fatal from exc
@@ -151,63 +173,6 @@ def _start(run: _Run) -> None:
         set_deletion_status(run.request.request_id, "running")
 
 
-def _lake(run: _Run, counts: _Counts) -> None:
-    result = purge_record_ids([run.record_id])
-    counts.update({k: int(v) for k, v in dataclasses.asdict(result).items()})
-
-
-def _seal_ops() -> None:
-    """Fold the WAL into the main file and truncate it (old frames hold deleted rows)."""
-    busy = connection().execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
-    if busy:
-        msg = "ops store checkpoint busy"
-        raise StoreBusy(msg)
-
-
-def _caches(run: _Run, counts: _Counts) -> None:
-    counts.update({k: int(v) for k, v in purge_record(run.record_id).items()})
-
-
-def _memory(run: _Run, counts: _Counts) -> None:
-    counts["memory_items"] = int(run.memory_purge(run.record_id))
-
-
-def _holds(path: Path, needle: bytes) -> bool:
-    """Whether the bytes of ``path`` contain ``needle`` (chunked; overlap spans chunk ends)."""
-    tail = b""
-    with path.open("rb") as fh:
-        while chunk := fh.read(TRACE_CHUNK):
-            if needle in tail + chunk:
-                return True
-            tail = chunk[-(len(needle) - 1) :] if len(needle) > 1 else b""
-    return False
-
-
-def _traces(cfg: HernessConfig, record_id: str) -> int:
-    needle, deleted = record_id.encode("utf-8"), 0
-    for path in sorted((Path(cfg.paths.data) / "traces").glob("*.jsonl")):
-        if path.is_symlink() or not path.is_file():
-            continue
-        try:
-            if _holds(path, needle):
-                path.unlink()
-                deleted += 1
-        except PermissionError as exc:  # a trace writer or scanner holds the file
-            msg = "trace file busy"
-            raise StoreBusy(msg) from exc
-    return deleted
-
-
-def _scrub(run: _Run, counts: _Counts) -> None:
-    rid = run.record_id
-    counts["evidence_rows"] = scrub_record_from_evidence(rid)
-    counts["finding_rows"] = run_write(
-        lambda conn: scrub_record_from_findings(rid, conn=conn), op="privacy_scrub_findings"
-    )
-    counts["trace_files"] = _traces(run.cfg, rid)
-    _seal_ops()
-
-
 def _nightly_payload(cfg: HernessConfig) -> dict[str, JsonValue]:
     """The ``job.payload`` of the configured ``nightly`` build (impl 08), else its default."""
     for job in cfg.resilience.schedule.jobs:
@@ -246,10 +211,21 @@ def _enqueue_build(run: _Run) -> str:
 
 def _promoted_since(run: _Run, since: datetime.datetime) -> bool:
     build = read_current(layout=data_layout(cfg=run.cfg))
-    if build is None:
-        return False
-    built = datetime.datetime.strptime(build[:15], _BUILD_TIME).replace(tzinfo=datetime.UTC)
-    return built >= since.replace(microsecond=0)
+    return build is not None and steps.built_at(build) >= since.replace(microsecond=0)
+
+
+def _cleanup(run: _Run, since: datetime.datetime, counts: _Counts) -> None:
+    """``cleanup_builds`` post; any build file older than ``since`` left besides ``CURRENT``
+    (deferred, pinned by a run or job, the kept failed build) fails the step, retryably."""
+    layout = data_layout(cfg=run.cfg)
+    report = cleanup_builds(
+        mode="post", keep_last=1, protect=frozenset(), layout=layout, now=run.now
+    )
+    counts.update(builds_deleted=len(report.deleted), builds_retired=len(report.retired))
+    counts["builds_left"] = steps.older_builds(layout, since)
+    if report.deferred or counts["builds_left"]:
+        msg = "older warehouse builds remain"
+        raise StoreBusy(msg, request_id=run.request.request_id, builds=counts["builds_left"])
 
 
 def _rebuild(run: _Run, counts: _Counts) -> JobOutcome | None:
@@ -266,14 +242,7 @@ def _rebuild(run: _Run, counts: _Counts) -> JobOutcome | None:
     if status in {"queued", "running"}:
         return _continue(run, build_job, wait=wait + 1, rebuilds=rebuilds, since=since)
     if status == "done" and _promoted_since(run, since):
-        report = cleanup_builds(
-            mode="post", keep_last=1, protect=frozenset(), layout=data_layout(cfg=run.cfg),
-            now=run.now,
-        )  # fmt: skip
-        counts.update(builds_deleted=len(report.deleted), builds_retired=len(report.retired))
-        if report.deferred:
-            msg = "build cleanup deferred"
-            raise StoreBusy(msg, request_id=run.request.request_id)
+        _cleanup(run, since, counts)
         return None
     if rebuilds >= _MAX_REBUILDS:
         set_deletion_status(run.request.request_id, "failed")
@@ -291,14 +260,12 @@ def _finish(run: _Run) -> None:
 
 
 def _second_pass(run: _Run, counts: _Counts) -> None:
-    """Lake pass 2; when it (or a failed earlier attempt) removed rows, repeat 3 and 3b."""
-    earlier = run.request.steps.get("7", {}).get("counts", {}).get("rows_removed", 0)
-    _lake(run, counts)
-    counts["rows_removed"] += earlier if isinstance(earlier, int) else 0
-    if counts["rows_removed"]:
-        _caches(run, counts)
-        _memory(run, counts)
-    _seal_ops()
+    """Lake pass 2, then steps 3, 3b and 4 again, whatever pass 2 removed (SN-T10-29-a)."""
+    rid = run.record_id
+    steps.lake(rid, counts)
+    steps.caches(rid, counts)
+    steps.memory(run.memory_purge, rid, counts)
+    steps.scrub(run.cfg, rid, counts)
 
 
 def run_privacy_delete(
@@ -315,11 +282,12 @@ def run_privacy_delete(
     payload; step errors as the module docstring says."""
     request = _open(ctx.job.payload, now)
     run = _Run(cfg, ctx.job.payload, now, memory_purge, request)
+    rid = request.record_id
     _step(run, "1", lambda _c: _start(run))
-    _step(run, "2", lambda c: _lake(run, c))
-    _step(run, "3", lambda c: _caches(run, c))
-    _step(run, "3b", lambda c: _memory(run, c))
-    _step(run, "4", lambda c: _scrub(run, c))
+    _step(run, "2", lambda c: steps.lake(rid, c))
+    _step(run, "3", lambda c: steps.caches(rid, c))
+    _step(run, "3b", lambda c: steps.memory(memory_purge, rid, c))
+    _step(run, "4", lambda c: steps.scrub(cfg, rid, c))
     waiting = _step(run, "5", lambda c: _rebuild(run, c))
     if waiting is not None:
         return waiting

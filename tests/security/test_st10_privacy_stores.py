@@ -20,6 +20,8 @@ from tests.support.privacy_env import (  # noqa: F401 - fixture import
 )
 
 from herness.core.errors import ModelUnavailable
+from herness.store.ops import core
+from herness.store.ops.core import _drop_cached
 
 pytestmark = pytest.mark.integration
 
@@ -72,6 +74,56 @@ def test_st10_57_memory_holds_nothing_citing_the_record(
     assert env.fts('"INC0042"') == []
     assert env.vectors.vectors(env.cited) == {}
     assert env.memory_ids() == env.kept
+
+
+def test_st10_57_citations_made_during_the_rebuild_wait_are_removed(
+    privacy_env: PrivacyEnv,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ST10-57 / SN-T10-29-a a memory item, an evidence sample and a trace citing the record
+    created during the rebuild wait (no lake row comes back) are removed by step 7, which
+    repeats steps 3, 3b and 4 whatever lake pass 2 removed; the description bytes are gone."""
+    env = privacy_env
+    seen = env.delete_end_to_end(monkeypatch, during_wait=env.recite_during_wait)
+    again = seen["wait"]
+    req = env.request()
+    assert req.status == "done"
+    seven = req.steps["7"]["counts"]
+    assert (seven["memory_items"], seven["evidence_rows"], seven["trace_files"]) == (1, 1, 1)
+    assert again not in env.memory_ids()
+    assert env.memory_ids() == env.kept
+    assert env.vectors.vectors([again]) == {}
+    assert env.fts(DESC.split()[0]) == []
+    assert not (env.data / "traces" / "run_cccc.jsonl").exists()
+    assert _hits(env.data) == {}
+
+
+def test_st10_50_connection_reopened_mid_step_leaves_no_bytes_in_ops_store(
+    privacy_env: PrivacyEnv,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ST10-50 / review I3 run_write dropping and reopening the thread's ops connection in the
+    middle of step 3b (what it does after a failed ROLLBACK) loses ``secure_delete``; the memory
+    rows are then deleted on the new connection. After the step-7 checkpoint the new connection
+    reads ``secure_delete`` = 1 and the record's description bytes are in neither ops.sqlite
+    nor its -wal file."""
+    env = privacy_env
+    reopened: list[bool] = []
+
+    def reopening_purge(record_id: str) -> int:
+        before = core.connection()
+        _drop_cached(close=True)
+        reopened.append(core.connection() is not before)
+        return env.memory.purge(record_id=record_id)
+
+    env.delete_end_to_end(monkeypatch, memory_purge=reopening_purge)
+    assert reopened
+    assert all(reopened)
+    assert env.request().status == "done"
+    hits = _hits(env.data)
+    assert {k: v for k, v in hits.items() if k.startswith("ops.sqlite")} == {}
+    assert hits == {}
+    assert core.connection().execute("PRAGMA secure_delete").fetchone()[0] == 1
 
 
 def test_st10_57_step_3b_failure_then_retry(privacy_env: PrivacyEnv) -> None:  # noqa: F811
