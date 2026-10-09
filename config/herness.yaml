@@ -108,6 +108,6 @@ deploy:
     account: svc-herness
   release:
     repo: null
-    signer_workflow: null
+    signer_workflow: null                        # must be <owner>/<repo>/.github/workflows/release.yml
     trusted_root_sha256: null                    # SHA-256 of the release trusted_root.jsonl
     licence_exceptions: []

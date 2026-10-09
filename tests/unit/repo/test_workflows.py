@@ -164,10 +164,10 @@ def test_st00_08_release_workflow() -> None:
 
     Trigger is tag push ``v*.*.*`` only; ``build`` needs ``ci``; ``build`` has
     ``id-token: write`` and ``attestations: write`` and no other job does; ``build``
-    calls ``attest-build-provenance`` on the wheel and ``attest-sbom``; the
-    tag-verification and version-match steps precede the wheel build. T00-15b: no sdist
-    is built or published (the U10-86 bundle has none); ``publish`` uploads the bundle
-    (UT00-82 and UT00-83 check its layout).
+    calls ``attest-build-provenance`` on the wheel and sdist and ``attest-sbom``; the
+    tag-verification and version-match steps precede the wheel build. T00-15b: the sdist
+    is built outside the U10-86 bundle and published as a separate asset; ``publish``
+    uploads the zipped bundle (test_release_bundle_workflow.py checks its layout).
     """
     doc = _load(RELEASE)
     triggers = _triggers(doc)
@@ -209,6 +209,10 @@ def test_st00_08_release_workflow() -> None:
     assert sbom_attest_idx is not None
     subject_path = steps[provenance_idx]["with"]["subject-path"]
     assert subject_path == "bundle/herness-*-py3-none-any.whl"
+    provenance_subjects = [
+        s["with"]["subject-path"] for s in steps if "attest-build-provenance@" in s.get("uses", "")
+    ]
+    assert "sdist/herness-*.tar.gz" in provenance_subjects  # sdist: a separate attested asset
     assert provenance_idx > build_idx
 
     publish_run_texts = [s.get("run", "") for s in jobs["publish"]["steps"]]
