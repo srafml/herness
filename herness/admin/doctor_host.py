@@ -9,6 +9,7 @@ process names, never a secret value or file contents. T09-22 (``run_doctor``) re
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
 import re
 import shutil
@@ -27,7 +28,7 @@ from herness.core import secrets
 from herness.core import time as clock
 from herness.core.audit import verify_chain
 from herness.core.config import validate
-from herness.core.errors import EgressBlocked, HernessError
+from herness.core.errors import EgressBlocked
 from herness.core.jobs.gpu import gpu_state
 from herness.core.types import ServiceName
 
@@ -48,6 +49,9 @@ _MAX_SKEW_S: Final = 5.0
 _MODEL_PORTS: Final = (8000, 8100, 8200)  # R-51
 _NOT_APPLICABLE: Final = "not applicable on this host"
 _FORBIDDEN_ACES: Final = ("BUILTIN\\Users", "Everyone", "Authenticated Users")
+# Allowlist ruling (T10-27 fix round 1): only these grantees plus <host or domain>\<account>.
+_ALWAYS_ALLOWED: Final = frozenset({"builtin\\administrators", "nt authority\\system"})
+_ACE: Final = re.compile(r"(?P<who>.+?):(?P<perm>(?:\([A-Za-z,]+\))+)\s*")
 _PHASE_OFFSET: Final = re.compile(r"Phase Offset:\s*([-+]?\d+(?:\.\d+)?)s")
 _FIX: Final[dict[str, str]] = {
     "python_uv": "Install Python 3.12 and uv",
@@ -95,11 +99,13 @@ def _config_dir() -> Path:
     return Path("config")
 
 
+def _clean(text: str) -> str:
+    """Printable characters only (process, plugin and grantee names are untrusted)."""
+    return "".join(c for c in text if c.isprintable())[:120]
+
+
 def _worst(statuses: Sequence[_Status]) -> _Status:
     return "FAIL" if "FAIL" in statuses else "WARN" if "WARN" in statuses else "PASS"
-
-
-# --- U10-90 checks ----------------------------------------------------------------------------
 
 
 def _check_python_uv(cfg: HernessConfig) -> HostCheckResult:
@@ -129,30 +135,38 @@ def _check_secrets_present(cfg: HernessConfig) -> HostCheckResult:
 def _acl_targets(cfg: HernessConfig) -> list[tuple[Path, bool]]:
     """``(path, required)``: ``data\\`` must exist; the others are checked when present."""
     config_dir = _config_dir().resolve()
-    optional = [config_dir / "profiles", config_dir.parent / ".env"]
-    directory_file = cfg.security.redaction.directory_file
-    if directory_file is not None:
-        optional.insert(1, directory_file)
+    extra = [p for p in (cfg.security.redaction.directory_file,) if p is not None]
+    optional = [config_dir / "profiles", *extra, config_dir.parent / ".env"]
     return [(cfg.paths.data, True), *((p, False) for p in optional)]
 
 
+def _aces(output: str, path: str) -> list[tuple[str, str]]:
+    """``(grantee, flags)`` per ACE line; the first line's path prefix ends at the column the
+    continuation lines are indented to (else after ``path``); an unparsed grantee keeps it."""
+    lines = [line for line in output.splitlines() if line.strip()]
+    indents = [len(line) - len(line.lstrip(" ")) for line in lines[1:] if line.startswith(" ")]
+    col = indents[0] if indents else len(path) + 1 if lines and lines[0].startswith(path) else 0
+    texts = [lines[0][col:], *(line.strip() for line in lines[1:])] if lines else []
+    return [(m["who"].strip(), m["perm"]) for m in map(_ACE.fullmatch, texts) if m]
+
+
 def _acl_problem(path: Path, account: str) -> str | None:
-    """Why the ACL of ``path`` is unsafe, or None (design 10 §5.5)."""
+    """Why the ACL of ``path`` is unsafe, or None (design 10 §5.5; grantee allowlist)."""
     result = wsl.run_cmd(["icacls.exe", str(path)], timeout_s=_TIMEOUT_S)
     if result.returncode != 0:
         return f"icacls exit {result.returncode}"
-    lines = result.stdout.splitlines()
-    flags = "(OI)(CI)" if path.is_dir() else ""
-    svc = re.compile(rf"(?:^|\s)[^\s\\]+\\{re.escape(account)}:{re.escape(flags)}\(M\)\s*$")
-    for line in lines:
-        bad = next((ace for ace in _FORBIDDEN_ACES if ace in line), None)
-        if bad is not None:
-            return f"{bad} has access"
-        if "(I)" in line:
+    aces = _aces(result.stdout, str(path))
+    svc = re.compile(rf"[^\s\\]+\\{re.escape(account)}", re.IGNORECASE)
+    for who, perm in aces:
+        bad = next((name for name in _FORBIDDEN_ACES if name.lower() in who.lower()), None)
+        if bad is not None or (who.lower() not in _ALWAYS_ALLOWED and not svc.fullmatch(who)):
+            return f"{_clean(bad or who)} has access"
+        if "(I)" in perm:
             return "inherited ACE (I)"
-    if not any(f"BUILTIN\\Administrators:{flags}(F)" in line for line in lines):
+    flags = "(OI)(CI)" if path.is_dir() else ""
+    if not any(w.lower() == "builtin\\administrators" and p == f"{flags}(F)" for w, p in aces):
         return f"no BUILTIN\\Administrators:{flags}(F)"
-    if not any(svc.search(line) for line in lines):
+    if not any(svc.fullmatch(who) and perm == f"{flags}(M)" for who, perm in aces):
         return f"no {account}:{flags}(M)"
     return None
 
@@ -160,23 +174,32 @@ def _acl_problem(path: Path, account: str) -> str | None:
 def _check_acl_data(cfg: HernessConfig) -> HostCheckResult:
     account = cfg.deploy.service.account
     problems: list[str] = []
+    absent: list[str] = []
     for path, required in _acl_targets(cfg):
         if not path.exists():
-            if required:
-                problems.append(f"{path}: missing")
+            (problems if required else absent).append(f"{path}: missing" if required else str(path))
             continue
         problem = _acl_problem(path, account)
         if problem is not None:
             problems.append(f"{path}: {problem}")
     if problems:
         return _row("acl_data", "FAIL", "; ".join(problems))
-    return _row("acl_data", "PASS", "ACLs restricted")
+    skipped = f"; not present: {', '.join(absent)}" if absent else ""
+    return _row("acl_data", "PASS", "ACLs restricted" + skipped)
 
 
-def _drives(cfg: HernessConfig) -> list[str]:
-    """System drive, then the drives of ``paths.data`` and ``paths.backup_target``, deduplicated."""
-    paths = (os.environ.get("SYSTEMDRIVE", "C:"), cfg.paths.data, cfg.paths.backup_target)
-    return list(dict.fromkeys(d for d in (PureWindowsPath(p).drive for p in paths) if d))
+def _drive_keys(cfg: HernessConfig) -> dict[str, str]:
+    """Label → drive of the system, data and backup drives; a drive-less value keeps a label."""
+    named = (
+        ("%SYSTEMDRIVE%", os.environ.get("SYSTEMDRIVE", "C:")),
+        ("paths.data", str(cfg.paths.data)),
+        ("paths.backup_target", str(cfg.paths.backup_target)),
+    )
+    keys: dict[str, str] = {}
+    for label, value in named:
+        drive = PureWindowsPath(value).drive
+        keys.setdefault(drive or f"{label} (no drive)", drive)
+    return keys
 
 
 def _bitlocker_status(drive: str) -> _Status:
@@ -187,10 +210,13 @@ def _bitlocker_status(drive: str) -> _Status:
 
 
 def _check_bitlocker(cfg: HernessConfig) -> HostCheckResult:
-    found = {drive: _bitlocker_status(drive) for drive in _drives(cfg)}
+    found: dict[str, _Status] = {
+        key: _bitlocker_status(drive) if drive else "WARN"
+        for key, drive in _drive_keys(cfg).items()
+    }
     status = _worst(list(found.values()))
     words = {"PASS": "Protection On", "FAIL": "Protection Off", "WARN": "access denied or unknown"}
-    detail = "; ".join(f"{drive} {words[s]}" for drive, s in found.items())
+    detail = "; ".join(f"{key} {words[s]}" for key, s in found.items())
     return _row("bitlocker", status, detail)
 
 
@@ -219,7 +245,8 @@ def _wsl_offset(cfg: HernessConfig) -> float | None:
         wsl_time = float(result.stdout.strip())
     except ValueError:
         return None
-    return wsl_time - clock.now().timestamp() if result.returncode == 0 else None
+    ok = result.returncode == 0 and math.isfinite(wsl_time)  # nan/inf must not PASS
+    return wsl_time - clock.now().timestamp() if ok else None
 
 
 def _check_clock(cfg: HernessConfig) -> HostCheckResult:
@@ -263,7 +290,7 @@ def _check_ports_loopback(cfg: HernessConfig) -> HostCheckResult:
 def _healthy(state: GpuStateReader, name: ServiceName) -> bool:
     try:
         return state.service_healthy(name)
-    except HernessError:
+    except Exception:  # noqa: BLE001 - an unreachable service counts as unhealthy
         return False
 
 
@@ -272,7 +299,7 @@ def _no_class_loaded() -> bool:
     state = gpu_state()
     try:
         return state.loaded_class() == "none"
-    except HernessError:  # no worker to ask (jobs backend unbound or unreachable)
+    except Exception:  # noqa: BLE001 - no worker to ask (backend unbound or unreachable)
         return not any(_healthy(state, name) for name in get_args(ServiceName.__value__))
 
 
@@ -280,7 +307,7 @@ def _process_name(pid: int | None) -> str:
     if pid is None:
         return "unknown process"
     try:
-        return psutil.Process(pid).name()
+        return _clean(psutil.Process(pid).name())
     except psutil.Error:
         return f"pid {pid}"
 
@@ -310,12 +337,9 @@ def _check_socket_guard(cfg: HernessConfig) -> HostCheckResult:
 def _check_plugins(cfg: HernessConfig) -> HostCheckResult:
     """Every ``herness.plugins`` entry point is loaded by the registry on first lookup."""
     del cfg
-    found = sorted(
-        {
-            f"{ep.dist.name if ep.dist else ep.name} {ep.dist.version if ep.dist else '?'}"
-            for ep in metadata.entry_points(group="herness.plugins")
-        }
-    )
+    eps = metadata.entry_points(group="herness.plugins")
+    names = {f"{ep.dist.name} {ep.dist.version}" if ep.dist else f"{ep.name} ?" for ep in eps}
+    found = sorted({_clean(name) for name in names})
     if found:
         return _row("plugins", "WARN", "plugins: " + ", ".join(found))
     return _row("plugins", "PASS", "no herness.plugins entry points")
@@ -327,9 +351,7 @@ def _check_services(cfg: HernessConfig) -> HostCheckResult:
     worker = ["sc.exe", "query"] if manager == "nssm" else task
     wanted = {"herness-worker": worker, "herness-wsl": task}
     missing = [
-        name
-        for name, argv in wanted.items()
-        if wsl.run_cmd([*argv, name], timeout_s=_TIMEOUT_S).returncode != 0
+        n for n, a in wanted.items() if wsl.run_cmd([*a, n], timeout_s=_TIMEOUT_S).returncode
     ]
     if missing:
         return _row("services", "WARN", "not registered: " + ", ".join(missing))
@@ -338,41 +360,22 @@ def _check_services(cfg: HernessConfig) -> HostCheckResult:
 
 type Check = Callable[[HernessConfig], HostCheckResult]
 
-HOST_CHECKS: Final[tuple[Check, ...]] = (
-    _check_python_uv,
-    _check_config_valid,
-    _check_secrets_present,
-    _check_acl_data,
-    _check_bitlocker,
-    _check_audit_chain,
-    _check_disk_free,
-    _check_clock,
-    _check_ports_loopback,
-    _check_ports_expected,
-    _check_socket_guard,
-    _check_plugins,
-    _check_services,
-)
+HOST_CHECKS: Final[tuple[Check, ...]] = (  # the U10-90 table order
+    _check_python_uv, _check_config_valid, _check_secrets_present, _check_acl_data,
+    _check_bitlocker, _check_audit_chain, _check_disk_free, _check_clock, _check_ports_loopback,
+    _check_ports_expected, _check_socket_guard, _check_plugins, _check_services,
+)  # fmt: skip
 # Extension point for U10-91 GPU_CHECKS (T10-28); empty until that card lands.
 _GPU_CHECKS: tuple[Check, ...] = ()
 
 
-# --- U10-89 ---------------------------------------------------------------------------------
-
-
-def _check_name(check: Check) -> str:
-    return getattr(check, "__name__", "check").removeprefix("_check_")
-
-
 def _run_one(check: Check, cfg: HernessConfig) -> HostCheckResult:
-    name = _check_name(check)
+    name = getattr(check, "__name__", "check").removeprefix("_check_")
     if name in _WINDOWS_ONLY and not _on_windows():
         return _row(name, "WARN", _NOT_APPLICABLE)
     try:
         return check(cfg)
-    except HernessError as exc:
-        return _row(name, "FAIL", type(exc).__name__)
-    except Exception as exc:  # noqa: BLE001 - doctor_checks never raises (U10-89 Errors)
+    except Exception as exc:  # noqa: BLE001 - HernessError and anything else: FAIL, never raise
         return _row(name, "FAIL", type(exc).__name__)
 
 

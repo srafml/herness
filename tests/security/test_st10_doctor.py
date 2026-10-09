@@ -91,6 +91,22 @@ def test_st10_38_users_and_inherited_ace_fail_acl_data(
     assert "BUILTIN\\Users" not in row.detail
 
 
+def test_st10_38_other_grantee_fails_acl_data(
+    env: tuple[HernessConfig, Host], fake_runner: FakeRunner
+) -> None:
+    """ST10-38 allowlist: CONTOSO\\Domain Users:(RX) on data\\ → acl_data FAIL naming it."""
+    cfg, _ = env
+    clean = ICACLS_USERS_INHERITED.replace("                BUILTIN\\Users:(RX)\r\n", "").replace(
+        "(I)(OI)", "(OI)"
+    )
+    fake_runner.add(["icacls.exe"], clean)
+    assert dh._check_acl_data(cfg).status == "PASS"
+    fake_runner.add(["icacls.exe"], clean + "                CONTOSO\\Domain Users:(RX)\r\n")
+    row = dh._check_acl_data(cfg)
+    assert row.status == "FAIL"
+    assert f"{cfg.paths.data}: CONTOSO\\Domain Users has access" in row.detail
+
+
 def test_st10_42_unknown_listener_without_worker_warns_with_name(
     env: tuple[HernessConfig, Host],
 ) -> None:

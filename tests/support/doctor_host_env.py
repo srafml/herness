@@ -30,7 +30,7 @@ ICACLS_DIR_OK = (
 )
 ICACLS_FILE_OK = (
     "D:\\herness\\.env BUILTIN\\Administrators:(F)\r\n"
-    "                 HERNESS-PC\\svc-herness:(M)\r\n\r\n"
+    "                HERNESS-PC\\svc-herness:(M)\r\n\r\n"
     "Successfully processed 1 files; Failed processing 0 files\r\n"
 )
 # ST10-38: a default-inherited tree — Users can read, and the ACEs are inherited (I).

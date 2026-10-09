@@ -38,6 +38,7 @@ from tests.support.fake_keyring import MemoryKeyring
 from tests.support.fake_runner import FakeRunner
 
 from herness.admin import doctor_host as dh
+from herness.admin import wsl
 from herness.core import audit, secrets
 from herness.core.config import HernessConfig, reset_config
 from herness.core.config_view import ConfigIssue
@@ -188,6 +189,19 @@ def test_ut10_71_acl_data_pass(
             ICACLS_DIR_OK.replace("svc-herness:(OI)(CI)(M)", "svc-herness:(OI)(CI)(F)"),
             "no svc-herness:(OI)(CI)(M)",
         ),
+        # Grantee allowlist (fix round 1 ruling): any other principal FAILs, named.
+        *(
+            (f"{ICACLS_DIR_OK}                {who}:{perm}\r\n", f"{who} has access")
+            for who, perm in [
+                ("CONTOSO\\Domain Users", "(RX)"),
+                ("HERNESS-PC\\bob", "(OI)(CI)(R)"),
+                ("BUILTIN\\Guests", "(R)"),
+                ("NT AUTHORITY\\INTERACTIVE", "(R)"),
+                ("CREATOR OWNER", "(OI)(CI)(IO)(F)"),
+                ("S-1-5-21-1-2-3-1001", "(F)"),
+                ("OTHER-PC\\svc-herness-x", "(M)"),
+            ]
+        ),
     ],
 )
 def test_ut10_71_acl_data_fail_variants(
@@ -200,6 +214,20 @@ def test_ut10_71_acl_data_fail_variants(
     assert row.status == "FAIL"
     assert f"{cfg.paths.data}: {reason}" in row.detail
     assert row.fix.startswith("icacls <path> /inheritance:r")
+
+
+def test_ut10_71_acl_aces_parsing() -> None:
+    """UT10-71 icacls parsing: path prefix cut at the continuation indent or after the path."""
+    out = "C:\\a b\\x NT AUTHORITY\\SYSTEM:(F)\r\n         CONTOSO\\Domain Users:(RX)\r\n"
+    assert dh._aces(out, "ignored") == [
+        ("NT AUTHORITY\\SYSTEM", "(F)"),
+        ("CONTOSO\\Domain Users", "(RX)"),
+    ]
+    one = "C:\\a b\\x BUILTIN\\Administrators:(F)\r\n\r\nSuccessfully processed 1 files\r\n"
+    assert dh._aces(one, "C:\\a b\\x") == [("BUILTIN\\Administrators", "(F)")]
+    # An unknown prefix stays in the grantee, which then is not allowlisted (fail closed).
+    assert dh._aces(one, "D:\\other") == [("C:\\a b\\x BUILTIN\\Administrators", "(F)")]
+    assert dh._aces("", "C:\\x") == []
 
 
 def test_ut10_71_acl_data_missing_and_icacls_error(
@@ -254,6 +282,34 @@ def test_ut10_71_bitlocker_drives_dedupe(
     one = with_paths(cfg, data=Path("C:/herness/data"), backup_target=Path("C:/bk"))
     assert dh._check_bitlocker(one).status == "PASS"
     assert len(fake_runner.calls) == 1
+
+
+@pytest.mark.parametrize("value", ["", "garbage", "  "])
+def test_ut10_71_bitlocker_bad_systemdrive_warns(
+    env: tuple[HernessConfig, Host],
+    fake_runner: FakeRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    """UT10-71 bitlocker WARN (never a silent PASS) when %SYSTEMDRIVE% names no drive."""
+    cfg, _ = env
+    monkeypatch.setenv("SYSTEMDRIVE", value)
+    fake_runner.add(["manage-bde.exe"], manage_bde("D:", "Protection On"))
+    row = dh._check_bitlocker(_bde_cfg(cfg))
+    assert row.status == "WARN"
+    assert row.detail.startswith("%SYSTEMDRIVE% (no drive) access denied or unknown")
+    assert [argv[2] for argv in fake_runner.argvs] == ["D:", "E:"]
+
+
+def test_ut10_71_acl_data_pass_names_absent_targets(
+    env: tuple[HernessConfig, Host], fake_runner: FakeRunner
+) -> None:
+    """UT10-71 acl_data PASS lists optional targets it could not find (cwd-dependent .env)."""
+    cfg, _ = env
+    fake_runner.add(["icacls.exe"], ICACLS_DIR_OK)
+    row = dh._check_acl_data(cfg)
+    env_file = dh._config_dir().resolve().parent / ".env"
+    assert (row.status, row.detail) == ("PASS", f"ACLs restricted; not present: {env_file}")
 
 
 # --- audit_chain ----------------------------------------------------------------------------
@@ -312,6 +368,9 @@ def _clock(fake_runner: FakeRunner, cfg: HernessConfig, host: str, wsl_shift: fl
         ("0.0012345s", None, "WARN"),
         ("unavailable", 0.1, "WARN"),
         ("-7.0s", None, "FAIL"),
+        ("0.01s", float("nan"), "WARN"),
+        ("0.01s", float("inf"), "WARN"),
+        ("0.01s", float("-inf"), "WARN"),
     ],
 )
 def test_ut10_71_clock(
@@ -363,6 +422,8 @@ def test_ut10_71_ports_expected(env: tuple[HernessConfig, Host]) -> None:
     assert row.detail == "unexpected listener: 8000 by wslrelay.exe, 8200 by unknown process"
     host.conns = [listen("127.0.0.1", 8100, pid=77)]  # 77 exited: NoSuchProcess
     assert dh._check_ports_expected(cfg).detail == "unexpected listener: 8100 by pid 77"
+    host.processes.names[77] = "evil\x1b[2J\r\nname.exe"  # attacker-chosen name is sanitised
+    assert dh._check_ports_expected(cfg).detail == "unexpected listener: 8100 by evil[2Jname.exe"
     host.conns = []
     assert dh._check_ports_expected(cfg).status == "PASS"
 
@@ -378,6 +439,9 @@ def test_ut10_71_ports_expected_without_worker(env: tuple[HernessConfig, Host]) 
     assert dh._check_ports_expected(cfg).status == "PASS"
     host.gpu.healthy = set()
     assert dh._check_ports_expected(cfg).status == "WARN"
+    host.gpu.loaded = OSError("ops store locked")  # a non-HernessError takes the same fallback
+    host.gpu.healthy = {"openjev"}
+    assert dh._check_ports_expected(cfg).status == "PASS"
 
 
 # --- socket_guard ---------------------------------------------------------------------------
@@ -498,6 +562,7 @@ def test_ut10_71_doctor_checks_all_pass_in_table_order(
     ]  # fmt: skip
     assert {r.name: r.status for r in rows if r.status != "PASS"} == {}
     assert all(r.fix == "" for r in rows)
+    assert {argv[0] for argv in fake_runner.argvs} <= wsl.ALLOWED_COMMANDS  # production argv0s
 
 
 def test_ut10_71_doctor_checks_error_rows_and_pool(
@@ -554,9 +619,10 @@ def test_ut10_71_check_result_is_frozen() -> None:
 
 
 def test_ut10_71_fake_runner_rejects_unsafe_argv(fake_runner: FakeRunner) -> None:
-    """UT10-71 the fake keeps the runner's allowlist: an unlisted argv0 raises ConfigError."""
-    from herness.admin import wsl  # noqa: PLC0415 - the patched module attribute is the point
+    """UT10-71 fixture coverage: the fake keeps the runner's allowlist (unlisted argv0 raises).
 
+    The production runner's rejection of unsafe argv is covered by test_admin_wsl.py (T10-22).
+    """
     with pytest.raises(ConfigError):
         wsl.run_cmd(["cmd.exe", "/c", "dir"], timeout_s=1)
     assert fake_runner.calls == []
