@@ -71,7 +71,7 @@ def test_ut10_68_unknown_action_is_config_error() -> None:
 
 @pytest.mark.parametrize(
     ("action", "owner"),
-    [("backup", "T10-20"), ("purge", "T10-20"), ("privacy_delete", "T10-29"), ("rekey", "T10-30")],
+    [("privacy_delete", "T10-29"), ("rekey", "T10-30")],
 )
 def test_ut10_68_table_routes_unbuilt_actions_to_typed_fatal_error(action: str, owner: str) -> None:
     """UT10-68 each action reaches its table entry; unbuilt owners raise FatalError (not
@@ -183,13 +183,17 @@ def test_ut10_68_inline_runs_through_registered_handler(
     worker_env: WorkerEnv,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """UT10-68 / R-45: inline=True on the real ops store runs the job in-process; the
-    placeholder's FatalError for the unbuilt purge unit propagates after being applied."""
+    """UT10-68 / R-45: inline=True on the real ops store runs the job in-process; the dry-run
+    purge unit (T10-20) returns its counts as the job result."""
     del worker_env
     monkeypatch.delitem(process_state().handlers, "maintenance")
     admin.register_handlers(memory_purge=_purge)
-    with pytest.raises(FatalError, match="T10-20"):
-        cmd_maintenance("purge", dry_run=True, actor="ops", inline=True)
+    result = cmd_maintenance("purge", dry_run=True, actor="ops", inline=True)
+    outcome = cast("dict[str, Any]", result.data["outcome"])
+    assert outcome["status"] == "done"
+    assert outcome["result"]["lake_partitions"] == 0
+    assert "chat_sessions" not in outcome["result"]  # dry run: chat is not counted
     rows = require_jobs_backend().list_jobs(status=None, kind="maintenance", limit=10)
     assert [r.payload["action"] for r in rows] == ["purge"]
     assert rows[0].priority == 80
+    assert rows[0].status == "done"
