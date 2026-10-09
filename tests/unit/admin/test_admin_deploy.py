@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import itertools
 import json
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -19,6 +21,8 @@ from tests.support.fake_keyring import MemoryKeyring
 from tests.support.fake_runner import FakeRunner
 
 from herness.admin import deploy, wsl
+from herness.admin.wsl import run_cmd as captured_run_cmd
+from herness.core import audit
 from herness.core import config as c
 from herness.core import config_validate as cv
 from herness.core import time as clock
@@ -177,6 +181,22 @@ def test_ut10_60_nonzero_exit_is_fatal(cfg: c.HernessConfig, fake_runner: FakeRu
     assert _audit_lines(cfg) == []
 
 
+def test_ut10_60_rendered_json_failure_leaves_no_tmp(
+    cfg: c.HernessConfig, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-60 a failed ``rendered.json`` replace removes its temp file and is not audited."""
+    fake_runner.add(["wsl.exe"])
+
+    def fail(*_a: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(deploy.os, "replace", fail)
+    with pytest.raises(OSError, match="No space"):
+        deploy.render_env(cfg, actor=USER)
+    assert list(_rendered(cfg).parent.iterdir()) == []
+    assert _audit_lines(cfg) == []
+
+
 # --- UT10-65 (U10-78 half) DeployHistory -----------------------------------------------------
 
 
@@ -228,29 +248,36 @@ def test_ut10_65_history_default_path(cfg: c.HernessConfig) -> None:
 def test_ut10_65_history_lock_busy_is_store_busy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT10-65 a held deploy lock surfaces as ``StoreBusy``; nothing is appended."""
-    history = deploy.DeployHistory(tmp_path / "history.jsonl")
-
-    def busy(*_a: object, **_k: object) -> None:
-        msg = "log lock timeout: .deploy.lock"
-        raise StoreBusy(msg)
-
-    monkeypatch.setattr(deploy, "log_lock", busy)
-    with pytest.raises(StoreBusy):
-        history.record("reasoning", _pins("a"), "cfg_1", NOW)
-    assert not (tmp_path / "history.jsonl").exists()
+    """UT10-65 a deploy lock held by another handle surfaces as ``StoreBusy``; no append."""
+    history = deploy.DeployHistory(tmp_path / "deploy" / "history.jsonl")
+    lock = tmp_path / "deploy" / ".deploy.lock"
+    lock.parent.mkdir()
+    ticks = itertools.count(step=1.0)  # the 10 s lock wait runs in fake time (as FT10-01)
+    monkeypatch.setattr(audit, "_monotonic", lambda: next(ticks))
+    monkeypatch.setattr(audit, "_sleep", lambda _s: None)
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        audit._os_lock(fd)  # the real OS lock, held as another process would hold it
+        with pytest.raises(StoreBusy, match=r"log lock timeout: \.deploy\.lock"):
+            history.record("reasoning", _pins("a"), "cfg_1", NOW)
+        audit._os_lock(fd, unlock=True)
+    finally:
+        os.close(fd)
+    assert not history.path.exists()
+    history.record("reasoning", _pins("a"), "cfg_1", NOW)  # released: the append goes through
+    assert history.last_promoted("reasoning") == [_pins("a")]
 
 
 # --- UT10-75 repository compose file ---------------------------------------------------------
 
 
 def test_ut10_75_repository_compose_cross_check(tmp_path: Path) -> None:
-    """UT10-75 repository compose + impl 08 resilience.yaml: no C08a; a moved port is C08a."""
+    """UT10-75 repository compose + impl 08 resilience.yaml: no issues; a moved port is C08a."""
     compose = REPO / "docker" / "compose.yaml"
     cfg_dir = write_checked_config(tmp_path)
     cfg = c.load_config("local", config_dir=cfg_dir)
     issues = cv.run_cross_checks(cfg, offline=True, include_registry=False, compose_path=compose)
-    assert [i for i in issues if i.message.startswith("C08a")] == []
+    assert issues == []
     herness = cfg_dir / "herness.yaml"
     text = herness.read_text("utf-8").replace("large: {", "large: {port: 8201, ", 1)
     herness.write_text(text, "utf-8")
@@ -287,3 +314,32 @@ def test_ut10_60_fake_runner_unmatched_fails(fake_runner: FakeRunner) -> None:
     """UT10-60 support: an argv no row matches fails the test instead of passing silently."""
     with pytest.raises(pytest.fail.Exception, match="no row matches"):
         wsl.run_cmd(["docker", "ps"], timeout_s=1)
+
+
+def test_ut10_60_fake_runner_blocks_captured_run_cmd(
+    fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-60 support: the real ``run_cmd`` held by name fails the test, no process starts."""
+    del fake_runner
+    monkeypatch.setattr(wsl.shutil, "which", lambda name: f"C:\bin\\{name}")
+    with pytest.raises(pytest.fail.Exception, match="fake_runner bypassed"):
+        captured_run_cmd(["docker", "ps"], timeout_s=1)
+
+
+@pytest.mark.parametrize(
+    ("argv", "timeout_s", "match"),
+    [
+        (["docker", "a\0b"], 1, "without NUL"),
+        (["docker"], 0, "timeout_s"),
+        (["docker"], 7201, "timeout_s"),
+    ],
+    ids=["nul", "zero-timeout", "long-timeout"],
+)
+def test_ut10_60_fake_runner_mirrors_argument_checks(
+    fake_runner: FakeRunner, argv: list[str], timeout_s: float, match: str
+) -> None:
+    """UT10-60 support: NUL elements and an out-of-range timeout are refused as by run_cmd."""
+    fake_runner.add(["docker"])
+    with pytest.raises(ConfigError, match=match):
+        wsl.run_cmd(argv, timeout_s=timeout_s)
+    assert fake_runner.calls == []

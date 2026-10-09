@@ -3,7 +3,9 @@
 It replaces U10-76 ``herness.admin.wsl.run_cmd``, the only permitted OS-level mock (ENG §6), so
 ``run_wsl`` and ``run_powershell`` keep their own argument checks and no test needs a real
 ``wsl.exe``, ``docker`` or ``powershell.exe``. The longest matching prefix wins (the newest on a
-tie); an argv no row matches fails the test. Every call is recorded with its stdin.
+tie); an argv no row matches fails the test. Every call is recorded with its stdin. The private
+``_execute`` (the one place ``subprocess.run`` is called) is replaced too, so code holding the
+real ``run_cmd`` by name fails the test instead of starting a process.
 """
 
 from __future__ import annotations
@@ -55,6 +57,13 @@ class FakeRunner:
         if not argv or argv[0] not in wsl.ALLOWED_COMMANDS:  # keep the U10-76 allowlist
             msg = f"command not allowed: {argv[0] if argv else ''}"
             raise ConfigError(msg)
+        elements: Sequence[object] = argv
+        if not all(isinstance(a, str) and "\0" not in a for a in elements):
+            msg = "command element is not a string without NUL"
+            raise ConfigError(msg)
+        if not 0 < timeout_s <= wsl.MAX_TIMEOUT_S:
+            msg = f"timeout_s must be in (0, {wsl.MAX_TIMEOUT_S}]"
+            raise ConfigError(msg)
         args = tuple(argv)
         self.calls.append(FakeCall(args, stdin, timeout_s))
         best: tuple[tuple[str, ...], CmdResult] | None = None
@@ -74,4 +83,10 @@ def fake_runner(monkeypatch: pytest.MonkeyPatch) -> FakeRunner:
     """Install a ``FakeRunner`` as ``herness.admin.wsl.run_cmd`` for one test."""
     runner = FakeRunner()
     monkeypatch.setattr(wsl, "run_cmd", runner)
+    monkeypatch.setattr(wsl, "_execute", _no_process)
     return runner
+
+
+def _no_process(argv: list[str], *_args: object) -> CmdResult:
+    """Stands in for ``wsl._execute``: a bypass of the fake must never start a real process."""
+    pytest.fail(f"fake_runner bypassed: real run_cmd reached for {argv[0]!r}")
