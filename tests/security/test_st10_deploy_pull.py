@@ -8,6 +8,7 @@ is answered by ``fake_runner`` through ``tests.support.pull_host``.
 
 from __future__ import annotations
 
+import hashlib
 import posixpath
 import threading
 from pathlib import Path
@@ -97,26 +98,78 @@ def test_st10_20_link_target_must_be_a_blob_name(host: PullHost, target: str) ->
     assert status == "link_invalid:config.json"
 
 
-@pytest.mark.parametrize("full", [True, False])
-def test_st10_20_large_non_lfs_blob_refused(host: PullHost, full: bool) -> None:
-    """ST10-20 a weight linked to a 40-hex (unhashed) blob over 10 MiB is ``not_lfs``."""
+def _git_id(content: bytes) -> str:
+    return hashlib.sha1(  # git's blob id, computed here independently of the fake host
+        b"blob " + str(len(content)).encode() + b"\x00" + content, usedforsecurity=False
+    ).hexdigest()
+
+
+def test_st10_20_genuine_git_blob_passes(host: PullHost) -> None:
+    """ST10-20 a genuine 40-hex (git blob id) config blob is hashed in full mode and passes."""
+    model = host.cfg.deploy.reasoning.model
+    path = host.blob(model, "config.json")
+    assert posixpath.basename(path) == _git_id(host.contents[path])
+    assert deploy_pull.verify_weights(host.cfg, "reasoning", full=True)["status"] == "ok"
+    [call] = [a for a in host.runner.argvs if "hash-object" in a]
+    assert call[4:] == ["git", "hash-object", "--no-filters", "--", path]
+
+
+def test_st10_20_tampered_git_blob_is_blob_mismatch(host: PullHost) -> None:
+    """ST10-20 one byte of ``config.json`` changed: ``blob_mismatch:config.json`` (full mode)."""
+    model = host.cfg.deploy.reasoning.model
+    path = host.blob(model, "config.json")
+    host.contents[path] = host.contents[path][:-1] + b"!"  # same size, other content
+    result = deploy_pull.verify_weights(host.cfg, "reasoning", full=True)
+    assert result == {"status": "blob_mismatch:config.json", "files": "0"}
+    # quick mode keeps the spec's presence / size check (no hashing after the window)
+    assert deploy_pull.verify_weights(host.cfg, "reasoning", full=False)["status"] == "ok"
+    with pytest.raises(FatalError, match=r"blob_mismatch:config\.json"):
+        deploy_pull.run_pull(host.cfg, allow_download=True, actor=ACTOR)
+    assert host.outbound == "Block"
+
+
+def test_st10_20_weight_behind_git_blob_name_is_hashed(host: PullHost) -> None:
+    """ST10-20 a weight file linked to a 40-hex name it does not hash to is refused."""
     model = host.cfg.deploy.reasoning.model
     blob = f"{repo_dir(model)}/blobs/{'e' * 40}"
     host.links[host.snapshot(model)]["model.safetensors"] = "../../blobs/" + "e" * 40
-    host.sizes[blob] = 10 * 1024 * 1024 + 1
-    result = deploy_pull.verify_weights(host.cfg, "reasoning", full=full)
-    assert result == {"status": "not_lfs:model.safetensors", "files": "0"}
-    host.sizes[blob] = 10 * 1024 * 1024  # at the limit: allowed, like a small config blob
-    assert deploy_pull.verify_weights(host.cfg, "reasoning", full=full)["status"] == "ok"
+    host.sizes[blob] = 5000
+    host.contents[blob] = b"\x00" * 5000  # attacker bytes
+    status = deploy_pull.verify_weights(host.cfg, "reasoning", full=True)["status"]
+    assert status == "blob_mismatch:model.safetensors"
 
 
-def test_st10_20_small_non_lfs_config_still_passes(host: PullHost) -> None:
-    """ST10-20 a small 40-hex blob (``config.json``) passes unhashed, by spec design."""
+@pytest.mark.parametrize(("stdout", "rc"), [("zz\n", 0), ("", 0), ("", 127), ("a" * 40 + "\n", 1)])
+def test_st10_20_garbled_git_output_is_mismatch(host: PullHost, stdout: str, rc: int) -> None:
+    """ST10-20 unreadable or failed ``git hash-object`` output never counts as a match."""
+    host.runner.add([*WSL, "git", "hash-object"], stdout, returncode=rc)
+    status = deploy_pull.verify_weights(host.cfg, "decider", full=True)["status"]
+    assert status == "blob_mismatch:config.json"
+
+
+def test_st10_20_git_ids_batched_by_100(host: PullHost) -> None:
+    """ST10-20 ``git hash-object`` gets at most 100 paths per call."""
     model = host.cfg.deploy.reasoning.model
-    assert len(posixpath.basename(host.blob(model, "config.json"))) == 40
+    snap = host.snapshot(model)
+    for i in range(130):
+        content = f"small file {i}".encode()
+        blob = _git_id(content)
+        host.links[snap][f"extra-{i}.json"] = f"../../blobs/{blob}"
+        host.sizes[f"{repo_dir(model)}/blobs/{blob}"] = len(content)
+        host.contents[f"{repo_dir(model)}/blobs/{blob}"] = content
     assert deploy_pull.verify_weights(host.cfg, "reasoning", full=True)["status"] == "ok"
-    hashed = [p for a in host.runner.argvs if "sha256sum" in a for p in a]
-    assert host.blob(model, "config.json") not in hashed
+    calls = [a for a in host.runner.argvs if "hash-object" in a]
+    assert [len(a) - 8 for a in calls] == [100, 31]
+
+
+@pytest.mark.parametrize("name", ["g" * 40, "a" * 41, "a" * 39, "a" * 65])
+def test_st10_20_non_hex_or_wrong_length_target_is_link_invalid(host: PullHost, name: str) -> None:
+    """ST10-20 a blob name that is neither 40 nor 64 lower-case hex is ``link_invalid``."""
+    host.links[host.snapshot(host.cfg.deploy.reasoning.model)]["config.json"] = (
+        f"../../blobs/{name}"
+    )
+    status = deploy_pull.verify_weights(host.cfg, "reasoning", full=True)["status"]
+    assert status == "link_invalid:config.json"
 
 
 @pytest.mark.parametrize(

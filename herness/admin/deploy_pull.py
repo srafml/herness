@@ -14,7 +14,6 @@ from __future__ import annotations
 import ctypes
 import json
 import os
-import posixpath
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -220,8 +219,7 @@ def verify_weights(cfg: HernessConfig, gpu_class: WeightClass, *, full: bool) ->
         links = pv.snapshot_links(cfg, snapshot, repo)
         if isinstance(links, str):
             return {"status": links, "files": "0"}
-        lfs = {r: n for r, b in links.items() if pv.LFS_BLOB.fullmatch(n := posixpath.basename(b))}
-        status, manifest = pv.check_files(cfg, links, lfs, full=full)
+        status, manifest = pv.check_snapshot(cfg, links, full=full)
         name = f"{gpu_class}-{revision}"
     if status == "ok":
         pv.write_manifest(cfg, name, manifest)

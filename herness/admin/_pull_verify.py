@@ -1,8 +1,10 @@
 """Weight-verification helpers of ``herness deploy pull`` (impl 10 U10-83 steps 1-5).
 
 Size-forced private sibling of ``herness.admin.deploy_pull`` (T10-24 review round 2), which
-keeps the public API. Everything here is fail-closed: a missing or garbled ``stat``, ``find`` or
-``sha256sum`` line is a failure status, never ok (TH10-30, TH10-34, TH10-35).
+keeps the public API. In full mode every linked blob is checked over its whole content against
+its name: SHA-256 for LFS blobs, the git blob id for the others (review round 3 ruling). Everything
+here is fail-closed: a missing or garbled ``stat``, ``find``, ``sha256sum`` or ``git hash-object``
+line is a failure status, never ok (TH10-30, TH10-34, TH10-35).
 """
 
 from __future__ import annotations
@@ -18,14 +20,11 @@ from herness.admin import wsl
 from herness.core.config import HernessConfig
 from herness.core.ids import canonical_json
 
-__all__ = ["LFS_BLOB", "NON_LFS_MAX_BYTES", "check_files", "hf_repo", "run", "snapshot_links"]
-__all__ += ["write_manifest"]
+__all__ = ["check_files", "check_snapshot", "hf_repo", "run", "snapshot_links", "write_manifest"]
 
-BATCH: Final = 100  # paths per ``stat`` / ``sha256sum`` call
-LFS_BLOB: Final = re.compile(r"[0-9a-f]{64}")  # LFS blob: named by its SHA-256
-# Review round 2: the Hub stores files above 10 MB in LFS, so a larger non-LFS (40-hex, git
-# object) blob is no genuine file; small non-LFS files (config.json ...) stay unhashed (spec).
-NON_LFS_MAX_BYTES: Final = 10 * 1024 * 1024
+BATCH: Final = 100  # paths per ``stat`` / ``sha256sum`` / ``git hash-object`` call
+_LFS_BLOB: Final = re.compile(r"[0-9a-f]{64}")  # LFS blob: named by its content SHA-256
+_GIT_BLOB: Final = re.compile(r"[0-9a-f]{40}")  # non-LFS blob: named by its git blob id (SHA-1)
 _BLOB_TARGET: Final = re.compile(r"(?:\.\./)+blobs/(?:[0-9a-f]{40}|[0-9a-f]{64})")  # HF links
 _SHA_LINE: Final = re.compile(r"([0-9a-f]{64}) [ *](.+)")
 
@@ -89,22 +88,55 @@ def snapshot_links(cfg: HernessConfig, snapshot: str, repo: str) -> dict[str, st
     return links or "snapshot_empty"
 
 
+def _git_ids(cfg: HernessConfig, paths: Sequence[str]) -> dict[str, str]:
+    """``{path: git blob id}`` from ``git hash-object`` batches (sha1 of ``blob <size>\\0`` +
+    content); output that is not one 40-hex line per path gives no ids (a mismatch)."""
+    found: dict[str, str] = {}
+    for start in range(0, len(paths), BATCH):
+        batch = paths[start : start + BATCH]
+        done = run(cfg, ["git", "hash-object", "--no-filters", "--", *batch], timeout_s=7200)
+        lines = done.stdout.splitlines()
+        if done.returncode == 0 and len(lines) == len(batch):
+            found |= {
+                p: oid for p, oid in zip(batch, lines, strict=True) if _GIT_BLOB.fullmatch(oid)
+            }
+    return found
+
+
 def check_files(
-    cfg: HernessConfig, files: dict[str, str], expected: dict[str, str], *, full: bool
+    cfg: HernessConfig,
+    files: dict[str, str],
+    expected: dict[str, str],
+    *,
+    git: dict[str, str] | None = None,
+    full: bool,
 ) -> tuple[str, dict[str, int]]:
-    """Steps 3-4: sizes of every file (non-LFS ones ≤ 10 MiB); ``expected`` hashes when full."""
+    """Steps 3-4: sizes of every file; ``expected`` SHA-256 hashes and ``git`` ids when full."""
+    git = git or {}
     sizes = _sizes(cfg, sorted(set(files.values())))
     for rel, path in sorted(files.items()):
         if path not in sizes or (rel in expected and sizes[path] == 0):
             return f"missing:{rel}", {}
-        if rel not in expected and sizes[path] > NON_LFS_MAX_BYTES:
-            return f"not_lfs:{rel}", {}
     if full:
         hashes = _sha256(cfg, sorted({files[rel] for rel in expected}))
         for rel, sha in sorted(expected.items()):
             if hashes.get(files[rel]) != sha:
                 return f"hash_mismatch:{rel}", {}
+        ids = _git_ids(cfg, sorted({files[rel] for rel in git}))
+        for rel, oid in sorted(git.items()):
+            if ids.get(files[rel]) != oid:
+                return f"blob_mismatch:{rel}", {}
     return "ok", {rel: sizes[path] for rel, path in files.items()}
+
+
+def check_snapshot(
+    cfg: HernessConfig, links: dict[str, str], *, full: bool
+) -> tuple[str, dict[str, int]]:
+    """Every linked blob checked against its name: SHA-256 (LFS) or git blob id (review r3)."""
+    names = {rel: posixpath.basename(blob) for rel, blob in links.items()}
+    lfs = {rel: name for rel, name in names.items() if _LFS_BLOB.fullmatch(name)}
+    git = {rel: name for rel, name in names.items() if _GIT_BLOB.fullmatch(name)}
+    return check_files(cfg, links, lfs, git=git, full=full)
 
 
 def write_manifest(cfg: HernessConfig, name: str, manifest: dict[str, int]) -> None:

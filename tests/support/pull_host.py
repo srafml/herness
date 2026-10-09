@@ -36,6 +36,12 @@ def _hex(seed: str, width: int = 64) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()[:width]
 
 
+def git_blob_id(content: bytes) -> str:
+    """Git blob id: SHA-1 of ``blob <size>`` + NUL + content (``git hash-object`` output)."""
+    header = b"blob " + str(len(content)).encode() + bytes([0])
+    return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
+
+
 def repo_dir(model: str) -> str:
     return f"{ROOT}/hub/models--{model.replace('/', '--')}"
 
@@ -59,6 +65,7 @@ class PullHost:
     regular: dict[str, list[str]] = field(default_factory=dict)  # snapshot -> non-link files
     sizes: dict[str, int] = field(default_factory=dict)  # blob path -> size
     hashes: dict[str, str] = field(default_factory=dict)  # blob path -> sha256sum output
+    contents: dict[str, bytes] = field(default_factory=dict)  # non-LFS blob path -> bytes
     on_block: Callable[[], None] | None = None
     events: list[str] = field(default_factory=list)
 
@@ -72,8 +79,11 @@ class PullHost:
             repo, _at, digest = ref.partition("@")
             self.repo_digests[ref] = [f"{repo}@sha256:{'0' * 64}", f"{repo}@{digest}"]
         for model in (self.cfg.deploy.reasoning.model, self.cfg.deploy.openjev.model):
+            config = (model + "config").encode().ljust(1011, b" ")  # 1000 + len("config.json")
+            config_blob = git_blob_id(config)
+            self.contents[f"{repo_dir(model)}/blobs/{config_blob}"] = config
             files = {
-                "config.json": _hex(model + "config", 40),
+                "config.json": config_blob,
                 "model.safetensors": _hex(model + "weights"),
                 "sub/tokenizer.model": _hex(model + "tok"),
             }
@@ -137,6 +147,10 @@ class PullHost:
         if program == "sha256sum":
             lines = [f"{self.hashes[p]}  {p}" for p in inner[1:] if p in self.hashes]
             return _ok("\n".join(lines) + "\n", 0 if len(lines) == len(inner) - 1 else 1)
+        if inner[:3] == ["git", "hash-object", "--no-filters"] and inner[3] == "--":
+            paths = inner[4:]
+            ids = [git_blob_id(self.contents[p]) for p in paths if p in self.contents]
+            return _ok("".join(f"{i}\n" for i in ids), 0 if len(ids) == len(paths) else 128)
         return _ok(returncode=127)
 
     def _compose(self, argv: list[str]) -> CmdResult:
