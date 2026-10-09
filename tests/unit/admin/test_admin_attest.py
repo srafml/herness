@@ -6,6 +6,9 @@ the placeholder Sigstore bundles against the flags it is given.
 
 from __future__ import annotations
 
+import json
+import os
+import stat
 from collections.abc import Callable
 from pathlib import Path
 
@@ -61,13 +64,17 @@ def test_ut10_66_exact_gh_argv_and_summary(tmp_path: Path, gh: FakeRunner) -> No
     bundle = ReleaseBundle.load(built.root)
     with structlog.testing.capture_logs() as logs:
         summary = verify_bundle(bundle, cfg)
-    ext = bundle.duckdb_extensions["excel"]
-    prov = bundle.provenance_bundles
+    # T10-26b: every gh path names verify_bundle's private copy, never the download dir.
+    copy = ReleaseBundle.load(Path(summary["copy"]))
+    assert copy.root.parent == cfg.paths.data / ".release"
+    assert copy.root.name.startswith(".verify-")
+    ext = copy.duckdb_extensions["excel"]
+    prov = copy.provenance_bundles
     assert gh.argvs() == [
-        _argv(bundle, bundle.wheel, prov[bundle.wheel.name], SLSA),
-        _argv(bundle, bundle.requirements, prov["requirements.txt"], SLSA),
-        _argv(bundle, ext, prov["duckdb/excel.duckdb_extension"], SLSA),
-        _argv(bundle, bundle.wheel, bundle.sbom_bundle, CDX),
+        _argv(copy, copy.wheel, prov[copy.wheel.name], SLSA),
+        _argv(copy, copy.requirements, prov["requirements.txt"], SLSA),
+        _argv(copy, ext, prov["duckdb/excel.duckdb_extension"], SLSA),
+        _argv(copy, copy.wheel, copy.sbom_bundle, CDX),
     ]
     assert {call.timeout_s for call in gh.calls} == {120}
     assert summary == {
@@ -78,9 +85,17 @@ def test_ut10_66_exact_gh_argv_and_summary(tmp_path: Path, gh: FakeRunner) -> No
             "requirements.txt": sha256_file(bundle.requirements),
             "duckdb/excel.duckdb_extension": built.ext_sha256,
         },
+        "sbom_sha256": sha256_file(bundle.sbom),
+        "copy": str(copy.root),
         "components": 1,
         "licences_checked": 1,
     }
+    for rel in ("trusted_root.jsonl", "sbom.cdx.json", "duckdb/excel.duckdb_extension"):
+        assert (copy.root / rel).read_bytes() == (built.root / rel).read_bytes()
+    if os.name == "posix":  # NTFS ignores POSIX modes; there the data root's ACL applies
+        assert stat.S_IMODE(copy.root.stat().st_mode) == 0o700
+        modes = {stat.S_IMODE(p.stat().st_mode) for p in copy.root.rglob("*") if p.is_file()}
+        assert modes == {0o600}
     verified = [e for e in logs if e["event"] == "deploy.install.verified"]
     assert verified == [
         {
@@ -193,3 +208,55 @@ def test_ut10_66_provenance_json_must_name_this_file(
     refused = [(e["reason"], e["file"]) for e in logs if e["event"] == "deploy.install.refused"]
     assert refused == [("provenance", built.wheel.name)]
     assert len(fake_runner.calls) == 1
+
+
+def test_ut10_66_private_copy_refuses_oversized_or_swapped_file(
+    tmp_path: Path, gh: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-66 the private copy (T10-26b) refuses a file grown past the size limit after
+    ``load``, and a file whose opened identity differs from the one checked (a link or a swap
+    between the check and the open; simulated, as file links need a privilege on Windows);
+    neither leaves anything behind nor reaches ``gh``."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    bundle = ReleaseBundle.load(built.root)
+    monkeypatch.setattr(attest, "_MAX_BYTES", 10)
+    with pytest.raises(ConfigError, match=r"^release bundle invalid: duckdb/excel\."):
+        verify_bundle(bundle, cfg)
+    monkeypatch.undo()
+    real_lstat, other = os.lstat, built.root / "sbom.cdx.json"
+
+    def lstat(path: object) -> os.stat_result:
+        return real_lstat(other if Path(str(path)).name == "requirements.txt" else str(path))
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    with pytest.raises(ConfigError, match=r"^release bundle invalid: requirements\.txt$"):
+        verify_bundle(bundle, cfg)
+    assert gh.calls == []
+    assert list((cfg.paths.data / ".release").iterdir()) == []
+
+
+def test_ut10_66_sbom_attestation_must_name_the_wheel(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    """UT10-66 the SBOM attestation's subject digest must be the wheel's SHA-256 (T10-26b,
+    parked minor of T10-26 r2): an SBOM attested for another file is refused, and the private
+    copy is removed."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+
+    def answer(argv: list[str]) -> CmdResult:
+        result = gh_answer(argv)
+        if CDX not in argv:
+            return result
+        doc = json.loads(result.stdout)
+        doc[0]["verificationResult"]["statement"]["subject"][0]["digest"]["sha256"] = "0" * 64
+        return CmdResult(0, json.dumps(doc), "", 0.0)
+
+    fake_runner.add(["gh"], answer)
+    with structlog.testing.capture_logs() as logs, pytest.raises(FatalError) as caught:
+        verify_bundle(ReleaseBundle.load(built.root), cfg)
+    assert str(caught.value) == "sbom attestation does not name the wheel"
+    refused = [(e["reason"], e["file"]) for e in logs if e["event"] == "deploy.install.refused"]
+    assert refused == [("sbom_attestation", "sbom.cdx.json")]
+    assert list((cfg.paths.data / ".release").iterdir()) == []

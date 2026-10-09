@@ -8,6 +8,7 @@ workflow, hosted-runner and predicate constraints carried by the argv, and stand
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import os
@@ -25,6 +26,7 @@ from tests.support.release_bundle import (
     EXT_BYTES,
     REPO,
     SLSA,
+    TRUSTED_ROOT,
     WORKFLOW,
     Attest,
     BundleSpec,
@@ -234,8 +236,10 @@ def gh_answer_trusting_requirements(root: Path) -> Any:
     """``fake_gh`` that treats the rewritten ``requirements.txt`` as signed (to reach step 3)."""
 
     def answer(argv: list[str]) -> CmdResult:
-        if argv[3] == str(root / "requirements.txt"):
-            return CmdResult(0, statement_json(root / "requirements.txt", SLSA), "", 0.0)
+        subject = Path(argv[3])  # in verify_bundle's private copy, never ``root`` (T10-26b)
+        assert not subject.is_relative_to(root)
+        if subject.name == "requirements.txt":
+            return CmdResult(0, statement_json(subject, SLSA), "", 0.0)
         return gh_answer(argv)
 
     return answer
@@ -351,24 +355,31 @@ def test_st10_53_install_audited_with_version_and_sha256(tmp_path: Path, env: Fa
         "target": "1.2.3",
         "detail": [f"sha256:{built.wheel_sha256}", f"ext:excel={built.ext_sha256}"],
     }
-    release = tmp_path / ".release" / "1.2.3"
+    assert sorted(p.name for p in (tmp_path / ".release" / "1.2.3").iterdir()) == sorted(
+        p.name for p in built.root.iterdir()
+    )
+    # T10-26b: uv and DuckDB read verify_bundle's private copy, removed once installed.
+    (private,) = {Path(argv[-1]).parent for argv in env.argvs() if argv[0] == "uv"}
+    assert private.parent == cfg.paths.data / ".release"
+    assert private.name.startswith(".verify-")
+    assert not private.exists()
     python = str(venv_python(VENV))
     uv_calls = [c for c in env.calls if c.argv[0] == "uv"]
     assert [(c.argv, c.timeout_s, c.check) for c in uv_calls] == [
         (
             ["uv", "pip", "sync", "--require-hashes", "--python", python,
-             str(release / "requirements.txt")],
+             str(private / "requirements.txt")],
             1800,
             True,
         ),
         (
             ["uv", "pip", "install", "--no-deps", "--python", python,
-             str(release / built.wheel.name)],
+             str(private / built.wheel.name)],
             600,
             True,
         ),
     ]  # fmt: skip
-    assert env.argvs()[-1][4] == str(release / "duckdb" / "excel.duckdb_extension")
+    assert env.argvs()[-1][4] == str(private / "duckdb" / "excel.duckdb_extension")
 
 
 def test_st10_53_keeps_two_newest_release_dirs(tmp_path: Path, env: FakeRunner) -> None:
@@ -396,6 +407,8 @@ def test_st10_53_refusals_before_any_change(
     monkeypatch.setattr(attest, "worker_alive", lambda: True)
     with pytest.raises(StoreBusy, match=r"^stop the worker before installing$"):
         attest.install_bundle(bundle, summary, venv=tmp_path / "venv", actor=USER)
+    assert _private_dirs(cfg) == []  # T10-26b: the private copy is single-use
+    summary = verify_bundle(bundle, cfg)
     with pytest.raises(FatalError, match=r"^bundle changed after verification$"):
         attest.install_bundle(
             bundle, {**summary, "wheel_sha256": "0" * 64}, venv=tmp_path / "venv", actor=USER
@@ -613,9 +626,15 @@ def test_st10_23_missing_trusted_root_pin_refused(tmp_path: Path, env: FakeRunne
     assert env.calls == []
 
 
-def test_st10_24_requirements_swapped_after_verify_refused(tmp_path: Path, env: FakeRunner) -> None:
-    """ST10-24 a ``requirements.txt`` swapped between verify and install is caught by the
-    re-hash of every copied subject against ``summary["subjects"]``: no audit, no uv step."""
+@pytest.mark.parametrize(
+    "rel", ["requirements.txt", "sbom.cdx.json", "duckdb/excel.duckdb_extension", "wheel"]
+)
+def test_st10_24_requirements_swapped_after_verify_refused(
+    tmp_path: Path, env: FakeRunner, rel: str
+) -> None:
+    """ST10-24 a subject (requirements, SBOM, extension, wheel) changed in the verified private
+    copy between verify and install is caught by the re-hash against the summary: no audit, no
+    uv step, the private copy removed (T10-26b: the download dir is never read again)."""
     built = build_bundle(tmp_path / "bundle")
     cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
     bundle = ReleaseBundle.load(built.root)
@@ -625,8 +644,142 @@ def test_st10_24_requirements_swapped_after_verify_refused(tmp_path: Path, env: 
         "requirements.txt",
         "duckdb/excel.duckdb_extension",
     }
-    bundle.requirements.write_text("evil==6.6.6 --hash=sha256:" + "1" * 64 + "\n", "utf-8")
+    private = Path(summary["copy"])
+    target = private / (built.wheel.name if rel == "wheel" else rel)
+    target.write_bytes(target.read_bytes() + b"\n# swapped\n")
     with pytest.raises(FatalError, match=r"^bundle changed after verification$"):
         attest.install_bundle(bundle, summary, venv=VENV, actor=USER)
     assert [argv for argv in env.argvs() if argv[0] != "gh"] == []
     assert list(cfg.paths.logs.glob("audit-*.jsonl")) == []
+    assert not private.exists()
+
+
+# --- ST10-61 (TH10-36, TH10-37, TH10-40; T10-26b) -----------------------------------------
+
+
+def _private_dirs(cfg: Any) -> list[Path]:
+    """verify_bundle's private copies left under ``<paths.data>/.release/``."""
+    return sorted((cfg.paths.data / ".release").glob(".verify-*"))
+
+
+def _swap(root: Path, wheel: Path) -> None:
+    """An attacker with write access to the download dir swaps the trust root and subjects."""
+    (root / "trusted_root.jsonl").write_bytes(b'{"mediaType": "attacker-root"}\n')
+    wheel.write_bytes(b"attacker wheel")
+    evil = "evil==6.6.6 --hash=sha256:" + "1" * 64 + "\n"
+    (root / "requirements.txt").write_text(evil, encoding="utf-8")
+
+
+def test_st10_61_swap_after_verify_installs_the_verified_copy(
+    tmp_path: Path, env: FakeRunner
+) -> None:
+    """ST10-61 trusted_root.jsonl, the wheel and requirements.txt swapped in the download dir
+    after verify_bundle returned: install_bundle syncs and installs the verified private copy
+    (original bytes), keeps those bytes in ``.release/<version>/``, never names the download
+    dir in any argv, and removes the private copy."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    names = ("trusted_root.jsonl", built.wheel.name, "requirements.txt")
+    original = {name: (built.root / name).read_bytes() for name in names}
+    bundle = ReleaseBundle.load(built.root)
+    summary = verify_bundle(bundle, cfg)
+    private = Path(summary["copy"])
+    assert _private_dirs(cfg) == [private]
+    _swap(built.root, built.wheel)
+    used: dict[str, bytes] = {}
+
+    def uv(argv: list[str]) -> CmdResult:
+        used[Path(argv[-1]).name] = Path(argv[-1]).read_bytes()
+        return CmdResult(0, "", "", 0.1)
+
+    env.add(["uv", "pip"], uv)
+    installed = attest.install_bundle(bundle, summary, venv=VENV, actor=USER)
+    assert installed["wheel_sha256"] == built.wheel_sha256
+    assert used == {n: original[n] for n in names[1:]}
+    archive = tmp_path / ".release" / "1.2.3"
+    assert {n: (archive / n).read_bytes() for n in names} == original
+    assert not [a for a in env.argvs() if any(str(built.root) in part for part in a)]
+    assert _private_dirs(cfg) == []
+
+
+def test_st10_61_swap_during_verify_gh_reads_only_the_copy(tmp_path: Path, env: FakeRunner) -> None:
+    """ST10-61 the download dir swapped while ``gh`` runs: every ``gh`` path (subject,
+    ``--bundle``, ``--custom-trusted-root``) is in the private copy, whose trust root is the
+    pinned one, so verification and the summary are unaffected."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    roots: list[bytes] = []
+
+    def gh(argv: list[str]) -> CmdResult:
+        roots.append(Path(argv[argv.index("--custom-trusted-root") + 1]).read_bytes())
+        _swap(built.root, built.wheel)
+        return gh_answer(argv)
+
+    env.add(["gh", "attestation", "verify"], gh)
+    summary = verify_bundle(ReleaseBundle.load(built.root), cfg)
+    assert summary["wheel_sha256"] == built.wheel_sha256
+    assert roots == [TRUSTED_ROOT] * 4
+    private = Path(summary["copy"])
+    for argv in env.argvs():
+        paths = [argv[3], argv[argv.index("--bundle") + 1]]
+        paths.append(argv[argv.index("--custom-trusted-root") + 1])
+        assert all(Path(p).is_relative_to(private) for p in paths), argv
+
+
+def test_st10_61_private_copy_removed_on_failure(tmp_path: Path, env: FakeRunner) -> None:
+    """ST10-61 the private copy is removed when verification fails, when the install fails
+    after the audit (``uv`` exit 1) and when it succeeds; a summary naming any other directory
+    is refused without deleting that directory."""
+    built = build_bundle(tmp_path / "bundle", BundleSpec(sbom_attested=False))
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    with pytest.raises(FatalError):
+        verify_bundle(ReleaseBundle.load(built.root), cfg)
+    assert (cfg.paths.data / ".release").is_dir()
+    assert _private_dirs(cfg) == []
+    built = build_bundle(tmp_path / "good")
+    bundle = ReleaseBundle.load(built.root)
+    summary = verify_bundle(bundle, cfg)
+    env.add(["uv", "pip", "sync"], CmdResult(1, "", "boom", 0.1))
+    with pytest.raises(FatalError, match=r"^uv failed: exit 1$"):
+        attest.install_bundle(bundle, summary, venv=VENV, actor=USER)
+    assert _private_dirs(cfg) == []
+    for forged in (str(built.root), str(cfg.paths.data / ".release"), None):
+        with pytest.raises(FatalError, match=r"^bundle changed after verification$"):
+            attest.install_bundle(bundle, {**summary, "copy": forged}, venv=VENV, actor=USER)
+    assert ReleaseBundle.load(built.root).version == "1.2.3"  # nothing deleted
+    assert (cfg.paths.data / ".release").is_dir()
+    other = dataclasses.replace(bundle, version="9.9.9")
+    with pytest.raises(FatalError, match=r"^bundle changed after verification$"):
+        attest.install_bundle(other, verify_bundle(bundle, cfg), venv=VENV, actor=USER)
+    assert _private_dirs(cfg) == []
+    env.table.pop()
+    assert attest.install_bundle(bundle, verify_bundle(bundle, cfg), venv=VENV, actor=USER)
+    assert _private_dirs(cfg) == []
+
+
+def test_st10_61_copy_refuses_non_regular_entries(tmp_path: Path, env: FakeRunner) -> None:
+    """ST10-61 a bundle file replaced by a directory, or by a link, after ``load`` is refused
+    by the copy (regular files only, links not followed) before any hash or ``gh`` call, and
+    nothing is left in the private area."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    bundle = ReleaseBundle.load(built.root)
+    requirements = built.root / "requirements.txt"
+    saved = requirements.read_bytes()
+    requirements.unlink()
+    requirements.mkdir()
+    with pytest.raises(ConfigError, match=r"^release bundle invalid: requirements\.txt$"):
+        verify_bundle(bundle, cfg)
+    assert env.calls == []
+    assert _private_dirs(cfg) == []
+    requirements.rmdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(saved)
+    try:
+        requirements.symlink_to(outside)
+    except OSError:
+        pytest.skip("creating a file symlink needs a privilege this process lacks")
+    with pytest.raises(ConfigError, match=r"^release bundle invalid: requirements\.txt$"):
+        verify_bundle(bundle, cfg)
+    assert env.calls == []
+    assert _private_dirs(cfg) == []
