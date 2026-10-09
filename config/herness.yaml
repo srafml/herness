@@ -109,4 +109,5 @@ deploy:
   release:
     repo: null
     signer_workflow: null
+    trusted_root_sha256: null                    # SHA-256 of the release trusted_root.jsonl
     licence_exceptions: []

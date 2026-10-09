@@ -113,6 +113,11 @@ def _deploy(**changes: Any) -> dict[str, Any]:
             "string_pattern_mismatch",
         ),
         (
+            {"release": {"trusted_root_sha256": "A" * 64}},
+            ("release", "trusted_root_sha256"),
+            "string_pattern_mismatch",
+        ),
+        (
             {"release": {"licence_exceptions": ["a;b"]}},
             ("release", "licence_exceptions", 0),
             "string_pattern_mismatch",
@@ -148,6 +153,7 @@ def test_ut10_19_deploy_release_values() -> None:
             release={
                 "repo": "acme/herness",
                 "signer_workflow": "acme/herness/.github/workflows/release.yml",
+                "trusted_root_sha256": "d" * 64,
                 "licence_exceptions": ["some-pkg"],
                 "duckdb_extensions": {"excel": "c" * 64},
             },
@@ -156,6 +162,7 @@ def test_ut10_19_deploy_release_values() -> None:
     )
     assert cfg.release.licence_exceptions == ("some-pkg",)
     assert cfg.release.duckdb_extensions == {"excel": "c" * 64}
+    assert cfg.release.trusted_root_sha256 == "d" * 64
     assert cfg.service.manager == "task_scheduler"
 
 
