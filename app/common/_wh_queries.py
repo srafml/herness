@@ -1,10 +1,6 @@
-"""Named-query file loader and raw-text guard (impl 09 U09-61), re-exported by ``app.common.wh``.
+"""Named-query loader, strict parameter checks and the fail-closed raw-text guard (U09-61).
 
-Private helper split out of ``wh.py`` to keep that module inside its §2 line budget; the public
-names stay ``app.common.wh.NamedQuery``, ``ParamSpec``, ``load_named_queries``,
-``check_forbidden_columns`` and ``FORBIDDEN_TEXT_COLUMNS``. ``PARAM_CHECKS`` is shared with
-``wh.query`` so defaults (at load) and bound values (at call) pass the same strict checks.
-"""
+Private helper of ``wh.py`` (§2 line budget); ``app.common.wh`` re-exports the public names."""
 
 from __future__ import annotations
 
@@ -26,27 +22,22 @@ from herness.core.errors import ConfigError
 FORBIDDEN_TEXT_COLUMNS: Final = frozenset(
     {"short_description", "description", "close_notes", "root_cause_text"}
 )
-# U09-61 pattern plus a `_v<n>` variant suffix (U09-63 `evidence.meta_v1`).
-_NAME_RE: Final = re.compile(r"^[a-z_]+\.[a-z_]+(?:_v\d+)?$", re.ASCII)
+_NAME_RE: Final = re.compile(r"^[a-z_]+\.[a-z_]+(?:_v\d+)?$", re.ASCII)  # + `_v<n>` variants
 MAX_STR: Final = 200
+_SQL_OR_FILE_FUNCS: Final = ("query", "read_", "glob", "sniff_", "parquet_", "iceberg_")  # never
 MAX_LIST: Final = 500
 
 type ParamType = Literal["str", "int", "float", "bool", "date", "list_str"]
 
 
-def _short(v: object) -> bool:
-    return isinstance(v, str) and len(v) <= MAX_STR
-
-
-# Strict checks (U09-62 step 2): `int` refuses bool, `date` refuses datetime.
-PARAM_CHECKS: Final[dict[str, Callable[[object], bool]]] = {
-    "str": _short,
-    "int": lambda v: type(v) is int,
+PARAM_CHECKS: Final[dict[str, Callable[[object], bool]]] = {  # strict (U09-62 step 2)
+    "str": lambda v: isinstance(v, str) and len(v) <= MAX_STR,
+    "int": lambda v: type(v) is int,  # not bool
     "float": lambda v: type(v) in {int, float},
     "bool": lambda v: isinstance(v, bool),
-    "date": lambda v: type(v) is datetime.date,
+    "date": lambda v: type(v) is datetime.date,  # not datetime
     "list_str": lambda v: (
-        isinstance(v, list | tuple) and len(v) <= MAX_LIST and all(_short(s) for s in v)
+        isinstance(v, list | tuple) and len(v) <= MAX_LIST and all(map(PARAM_CHECKS["str"], v))
     ),
 }
 
@@ -98,8 +89,7 @@ def _check_sql(name: str, sql: str, declared: set[str]) -> None:
         raise _bad(name, "SQL does not parse") from exc
     if len(statements) != 1 or not isinstance(statements[0], exp.Select):
         raise _bad(name, "must be exactly one SELECT statement")
-    used = {p.name for p in statements[0].find_all(exp.Placeholder)}
-    if used != declared:
+    if {p.name for p in statements[0].find_all(exp.Placeholder)} != declared:
         raise _bad(name, "placeholders do not match the declared params")
 
 
@@ -129,45 +119,62 @@ def load_named_queries(path: Path, *, page_row_limit: int) -> dict[str, NamedQue
     return out
 
 
-def _core_sources(scope: Scope) -> dict[str, str]:
-    """Casefolded alias (and table name) -> ``core.<table>`` for the core tables of ``scope``."""
+def _core_sources(scope: Scope | None, *, outer: bool = True) -> dict[str, str]:
+    """Casefolded alias/table -> ``core.<table>`` of ``scope`` (``outer``: and its parents)."""
     core: dict[str, str] = {}
-    for alias, src in scope.sources.items():
-        if isinstance(src, exp.Table) and src.db.casefold() == "core":
-            table = f"core.{src.name.casefold()}"
-            core[alias.casefold()] = core[src.name.casefold()] = table
+    while scope is not None:  # inner names shadow outer ones
+        for alias, src in scope.sources.items():
+            if isinstance(src, exp.Table) and src.db.casefold() == "core":
+                table = f"core.{src.name.casefold()}"
+                core = {alias.casefold(): table, src.name.casefold(): table} | core
+        scope = scope.parent if outer else None
     return core
 
 
-def _scope_violations(scope: Scope, core: Mapping[str, str]) -> set[str]:
-    """``<table>.<column>`` / ``<table>.*`` reads of raw text in one scope (case-insensitive)."""
-    tables = set(core.values())
-    found: set[str] = set()
+def _structural(tree: exp.Expr) -> set[str]:
+    """Fail-closed shapes: positional refs, PIVOT, non-table sources, SQL-string/file functions."""
+    found = {f"positional column reference {p.sql()}" for p in tree.find_all(exp.PositionalColumn)}
+    found |= {"PIVOT/UNPIVOT"} if tree.find(exp.Pivot) else set()
+    ctes = {cte.alias.casefold() for cte in tree.find_all(exp.CTE)}
+    for src in (node.this for node in tree.find_all(exp.From, exp.Join, exp.Lateral)):
+        named = isinstance(src, exp.Table) and isinstance(src.this, exp.Identifier)
+        if not (isinstance(src, exp.Subquery) or (named and (src.db or src.name in ctes))):
+            shown = (src.this if isinstance(src, exp.Table) else src).sql("duckdb").casefold()
+            found.add(f"source {shown} is not a table, CTE or subquery")
+    for fn in tree.find_all(exp.Func):
+        fname = (fn.name if isinstance(fn, exp.Anonymous) else fn.sql_name()).casefold()
+        if fname.startswith(_SQL_OR_FILE_FUNCS):
+            found.add(f"function {fname}")
+    return found
+
+
+def _scope_violations(scope: Scope) -> set[str]:
+    """Raw-text reads in one scope; qualifiers resolve against this and every enclosing scope."""
+    core, found = _core_sources(scope), set[str]()
+    own = set(_core_sources(scope, outer=False).values())  # stars expand this scope only
     for node in scope.find_all(exp.Column, exp.Columns, exp.Star):
-        if isinstance(node, exp.Columns) or (  # COLUMNS(...) and projected `*`
-            isinstance(node, exp.Star) and isinstance(node.parent, exp.Select | exp.Columns)
-        ):
-            found.update(f"{t}.*" for t in tables)
-            continue
+        star = isinstance(node, exp.Star) and isinstance(node.parent, exp.Select | exp.Columns)
+        if star or isinstance(node, exp.Columns):  # projected `*` and COLUMNS(...)
+            found.update(f"{t}.*" for t in own)
         if not isinstance(node, exp.Column):
             continue  # count(*) and similar aggregates read no column
         qualifier, name = node.table.casefold(), node.name.casefold()
-        if isinstance(node.this, exp.Star):  # t.*
-            if qualifier in core:
-                found.add(f"{core[qualifier]}.*")
-        elif name in core:  # whole-row reference: `i`, `to_json(i)`, `x.i`
-            found.add(f"{core[name]}.*")
-        elif name in FORBIDDEN_TEXT_COLUMNS:
-            owners = [core[qualifier]] if qualifier in core else [] if qualifier else tables
+        if isinstance(node.this, exp.Star) and qualifier in core:  # t.*
+            found.add(f"{core[qualifier]}.*")
+        elif name in core and (not qualifier or qualifier in core or qualifier == "core"):
+            found.add(f"{core[name]}.*")  # whole-row reference: `i`, `to_json(i)`, `i.i`
+        elif name in FORBIDDEN_TEXT_COLUMNS:  # unqualified: every core table in reach
+            owners = [core[qualifier]] if qualifier in core else [] if qualifier else core.values()
             found.update(f"{t}.{node.name}" for t in owners)
     return found
 
 
 def check_forbidden_columns(queries: Mapping[str, NamedQuery]) -> list[str]:
-    """Raw-text guard (U09-61): forbidden ``core`` columns, ``core`` stars, whole-row reads."""
+    """Raw-text guard (U09-61), fail closed: core text/star/whole-row reads, refused shapes."""
     found: set[str] = set()
     for name, nq in queries.items():
-        for scope in traverse_scope(sqlglot.parse_one(nq.sql, read="duckdb")):
-            if core := _core_sources(scope):
-                found.update(f"{name}: {v}" for v in _scope_violations(scope, core))
+        tree = sqlglot.parse_one(nq.sql, read="duckdb")
+        scopes = traverse_scope(tree) if isinstance(tree, exp.Query) else []
+        hits = _structural(tree).union(*(_scope_violations(scope) for scope in scopes))
+        found.update(f"{name}: {v}" for v in hits)
     return sorted(found)

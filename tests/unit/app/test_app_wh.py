@@ -502,7 +502,7 @@ def test_ut09_59_alias_and_star_reported() -> None:
         ("SELECT I.* FROM core.incident i", "core.incident.*"),
         ("SELECT i FROM core.incident i", "core.incident.*"),
         ("SELECT to_json(i) FROM core.incident i", "core.incident.*"),
-        ("SELECT x.I FROM core.incident i, metrics.thing x", "core.incident.*"),
+        ("SELECT i.I FROM core.incident i", "core.incident.*"),
         ("SELECT incident FROM core.incident", "core.incident.*"),
         ("SELECT to_json(i.*) FROM core.incident i", "core.incident.*"),
         ("SELECT COLUMNS('desc.*') FROM core.incident", "core.incident.*"),
@@ -524,6 +524,59 @@ def test_ut09_59_case_whole_row_and_columns_bypasses(sql: str, expected: str) ->
 )
 def test_ut09_59_allowed_shapes(sql: str) -> None:
     """UT09-59 count(*), allowed columns and COLUMNS() over non-core tables pass the guard."""
+    assert wh.check_forbidden_columns({"a.b": _nq("a.b", sql)}) == []
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        (
+            "SELECT l.d FROM core.incident i, LATERAL (SELECT i.description AS d) l",
+            "core.incident.description",
+        ),
+        ("SELECT (SELECT i.description) AS d FROM core.incident i", "core.incident.description"),
+        (
+            "SELECT 1 FROM core.incident i WHERE EXISTS"
+            " (SELECT 1 FROM meta.build b WHERE b.status = i.description)",
+            "core.incident.description",
+        ),
+        (
+            "SELECT 1 FROM core.incident i WHERE EXISTS"
+            " (SELECT 1 FROM meta.build b WHERE b.status = description)",
+            "core.incident.description",
+        ),
+        ("SELECT #2 FROM core.incident", "positional column reference #2"),
+        ("SELECT description FROM query_table('core.incident')", "function query_table"),
+        ("SELECT * FROM query('SELECT description FROM core.incident')", "function query"),
+        ("SELECT * FROM read_csv('x.csv')", "function read_csv"),
+        ("SELECT 1 AS x WHERE EXISTS (SELECT * FROM read_parquet('x'))", "function read_parquet"),
+        ("SELECT x FROM range(10) t(x)", "source range(0, 10) is not a table, CTE or subquery"),
+        ("SELECT a FROM incident", "source incident is not a table, CTE or subquery"),
+        (
+            "SELECT value FROM (UNPIVOT core.incident ON COLUMNS(* EXCLUDE number))",
+            "PIVOT/UNPIVOT",
+        ),
+        ("PIVOT core.incident ON number USING first(description)", "PIVOT/UNPIVOT"),
+    ],
+)
+def test_ut09_59_outer_scopes_and_fail_closed_shapes(sql: str, expected: str) -> None:
+    """UT09-59 outer-scope references, positional refs, table functions, SQL-from-string,
+    file reads, non-table sources and PIVOT/UNPIVOT are violations (fail-closed posture)."""
+    assert f"a.b: {expected}" in wh.check_forbidden_columns({"a.b": _nq("a.b", sql)})
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT f.team FROM score.funding f LEFT JOIN core.team t ON t.team_id = f.x",
+        "SELECT x.i FROM core.incident i, metrics.thing x",
+        "WITH c AS (SELECT i.number FROM core.incident i) SELECT c.number FROM c",
+        "SELECT q.n FROM (SELECT i.number AS n FROM core.incident i) q",
+        "SELECT 1 FROM core.incident i WHERE EXISTS (SELECT * FROM meta.build b)",
+    ],
+)
+def test_ut09_59_qualified_non_core_and_allowed_sources(sql: str) -> None:
+    """UT09-59 a non-core qualifier is not a whole-row read; CTEs and subqueries are allowed."""
     assert wh.check_forbidden_columns({"a.b": _nq("a.b", sql)}) == []
 
 
