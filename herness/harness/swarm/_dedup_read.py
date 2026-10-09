@@ -18,7 +18,7 @@ from herness.harness.blackboard import FindingFilter
 from herness.store.ops.runs import select_tasks
 
 if TYPE_CHECKING:
-    from herness.core.types import Finding
+    from herness.core.types import Finding, FindingStatus
     from herness.harness.blackboard import Blackboard
 
 __all__ = ["PAGE_LIMIT", "TASK_CHUNK", "read_proposed"]
@@ -34,10 +34,11 @@ def _author_task_ids(run_id: str) -> list[str]:
     return sorted(row.task_id for row in rows if row.spec.specialty != "crosscheck")
 
 
-async def _read_chunk(bb: Blackboard, run_id: str, task_ids: Sequence[str]) -> list[Finding]:
-    flt = FindingFilter(
-        run_id=run_id, status={"proposed"}, task_ids=set(task_ids), limit=PAGE_LIMIT
-    )
+async def _read_chunk(
+    bb: Blackboard, run_id: str, task_ids: Sequence[str], *, status: FindingStatus = "proposed"
+) -> list[Finding]:
+    """One chunk's `status` findings (the Writer step of T06-19 reads `verified`, `rejected`)."""
+    flt = FindingFilter(run_id=run_id, status={status}, task_ids=set(task_ids), limit=PAGE_LIMIT)
     page = await bb.list_findings(flt)
     if len(page) < PAGE_LIMIT:
         return page
@@ -48,8 +49,8 @@ async def _read_chunk(bb: Blackboard, run_id: str, task_ids: Sequence[str]) -> l
         return page
     half = len(task_ids) // 2
     return [
-        *await _read_chunk(bb, run_id, task_ids[:half]),
-        *await _read_chunk(bb, run_id, task_ids[half:]),
+        *await _read_chunk(bb, run_id, task_ids[:half], status=status),
+        *await _read_chunk(bb, run_id, task_ids[half:], status=status),
     ]
 
 
