@@ -46,6 +46,7 @@ ALLOWED_LICENCES: Final = frozenset(
     {"MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "PSF-2.0", "Python-2.0", "ISC", "MPL-2.0"}
 )  # ENG §5.6
 _KEEP_RELEASES: Final = 2
+_ROOT_REFUSED: Final = "attestation verification failed: trusted_root.jsonl"
 
 
 def _invalid(rel: str) -> NoReturn:
@@ -162,6 +163,19 @@ def _gh_verify(bundle: ReleaseBundle, release: ReleaseDeploy, subject: Path, pre
     return result.stdout
 
 
+def _check_provenance(rel: str, stdout: str, digest: str) -> None:
+    """Defence in depth on gh's JSON: SLSA predicate type and this file's SHA-256 as subject."""
+    try:
+        statement = json.loads(stdout)[0]["verificationResult"]["statement"]
+        ok = statement["predicateType"] == _SLSA and any(
+            s["digest"]["sha256"] == digest for s in statement["subject"]
+        )
+    except (ValueError, LookupError, TypeError):
+        ok = False
+    if not ok:
+        _refuse("provenance", rel, f"attestation verification failed: {rel}")
+
+
 def _attested_sbom(bundle: ReleaseBundle, stdout: str) -> dict[str, Any]:
     """The verified SBOM predicate; it must equal the loose ``sbom.cdx.json`` (U10-87 step 2)."""
     try:
@@ -238,23 +252,28 @@ def _check_licences(components: list[dict[str, Any]], exceptions: Iterable[str])
 def verify_bundle(bundle: ReleaseBundle, cfg: HernessConfig) -> dict[str, Any]:
     """Verify provenance, the attested SBOM, components and licences (U10-87; TH10-36/37)."""
     release = cfg.deploy.release
-    if not release.repo or not release.signer_workflow:
+    if not (release.repo and release.signer_workflow and release.trusted_root_sha256):
         msg = "deploy.release is not configured"
         raise ConfigError(msg)
-    subjects = [bundle.wheel, bundle.requirements, *bundle.duckdb_extensions.values()]
-    for subject in subjects:
-        _gh_verify(bundle, release, subject, _SLSA)
+    # Ruling T10-26 r2: the bundled trust root must match its file-only pin before any gh call.
+    if _sha256(bundle.trusted_root) != release.trusted_root_sha256:
+        _refuse("trusted_root", "trusted_root.jsonl", _ROOT_REFUSED)
+    files = [bundle.wheel, bundle.requirements, *bundle.duckdb_extensions.values()]
+    subjects = {f.relative_to(bundle.root).as_posix(): _sha256(f) for f in files}  # hashed first
+    for rel, digest in subjects.items():
+        _check_provenance(rel, _gh_verify(bundle, release, bundle.root / rel, _SLSA), digest)
     sbom = _attested_sbom(bundle, _gh_verify(bundle, release, bundle.wheel, _CDX))
     components = sbom.get("components") or []
     if not isinstance(components, list) or not all(isinstance(c, dict) for c in components):
         _refuse("components", "sbom.cdx.json", "sbom components unreadable")
     count = _check_components(components, _requirements(bundle.requirements))
     licences = _check_licences(components, release.licence_exceptions)
-    digest = _sha256(bundle.wheel)
+    digest = subjects[bundle.wheel.name]
     _log.info("deploy.install.verified", version=bundle.version, wheel_sha256=digest)
     return {
         "version": bundle.version,
         "wheel_sha256": digest,
+        "subjects": subjects,
         "components": count,
         "licences_checked": licences,
     }
@@ -306,7 +325,10 @@ def install_bundle(
     check_extensions(bundle, cfg, venv=venv)  # U10-112 pins before the audit and any venv change
     releases = _repo_root() / ".release"
     copied = _copy_bundle(bundle, releases / bundle.version)
-    if _sha256(copied.wheel) != digest:
+    verified: dict[str, str] = summary["subjects"]
+    if _sha256(copied.wheel) != digest or any(
+        _sha256(copied.root / rel) != sha for rel, sha in verified.items()
+    ):
         msg = "bundle changed after verification"
         raise FatalError(msg)
     _prune(releases)

@@ -6,6 +6,7 @@ the placeholder Sigstore bundles against the flags it is given.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,8 @@ from tests.support.release_bundle import (
     build_bundle,
     fake_gh,
     init_release_config,
+    sha256_file,
+    statement_json,
 )
 
 from herness.admin import attest
@@ -70,6 +73,11 @@ def test_ut10_66_exact_gh_argv_and_summary(tmp_path: Path, gh: FakeRunner) -> No
     assert summary == {
         "version": "1.2.3",
         "wheel_sha256": built.wheel_sha256,
+        "subjects": {
+            built.wheel.name: built.wheel_sha256,
+            "requirements.txt": sha256_file(bundle.requirements),
+            "duckdb/excel.duckdb_extension": built.ext_sha256,
+        },
         "components": 1,
         "licences_checked": 1,
     }
@@ -131,8 +139,12 @@ def test_ut10_66_unreadable_gh_output_refused(
     built = build_bundle(tmp_path / "bundle")
     cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
     for out in ("not json", "[]", '[{"verificationResult": {}}]'):
+
+        def answer(argv: list[str], out: str = out) -> CmdResult:
+            return CmdResult(0, out, "", 0.0) if CDX in argv else gh_answer(argv)
+
         fake_runner.table.clear()
-        fake_runner.add(["gh"], CmdResult(0, out, "", 0.0))
+        fake_runner.add(["gh"], answer)
         with pytest.raises(FatalError, match="sbom"):
             verify_bundle(ReleaseBundle.load(built.root), cfg)
     monkeypatch.setattr(attest, "_MAX_BYTES", 10)
@@ -146,3 +158,38 @@ def test_ut10_66_unreadable_sbom_components_refused(tmp_path: Path, gh: FakeRunn
     cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
     with pytest.raises(FatalError, match=r"^sbom components unreadable$"):
         verify_bundle(ReleaseBundle.load(built.root), cfg)
+
+
+def test_ut10_66_unconfigured_trust_root_pin_raises(tmp_path: Path, gh: FakeRunner) -> None:
+    """UT10-66 no ``deploy.release.trusted_root_sha256`` → ConfigError, no subprocess."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=None, trusted_root_sha256=None)
+    with pytest.raises(ConfigError, match=r"^deploy\.release is not configured$"):
+        verify_bundle(ReleaseBundle.load(built.root), cfg)
+    assert gh.calls == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        lambda path: statement_json(path, "https://example.invalid/other-predicate"),
+        lambda path: statement_json(path, SLSA, digest="0" * 64),
+        lambda path: "[]",
+        lambda path: '[{"verificationResult": {"statement": {"predicateType": "x"}}}]',
+    ],
+    ids=["other-predicate", "other-subject-digest", "empty", "no-subject"],
+)
+def test_ut10_66_provenance_json_must_name_this_file(
+    tmp_path: Path, fake_runner: FakeRunner, answer: Callable[[Path], str]
+) -> None:
+    """UT10-66 a zero gh exit is not enough: the SLSA result must carry the SLSA predicate type
+    and this file's own SHA-256 as a subject digest (review round 2, B2)."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    fake_runner.add(["gh"], lambda argv: CmdResult(0, answer(Path(argv[3])), "", 0.0))
+    with structlog.testing.capture_logs() as logs, pytest.raises(FatalError) as caught:
+        verify_bundle(ReleaseBundle.load(built.root), cfg)
+    assert str(caught.value) == f"attestation verification failed: {built.wheel.name}"
+    refused = [(e["reason"], e["file"]) for e in logs if e["event"] == "deploy.install.refused"]
+    assert refused == [("provenance", built.wheel.name)]
+    assert len(fake_runner.calls) == 1

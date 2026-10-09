@@ -24,12 +24,14 @@ from tests.support.fake_runner import FakeRunner
 from tests.support.release_bundle import (
     EXT_BYTES,
     REPO,
+    SLSA,
     WORKFLOW,
     Attest,
     BundleSpec,
     build_bundle,
     fake_gh,
     init_release_config,
+    statement_json,
 )
 
 from herness.admin import attest, commands_deploy
@@ -233,7 +235,7 @@ def gh_answer_trusting_requirements(root: Path) -> Any:
 
     def answer(argv: list[str]) -> CmdResult:
         if argv[3] == str(root / "requirements.txt"):
-            return CmdResult(0, "[]", "", 0.0)
+            return CmdResult(0, statement_json(root / "requirements.txt", SLSA), "", 0.0)
         return gh_answer(argv)
 
     return answer
@@ -582,3 +584,49 @@ def test_st10_24_malformed_licence_entry_refused(
     refused = [e["reason"] for e in logs if e["event"] == "deploy.install.refused"]
     assert refused == ["licence"]
     _nothing_installed(env, tmp_path)
+
+
+# --- Review round 2 -----------------------------------------------------------------------
+
+
+def test_st10_23_foreign_trusted_root_refused_before_gh(tmp_path: Path, env: FakeRunner) -> None:
+    """ST10-23 a bundle carrying its own trust root (one that does not match the file-only
+    ``deploy.release.trusted_root_sha256`` pin) is refused before any gh call (ruling r2)."""
+    built = build_bundle(tmp_path / "bundle")
+    (built.root / "trusted_root.jsonl").write_bytes(b'{"mediaType": "attacker-root"}\n')
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    with structlog.testing.capture_logs() as logs, pytest.raises(FatalError) as caught:
+        cmd_deploy_install(built.root, cfg=cfg, actor=USER)
+    assert str(caught.value) == "attestation verification failed: trusted_root.jsonl"
+    refused = [(e["reason"], e["file"]) for e in logs if e["event"] == "deploy.install.refused"]
+    assert refused == [("trusted_root", "trusted_root.jsonl")]
+    assert env.calls == []
+    assert not (tmp_path / ".release").exists()
+
+
+def test_st10_23_missing_trusted_root_pin_refused(tmp_path: Path, env: FakeRunner) -> None:
+    """ST10-23 without the trust-root pin ``deploy.release`` counts as not configured."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256, trusted_root_sha256=None)
+    with pytest.raises(ConfigError, match=r"^deploy\.release is not configured$"):
+        cmd_deploy_install(built.root, cfg=cfg, actor=USER)
+    assert env.calls == []
+
+
+def test_st10_24_requirements_swapped_after_verify_refused(tmp_path: Path, env: FakeRunner) -> None:
+    """ST10-24 a ``requirements.txt`` swapped between verify and install is caught by the
+    re-hash of every copied subject against ``summary["subjects"]``: no audit, no uv step."""
+    built = build_bundle(tmp_path / "bundle")
+    cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
+    bundle = ReleaseBundle.load(built.root)
+    summary = verify_bundle(bundle, cfg)
+    assert set(summary["subjects"]) == {
+        built.wheel.name,
+        "requirements.txt",
+        "duckdb/excel.duckdb_extension",
+    }
+    bundle.requirements.write_text("evil==6.6.6 --hash=sha256:" + "1" * 64 + "\n", "utf-8")
+    with pytest.raises(FatalError, match=r"^bundle changed after verification$"):
+        attest.install_bundle(bundle, summary, venv=VENV, actor=USER)
+    assert [argv for argv in env.argvs() if argv[0] != "gh"] == []
+    assert list(cfg.paths.logs.glob("audit-*.jsonl")) == []

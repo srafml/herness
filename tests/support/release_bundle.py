@@ -26,6 +26,8 @@ SLSA = "https://slsa.dev/provenance/v1"
 CDX = "https://cyclonedx.org/bom"
 VERSION = "1.2.3"
 EXT_BYTES = b"\x00asm-fake-duckdb-excel-extension\x00" * 8
+TRUSTED_ROOT = b'{"mediaType": "trusted-root-placeholder"}\n'
+TRUSTED_ROOT_SHA256 = hashlib.sha256(TRUSTED_ROOT).hexdigest()
 
 
 def sha256_file(path: Path) -> str:
@@ -130,7 +132,7 @@ def build_bundle(root: Path, spec: BundleSpec | None = None) -> Built:
     reqs.write_text(requirements_text(spec.requirements), encoding="utf-8")
     sbom = sbom_for(spec)
     (root / "sbom.cdx.json").write_text(json.dumps(sbom, indent=2), encoding="utf-8")
-    (root / "trusted_root.jsonl").write_text('{"mediaType": "trusted-root-placeholder"}\n')
+    (root / "trusted_root.jsonl").write_bytes(TRUSTED_ROOT)
     subjects = [wheel, reqs]
     ext_sha = None
     if spec.ext_bytes is not None:
@@ -180,8 +182,23 @@ def fake_gh(argv: list[str]) -> tuple[int, str, str]:
         return 1, "", "no valid attestation"
     if not all(checks):
         return 1, "", "verification failed"
-    statement = {"predicateType": claim["predicate_type"], "predicate": claim["predicate"]}
+    statement = {
+        "subject": [{"name": Path(subject).name, "digest": {"sha256": claim["subject_sha256"]}}],
+        "predicateType": claim["predicate_type"],
+        "predicate": claim["predicate"],
+    }
     return 0, json.dumps([{"verificationResult": {"statement": statement}}]), ""
+
+
+def statement_json(subject: Path, predicate_type: str, digest: str | None = None) -> str:
+    """``gh --format json`` output for one verified ``subject`` (digest defaults to its own)."""
+    sha = digest if digest is not None else sha256_file(subject)
+    statement = {
+        "subject": [{"name": subject.name, "digest": {"sha256": sha}}],
+        "predicateType": predicate_type,
+        "predicate": {},
+    }
+    return json.dumps([{"verificationResult": {"statement": statement}}])
 
 
 def write_gh_shim(bin_dir: Path) -> Path:
@@ -199,7 +216,12 @@ def write_gh_shim(bin_dir: Path) -> Path:
 
 
 def init_release_config(
-    root: Path, *, ext_sha256: str | None, exceptions: tuple[str, ...] = (), release: bool = True
+    root: Path,
+    *,
+    ext_sha256: str | None,
+    exceptions: tuple[str, ...] = (),
+    release: bool = True,
+    trusted_root_sha256: str | None = TRUSTED_ROOT_SHA256,
 ) -> Any:
     """``init_config`` on a full config tree under ``root`` with a ``deploy.release`` block."""
     # Imported here so this file stays stdlib-only when it runs as the fake ``gh`` program.
@@ -210,6 +232,8 @@ def init_release_config(
     cfg_dir = write_full_config(root)
     block: dict[str, Any] = {"repo": REPO, "signer_workflow": WORKFLOW}
     block["licence_exceptions"] = list(exceptions)
+    if trusted_root_sha256 is not None:
+        block["trusted_root_sha256"] = trusted_root_sha256
     if ext_sha256 is not None:
         block["duckdb_extensions"] = {"excel": ext_sha256}
     if release:

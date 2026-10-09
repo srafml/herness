@@ -320,6 +320,7 @@ class ReleaseDeploy(_Section):
 
     repo: Annotated[str, _re(_REPO)] | None = None
     signer_workflow: Annotated[str, _re(_WORKFLOW)] | None = None
+    trusted_root_sha256: Annotated[str, _re(r"^[0-9a-f]{64}$")] | None = None
     licence_exceptions: tuple[_Safe, ...] = ()
     duckdb_extensions: dict[Literal["excel"], Annotated[str, _re(r"^[0-9a-f]{64}$")]] = Field(
         default_factory=dict
