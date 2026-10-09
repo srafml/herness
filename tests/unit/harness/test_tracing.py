@@ -156,7 +156,7 @@ def test_ut05_43_each_type_writes_one_json_line_with_common_fields(tmp_path: Pat
         assert line["task_id"] is None
         assert line["role"] is None
         assert line["step"] == 1
-    assert len(t.TraceType) == 10
+    assert len(t.TraceType) == 11  # + plan_decision (D06-01, T06-15)
     assert tracer.health() == {"status": "ok"}
 
 

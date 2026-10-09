@@ -3,7 +3,7 @@
 The funding pipeline (U06-71, U06-72) and the org pipeline ("as funding", U06-73, U06-74) plan
 analyst tasks, build planner and writer inputs and read through the run's `RecordedReader` the
 same way; this module holds that common part. `base_priority` and `default_tools` are stand-ins
-for the swarm functions of T06-15 and T06-13.
+for the swarm functions of T06-15 and T06-13 (the §2 import-rank rule keeps both here).
 """
 
 import json
@@ -47,7 +47,9 @@ _FINDING_KEYS: Final = {"finding_id", "entity_type", "entity_id", "claim", "numb
                         "confidence", "query_ids"}  # fmt: skip
 
 
-# T06-15: replace with herness.harness.swarm.planner.base_priority
+# T06-15: stays a stand-in for herness.harness.swarm.planner.base_priority: the spec 06 §2
+# import-rank rule forbids pipelines (rank 3) importing swarm (rank 2). Guarded by the UT06-60
+# parity test; replacing it needs a spec owner ruling.
 def base_priority(rank: int | None, must_cover: bool) -> float:
     """U06-91: `(100 - rank if rank is not None else 0) + (50 if must_cover else 0)`."""
     return float((100 - rank if rank is not None else 0) + (50 if must_cover else 0))
