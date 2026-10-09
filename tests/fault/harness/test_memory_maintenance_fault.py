@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from tests.support.fault_env import FaultEnv
 from tests.support.memory_kill import SURVIVED
+from tests.support.memory_promote_kill import SURVIVED as PROMOTE_SURVIVED
 from tests.support.ops_store import OpsStoreHandle
 from tests.unit.harness.memory._maintenance_env import (
     FakeCtx,
@@ -27,6 +28,7 @@ from tests.unit.harness.memory._maintenance_env import (
     row_of,
     vector_metas,
 )
+from tests.unit.harness.memory._procedural_env import incidents_sql, run_with
 from tests.unit.harness.memory._write_env import (
     NOW,
     PATTERNS,
@@ -173,3 +175,42 @@ def test_ft07_01_process_killed_after_commit_then_maintenance_backfills(
     assert meta.memory_id == memory_id
     assert meta.content_hash == row_of(memory_id)["data"]["content_hash"]
     assert row_of(memory_id)["data"]["embedding_pending"] is False
+
+
+def test_ft07_01_promote_killed_before_batched_flush_then_maintenance_backfills(
+    ops_store: OpsStoreHandle, tmp_path: Path, reset_process_state: ProcessState
+) -> None:
+    """FT07-01 (T07-28) a real kill of `promote_procedural` between a fingerprint's SQLite commit
+    and the single batched vector flush: the child dies at the second fingerprint's transaction;
+    the first one's template and qa_pair rows exist, `embedding_pending`, with no vectors; the
+    registered maintenance handler backfills both."""
+    del reset_process_state
+    plan = tmp_path / "promote_kill_plan.json"
+    rule = {"point": "sqlite.write", "action": "kill", "kind": "memory_promote", "nth": 2}
+    plan.write_text(json.dumps([rule]), encoding="utf-8")
+    sqls = [incidents_sql().replace("AS n", f"AS n{i}") for i in range(2)]
+    run_id = run_with([(sql, True) for sql in sqls])
+    child_env = {**os.environ, "HERNESS_ENV": "test", "HERNESS_FAULTS": str(plan)}
+    out = subprocess.run(  # noqa: S603 - fixed interpreter and module
+        [sys.executable, "-m", "tests.support.memory_promote_kill", str(ops_store.db_path),
+         str(tmp_path), run_id],
+        cwd=ROOT, env=child_env, capture_output=True, text=True, timeout=180, check=False,
+    )  # fmt: skip
+    assert out.returncode != 0, out.stdout[-500:] + out.stderr[-1500:]
+    assert PROMOTE_SURVIVED not in out.stdout
+    ids = {r["memory_id"] for r in core.read_all("SELECT memory_id FROM memory_item")}
+    assert len(ids) == 2  # one template and its qa_pair: the first fingerprint committed
+    assert all(row_of(i)["data"]["embedding_pending"] is True for i in ids)
+    vectors = VectorIndex(lambda: VectorStore(tmp_path / "vectors"))
+    assert vectors.list_ids("", 10) == []
+    store = MemoryStore(
+        MemoryConfig(injection_patterns=PATTERNS), conn_factory=core.connection,
+        vectors=vectors, embedder=Embedder(FakeEmbed(), model_name="bge-m3"),
+        redactor=make_writer(tmp_path).redactor, llms=None,
+        allowed_numeral_patterns=(r"(INC|CHG|PRB)\d+",), data_root=ops_store.data_root,
+    )  # fmt: skip
+    register_memory_components(ToolRegistry(), store)
+    outcome = resolve_handler("memory_maintenance")(FakeCtx())  # type: ignore[arg-type]
+    assert outcome.result["backfill"] == {"embedded": 2, "stopped": False}
+    assert {m.memory_id for m in vectors.list_ids("", 10)} == ids
+    assert all(row_of(i)["data"]["embedding_pending"] is False for i in ids)

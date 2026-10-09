@@ -127,13 +127,6 @@ def _seed_run_with_queries(repeat: int) -> str:
 
 
 @pytest.mark.timeout(900)
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=False,
-    reason="measured promote_procedural ~26-29 s vs 10 s: 525 per-item LanceDB merge_insert"
-    " upserts (embed_after_commit, ~42 ms each on a fresh table, slower as versions"
-    " accumulate) take ~22 of the 24 s; needs a batched or deferred vector upsert",
-)
 def test_bt07_09_promote_procedural_500_queries_under_10s(
     ops_store: OpsStoreHandle, tmp_path: Path
 ) -> None:

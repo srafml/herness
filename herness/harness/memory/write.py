@@ -47,6 +47,7 @@ _SESSION_VIA: Final = frozenset({"chat", "dashboard"})
 _HISTORY_MAX: Final = 20
 _CONFLICTS_MAX: Final = 10
 _NEAR_K: Final = 10
+_READ_MAX: Final = 500  # `get_memory_items` id limit; reads chunk, the vector upsert does not
 _DAY: Final = timedelta(hours=24)
 _log = get_logger("memory")
 
@@ -95,9 +96,22 @@ class MemoryWriter:
 
     def embed_after_commit(self, memory_id: str) -> None:
         """Embed a committed item and clear its `embedding_pending`; a failure keeps it set."""
-        rows = ops.get_memory_items([memory_id], conn=self._conn())
-        if rows and self._upsert(rows[0], None):
-            self._set_pending(memory_id, value=False)
+        self.embed_many_after_commit([memory_id], op="upsert")
+
+    def embed_many_after_commit(self, memory_ids: Sequence[str], *, op: str = "upsert") -> None:
+        """Embed committed items, write all vectors in ONE upsert, then clear `embedding_pending`
+        of the stored ids in one run_write (T07-28). An embedding failure skips only that item;
+        a failed upsert is logged `memory.vector.sync_failed` (`op`, `count`), never raised, and
+        leaves every item pending for maintenance (U07-57)."""
+        rows = self._read(memory_ids, self._conn())
+        vrows = [v for row in rows if (v := self._vector_row(row, None)) is not None]
+        try:
+            self._vectors.upsert(vrows)
+        except (ModelUnavailable, OSError):
+            _log.warning("memory.vector.sync_failed", op=op, count=len(vrows))
+            return
+        if vrows:
+            self._set_pending(*(v.memory_id for v in vrows), value=False)
 
     # ------------------------------------------------------------------ pipeline
 
@@ -316,30 +330,45 @@ class MemoryWriter:
 
         return tx(conn) if conn is not None else core.run_write(tx, op="memory_propose")
 
-    def _upsert(self, row: ops.MemoryItemRow, vector: np.ndarray | None) -> bool:
-        """Step 13: write the vector row; False (logged) when embedding or LanceDB fails."""
-        kind, layer, status = row["kind"], row["layer"], row["status"]
+    @staticmethod
+    def _read(memory_ids: Sequence[str], conn: Conn) -> list[ops.MemoryItemRow]:
+        """The rows of `memory_ids`, read in chunks of `get_memory_items`' id limit."""
+        ids = list(dict.fromkeys(memory_ids))
+        return [r for i in range(0, len(ids), _READ_MAX)
+                for r in ops.get_memory_items(ids[i : i + _READ_MAX], conn=conn)]  # fmt: skip
+
+    def _vector_row(self, row: ops.MemoryItemRow, vector: np.ndarray | None) -> VectorRow | None:
+        """The vector row of `row` (embedded unless `vector`); None (logged) if embedding fails."""
         try:
             if vector is None:
-                vector = self._embedder.embed_item(kind, row["content"])  # type: ignore[arg-type]
-            key, model = str(row["data"].get("content_hash")), self._embedder.model_name
-            vrow = VectorRow(row["memory_id"], layer, kind, status, key, model, vector)  # type: ignore[arg-type]
+                vector = self._embedder.embed_item(row["kind"], row["content"])  # type: ignore[arg-type]
+        except ModelUnavailable:
+            _log.warning("memory.embedding.failed", memory_id=row["memory_id"], op="upsert")
+            return None
+        key, model = str(row["data"].get("content_hash")), self._embedder.model_name
+        kind, layer, status = row["kind"], row["layer"], row["status"]
+        return VectorRow(row["memory_id"], layer, kind, status, key, model, vector)  # type: ignore[arg-type]
+
+    def _upsert(self, row: ops.MemoryItemRow, vector: np.ndarray | None) -> bool:
+        """Step 13: write the vector row; False (logged) when embedding or LanceDB fails."""
+        if (vrow := self._vector_row(row, vector)) is None:
+            return False
+        try:
             self._vectors.upsert([vrow])
         except ModelUnavailable:
             _log.warning("memory.embedding.failed", memory_id=row["memory_id"], op="upsert")
             return False
         return True
 
-    def _set_pending(self, memory_id: str, *, value: bool) -> None:
-        """Set `data.embedding_pending` and the matching flag in one run_write."""
+    def _set_pending(self, *memory_ids: str, value: bool) -> None:
+        """Set `data.embedding_pending` and the matching flag of each id in one run_write."""
 
         def tx(conn: Conn) -> None:
-            rows = ops.get_memory_items([memory_id], conn=conn)
-            if rows:
-                data = dict(rows[0]["data"])
+            for row in self._read(memory_ids, conn):
+                data = dict(row["data"])
                 flags = [f for f in st.stored_flags(data) if f != "embedding_pending"]
                 data["flags"] = [*flags, "embedding_pending"] if value else list(flags)
                 data["embedding_pending"] = value
-                ops.update_memory_item(memory_id, data=data, conn=conn)
+                ops.update_memory_item(row["memory_id"], data=data, conn=conn)
 
         core.run_write(tx, op="memory_embedding_flag")
