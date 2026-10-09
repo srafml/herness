@@ -1,6 +1,10 @@
 # Release (U00-60): SLSA Build L2 — signed-tag build, SBOM, licence gate, provenance.
 # Rules (impl 00 §3.8): third-party actions pinned by commit SHA, read-only default token,
 # checkout without persisted credentials, untrusted values only through env, hosted runners only.
+# T00-15b: the build job stages exactly the impl 10 U10-86 release bundle in bundle/ (wheel,
+# requirements.txt, sbom.cdx.json, trusted_root.jsonl, duckdb/excel.duckdb_extension for
+# windows_amd64, one Sigstore bundle per attested subject plus the wheel's SBOM attestation
+# bundle); publish attaches it to the GitHub release as one zip asset.
 name: release
 
 on:
@@ -31,8 +35,10 @@ jobs:
 
   build:
     needs: ci
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The bundle targets the Windows box: its requirements.txt, SBOM and DuckDB extension
+    # are those of windows_amd64 (U10-86), so they are built on a hosted Windows runner.
+    runs-on: windows-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
@@ -77,42 +83,140 @@ jobs:
             echo "$msg" >&2
             exit 1
           fi
-          echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
-      - run: uv build
-      - name: runtime environment for the SBOM (as the ci audit job)
+      - run: uv build --wheel --out-dir bundle
+      - name: runtime environment for the SBOM (Windows target)
         env:
           UV_PROJECT_ENVIRONMENT: build/runtime-venv
         run: uv sync --no-dev --all-extras --no-install-project
-      - name: SBOM and licence gate (as the ci audit job)
+      - name: SBOM and licence gate
         run: |
-          uv run cyclonedx-py environment build/runtime-venv --output-reproducible --of JSON -o "dist/herness-$PROJECT_VERSION.cdx.json"
-          uv run python -m tools.check_licences --sbom "dist/herness-$PROJECT_VERSION.cdx.json" --mode enforce
-      - name: download the DuckDB excel extension (impl 10 D10-28)
+          uv run cyclonedx-py environment build/runtime-venv --output-reproducible --of JSON -o bundle/sbom.cdx.json
+          uv run python -m tools.check_licences --sbom bundle/sbom.cdx.json --mode enforce
+      - name: requirements.txt for the target, equal to the SBOM components (U10-87 step 3)
+        # uv export is universal: keep the entries whose marker holds on this runner, so no
+        # package is pinned twice and every pin matches a library in the SBOM.
         run: |
-          duckdb_version=$(uv run python -c "
-          import tomllib
-          lock = tomllib.load(open('uv.lock', 'rb'))
-          print(next(p['version'] for p in lock['package'] if p['name'] == 'duckdb'))
-          ")
-          mkdir -p dist/duckdb
-          curl -fsSL -o "$RUNNER_TEMP/excel.duckdb_extension.gz" \
-            "https://extensions.duckdb.org/v$duckdb_version/linux_amd64/excel.duckdb_extension.gz"
-          gunzip -c "$RUNNER_TEMP/excel.duckdb_extension.gz" > dist/duckdb/excel.duckdb_extension
-          (cd dist/duckdb && sha256sum excel.duckdb_extension > SHA256SUMS)
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2  # pragma: allowlist secret
+          mkdir -p build
+          uv export --quiet --no-dev --all-extras --no-emit-project --format requirements-txt -o build/requirements.universal.txt
+          uv run python - build/requirements.universal.txt bundle/sbom.cdx.json bundle/requirements.txt <<'PY'
+          import json, re, sys
+          from packaging.markers import Marker
+          src, sbom, dest = sys.argv[1:]
+          norm = lambda name: re.sub(r"[-_.]+", "-", name).lower()
+          blocks = []
+          for line in open(src, encoding="utf-8").read().splitlines():
+              if line[:1].isspace() and blocks:
+                  blocks[-1].append(line)
+              else:
+                  blocks.append([line])
+          kept, pins = [], {}
+          for block in blocks:
+              head = block[0].split("#", 1)[0].rstrip(" \\")
+              req, _, marker = head.partition(";")
+              if req.strip() and marker.strip() and not Marker(marker.strip()).evaluate():
+                  continue
+              if req.strip():
+                  name, _, version = req.strip().partition("==")
+                  if norm(name) in pins or not version:
+                      sys.exit(f"requirement not pinned once with ==: {name}")
+                  pins[norm(name)] = version.strip()
+              kept += block
+          components = json.load(open(sbom, encoding="utf-8")).get("components", [])
+          libs = {norm(c["name"]): c.get("version") for c in components if c.get("type") == "library"}
+          diff = sorted(n for n in libs.keys() | pins.keys() if libs.get(n) != pins.get(n))
+          if diff:
+              sys.exit("sbom components differ from requirements: " + ", ".join(diff))
+          open(dest, "w", encoding="utf-8", newline="\n").write("\n".join(kept) + "\n")
+          PY
+      - name: download the DuckDB excel extension for windows_amd64 (impl 10 D10-28, U10-86)
+        run: |
+          duckdb_version=$(sed -n 's/^duckdb==\([^ ;\\]*\).*/\1/p' bundle/requirements.txt)
+          if [ -z "$duckdb_version" ]; then
+            echo "duckdb is not pinned in requirements.txt" >&2
+            exit 1
+          fi
+          mkdir -p bundle/duckdb
+          curl -fsSL -o build/excel.duckdb_extension.gz \
+            "https://extensions.duckdb.org/v$duckdb_version/windows_amd64/excel.duckdb_extension.gz"
+          gunzip -c build/excel.duckdb_extension.gz > bundle/duckdb/excel.duckdb_extension
+      # One attestation step per SLSA subject; each step's Sigstore bundle (bundle-path
+      # output) is kept under the name U10-86 expects before the next attest step runs.
+      - id: provenance-wheel
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2  # pragma: allowlist secret
         with:
-          subject-path: |
-            dist/*.whl
-            dist/*.tar.gz
-            dist/duckdb/excel.duckdb_extension
-      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0  # pragma: allowlist secret
+          subject-path: bundle/herness-*-py3-none-any.whl
+      - name: keep the wheel provenance bundle
+        env:
+          SUBJECT: bundle/herness-*-py3-none-any.whl
+          SRC: ${{ steps.provenance-wheel.outputs.bundle-path }}
+          SUFFIX: .provenance.sigstore.json
+        run: |
+          for subject in $SUBJECT; do tail -n 1 "$SRC" > "bundle/${subject##*/}$SUFFIX"; done
+          rm -f "$SRC"
+      - id: provenance-requirements
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2  # pragma: allowlist secret
         with:
-          subject-path: dist/*.whl
-          sbom-path: dist/*.cdx.json
+          subject-path: bundle/requirements.txt
+      - name: keep the requirements.txt provenance bundle
+        env:
+          SUBJECT: bundle/requirements.txt
+          SRC: ${{ steps.provenance-requirements.outputs.bundle-path }}
+          SUFFIX: .provenance.sigstore.json
+        run: |
+          for subject in $SUBJECT; do tail -n 1 "$SRC" > "bundle/${subject##*/}$SUFFIX"; done
+          rm -f "$SRC"
+      - id: provenance-excel
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2  # pragma: allowlist secret
+        with:
+          subject-path: bundle/duckdb/excel.duckdb_extension
+      - name: keep the excel extension provenance bundle
+        env:
+          SUBJECT: bundle/duckdb/excel.duckdb_extension
+          SRC: ${{ steps.provenance-excel.outputs.bundle-path }}
+          SUFFIX: .provenance.sigstore.json
+        run: |
+          for subject in $SUBJECT; do tail -n 1 "$SRC" > "bundle/${subject##*/}$SUFFIX"; done
+          rm -f "$SRC"
+      - id: sbom-wheel
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0  # pragma: allowlist secret
+        with:
+          subject-path: bundle/herness-*-py3-none-any.whl
+          sbom-path: bundle/sbom.cdx.json
+      - name: keep the wheel SBOM attestation bundle
+        env:
+          SUBJECT: bundle/herness-*-py3-none-any.whl
+          SRC: ${{ steps.sbom-wheel.outputs.bundle-path }}
+          SUFFIX: .sbom.sigstore.json
+        run: |
+          for subject in $SUBJECT; do tail -n 1 "$SRC" > "bundle/${subject##*/}$SUFFIX"; done
+          rm -f "$SRC"
+      - name: export the Sigstore trusted root (its sha256 is deploy.release.trusted_root_sha256)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation trusted-root > bundle/trusted_root.jsonl
+      - name: check the bundle layout (U10-86)
+        run: uv run python -c "from pathlib import Path; from herness.admin.attest import ReleaseBundle; ReleaseBundle.load(Path('bundle'))"
+      - name: verify every attestation offline against the bundled trusted root (U10-87 flags)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          signer="$GITHUB_REPOSITORY/.github/workflows/release.yml"
+          check() {
+            gh attestation verify "$1" --bundle "$2" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" --deny-self-hosted-runners \
+              --custom-trusted-root bundle/trusted_root.jsonl --predicate-type "$3" --format json > /dev/null
+          }
+          slsa=https://slsa.dev/provenance/v1
+          for wheel in bundle/herness-*-py3-none-any.whl; do
+            check "$wheel" "$wheel.provenance.sigstore.json" "$slsa"
+            check "$wheel" "$wheel.sbom.sigstore.json" https://cyclonedx.org/bom
+          done
+          check bundle/requirements.txt bundle/requirements.txt.provenance.sigstore.json "$slsa"
+          check bundle/duckdb/excel.duckdb_extension bundle/excel.duckdb_extension.provenance.sigstore.json "$slsa"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1  # pragma: allowlist secret
         with:
-          name: dist
-          path: dist/*
+          name: bundle
+          path: bundle/
           retention-days: 90
 
   publish:
@@ -124,8 +228,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1  # pragma: allowlist secret
         with:
-          name: dist
-          path: dist
+          name: bundle
+          path: bundle
       - name: generate release notes from the tag annotation
         env:
           TAG: ${{ github.ref_name }}
@@ -133,12 +237,14 @@ jobs:
         run: |
           obj_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')
           gh api "repos/$GITHUB_REPOSITORY/git/tags/$obj_sha" --jq '.message' > "$RUNNER_TEMP/tag-notes.md"
-      - name: create the GitHub release
+      - name: create the GitHub release with the bundle as one zip asset
         env:
           TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
-        # dist/* is a bash glob (does not descend into dist/duckdb/), so the assets
-        # are listed explicitly rather than relying on it to pick up the extension.
+        # A release asset cannot hold a directory, so the U10-86 tree (with duckdb/) ships
+        # zipped; the operator extracts it and runs `herness deploy install <dir>`.
         run: |
-          gh release create "$TAG" dist/*.whl dist/*.tar.gz dist/*.cdx.json dist/duckdb/* \
+          ASSET="$RUNNER_TEMP/herness-${TAG#v}-bundle.zip"
+          (cd bundle && zip -r -X -D "$ASSET" .)
+          gh release create "$TAG" "$ASSET" \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/tag-notes.md"

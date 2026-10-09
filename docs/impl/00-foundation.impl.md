@@ -46,7 +46,7 @@ This spec builds the L0 foundation modules that design 00 assigns to itself: `he
 | ENG §2.1 | Layer contracts in `pyproject.toml`, including `herness.admin` (R-07), no `herness.core` → `herness.store` imports (ports, R-04), no `herness.enrich` → `herness.harness` imports (R-05), and the settings exception (R-03) | §3.6, §3.5 | U00-47, U00-52 | T00-08, T00-09 | UT00-58, UT00-73, ST00-10 |
 | ENG §2.4 | Module line limit checked in CI | §3.7 | U00-55 | T00-10 | UT00-59, UT00-60, IT00-02 |
 | ENG §3.1 | Tooling baseline (ruff, mypy strict, pre-commit) | §3.6 | U00-50, U00-51, U00-54 | T00-01, T00-12 | UT00-57, IT00-01 |
-| ENG §5.6, §7, E2 | Hosted CI, audit, SBOM, signed provenance | §3.8 | U00-58 … U00-60 | T00-13, T00-14, T00-15 | ST00-06, ST00-07, ST00-08, ST00-16, UT00-69, UT00-70 |
+| ENG §5.6, §7, E2 | Hosted CI, audit, SBOM, signed provenance | §3.8 | U00-58 … U00-60 | T00-13, T00-14, T00-15 | ST00-06, ST00-07, ST00-08, ST00-16, UT00-69, UT00-70, UT00-82, UT00-83 |
 | ENG §6, §7 | Traceability check by script | §3.7 | U00-56 | T00-11 | UT00-61 … UT00-68, BT00-04 |
 | ENG §14 E1 | mypy strict on all of `herness/` | §3.6 | U00-51 | T00-01 | UT00-57 |
 | ENG §14 E3 | Dev deps add import-linter, pip-audit, cyclonedx-bom, detect-secrets; osv-scanner binary | §3.6, §3.8 | U00-49, U00-59 | T00-01, T00-14 | UT00-56 |
@@ -1420,7 +1420,9 @@ Trigger: `push` of tags matching `v*.*.*`. Jobs:
 | Kind | configuration file (GitHub Actions workflow) |
 | Purpose | SLSA Build L2 release (ENG §5.6): build only on a hosted runner, signed provenance and an SBOM attestation per artifact, licence gate, signed-tag check. The release assets (wheel, `herness-<version>.cdx.json` SBOM, the DuckDB `excel` extension with its `SHA256SUMS`, and the attestations) are the inputs of T10-26 (herness deploy install), which verifies the attestation and SBOM before installing the wheel on the target box (ENG §14 E4, R-58). |
 | Security notes | TH00-12, TH00-13. Herness builds no container image of its own; third-party images are pinned by digest by impl 10. |
-| Tests | ST00-08 |
+| Tests | ST00-08, UT00-82, UT00-83 |
+
+Spec note (card T00-15b, follow-up to T10-26): the `build` job now runs on `windows-latest` and stages exactly the impl 10 U10-86 release bundle in `bundle/`; it supersedes the `dist/`, sdist, `linux_amd64`, `herness-<version>.cdx.json` and `SHA256SUMS` details in the table above. Steps after the version check: `uv build --wheel --out-dir bundle` (no sdist: U10-86 admits no extra file); the runtime environment and SBOM as the `audit` job but on Windows, written to `bundle/sbom.cdx.json`, licence gate in enforce mode; `uv export --no-dev --all-extras --no-emit-project` filtered to the entries whose marker holds on the runner (the target, so each package is pinned once) → `bundle/requirements.txt`, and the job fails unless its pins equal the SBOM's library components (U10-87 step 3); the DuckDB `excel` extension for the DuckDB version pinned in `bundle/requirements.txt` and platform `windows_amd64` → `bundle/duckdb/excel.duckdb_extension` (no `SHA256SUMS`); one `actions/attest-build-provenance` step per SLSA subject (wheel, `requirements.txt`, each extension) and one `actions/attest-sbom` step (wheel, `bundle/sbom.cdx.json`), each followed by a step that keeps the last bundle of its `bundle-path` output as `bundle/<subject file name>.provenance.sigstore.json` or `bundle/<wheel>.sbom.sigstore.json`; `gh attestation trusted-root > bundle/trusted_root.jsonl`; `ReleaseBundle.load(Path('bundle'))`; `gh attestation verify` of every subject offline with the U10-87 flags against the bundled root; upload `bundle/` as artifact `bundle` (90 days). `publish` downloads it, zips the tree as `herness-<version>-bundle.zip` (a release asset cannot hold the `duckdb/` directory) and runs `gh release create "$TAG" <zip> --verify-tag ...`; that zip is the only asset. Tests UT00-82, UT00-83.
 
 ### 3.9 Repository hygiene files
 
@@ -2001,6 +2003,8 @@ Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, 
 | UT00-80 | U00-45 | import `herness.core.types._ownership` | Inspect the tables | `TYPE_OWNERS` maps `QuestionType` and `Entity` to `"03"` (RQ-03) and holds every name listed in U00-45 under its owner; no name appears twice or also in `DECLARED_ELSEWHERE`; `impact_usd` and `JobContext` are absent; `OWNER_IMPORTS["06"] == {"harness", "jobs"}`; the `OWNER_IMPORTS` graph is acyclic |
 | UT00-81 | U00-46, U00-47 | tmp tree with `herness/core/jobs/ports.py` defining `class JobContext(Protocol)` and `herness/core/resilience/chain.py` defining `class ModelChain`; second tree with `herness/harness/other.py` defining `class JobContext` | Run `main(["--root", tmp])` on each | First: no `OWN042`; second: `OWN042` for `JobContext` |
 | UT00-79 | U00-64, U00-69 | none | `format_value` with unit `score` and no format; `usd_compact` of `999960` and `999.6`; `True`; `"abc"`; `float("nan")`; `None`; format `"pct3"`; `int` of `-0.001`; `plain` of `1e22` | `plain` rule applied; `$1.00M`, `$1.0K`; `n/a` × 5; `0`; `10,000,000,000,000,000,000,000` (no exponent) |
+| UT00-82 | U00-60 | none | parse `release.yml` | `build` runs on `windows-latest`; the extension URL uses `windows_amd64`; no `linux_amd64`, `SHA256SUMS`, `.tar.gz` or `dist/`; the wheel is built into `bundle/`; `requirements.txt` comes from `uv export --no-emit-project`; the SBOM is `bundle/sbom.cdx.json` and passes the licence gate; one `attest-build-provenance` step each for the wheel, `requirements.txt` and `duckdb/excel.duckdb_extension`, one `attest-sbom` step for the wheel, each directly followed by the step that keeps its `bundle-path`; trusted-root export, `ReleaseBundle.load` and the offline `gh attestation verify` precede the upload of `bundle/`; only `publish` has `contents: write` and it releases the zipped bundle |
+| UT00-83 | U00-60 | tmp dir | write every file `release.yml` stages in `bundle/` (names derived from the parsed workflow, dummy contents), then impl 10 U10-86 `ReleaseBundle.load` | Loads: version, wheel, three provenance subjects, extension `excel`; the derived file set equals the one `tests/support/release_bundle.build_bundle` writes |
 
 ### 11.2 Property tests (marker `unit`, Hypothesis)
 
@@ -2032,7 +2036,7 @@ Locations: `tests/unit/core/` (`test_errors.py`, `test_time.py`, `test_ids.py`, 
 | ST00-05 | TH00-05 | unit | none | 100,000 `new_token()` calls | All unique; no two consecutive tokens decode to integers differing by less than 2**64 |
 | ST00-06 | TH00-12 | unit | parse both workflow files with `yaml.safe_load` | Inspect | Every third-party `uses:` pinned to 40 hex; no `pull_request_target`; top-level `permissions` is `contents: read`; no `run:` contains `${{ github.event.`, `${{ github.head_ref` or `${{ inputs.`; no `self-hosted` runner; every checkout has `persist-credentials: false` |
 | ST00-07 | TH00-11 | unit | fixture JSON inputs and ignore TOML | Cases: High with fix; High without fix; unknown severity with fix; ignored unexpired; ignored expired (`--today` after `expires`) | exit 1 with `AU001`; exit 0 with `AU002`; exit 1 `AU001`; exit 0 `ignored`; exit 1 `AU003` |
-| ST00-08 | TH00-13 | unit | parse `release.yml` | Inspect | Trigger only tag push `v*.*.*`; `build` needs `ci`; `build` has `id-token: write` and `attestations: write` and uses `attest-build-provenance` on wheel and sdist and `attest-sbom`; tag-verification and version-match steps precede `uv build`; no other job has `id-token: write` |
+| ST00-08 | TH00-13 | unit | parse `release.yml` | Inspect | Trigger only tag push `v*.*.*`; `build` needs `ci`; `build` has `id-token: write` and `attestations: write` and uses `attest-build-provenance` on the wheel (T00-15b: no sdist; one step per U10-86 subject) and `attest-sbom`; tag-verification and version-match steps precede `uv build`; no other job has `id-token: write` |
 | ST00-09 | TH00-08 | integration | tmp copy of `pyproject.toml`; tmp file `herness/x.py` with `import pickle`, `yaml.load(s)`, `httpx.Client()`, `from herness.core.time import now`; tmp file `herness/connectors/y.py` with `httpx.AsyncHTTPTransport()` and `httpx.get(url)` | `ruff check --config <tmp pyproject> <files>` via subprocess | `herness/x.py`: `TID251` × 3 and `ICN003`; `herness/connectors/y.py`: `TID251` × 2 (connectors have no exception, R-06); exit non-zero |
 | ST00-10 | TH00-08 | integration | Copy `herness/` and `pyproject.toml` to `tmp_path`; add `import herness.harness` (created as an empty package in the copy, and appended to C1) to the copied `herness/core/errors.py` | `lint-imports` via subprocess in `tmp_path` | Non-zero exit naming contracts C1 and C4 |
 | ST00-11 | TH00-10 | unit | read `.env.example` and `.gitignore` | Inspect | Every `KEY=value` line has an empty value; no key starts with `HERNESS_SECURITY__`; `.gitignore` contains `.env`, `!.env.example`, `data/` |
@@ -2269,11 +2273,13 @@ All cards are Phase 1. Test files are not counted as production files. `uv.lock`
 | Depends on | T00-14 |
 | Units | U00-60 |
 | Files | `.github/workflows/release.yml` |
-| Tests | ST00-08 |
+| Tests | ST00-08, UT00-82, UT00-83 |
 | Threats | TH00-13 |
 | Acceptance checks | `uv run pytest -k ST00_08` passes; a signed tag `v0.1.0` produces a GitHub release with wheel, sdist, SBOM and `duckdb/excel.duckdb_extension` with its `SHA256SUMS`; `gh attestation verify dist/herness-0.1.0-py3-none-any.whl --repo <owner>/<repo>` succeeds; an unsigned tag fails the `build` job before `uv build` |
 | Blocked by | O-03 (licence approvals needed before the first release passes the enforce-mode gate) |
 | Size | S |
+
+Spec note (card T00-15b): the release publishes one asset, `herness-<version>-bundle.zip`, holding the U10-86 bundle (see the U00-60 note); the acceptance check reads: a signed tag produces that asset, it extracts to a directory that `ReleaseBundle.load` accepts, and `gh attestation verify <wheel> --bundle <wheel>.provenance.sigstore.json --repo <owner>/<repo>` succeeds. There is no sdist and no `SHA256SUMS`.
 
 #### T00-16 Shared numbers module
 

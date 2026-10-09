@@ -104,7 +104,9 @@ def _runners(job: dict[str, Any]) -> list[str]:
 
 
 def _check_runners_and_checkout(path: Path, doc: dict[Any, Any]) -> None:
-    assert not any("self-hosted" in s for s in _strings(doc["jobs"])), path.name
+    # release.yml's offline check passes gh's `--deny-self-hosted-runners` (T00-15b).
+    texts = (s.replace("--deny-self-hosted-runners", "") for s in _strings(doc["jobs"]))
+    assert not any("self-hosted" in s for s in texts), path.name
     for name, job in doc["jobs"].items():
         if "uses" in job:  # a reusable-workflow call has no runner of its own
             continue
@@ -162,10 +164,10 @@ def test_st00_08_release_workflow() -> None:
 
     Trigger is tag push ``v*.*.*`` only; ``build`` needs ``ci``; ``build`` has
     ``id-token: write`` and ``attestations: write`` and no other job does; ``build``
-    calls ``attest-build-provenance`` on the wheel and sdist and ``attest-sbom``; the
-    tag-verification and version-match steps precede ``uv build``; ``publish``'s
-    ``gh release create`` names the wheel, sdist, SBOM and ``dist/duckdb/*`` explicitly
-    (not a bare ``dist/*`` glob, which would drop the DuckDB extension assets).
+    calls ``attest-build-provenance`` on the wheel and ``attest-sbom``; the
+    tag-verification and version-match steps precede the wheel build. T00-15b: no sdist
+    is built or published (the U10-86 bundle has none); ``publish`` uploads the bundle
+    (UT00-82 and UT00-83 check its layout).
     """
     doc = _load(RELEASE)
     triggers = _triggers(doc)
@@ -186,7 +188,7 @@ def test_st00_08_release_workflow() -> None:
     run_texts = [s.get("run", "") for s in steps]
     uses_list = [s.get("uses", "") for s in steps]
 
-    build_idx = next((i for i, r in enumerate(run_texts) if r.strip() == "uv build"), None)
+    build_idx = next((i for i, r in enumerate(run_texts) if r.strip().startswith("uv build")), None)
     tag_verify_idx = next(
         (i for i, r in enumerate(run_texts) if "verification.verified" in r), None
     )
@@ -206,15 +208,8 @@ def test_st00_08_release_workflow() -> None:
     assert provenance_idx is not None
     assert sbom_attest_idx is not None
     subject_path = steps[provenance_idx]["with"]["subject-path"]
-    assert "dist/*.whl" in subject_path
-    assert "dist/*.tar.gz" in subject_path
+    assert subject_path == "bundle/herness-*-py3-none-any.whl"
+    assert provenance_idx > build_idx
 
     publish_run_texts = [s.get("run", "") for s in jobs["publish"]["steps"]]
-    release_create_run = next((r for r in publish_run_texts if "gh release create" in r), None)
-    assert release_create_run is not None
-    # dist/* is a bash glob and does not descend into dist/duckdb/, so the release
-    # assets must be listed explicitly (review round 1, T00-15).
-    assert "dist/duckdb/*" in release_create_run
-    assert "dist/*.whl" in release_create_run
-    assert "dist/*.tar.gz" in release_create_run
-    assert "dist/*.cdx.json" in release_create_run
+    assert any("gh release create" in r for r in publish_run_texts)

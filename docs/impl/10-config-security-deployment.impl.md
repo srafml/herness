@@ -1580,6 +1580,8 @@ Impl 09 owns the CLI command table, options and rendering (R-47); this section s
 | Security notes | TH10-40. |
 | Tests | ST10-48 |
 
+Spec note (card T00-15b; ruling candidate, `attest.py` unchanged): how release CI (impl 00 U00-60) produces this layout. (a) The provenance bundle of a subject is named after the subject's file name and sits at the bundle root, also for an extension: `excel.duckdb_extension.provenance.sigstore.json`, not under `duckdb/`. (b) GitHub release assets cannot hold a directory, so the release carries the tree as one asset `herness-<version>-bundle.zip`; the operator extracts it and passes the directory to `herness deploy install`. (c) There is no `duckdb/SHA256SUMS` (D10-28 is superseded on this point: an extra file is refused); the operator takes the pin for `deploy.release.duckdb_extensions` from the verified extension file. (d) `requirements.txt` is the `uv export` output reduced to the entries whose marker holds on the Windows build runner, so each package is pinned once and the pins equal the SBOM's library components (U10-87 step 3); markers are kept on the remaining lines. (e) `trusted_root.jsonl` is `gh attestation trusted-root` output from the build job; the operator obtains the root independently (the same command on a trusted machine) and pins its SHA-256 in `deploy.release.trusted_root_sha256`, rather than trusting the copy in the bundle.
+
 #### U10-87 herness.admin.attest.verify_bundle
 
 | Field | Content |
