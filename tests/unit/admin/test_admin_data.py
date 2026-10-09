@@ -71,7 +71,7 @@ def test_ut10_68_unknown_action_is_config_error() -> None:
 
 @pytest.mark.parametrize(
     ("action", "owner"),
-    [("privacy_delete", "T10-29"), ("rekey", "T10-30")],
+    [("rekey", "T10-30")],
 )
 def test_ut10_68_table_routes_unbuilt_actions_to_typed_fatal_error(action: str, owner: str) -> None:
     """UT10-68 each action reaches its table entry; unbuilt owners raise FatalError (not

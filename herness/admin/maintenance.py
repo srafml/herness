@@ -22,6 +22,7 @@ from urllib.parse import quote
 
 from pydantic import JsonValue
 
+from herness.admin import privacy
 from herness.admin._maintenance_purge import BEAT_EVERY, counts_text, parse_day, run_purge
 from herness.core import time as clock
 from herness.core.audit import audit
@@ -233,10 +234,15 @@ def _nightly(run: Callable[..., dict[str, int]]) -> _Unit:
     return unit
 
 
+def _privacy_delete(ctx: JobContext, memory_purge: Callable[[str], int]) -> JobOutcome:
+    """U10-99 with the loaded config, the clock and the bound ``memory_purge`` (R-54)."""
+    return privacy.run_privacy_delete(get_config(), ctx, now=clock.now(), memory_purge=memory_purge)
+
+
 _ACTIONS: Final[Mapping[str, _Unit]] = {
     "backup": _nightly(run_backup),
     "purge": _nightly(run_purge),
-    "privacy_delete": _placeholder("privacy_delete", "T10-29"),  # T10-29: run_privacy_delete
+    "privacy_delete": _privacy_delete,
     "rekey": _placeholder("rekey", "T10-30"),  # T10-30: run_rekey (U10-101)
 }
 
