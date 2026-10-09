@@ -26,7 +26,7 @@ Row = dict[str, object]
 
 SOURCE: Final = "monitoring"
 TOOLS: Final = ("prometheus", "datadog", "splunk")
-EVENT_KEY_FORMATS: Final = {"prometheus": "{:016x}", "datadog": "{}", "splunk": "evt-{:010d}"}
+EVENT_KEY_FORMATS: Final = {"prometheus": "{:016x}", "datadog": "{}", "splunk": "evt_{:010d}"}
 _NEAR_S: Final = 30 * 60  # near-incident window: +/- 30 min
 _DURATION_MEDIAN_MIN: Final = 20.0
 _DURATION_SIGMA: Final = 0.8  # the spec gives only the median
@@ -216,7 +216,7 @@ def gen_metric_daily(
                     "date": day.isoformat(),
                     "service": service.name,
                     "metric_name": name,
-                    "value": value,
+                    "value": float(f"{value:.6g}"),
                     "unit": _UNITS[name],
                     "_source_key": f"{tool}|{name}|{service.name}|{day.isoformat()}",
                 })  # fmt: skip

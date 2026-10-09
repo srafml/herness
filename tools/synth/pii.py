@@ -54,6 +54,7 @@ _FIRST_NAMES: Final = tuple(head + tail for head in _FIRST_HEADS for tail in _FI
 _LAST_NAMES: Final = tuple(head + tail for head in _LAST_HEADS for tail in _LAST_TAILS)
 
 _PHRASES: Final = ("contact {v}", "reported by {v}", "from host {v}")
+_PHONE_GUARD: Final = " (desk)"
 _PHONE_FORMATS: Final = ("+1-202-555-01{nn}", "+1 202 555 01{nn}", "(202) 555-01{nn}")
 _EMAIL_DOMAINS: Final = ("example.com", "example.org")
 _IP_PREFIXES: Final = ("192.0.2.", "198.51.100.")
@@ -200,6 +201,8 @@ def inject_pii(
         points = _boundaries(text, spans)
         at = points[int(rng.integers(len(points)))]
         lead = "" if at == 0 else " "
+        if kind == "PHONE" and text[at:].lstrip()[:1].isdigit():
+            suffix += _PHONE_GUARD  # the PHONE scan must not run on into a following number
         piece = f"{lead}{prefix.capitalize()}{value}{suffix}." + (" " if at == 0 else "")
         start = at + len(lead) + len(prefix)
         text, spans = _insert(text, spans, at, piece)

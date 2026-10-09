@@ -45,6 +45,7 @@ _LEVELS: Final = 3  # team name suffix L1..L3
 _DEPENDS: Final = "Depends on::Used by"
 _RUNS: Final = "Runs on::Runs"
 _SHARE_TOLERANCE: Final = 0.02  # top-5 % share accepted in target +/- this
+_MAX_RUN_COST: Final = 999_999.99  # keeps the inbox CSV amount clear of the PHONE scan (9 digits)
 _T6_SHARE: Final = {"full": 0.015, "small": 0.05, "tiny": 0.05}
 _T6_MIN_PEERS: Final = 5
 _T3_CHANGES: Final = 40  # emergency and, again, normal (control) changes on C3
@@ -351,7 +352,7 @@ def build_catalog(
         services.append(ServiceRow(
             sid, d.names[i], int(d.crit[i]), owner.sys_id, support.sys_id, float(d.inc[i]),
             float(d.evt[i]), org_key[owner.org_sys_id], d.names[i], owner.cost_center,
-            round(float(d.run_cost[i]), 2), round(float(d.downtime[i]), 2),
+            min(round(float(d.run_cost[i]), 2), _MAX_RUN_COST), round(float(d.downtime[i]), 2),
         ))  # fmt: skip
     stub = Catalog(
         tuple(orgs), tuple(teams), tuple(services), tuple(cis), tuple(rels), tuple(projects),
