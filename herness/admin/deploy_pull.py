@@ -1,6 +1,5 @@
-"""``herness deploy pull``: firewall window, image and weight pulls, verification.
-
-Impl 10 U10-81 to U10-83 and U10-92 (design 10 §3.7, §5.6.3, §9.2; ENG §5.6).
+"""``herness deploy pull``: firewall window, image and weight pulls, verification (impl 10
+U10-81 to U10-83, U10-92; design 10 §3.7, §5.6.3, §9.2; ENG §5.6).
 
 The WSL VM's outbound traffic is allowed only inside ``firewall_window``, after every model
 service is stopped (TH10-45), and is set back to ``Block`` and read back on every exit path,
@@ -34,10 +33,8 @@ from herness.core.ids import canonical_json
 from herness.core.jobs import worker_alive
 from herness.core.logging import get_logger
 
-__all__ = [
-    "REFS_SCRIPT", "WSL_VM_CREATOR_ID", "firewall_window", "pull_images", "pull_weights",
-    "run_pull", "verify_weights",
-]  # fmt: skip
+__all__ = ["REFS_SCRIPT", "WSL_VM_CREATOR_ID", "firewall_window", "pull_images", "pull_weights"]
+__all__ += ["run_pull", "verify_weights"]
 
 WSL_VM_CREATOR_ID: Final = "{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}"  # verification V-20
 REFS_SCRIPT: Final = 'printf %s "$1" > "$2"'  # U10-83 step 3: the fixed script, $1/$2 only
@@ -51,10 +48,10 @@ _BLOCK_CMD: Final = (
 )
 _HASH_BATCH: Final = 100
 _LFS_BLOB: Final = re.compile(r"[0-9a-f]{64}")
+_BLOB_TARGET: Final = re.compile(r"(?:\.\./)+blobs/(?:[0-9a-f]{40}|[0-9a-f]{64})")  # HF links
 _SHA_LINE: Final = re.compile(r"([0-9a-f]{64}) [ *](.+)")
 type WeightClass = Literal["reasoning", "decider", "large"]
 _WEIGHT_CLASSES: Final[tuple[WeightClass, ...]] = ("reasoning", "decider", "large")
-_HF_CLASSES: Final[tuple[WeightClass, ...]] = ("reasoning", "decider")
 _log = get_logger("admin.deploy")
 
 
@@ -90,6 +87,18 @@ def _outbound_blocked() -> bool:
     )
 
 
+def _block_twice() -> bool:
+    """Set ``Block`` and read it back, once more after 2 s; a runner failure is "not closed"."""
+    for attempt in range(2):
+        if attempt:
+            clock.sleep(_RETRY_DELAY_S)
+        with suppress(Exception):
+            _set_outbound("Block")
+            if _outbound_blocked():
+                return True
+    return False
+
+
 class _Window:
     """One open window: ``close`` is serialised between the body thread and the timer."""
 
@@ -101,17 +110,18 @@ class _Window:
     def close(self) -> None:
         """Step 4: set ``Block``, read it back, retry once after 2 s; else CRITICAL and raise."""
         with self._lock:
-            for attempt in range(2):
-                if attempt:
-                    clock.sleep(_RETRY_DELAY_S)
-                try:
+            try:
+                closed = _block_twice()
+            except BaseException:  # e.g. Ctrl+C in the retry delay: CRITICAL, one more Block
+                _log.critical(
+                    "deploy.firewall.restore_failed", actor=self.actor, command=_BLOCK_CMD
+                )
+                with suppress(Exception):
                     _set_outbound("Block")
-                    blocked = _outbound_blocked()
-                except Exception:  # noqa: BLE001 - any runner failure counts as "not closed"
-                    blocked = False
-                if blocked:
-                    _log.info("deploy.firewall.window_closed", actor=self.actor)
-                    return
+                raise
+            if closed:
+                _log.info("deploy.firewall.window_closed", actor=self.actor)
+                return
             _log.critical("deploy.firewall.restore_failed", actor=self.actor, command=_BLOCK_CMD)
             msg = "firewall window could not be closed; run the Block command manually"
             raise FatalError(msg, hint=_BLOCK_CMD)
@@ -180,8 +190,7 @@ def pull_images(cfg: HernessConfig, *, guard: EgressGuard) -> list[dict[str, str
         guard.check(f"https://{registry_host(ref)}/v2/", b"", "model_download", "none")
         if wsl.run_wsl(distro, ["docker", "pull", ref], timeout_s=3600).returncode != 0:
             _fail(f"image pull failed: {service}", service=service, reason="image_pull")
-        # ``docker image inspect`` JSON, parsed here: the spec's ``--format {{json .RepoDigests}}``
-        # holds a space, which the U10-77 argument pattern refuses (T10-24 ruling).
+        # JSON parsed here: ``{{json .RepoDigests}}`` fails the U10-77 pattern (T10-24 ruling)
         inspect = wsl.run_wsl(distro, ["docker", "image", "inspect", ref], timeout_s=60)
         digest = ref.rpartition("@")[2]
         found = _repo_digests(inspect.stdout) if inspect.returncode == 0 else []
@@ -232,17 +241,22 @@ def _sha256(cfg: HernessConfig, paths: Sequence[str]) -> dict[str, str]:
 
 def _links(cfg: HernessConfig, snapshot: str, repo: str) -> dict[str, str] | str:
     """``{relative file: blob path}`` of the snapshot's links, or a failure status."""
-    # ``%l=`` then ``-print0``: the spec's ``%p %l\n`` holds a space and a backslash, which
-    # the U10-77 argument pattern refuses (T10-24 ruling); NUL ends each record.
+    # ``%l=`` + ``-print0``: the spec's printf format fails the U10-77 pattern (T10-24 ruling)
     listing = _wsl(cfg, ["find", snapshot, "-type", "l", "-printf", "%l=", "-print0"])
-    if listing.returncode != 0:
+    # Review round 1: a non-link file is never hash-checked, so any is refused (no ``!``: U10-77)
+    others = ["find", snapshot, "-mindepth", "1", "-not", "-type", "d", "-not", "-type", "l"]
+    other = _wsl(cfg, [*others, "-print0"])
+    if listing.returncode != 0 or other.returncode != 0:
         return "list_failed"
+    if stray := other.stdout.split("\0")[0]:
+        return f"not_a_link:{posixpath.relpath(stray, snapshot)}"
     links: dict[str, str] = {}
     for record in filter(None, listing.stdout.split("\0")):
         target, _eq, path = record.partition("=")
         rel = posixpath.relpath(path, snapshot) if path.startswith(snapshot + "/") else ""
         blob = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
-        if not rel or rel.startswith("..") or posixpath.dirname(blob) != f"{repo}/blobs":
+        shaped = record.count("=") == 1 and _BLOB_TARGET.fullmatch(target) is not None
+        if not (rel and shaped) or posixpath.dirname(blob) != f"{repo}/blobs":
             return f"link_invalid:{rel or 'unknown'}"
         links[rel] = blob
     return links or "snapshot_empty"
@@ -296,8 +310,7 @@ def verify_weights(cfg: HernessConfig, gpu_class: WeightClass, *, full: bool) ->
         links = _links(cfg, snapshot, repo)
         if isinstance(links, str):
             return {"status": links, "files": "0"}
-        lfs = {rel: posixpath.basename(blob) for rel, blob in links.items()}
-        lfs = {rel: name for rel, name in lfs.items() if _LFS_BLOB.fullmatch(name)}
+        lfs = {r: n for r, b in links.items() if _LFS_BLOB.fullmatch(n := posixpath.basename(b))}
         status, manifest = _check_files(cfg, links, lfs, full=full)
         name = f"{gpu_class}-{revision}"
     if status == "ok":
@@ -309,7 +322,7 @@ def pull_weights(cfg: HernessConfig, *, guard: EgressGuard) -> list[dict[str, st
     """Download pinned weight revisions, pin OpenJev's ``refs/main``, verify all (U10-83)."""
     cfg.deploy.require_pinned()
     deploy = cfg.deploy
-    for gpu_class in _HF_CLASSES:
+    for gpu_class in _WEIGHT_CLASSES[:2]:  # reasoning, decider
         model, revision, repo = _hf(cfg, gpu_class)
         url = f"https://huggingface.co/{model}/resolve/{revision}"
         guard.check(url, b"", "model_download", "none")
@@ -320,7 +333,8 @@ def pull_weights(cfg: HernessConfig, *, guard: EgressGuard) -> list[dict[str, st
             "download", model, "--revision", revision,
         ]  # fmt: skip
         if _wsl(cfg, argv, timeout_s=7200).returncode != 0:
-            _fail(f"weight download failed: {gpu_class}", reason="weight_download")
+            msg = f"weight download failed: {gpu_class}"
+            _fail(msg, gpu_class=gpu_class, reason="weight_download")
         if gpu_class == "decider":  # V-15: offline resolution picks the pinned snapshot
             refs = ["sh", "-c", REFS_SCRIPT, "sh", revision, f"{repo}/refs/main"]
             done = wsl.run_wsl(

@@ -167,6 +167,10 @@ def test_ut10_62_verify_weights_full_ok_writes_manifest(host: PullHost) -> None:
     }
     find = _inner(host, "find")[0]
     assert find == ["find", host.snapshot(model), "-type", "l", "-printf", "%l=", "-print0"]
+    assert _inner(host, "find")[1] == [
+        "find", host.snapshot(model), "-mindepth", "1", "-not", "-type", "d",
+        "-not", "-type", "l", "-print0",
+    ]  # fmt: skip
 
 
 def test_ut10_62_verify_weights_mismatch(host: PullHost) -> None:
@@ -509,3 +513,43 @@ def test_ut10_63_failed_readback_command_is_not_closed(host: PullHost) -> None:
     ):
         pass
     assert host.outbound == "Block"  # set, but never confirmed by a successful read-back
+
+
+def test_ut10_63_interrupt_in_retry_still_critical_and_block(
+    host: PullHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-63 Ctrl+C in the retry delay: CRITICAL ``restore_failed``, one more ``Block``."""
+
+    def interrupted(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    host.readback = lambda _state: '{"DefaultOutboundAction": "Allow"}'
+    monkeypatch.setattr(deploy_pull.clock, "sleep", interrupted)
+    with (
+        structlog.testing.capture_logs() as logs,
+        pytest.raises(KeyboardInterrupt),
+        deploy_pull.firewall_window(actor=ACTOR),
+    ):
+        pass
+    assert host.events == ["set:Allow", "set:Block", "get", "set:Block"]
+    assert [x["event"] for x in logs if x["log_level"] == "critical"] == [
+        "deploy.firewall.restore_failed"
+    ]
+
+
+def test_ut10_62_weight_download_failure_logs_gpu_class(host: PullHost) -> None:
+    """UT10-62 ``deploy.pull.failed`` for a failed download names the GPU class."""
+    host.fail_prefix = ("docker", "run")
+    guard = make_guard(host.cfg)
+    with (
+        guard.download_window(allow_download=True, actor=ACTOR),
+        structlog.testing.capture_logs() as logs,
+        pytest.raises(FatalError),
+    ):
+        deploy_pull.pull_weights(host.cfg, guard=guard)
+    expected = {
+        "event": "deploy.pull.failed",
+        "gpu_class": "reasoning",
+        "reason": "weight_download",
+    }
+    assert any(expected.items() <= line.items() for line in logs)

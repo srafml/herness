@@ -71,6 +71,45 @@ def test_st10_20_altered_blob_is_hash_mismatch(host: PullHost) -> None:
     assert host.outbound == "Block"
 
 
+def test_st10_20_spoofed_link_record_refused(host: PullHost) -> None:
+    """ST10-20 a link target holding ``=`` plus a snapshot path cannot pass as a genuine blob."""
+    model = host.cfg.deploy.reasoning.model
+    snap = host.snapshot(model)
+    genuine = host.links[snap]["model.safetensors"]  # ../../blobs/<64 hex>
+    # The link really points at "<genuine>=<snap>/evil"; its record reads
+    # "<genuine>=<snap>/evil=<snap>/model.safetensors".
+    host.links[snap] = {"model.safetensors": f"{genuine}={snap}/evil"}
+    result = deploy_pull.verify_weights(host.cfg, "reasoning", full=True)
+    assert result["status"].startswith("link_invalid:")
+    with pytest.raises(FatalError, match="link_invalid"):
+        deploy_pull.run_pull(host.cfg, allow_download=True, actor=ACTOR)
+    assert host.outbound == "Block"
+
+
+@pytest.mark.parametrize(
+    "target", ["../../blobs/" + "a" * 63, "../../blobs/" + "A" * 64, "../../blobs/../blobs/x"]
+)
+def test_st10_20_link_target_must_be_a_blob_name(host: PullHost, target: str) -> None:
+    """ST10-20 a target not shaped ``(../)+blobs/<40 or 64 hex>`` is ``link_invalid``."""
+    host.links[host.snapshot(host.cfg.deploy.openjev.model)]["config.json"] = target
+    status = deploy_pull.verify_weights(host.cfg, "decider", full=False)["status"]
+    assert status == "link_invalid:config.json"
+
+
+def test_st10_20_regular_file_in_snapshot_refused(host: PullHost) -> None:
+    """ST10-20 a tampered regular file replacing a link is refused, full and quick."""
+    model = host.cfg.deploy.reasoning.model
+    snap = host.snapshot(model)
+    del host.links[snap]["model.safetensors"]
+    host.regular[snap] = ["model.safetensors"]
+    for full in (True, False):
+        result = deploy_pull.verify_weights(host.cfg, "reasoning", full=full)
+        assert result == {"status": "not_a_link:model.safetensors", "files": "0"}
+    with pytest.raises(FatalError, match=r"not_a_link:model\.safetensors"):
+        deploy_pull.run_pull(host.cfg, allow_download=True, actor=ACTOR)
+    assert host.outbound == "Block"
+
+
 def test_st10_21_flipped_gguf_is_fatal(host: PullHost) -> None:
     """ST10-21 a GGUF byte flipped: its SHA-256 differs from the pin and the pull fails."""
     host.hashes[GGUF] = host.cfg.deploy.large.sha256[:-1] + "e"

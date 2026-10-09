@@ -56,6 +56,7 @@ class PullHost:
     repo_digests: dict[str, list[str]] = field(default_factory=dict)
     fail_prefix: tuple[str, ...] | None = None  # any argv with this prefix exits 1
     links: dict[str, dict[str, str]] = field(default_factory=dict)  # snapshot -> rel -> target
+    regular: dict[str, list[str]] = field(default_factory=dict)  # snapshot -> non-link files
     sizes: dict[str, int] = field(default_factory=dict)  # blob path -> size
     hashes: dict[str, str] = field(default_factory=dict)  # blob path -> sha256sum output
     on_block: Callable[[], None] | None = None
@@ -125,6 +126,9 @@ class PullHost:
             return _ok(returncode=0 if inner[2] in self.links else 1)
         if program == "find":
             snap = inner[1]
+            if inner[2] == "-mindepth":  # files that are neither directories nor links
+                found = "".join(f"{snap}/{rel}\0" for rel in self.regular.get(snap, []))
+                return _ok(found, 0 if snap in self.links else 1)
             records = [f"{t}={snap}/{rel}\0" for rel, t in self.links.get(snap, {}).items()]
             return _ok("".join(records), 0 if snap in self.links else 1)
         if program == "stat":
