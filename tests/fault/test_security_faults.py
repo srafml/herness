@@ -1,8 +1,9 @@
 """Fault tests for impl 10 security paths (FT10-01 T10-05, FT10-05 T10-06, FT10-07 T10-11,
-FT10-08 T10-16)."""
+FT10-08 T10-16, FT10-02 T10-30)."""
 
 from __future__ import annotations
 
+import datetime
 import errno
 import json
 import os
@@ -11,7 +12,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -20,15 +21,29 @@ from tests.support.config_tree import write_full_config
 from tests.support.egress_harness import API, audit_fields, make_guard
 from tests.support.egress_harness import load as load_egress
 from tests.support.fake_keyring import MemoryKeyring
+from tests.support.rekey_env import (
+    NEW_KEY,
+    OLD_ID,
+    OLD_KEY,
+    FakeCtx,
+    RekeyEnv,
+    open_rekey_env,
+    write_labels,
+)
 
+from herness.admin import rekey as rekey_module
+from herness.admin.rekey import run_rekey
 from herness.core import _redact_pool as redact_pool
 from herness.core import audit as a
 from herness.core import config as c
 from herness.core import redact, secrets
 from herness.core.errors import ConfigError, EgressBlocked, FatalError, RetryableError, StoreBusy
+from herness.core.jobs.ports import JobContext
 from herness.core.logging import configure_logging, reset_logging
 
 pytestmark = pytest.mark.fault
+
+REKEY_NOW = datetime.datetime(2026, 9, 26, 19, 0, tzinfo=datetime.UTC)
 
 REPO = Path(__file__).resolve().parents[2]
 HOLDER = """
@@ -187,3 +202,92 @@ def test_ft10_08_egress_log_disk_full_fails_closed(
     assert audit_fields(cfg.paths.logs) == [
         {"egress_id": caught.value.egress_id, "reason": "egress_log_failed"}
     ]
+
+
+@pytest.fixture
+def rekey_env(tmp_path: Path, fake_keyring: MemoryKeyring) -> Iterator[RekeyEnv]:
+    """The planted rekey environment of ``tests.support.rekey_env``."""
+    with open_rekey_env(tmp_path, fake_keyring) as env:
+        yield env
+
+
+# --- FT10-02 rekey killed before the key swap (T10-30) ---------------------------------------
+
+
+class _Killed(BaseException):
+    """Stands in for the worker process dying at a chosen point of the rekey job."""
+
+
+def _kill_at(monkeypatch: pytest.MonkeyPatch, attr: str, name: str) -> None:
+    real = getattr(rekey_module, attr)
+
+    def die(secret: str, *args: Any, **kwargs: Any) -> Any:
+        if secret == name:
+            raise _Killed
+        return real(secret, *args, **kwargs)
+
+    monkeypatch.setattr(rekey_module, attr, die)
+
+
+def test_ft10_02_killed_after_step_3_keeps_old_key_until_rerun(
+    rekey_env: RekeyEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FT10-02 rekey killed after step 3, before 4a: old key active, hashes and labels
+    unchanged; the rerun swaps the key and re-keys the labels."""
+    env = rekey_env
+    write_labels(env, "human", "a", [("sn:incident:INC1", env.old["sn:incident:INC1"])])
+    write_labels(env, "gold", "a", [("sn:change:CHG1", env.old["sn:change:CHG1"])])
+    labels_before = env.label_bytes()
+    warehouse = next((env.data / "warehouse").glob("wh-*.duckdb"))
+    wh_before = warehouse.read_bytes()
+    ctx = FakeCtx()
+    with monkeypatch.context() as patch:
+        _kill_at(patch, "set_secret", "redact.hmac_key")  # step 4a
+        with pytest.raises(_Killed):
+            run_rekey(env.cfg, cast("JobContext", ctx), now=REKEY_NOW)
+    assert ctx.state["step"] == 3
+    assert (env.key("redact.hmac_key"), env.key("redact.hmac_key.next")) == (OLD_KEY, NEW_KEY)
+    live = {k: v for k, v in env.label_bytes().items() if not k.rsplit("/", 1)[-1].startswith(".")}
+    assert live == labels_before  # labels unchanged before the rerun
+    assert warehouse.read_bytes() == wh_before  # hashes unchanged
+    assert not env.marker.exists()
+    redact.reset_redactor()
+    assert redact.get_redactor().key_id == OLD_ID  # old key still active
+    outcome = run_rekey(env.cfg, cast("JobContext", ctx), now=REKEY_NOW)  # rerun
+    assert outcome.status == "done"
+    assert (env.key("redact.hmac_key"), env.key("redact.hmac_key.next")) == (NEW_KEY, None)
+    assert [r["content_hash"] for r in env.label_rows("human")] == [env.new["sn:incident:INC1"]]
+    assert [r["content_hash"] for r in env.label_rows("gold")] == [env.new["sn:change:CHG1"]]
+    assert env.marker.exists()
+
+
+def test_ft10_02_killed_after_swap_rerun_finishes(
+    rekey_env: RekeyEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FT10-02 killed right after 4a (new key active, staged labels not yet swapped in, .next
+    kept), or after the label swap: the rerun resumes at 4b and finishes the rotation."""
+    env = rekey_env
+    write_labels(env, "teacher", "a", [("sn:problem:PRB1", env.old["sn:problem:PRB1"])])
+    ctx = FakeCtx()
+
+    def die(*_args: Any) -> int:
+        raise _Killed
+
+    with monkeypatch.context() as patch:
+        patch.setattr(rekey_module, "commit_labels", die)  # right after 4a
+        with pytest.raises(_Killed):
+            run_rekey(env.cfg, cast("JobContext", ctx), now=REKEY_NOW)
+    assert (env.key("redact.hmac_key"), env.key("redact.hmac_key.next")) == (NEW_KEY, NEW_KEY)
+    assert [r["content_hash"] for r in env.label_rows("teacher")] == [env.old["sn:problem:PRB1"]]
+    with monkeypatch.context() as patch:
+        _kill_at(patch, "delete_secret", "redact.hmac_key.next")  # labels swapped, then 4b
+        with pytest.raises(_Killed):
+            run_rekey(env.cfg, cast("JobContext", ctx), now=REKEY_NOW)
+    assert [r["content_hash"] for r in env.label_rows("teacher")] == [env.new["sn:problem:PRB1"]]
+    outcome = run_rekey(env.cfg, cast("JobContext", ctx), now=REKEY_NOW)
+    assert outcome.status == "done"
+    assert env.key("redact.hmac_key.next") is None
+    assert [r["content_hash"] for r in env.label_rows("teacher")] == [env.new["sn:problem:PRB1"]]
+    actions = [cast("dict[str, object]", ln["fields"]).get("action") for ln in env.audit_lines()]
+    assert "redact_rekey" in actions
+    assert not [p for p in env.labels.rglob("*") if p.name.startswith(".")]  # nothing staged
