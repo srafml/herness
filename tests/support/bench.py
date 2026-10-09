@@ -1,13 +1,11 @@
 """Benchmark recorder and regression rule (U11-51; design 11 §8).
 
-Bench tests measure with `tests.support.bench_stats` (`REPEATS`, `report`) and record each
-result through the session fixture `bench_recorder` (`record_median`, `record_value`). At
-session end, when any record exists, the fixture writes
-`<bench dir>/<YYYYMMDD-HHMMSS>-<git sha>.json`; the bench dir is `<rootdir>/data/bench/`
-(gitignored) unless env `HERNESS_BENCH_DIR` names another (tests and the phase gate runner
-use it). With `HERNESS_BENCH_GATE=1` the file is marked `"gate": true` and compared with the
-newest earlier gate file; a regression beyond `eval.yaml: thresholds.bench_regression_max`
-fails the session (exit code 1 via `session.shouldfail`).
+Bench tests measure with `tests.support.bench_stats` and record through the session fixture
+`bench_recorder` (`record_median`, `record_value`). At session end, when any record exists,
+the fixture writes `<bench dir>/<YYYYMMDD-HHMMSS>-<git sha>.json`; the bench dir is
+`<rootdir>/data/bench/` (gitignored) unless env `HERNESS_BENCH_DIR` names another. With
+`HERNESS_BENCH_GATE=1` the file is a gate file, compared with the newest earlier one; a
+regression beyond `thresholds.bench_regression_max` fails the session (exit code 1).
 """
 
 from __future__ import annotations
@@ -25,24 +23,10 @@ from typing import Any, Final, Literal
 import psutil
 import pytest
 import yaml
-from tests.support.bench_stats import REPEATS, report
+from tests.support.bench_stats import report
 
 from herness.core import time as clock
 from herness.eval.settings import load_eval_config
-
-__all__ = [
-    "REPEATS",
-    "BenchRecord",
-    "BenchRecorder",
-    "BenchTarget",
-    "Regression",
-    "bench_dir",
-    "bench_recorder",
-    "compare_bench",
-    "max_regression",
-    "record_median",
-    "record_value",
-]
 
 _REPO: Final = Path(__file__).resolve().parents[2]
 _GIT = "git"
