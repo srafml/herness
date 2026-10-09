@@ -4,20 +4,19 @@
 ``content_hash`` to the hash under the staged key, re-keys the human, gold and teacher labels,
 then swaps ``redact.hmac_key.next`` into ``redact.hmac_key``. Rewritten label parts are staged
 as verified, dot-prefixed files (``.part-<x>.parquet.rekey-<new key id>``, skipped by every label
-reader) and swapped in with ``os.replace`` only after the key swap, so a job killed before the
-swap leaves the old key active and every label unchanged (FT10-02); a job killed after it
-finishes the swap on its rerun. Key values stay in the keyring and in process memory: logs,
-errors, saved state, the marker, the map and the audit line carry 8-hex key ids only.
+reader, ``herness.admin._rekey_labels``) and swapped in with ``os.replace`` only after the key
+swap, so a job killed before the swap leaves the old key active and every label unchanged
+(FT10-02). Every run before the swap redoes the label step from the live parts; a job killed
+after the swap finishes on its rerun, refusing a live part changed since staging. Key values
+stay in the keyring and in process memory: logs, errors, saved state, the marker, the map and
+the audit line carry 8-hex key ids only.
 """
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
-import json
 import os
 import re
-from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -27,11 +26,20 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import JsonValue
 
+from herness.admin._rekey_labels import (
+    commit_labels,
+    os_errors,
+    rekey_labels,
+    unlink,
+    verify_failed,
+    write_json,
+)
 from herness.core import time as clock
 from herness.core.audit import audit
 from herness.core.config import HernessConfig
-from herness.core.errors import FatalError, SchemaViolation, StoreBusy
+from herness.core.errors import FatalError, SchemaViolation
 from herness.core.jobs.ports import JobContext
+from herness.core.jobs.scheduler import NEXT_KEY_REF as NEXT_KEY
 from herness.core.logging import get_logger
 from herness.core.redact import RedactionFailed, Redactor, reset_redactor
 from herness.core.redact_directory import NameDirectory
@@ -43,13 +51,10 @@ from herness.store.warehouse import open_readonly
 
 __all__ = ["build_rekey_map", "commit_labels", "rekey_labels", "run_rekey"]
 
-NEXT_KEY: Final = "redact.hmac_key.next"
 BATCH_ROWS: Final = 20_000
 MAP_SCHEMA: Final = pa.schema(
     [(name, pa.string()) for name in ("record_id", "old_content_hash", "new_content_hash")]
 )
-LABEL_DIRS: Final = ("human", "gold", "gold/_reviews", "teacher")  # design 10 §5.3 step 3
-_PART_GLOB: Final = "part-*.parquet"
 _KEY_HEX: Final = re.compile(r"[0-9A-Fa-f]{64}")
 _SCHEMA_ERRORS: Final = (duckdb.CatalogException, duckdb.BinderException)
 # (record_id, old content_hash, short description, body) of every hashed record, by record id;
@@ -87,40 +92,6 @@ def _key(name: str) -> str:
 def _key_id(value: str) -> str:
     """First 8 hex of SHA-256 over the key bytes (U10-40 ``Redactor.key_id``)."""
     return hashlib.sha256(bytes.fromhex(value)).hexdigest()[:8]
-
-
-@contextlib.contextmanager
-def _os_errors(what: str) -> Iterator[None]:
-    """``OSError`` -> ``StoreBusy`` naming ``what`` (a kind and a file name) only."""
-    try:
-        yield
-    except OSError as exc:
-        msg = f"rekey cannot write {what}"
-        raise StoreBusy(msg) from exc
-
-
-def _unlink(path: Path) -> None:
-    with contextlib.suppress(OSError):
-        path.unlink(missing_ok=True)
-
-
-def _verify_failed(what: str) -> FatalError:
-    return FatalError(f"rekey verification failed: {what}")
-
-
-def _write_json(path: Path, body: dict[str, str]) -> None:
-    """Write ``body`` to ``path`` atomically (``.tmp``, fsync, ``os.replace``)."""
-    tmp = path.with_name(f".{path.name}.tmp")
-    with _os_errors(path.name):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with tmp.open("w", encoding="utf-8") as handle:
-                json.dump(body, handle, sort_keys=True)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(tmp, path)
-        finally:
-            _unlink(tmp)
 
 
 # --- U10-102 build_rekey_map -------------------------------------------------------------------
@@ -173,120 +144,19 @@ def build_rekey_map(
     tmp = out_path.with_name(f".{out_path.name}.tmp")
     con = open_readonly(layout=data_layout(cfg=cfg))
     try:
-        with _os_errors(out_path.name):
+        with os_errors(out_path.name):
             out_path.parent.mkdir(parents=True, exist_ok=True)
             rows, failed = _stream_map(con, new_redactor, tmp, ctx)
             if pq.read_metadata(tmp).num_rows != rows:
-                raise _verify_failed(out_path.name)
+                raise verify_failed(out_path.name)
             os.replace(tmp, out_path)
     finally:
         con.close()
-        _unlink(tmp)
+        unlink(tmp)
     if failed:
         _log.warning("rekey.map.redaction_failed", failed=failed, rows=rows)
     _log.info("rekey.map.written", rows=rows, key_id=out_path.stem)
     return rows
-
-
-# --- U10-103 rekey_labels ----------------------------------------------------------------------
-
-
-def _load_map(path: Path) -> dict[str, tuple[str, ...]]:
-    """``old -> sorted new hashes``; NULL new hashes are ignored."""
-    with _os_errors(path.name):
-        table = pq.read_table(path, columns=["old_content_hash", "new_content_hash"])
-    found: dict[str, set[str]] = {}
-    for old, new in zip(*(table.column(i).to_pylist() for i in range(2)), strict=True):
-        if old is not None and new is not None:
-            found.setdefault(old, set()).add(new)
-    return {old: tuple(sorted(news)) for old, news in found.items()}
-
-
-def _label_parts(labels_root: Path) -> list[Path]:
-    """``part-*.parquet`` of every label kind of every question set version."""
-    with _os_errors("labels"):
-        roots = sorted(labels_root.iterdir()) if labels_root.is_dir() else []
-        folders = [v / kind for v in roots if v.is_dir() for kind in LABEL_DIRS]
-        return [p for f in folders if f.is_dir() for p in sorted(f.glob(_PART_GLOB))]
-
-
-def _staged_name(part: Path, key_id: str) -> Path:
-    return part.with_name(f".{part.name}.rekey-{key_id}")
-
-
-def _rekey_table(
-    table: pa.Table, mapping: dict[str, tuple[str, ...]], counts: dict[str, int]
-) -> tuple[pa.Table, list[str | None]] | None:
-    """The re-keyed table and its hash column, or None when no row changes."""
-    take: list[int] = []
-    hashes: list[str | None] = []
-    changed = False
-    for i, old in enumerate(table.column("content_hash").to_pylist()):
-        new = mapping.get(old, ()) if old is not None else ()
-        counts["kept_old" if not new else "rekeyed" if len(new) == 1 else "ambiguous"] += 1
-        changed = changed or (bool(new) and new != (old,))
-        take += [i] * max(len(new), 1)
-        hashes += list(new) or [old]
-    if not changed:
-        return None
-    out = table.take(pa.array(take, pa.int64()))
-    idx = out.schema.get_field_index("content_hash")
-    field = out.schema.field(idx)
-    return out.set_column(idx, field, pa.array(hashes, field.type)), hashes
-
-
-def _stage(part: Path, table: pa.Table, hashes: list[str | None], key_id: str) -> None:
-    """Write the staged part via ``.tmp``, re-read and verify it, then ``os.replace``."""
-    staged = _staged_name(part, key_id)
-    tmp = staged.with_name(f"{staged.name}.tmp")
-    with _os_errors(f"label part {part.name}"):
-        try:
-            pq.write_table(table, tmp, compression="zstd")
-            with tmp.open("rb+") as handle:
-                os.fsync(handle.fileno())
-            check = pq.read_table(tmp, columns=["content_hash"], partitioning=None)
-            if check.num_rows != len(hashes) or check.column(0).to_pylist() != hashes:
-                raise _verify_failed(part.name)
-            os.replace(tmp, staged)
-        finally:
-            _unlink(tmp)
-
-
-def rekey_labels(labels_root: Path, rekey_map: Path) -> dict[str, int]:
-    """Re-key every human, gold and teacher label part through ``rekey_map`` (U10-103).
-
-    Per row: exactly one new hash replaces the old one (``rekeyed``), several give one row per
-    new hash (``ambiguous``), none keeps the old hash (``kept_old``, reported). A changed part
-    is staged next to the live one; ``commit_labels`` swaps the staged parts in.
-    """
-    key_id = rekey_map.stem
-    mapping = _load_map(rekey_map)
-    counts = {"rekeyed": 0, "kept_old": 0, "ambiguous": 0}
-    for part in _label_parts(labels_root):
-        with _os_errors(f"label part {part.name}"):
-            table = pq.read_table(part, partitioning=None)
-        if "content_hash" not in table.column_names:
-            msg = f"label part has no content_hash: {part.name}"
-            raise SchemaViolation(msg)
-        rekeyed = _rekey_table(table, mapping, counts)
-        if rekeyed is not None:
-            _stage(part, *rekeyed, key_id)
-    if counts["kept_old"]:
-        _log.warning("rekey.labels.kept_old", kept_old=counts["kept_old"], key_id=key_id)
-    _log.info("rekey.labels.staged", key_id=key_id, **counts)
-    return counts
-
-
-def commit_labels(labels_root: Path, key_id: str) -> int:
-    """Swap every staged part of ``key_id`` onto its live part with ``os.replace``."""
-    moved = 0
-    for part in _label_parts(labels_root):
-        staged = _staged_name(part, key_id)
-        with _os_errors(f"label part {part.name}"):
-            if staged.exists():
-                os.replace(staged, part)
-                moved += 1
-    return moved
 
 
 # --- U10-101 run_rekey -------------------------------------------------------------------------
@@ -300,15 +170,19 @@ def _new_redactor(cfg: HernessConfig, value: str) -> Redactor:
     return Redactor(red, bytes.fromhex(value), directory)
 
 
+def _map_path(cfg: HernessConfig, key_id: str) -> Path:
+    return Path(cfg.paths.data) / "cache" / "rekey" / f"{key_id}.parquet"
+
+
 def _finish(
     cfg: HernessConfig, ids: dict[str, str], counts: dict[str, int], *, now: datetime
 ) -> JobOutcome:
-    """Steps 4b-4e after the key swap; also the resume point of a rerun after 4a."""
+    """Labels swap-in and steps 4b-4e after the key swap; also the resume point after 4a."""
     data = Path(cfg.paths.data)
-    moved = commit_labels(data / "labels", ids["new_key_id"])
+    moved = commit_labels(data / "labels", _map_path(cfg, ids["new_key_id"]))
     delete_secret(NEXT_KEY, actor="system")  # 4b
-    body = {"swapped_at": clock.format_utc(now), **ids}
-    _write_json(data / "cache" / "rekey" / "SWAPPED", body)  # 4c
+    body: dict[str, object] = {"swapped_at": clock.format_utc(now), **ids}
+    write_json(data / "cache" / "rekey" / "SWAPPED", body)  # 4c
     detail = "old=" + ids["old_key_id"]
     audit("admin_action", "system", action="redact_rekey", target=ids["new_key_id"], detail=detail)
     reset_redactor()  # 4e
@@ -317,25 +191,32 @@ def _finish(
     return JobOutcome(status="done", result=result)
 
 
-def _saved_counts(state: dict[str, JsonValue]) -> dict[str, int]:
-    return {
+def _resume(cfg: HernessConfig, state: dict[str, JsonValue], *, now: datetime) -> JobOutcome:
+    """The swap began (active id is the saved ``new_key_id``): finish from step 4b."""
+    old, new = state.get("old_key_id"), state.get("new_key_id")
+    labels_staged = state.get("step") == 3  # noqa: PLR2004 - spec step 3 (labels staged)
+    if not (isinstance(old, str) and isinstance(new, str) and labels_staged):
+        msg = "rekey state incomplete after the key swap"
+        raise FatalError(msg)
+    counts = {
         k: v for k in ("rekeyed", "kept_old", "ambiguous") if isinstance(v := state.get(k), int)
     }
+    return _finish(cfg, {"new_key_id": new, "old_key_id": old}, counts, now=now)
 
 
 def run_rekey(cfg: HernessConfig, ctx: JobContext, *, now: datetime) -> JobOutcome:
     """The planned redaction key rotation (U10-101): map, labels, then the key swap.
 
-    State (``step``, ``new_key_id``, ``old_key_id``, counts) is saved after steps 2 and 3, and
-    a rerun skips finished steps of the same staged key. A failure before 4a leaves the old
-    key and ``.next`` in place (design 10 §6).
+    State (``step``, ``new_key_id``, ``old_key_id``, counts) is saved after steps 2 and 3. A
+    rerun before the swap reuses the map of the same staged key but always redoes the label
+    step from the live parts. A failure before 4a leaves the old key and ``.next`` in place
+    (design 10 §6).
     """
     state = ctx.load_state()
     active_name = SecretRef.parse(cfg.security.redaction.key).name
     active_id = _key_id(_key(active_name))
-    if isinstance(saved := state.get("new_key_id"), str) and saved == active_id:
-        ids = {"new_key_id": saved, "old_key_id": str(state.get("old_key_id"))}
-        return _finish(cfg, ids, _saved_counts(state), now=now)  # swap began: go to 4b
+    if state.get("new_key_id") == active_id:
+        return _resume(cfg, state, now=now)  # swap began: go to 4b
     if not exists(NEXT_KEY):
         msg = "no staged key"
         raise FatalError(msg)
@@ -344,16 +225,12 @@ def run_rekey(cfg: HernessConfig, ctx: JobContext, *, now: datetime) -> JobOutco
     if ids["new_key_id"] == active_id:
         msg = "staged key equals the active key"
         raise FatalError(msg)
-    raw_step = state.get("step") if saved == ids["new_key_id"] else 0
-    step = raw_step if isinstance(raw_step, int) else 0
-    map_path = Path(cfg.paths.data) / "cache" / "rekey" / f"{ids['new_key_id']}.parquet"
-    if step < 2 or not map_path.exists():  # noqa: PLR2004 - spec step 2
+    map_path = _map_path(cfg, ids["new_key_id"])
+    same_key = state.get("new_key_id") == ids["new_key_id"]
+    if not (same_key and state.get("step") in (2, 3) and map_path.exists()):
         build_rekey_map(cfg, _new_redactor(cfg, value), out_path=map_path, ctx=ctx)
         ctx.save_state({"step": 2, **ids})
-        step = 2
-    counts = _saved_counts(state)
-    if step < 3:  # noqa: PLR2004 - spec step 3
-        counts = rekey_labels(Path(cfg.paths.data) / "labels", map_path)
-        ctx.save_state({"step": 3, **ids, **counts})
+    counts = rekey_labels(Path(cfg.paths.data) / "labels", map_path)  # always, before 4a
+    ctx.save_state({"step": 3, **ids, **counts})
     set_secret(active_name, value, actor="system")  # 4a
     return _finish(cfg, ids, counts, now=now)

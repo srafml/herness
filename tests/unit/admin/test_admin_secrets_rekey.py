@@ -133,6 +133,24 @@ def test_ut10_73_rekey_stages_plans_and_audits(
     assert value not in json.dumps(result.data) + json.dumps(result.warnings)
 
 
+def test_ut10_73_rekey_unknown_planned_time_warns(
+    cfg: c.HernessConfig, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-73 a job row without ``scheduled_for``: staged and planned, exit 0 with a warning;
+    the audit line has no ``detail`` (never "None")."""
+    jobs = Jobs()
+    _install(monkeypatch, jobs)
+    monkeypatch.setattr(jobs, "get_job", lambda _job_id: None)
+    result = cmd_secrets_rekey(actor=USER, prompt=Prompt("ESCROWED"), show=lambda _t: None)
+    assert (result.ok, result.exit_code) == (True, 0)
+    assert result.data == {"job_id": "job_rekey_1", "planned_at": None}
+    assert result.warnings == [
+        "rekey job job_rekey_1 planned; planned time unknown, see `herness status`"
+    ]
+    assert _audit_fields(cfg)[-1] == {"action": "redact_rekey", "target": "staged"}
+    assert (SVC, NEXT) in fake_keyring.store
+
+
 def test_ut10_73_rekey_not_escrowed_stores_nothing(
     cfg: c.HernessConfig, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
 ) -> None:

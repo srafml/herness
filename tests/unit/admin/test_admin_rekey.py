@@ -35,6 +35,7 @@ from tests.support.rekey_env import (
 )
 
 from herness.admin import rekey
+from herness.admin._rekey_labels import manifest_path
 from herness.admin.maintenance import handle_maintenance
 from herness.admin.rekey import build_rekey_map, rekey_labels, run_rekey
 from herness.core import redact
@@ -177,26 +178,97 @@ def test_ut10_70_resume_after_swap_goes_to_4b(rekey_env: RekeyEnv) -> None:
     assert json.loads(env.marker.read_text("utf-8"))["new_key_id"] == NEW_ID
 
 
-def test_ut10_70_resume_skips_finished_steps(
+def test_ut10_70_rerun_reuses_map_but_redoes_labels(
     rekey_env: RekeyEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT10-70 a saved step 3 of the same new key skips steps 2 and 3 on the rerun."""
+    """UT10-70 a saved step 3 of the same new key (old key still active) reuses the map but
+    always redoes the label step from the live parts (review fix round 1)."""
     env = rekey_env
     _plant_labels(env)
     rekey.build_rekey_map(
         env.cfg, redactor(env.cfg, NEW_KEY), out_path=env.map_path, ctx=_ctx(FakeCtx())
     )
     counts = rekey_labels(env.labels, env.map_path)
+    calls: list[int] = []
+    real = rekey.rekey_labels
 
     def boom(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError
 
+    def spy(*args: Any) -> dict[str, int]:
+        calls.append(1)
+        return real(*args)
+
     monkeypatch.setattr(rekey, "build_rekey_map", boom)
-    monkeypatch.setattr(rekey, "rekey_labels", boom)
+    monkeypatch.setattr(rekey, "rekey_labels", spy)
     state = {"step": 3, "new_key_id": NEW_ID, "old_key_id": OLD_ID, **counts}
     outcome = run_rekey(env.cfg, _ctx(FakeCtx(state=dict(state))), now=NOW)
+    assert calls == [1]
     assert outcome.result["counts"] == counts
     assert env.key("redact.hmac_key") == NEW_KEY
+
+
+@pytest.mark.parametrize("drop", ["old_key_id", "step"])
+def test_ut10_70_resume_with_incomplete_state_is_fatal(rekey_env: RekeyEnv, drop: str) -> None:
+    """UT10-70 after the key swap, a saved state without ``old_key_id`` or step 3 raises
+    FatalError; nothing is audited as ``old=None``."""
+    env = rekey_env
+    env.keyring.store[("herness", "redact.hmac_key")] = NEW_KEY
+    state: dict[str, Any] = {"step": 3, "new_key_id": NEW_ID, "old_key_id": OLD_ID}
+    del state[drop]
+    with pytest.raises(FatalError, match="rekey state incomplete"):
+        run_rekey(env.cfg, _ctx(FakeCtx(state=state)), now=NOW)
+    assert "old=None" not in env.audit_text()
+    assert env.key("redact.hmac_key.next") == NEW_KEY
+
+
+def _staged_after_swap(env: RekeyEnv) -> FakeCtx:
+    """Steps 2-3 done and the key swapped (4a), as a killed job leaves them."""
+    _plant_labels(env)
+    rekey.build_rekey_map(
+        env.cfg, redactor(env.cfg, NEW_KEY), out_path=env.map_path, ctx=_ctx(FakeCtx())
+    )
+    counts = rekey_labels(env.labels, env.map_path)
+    env.keyring.store[("herness", "redact.hmac_key")] = NEW_KEY
+    return FakeCtx(state={"step": 3, "new_key_id": NEW_ID, "old_key_id": OLD_ID, **counts})
+
+
+def test_ut10_70_resume_refuses_live_part_changed_since_staging(rekey_env: RekeyEnv) -> None:
+    """UT10-70 resume after 4a: a live part rewritten since staging (e.g. a privacy purge)
+    raises FatalError before any staged part is swapped in; the rewrite is kept."""
+    env = rekey_env
+    ctx = _staged_after_swap(env)
+    human = env.labels / QSV / "human" / "part-a.parquet"
+    write_labels(env, "human", "a", [])  # the purge emptied the part
+    before = env.label_bytes()
+    with pytest.raises(FatalError, match=r"part-a\.parquet"):
+        run_rekey(env.cfg, _ctx(ctx), now=NOW)
+    assert env.label_bytes() == before  # nothing swapped, gold and teacher included
+    assert pq.read_table(human).num_rows == 0
+    assert env.key("redact.hmac_key.next") == NEW_KEY
+
+
+def test_ut10_70_resume_refuses_missing_staged_file(rekey_env: RekeyEnv) -> None:
+    """UT10-70 resume after 4a: a recorded staged file that disappeared is a FatalError, not a
+    silent skip (the label would stay on its old hash)."""
+    env = rekey_env
+    ctx = _staged_after_swap(env)
+    staged = next((env.labels / QSV / "gold").glob(f".part-a.parquet.rekey-{NEW_ID}"))
+    staged.unlink()
+    with pytest.raises(FatalError, match="staged file missing"):
+        run_rekey(env.cfg, _ctx(ctx), now=NOW)
+
+
+def test_ut10_70_resume_without_manifest_is_fatal(rekey_env: RekeyEnv) -> None:
+    """UT10-70 resume after 4a without the staging manifest raises FatalError."""
+    env = rekey_env
+    ctx = _staged_after_swap(env)
+    manifest_path(env.map_path).unlink()
+    with pytest.raises(FatalError, match="manifest unreadable"):
+        run_rekey(env.cfg, _ctx(ctx), now=NOW)
+    manifest_path(env.map_path).write_text('{"parts": []}', "utf-8")
+    with pytest.raises(FatalError, match="verification"):
+        run_rekey(env.cfg, _ctx(ctx), now=NOW)
 
 
 # --- UT10-70 build_rekey_map ---------------------------------------------------------------
@@ -286,17 +358,26 @@ def test_ut10_70_rekey_labels_counts_and_staging(rekey_env: RekeyEnv) -> None:
     ]
     mpath = _map(env.data / "cache" / "rekey" / f"{NEW_ID}.parquet", rows)
     part = write_labels(env, "human", "a", [("r1", "a" * 32), ("r2", "b" * 32), ("r4", "c" * 32)])
-    write_labels(env, "teacher", "a", [("r9", "9" * 32)])  # nothing changes: not staged
+    teacher = write_labels(env, "teacher", "a", [("r9", "9" * 32)])  # unchanged: not staged
+    stale = [  # left by an earlier attempt (this key and another one): cleared first
+        teacher.with_name(f".part-a.parquet.rekey-{NEW_ID}"),
+        part.with_name(".part-a.parquet.rekey-deadbeef.tmp"),
+    ]
+    for path in stale:
+        path.write_bytes(b"stale")
     before = part.read_bytes()
     counts = rekey_labels(env.labels, mpath)
     assert counts == {"rekeyed": 1, "kept_old": 2, "ambiguous": 1}
     assert part.read_bytes() == before
     staged = sorted(p.name for p in env.labels.rglob(".*"))
     assert staged == [f".part-a.parquet.rekey-{NEW_ID}"]
-    assert rekey.commit_labels(env.labels, NEW_ID) == 1
+    assert not any(path.exists() for path in stale)
+    manifest = json.loads(manifest_path(mpath).read_text("utf-8"))
+    assert list(manifest["parts"]) == [f"{QSV}/human/part-a.parquet"]
+    assert rekey.commit_labels(env.labels, mpath) == 1
     got = [(r["record_id"], r["content_hash"]) for r in env.label_rows("human")]
     assert got == [("r1", "1" * 32), ("r2", "2" * 32), ("r2", "3" * 32), ("r4", "c" * 32)]
-    assert rekey.commit_labels(env.labels, NEW_ID) == 0
+    assert rekey.commit_labels(env.labels, mpath) == 0
 
 
 def test_ut10_70_rekey_labels_os_error_is_store_busy(
@@ -361,7 +442,7 @@ def test_ut10_70_maintenance_rekey_routes_to_run_rekey(monkeypatch: pytest.Monke
         return own
 
     sentinel = object()
-    monkeypatch.setattr("herness.admin.maintenance.run_rekey", fake)
+    monkeypatch.setattr("herness.admin.rekey.run_rekey", fake)
     monkeypatch.setattr("herness.admin.maintenance.get_config", lambda: sentinel)
     monkeypatch.setattr("herness.admin.maintenance.clock.now", lambda: NOW)
     ctx = FakeCtx()

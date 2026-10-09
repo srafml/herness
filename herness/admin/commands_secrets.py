@@ -19,7 +19,7 @@ from herness._cli.output import CommandResult
 from herness.core import time as clock
 from herness.core.audit import audit, last_secret_set_times
 from herness.core.config import HernessConfig, get_config
-from herness.core.errors import ConfigError
+from herness.core.errors import ConfigError, HernessError
 from herness.core.jobs.ports import require_jobs_backend
 from herness.core.jobs.scheduler import NEXT_KEY_REF, schedule_rekey
 from herness.core.secrets import (
@@ -133,14 +133,21 @@ def cmd_secrets_rekey(
         return _fail(f"{NEXT_KEY_REF} not created: escrow not confirmed")
     try:
         job_id = schedule_rekey()  # step 3
-    except Exception:
-        delete_secret(NEXT_KEY_REF, actor=actor)  # no job: unstage so the command can rerun
+    except HernessError:
+        # Typed planning failures (ConfigError, StoreBusy, ...): unstage so the command can be
+        # rerun. Should a job row exist anyway, it fails "no staged key"; the old key stays.
+        delete_secret(NEXT_KEY_REF, actor=actor)
         raise
     row = require_jobs_backend().get_job(job_id)
     when = None if row is None else row.scheduled_for
-    planned = None if when is None else clock.format_utc(when)
+    if when is None:  # job planned but its row is unreadable: say so, never audit "None"
+        audit("admin_action", actor, action="redact_rekey", target="staged")
+        data: dict[str, object] = {"job_id": job_id, "planned_at": None}
+        warning = f"rekey job {job_id} planned; planned time unknown, see `herness status`"
+        return CommandResult(ok=True, data=data, warnings=[warning], exit_code=0)
+    planned = clock.format_utc(when)
     audit("admin_action", actor, action="redact_rekey", target="staged", detail=planned)
-    data: dict[str, object] = {"job_id": job_id, "planned_at": planned}
+    data = {"job_id": job_id, "planned_at": planned}
     return CommandResult(ok=True, data=data, warnings=[], exit_code=0)
 
 

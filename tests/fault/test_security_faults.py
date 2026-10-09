@@ -261,6 +261,28 @@ def test_ft10_02_killed_after_step_3_keeps_old_key_until_rerun(
     assert env.marker.exists()
 
 
+def test_ft10_02_purge_and_append_between_kill_and_rerun_are_kept(
+    rekey_env: RekeyEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FT10-02 killed after step 3; a privacy purge then rewrites a live label part and a new
+    part is appended; the rerun keeps the purge (no resurrection) and re-keys the new part."""
+    env = rekey_env
+    inc, chg, prb = "sn:incident:INC1", "sn:change:CHG1", "sn:problem:PRB1"
+    write_labels(env, "human", "a", [(inc, env.old[inc]), (chg, env.old[chg])])
+    ctx = FakeCtx()
+    with monkeypatch.context() as patch:
+        _kill_at(patch, "set_secret", "redact.hmac_key")  # step 4a
+        with pytest.raises(_Killed):
+            run_rekey(env.cfg, cast("JobContext", ctx), now=REKEY_NOW)
+    write_labels(env, "human", "a", [(chg, env.old[chg])])  # purge of INC1 rewrites the part
+    write_labels(env, "human", "b", [(prb, env.old[prb])])  # appended after staging
+    outcome = run_rekey(env.cfg, cast("JobContext", ctx), now=REKEY_NOW)  # rerun
+    assert outcome.status == "done"
+    rows = sorted((r["record_id"], r["content_hash"]) for r in env.label_rows("human"))
+    assert rows == sorted([(chg, env.new[chg]), (prb, env.new[prb])])  # INC1 not resurrected
+    assert env.key("redact.hmac_key") == NEW_KEY
+
+
 def test_ft10_02_killed_after_swap_rerun_finishes(
     rekey_env: RekeyEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
