@@ -11,11 +11,11 @@ under `tests/`; IT04-11 checks nothing under `herness/metrics/` reads truth file
 Both variants carry `slow` (pyproject: "small or full scale"). The `full` variant reuses a
 pre-generated root named by `HERNESS_SYNTH_FULL_ROOT` (nightly cache) when set.
 
-Spec note (T04-22 report): the generator links the T2 cluster incidents to the epic in the
-month after `--start` (tools/synth/plants_delivery.py), about three years before `--end` at
-`small`/`full`, so with the shipped 365-day funding window the epic has no direct link in
-the window and its cluster becomes a `cluster_fix`. The tests set
-`scoring.funding.window_days` to 1095 (the allowed maximum) so the window covers the span.
+Spec note SN-1 (CO-T04-22a, owner T11): the generator plants the E2 remote links (T2
+epic) at `--start` + 30 days (tools/synth/plants_delivery.py), about three years before
+`--end` at `small`/`full`, outside the shipped 365-day funding window; with it the epic has no
+in-window link and ranks 4 (its cluster becomes a `cluster_fix`). Until CO-T04-22a is
+resolved the tests set `scoring.funding.window_days` to 1095 (the allowed maximum).
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from herness.store import warehouse
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 SEED: Final = 42
+# CO-T04-22a: E2 links sit at start + 30 d, outside the shipped 365-day window (SN-1).
 FUNDING_WINDOW_DAYS: Final = 1095
 TOP_CLUSTER_FIX: Final = 10
 FULL_ROOT_ENV: Final = "HERNESS_SYNTH_FULL_ROOT"
@@ -90,11 +91,11 @@ def test_it04_08_planted_truths_small(tmp_path: Path) -> None:
 
 
 @pytest.mark.xfail(
-    strict=False,
-    reason="T04-22 finding (seed 42 full, 2026-10-09): T2 epic rank 1 and T1 top lever"
+    strict=True,
+    reason="CO-T04-22b (seed 42 full, 2026-10-09): T2 epic funding rank 1 and T1 top lever"
     " mttr_hours hold, but T1 team is org rank 3 (composite 1.624 vs 1.831 for a crit_lo"
-    " team scored on 6 of 10 metrics) and the T2c cluster_fix is funding rank 60 of 427;"
-    " pending controller ruling (generator calibration vs scoring)",
+    " team scored on 6 of 10 metrics) and the T2c cluster_fix is funding rank 60 of 427"
+    " (needs <= 10)",
 )
 @pytest.mark.timeout(7200)
 def test_it04_08_planted_truths_full(tmp_path: Path) -> None:

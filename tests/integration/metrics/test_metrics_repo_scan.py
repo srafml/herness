@@ -5,7 +5,9 @@ IT04-10: the evidence helpers `result_hash`, `rows_equivalent` and `iter_batch_r
 defined only in `herness/metrics/evidence.py` across the production trees (`herness/`,
 `tools/`, `app/` when present). IT04-11: `herness/metrics/` defines none of the
 `herness.core.ids` functions, references no synthetic truth file and imports neither
-`herness.enrich` nor `herness.harness` (also not lazily inside a function).
+`herness.enrich` nor `herness.harness` (also not lazily inside a function, not through a
+relative import resolved against the file's package, and not through an
+`importlib.import_module` / `__import__` call with a string-literal module name).
 """
 
 from __future__ import annotations
@@ -55,15 +57,41 @@ def _definitions(path: Path) -> set[str]:
     return names
 
 
+def _package(path: Path) -> list[str]:
+    """Package parts of `path` (a module's package, or the package an `__init__` defines)."""
+    return list(path.relative_to(REPO).with_suffix("").parts[:-1])
+
+
+def _resolve(node: ast.ImportFrom, package: list[str]) -> str:
+    if node.level == 0:
+        return node.module or ""
+    base = package[: len(package) - (node.level - 1)]
+    return ".".join([*base, *([node.module] if node.module else [])])
+
+
+def _dynamic(node: ast.Call) -> str | None:
+    """The string-literal module of an `importlib.import_module(...)` / `__import__(...)`."""
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+    if name not in {"import_module", "__import__"} or not node.args:
+        return None
+    arg = node.args[0]
+    return arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else None
+
+
 def _imports(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    package = _package(path)
     out: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             out |= {alias.name for alias in node.names}
-        elif isinstance(node, ast.ImportFrom) and node.module is not None and node.level == 0:
-            out.add(node.module)
-            out |= {f"{node.module}.{alias.name}" for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolve(node, package)
+            out.add(module)
+            out |= {f"{module}.{alias.name}" for alias in node.names}
+        elif isinstance(node, ast.Call) and (literal := _dynamic(node)) is not None:
+            out.add(literal)
     return out
 
 

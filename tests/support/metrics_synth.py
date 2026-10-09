@@ -9,13 +9,15 @@ outputs from the truth files (a perfect enricher: no model runs in these tests),
 
 Test-side adjustments, each recorded in the T04-22 report as a spec note:
 
-* SN-f: the fragment's `service_overrides` name services `servicenow:cmdb_ci_service:<id>`
-  while `core.service` and the truth files use `servicenow:cmdb_ci:<id>`; the prefix is
-  rewritten so the Jira project/component overrides reach the services.
-* The fragment maps only `servicenow.incident_state` and a capitalised
-  `servicenow.change_type`; `SYNTH_ENUMS` adds the Jira issue type / status category,
-  change type / close code and monitoring severity values the generator emits (without them
-  every `core.work_item.type` is NULL and there is no funding candidate).
+* SN-f (CO-T04-22d, T11 fragment defect; delete when fixed): the fragment's
+  `service_overrides` name services `servicenow:cmdb_ci_service:<id>` while `core.service`
+  and the truth files use `servicenow:cmdb_ci:<id>`; the prefix is rewritten so the Jira
+  project/component overrides reach the services.
+* CO-T04-22d (T11 fragment defect; delete when fixed): the fragment maps only
+  `servicenow.incident_state` and a capitalised `servicenow.change_type`; `SYNTH_ENUMS`
+  adds the Jira issue type / status category, change type / close code and monitoring
+  severity values the generator emits (without them every `core.work_item.type` is NULL and
+  there is no funding candidate).
 * `metrics.yaml: scoring.as_of` is the day after the generated span, as a nightly build
   right after the data would date it, so windows end where the data ends.
 """
@@ -55,10 +57,12 @@ __all__ = [
     "cluster_id",
     "generate_root",
     "plant_enrichment",
+    "release",
     "remove_builds",
     "scored_build",
 ]
 
+# CO-T04-22d: patches a T11 synth_mappings fragment defect; delete once T11 fixes it.
 _LOWER: Final = ("Task", "Epic", "Feature", "Story", "Bug", "Initiative")
 SYNTH_ENUMS: Final[dict[str, dict[str, str]]] = {
     "jira.issue_type": {name: name.lower() for name in _LOWER},
@@ -94,6 +98,7 @@ def cluster_id(plant: str) -> str:
 
 def _mappings(synth_root: Path) -> dict[str, Any]:
     text = (synth_root / "synth_mappings.yaml").read_text(encoding="utf-8")
+    # CO-T04-22d (SN-f): the fragment's :cmdb_ci_service: prefix; delete once T11 fixes it.
     fragment = yaml.safe_load(text.replace(":cmdb_ci_service:", ":cmdb_ci:"))["mappings"]
     enums = fragment.setdefault("enums", {})
     for name, values in SYNTH_ENUMS.items():
@@ -157,10 +162,18 @@ class SynthEnv:
         return open_for_build(build_id, create=False, cfg=_BUILD_CFG, layout=self.layout)
 
 
+def release() -> None:
+    """Fixture teardown: drop the ops-store connections and the process-wide config cache
+    `SynthEnv.activate` loaded (the reset the autouse `reset_herness_state` uses), so no
+    tmp-folder config leaks into later test modules."""
+    reset_connections()
+    herness_config.reset_config()
+
+
 def remove_builds(env: SynthEnv) -> None:
     """Delete the warehouse folder `env`'s builds wrote under its `data_root`, so a reused
-    (cached) synthetic root is left as generated."""
-    reset_connections()
+    (cached) synthetic root is left as generated; then `release()`."""
+    release()
     shutil.rmtree(env.layout.warehouse, ignore_errors=True)
 
 

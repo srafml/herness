@@ -33,6 +33,7 @@ from tests.support.metrics_synth import (
     ScoredBuild,
     SynthEnv,
     generate_root,
+    release,
     remove_builds,
     scored_build,
 )
@@ -41,7 +42,6 @@ from herness.metrics.compute import compute_metric
 from herness.metrics.peers import peer_group
 from herness.metrics.portfolio import Scenario, optimize_portfolio
 from herness.store import warehouse
-from herness.store.ops import reset_connections
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -104,7 +104,7 @@ def active(bench: Bench) -> Iterator[Bench]:
     """`bench` with its config loaded and the ops store pointed at its work folder."""
     bench.env.activate()
     yield bench
-    reset_connections()
+    release()
 
 
 def _line(bench_id: str, stat: str, value: float) -> float:
@@ -125,8 +125,8 @@ def test_bt04_01_materialize_facts(bench: Bench) -> None:
 
 @pytest.mark.xfail(
     strict=False,
-    reason="T04-22 dev box under heavy shared load (2026-10-09): step metrics measured"
-    " 124.1 s vs spec < 120 s (seed 42 full); threshold kept, pending controller ruling",
+    reason="CO-T04-22c rerun on idle box: dev box under heavy shared load (2026-10-09),"
+    " step metrics measured 124.1 s vs spec < 120 s (seed 42 full); threshold kept",
 )
 @pytest.mark.timeout(TIMEOUT_S)
 def test_bt04_02_step_metrics(bench: Bench) -> None:

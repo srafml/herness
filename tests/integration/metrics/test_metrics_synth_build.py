@@ -10,6 +10,11 @@ IT04-01 re-runs every `meta.evidence` query; IT04-02 resolves every stored `quer
 IT04-03 `metric_series` vs `compute_metric`; IT04-04 `peer_group` vs `score.org`; IT04-05
 five portfolio solves; IT04-06 `result_sample`; IT04-07 `persist=False` vs `persist=True`;
 IT04-09 `compute_metric(con=None)` leaves the promoted file untouched (TH04-06 evidence).
+
+Spec note SN-2: §11.3 names `lake_small` (impl 11 fixture, `synth_data.py --seed 7 --scale
+tiny`); these tests generate a seed-42 `tiny` root instead. The scale is the same; the
+substitute is needed because planting the enrichment reads the generated root's truth files,
+which `lake_small` (raw + inbox only) does not carry.
 """
 
 from __future__ import annotations
@@ -25,21 +30,22 @@ from typing import Any
 
 import duckdb
 import pytest
-from tests.support.metrics_synth import ScoredBuild, SynthEnv, generate_root, scored_build
+from tests.support.metrics_synth import (
+    ScoredBuild,
+    SynthEnv,
+    generate_root,
+    release,
+    scored_build,
+)
 
 from herness.core import time as clock
+from herness.metrics._encode import encode_cell
 from herness.metrics.compute import compute_metric, metric_series
-from herness.metrics.evidence import (
-    RESULT_SAMPLE_LIMIT,
-    result_hash,
-    result_sample,
-    rows_equivalent,
-)
+from herness.metrics.evidence import RESULT_SAMPLE_LIMIT, result_hash, rows_equivalent
 from herness.metrics.peers import peer_group
 from herness.metrics.portfolio import optimize_portfolio
 from herness.store import warehouse
 from herness.store._warehouse_rw import write_current
-from herness.store.ops import reset_connections
 
 pytestmark = pytest.mark.integration
 
@@ -77,7 +83,7 @@ class Rerun:
 
 
 @pytest.fixture(scope="module")
-def scored(tmp_path_factory: pytest.TempPathFactory) -> Scored:
+def scored(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Scored]:
     """Generate, build, plant, score; promote a byte copy of the build file."""
     base = tmp_path_factory.mktemp("it04")
     root = generate_root(SEED, "tiny", base / "synth")
@@ -89,8 +95,9 @@ def scored(tmp_path_factory: pytest.TempPathFactory) -> Scored:
         warehouse.build_path(promoted, layout=env.layout),
     )
     write_current(promoted, layout=env.layout)
-    reset_connections()
-    return Scored(env, build, promoted)
+    release()
+    yield Scored(env, build, promoted)
+    release()
 
 
 @pytest.fixture
@@ -98,7 +105,7 @@ def active(scored: Scored) -> Iterator[Scored]:
     """`scored` with its config loaded and the ops store pointed at its work folder."""
     scored.env.activate()
     yield scored
-    reset_connections()
+    release()
 
 
 @pytest.fixture
@@ -251,12 +258,32 @@ def test_it04_05_portfolio_five_runs_identical(active: Scored) -> None:
     assert json.loads(dumps.pop())["selected"]
 
 
+def _digest_order(columns: Columns, rows: list[tuple[Any, ...]]) -> list[tuple[str, str]]:
+    """(hex digest, row JSON) of every row, sorted by digest, assembled here per design 00
+    §5.1 (only the per-cell canonical token comes from the production encoder)."""
+    out = []
+    for row in rows:
+        cells = (
+            json.dumps(name, ensure_ascii=False) + ":" + encode_cell(value, kind)
+            for (name, kind), value in zip(columns, row, strict=True)
+        )
+        text = "{" + ",".join(cells) + "}"
+        out.append((hashlib.sha256(text.encode("utf-8")).hexdigest(), text))
+    return sorted(out)
+
+
 def test_it04_06_result_sample_is_first_rows_in_hash_order(reruns: list[Rerun]) -> None:
     """IT04-06 every `meta.evidence.result_sample` holds at most 50 rows, equal to the
-    first rows of the result in the design 00 §5.1 row-digest order."""
+    first rows of the result in the design 00 §5.1 row-digest order (order derived in the
+    test and anchored to the stored `result_hash`)."""
     for rerun in reruns:
+        ordered = _digest_order(rerun.columns, rerun.rows)
+        columns = [list(c) for c in rerun.columns]
+        header = json.dumps(columns, separators=(",", ":"), ensure_ascii=False)
+        payload = header + "\n" + "\n".join(digest for digest, _ in ordered)
+        assert hashlib.sha256(payload.encode("utf-8")).hexdigest() == rerun.stored_hash
+        expected = [json.loads(text) for _, text in ordered[:RESULT_SAMPLE_LIMIT]]
         assert len(rerun.stored_sample) <= RESULT_SAMPLE_LIMIT
-        expected = json.loads(json.dumps(result_sample(rerun.columns, rerun.rows)))
         assert rerun.stored_sample == expected, rerun.query_id
     assert any(len(r.stored_sample) == RESULT_SAMPLE_LIMIT for r in reruns)
 
