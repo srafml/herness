@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Final
@@ -54,6 +55,7 @@ __all__ = [
     "cluster_id",
     "generate_root",
     "plant_enrichment",
+    "remove_builds",
     "scored_build",
 ]
 
@@ -75,11 +77,12 @@ _BUILD_CFG: Final = BuildSettings(memory_limit="16GB", threads=8)
 _SOURCES_YAML: Final = "version: 1\nbuild:\n  threads: 8\n  memory_limit: 16GB\n"
 
 
-def generate_root(seed: int, scale: str, root: Path) -> Path:
-    """Generate a synthetic root in-process (`tools/synth_data.py` `generate`); return it."""
+def generate_root(seed: int, scale: str, root: Path, **overrides: object) -> Path:
+    """Generate a synthetic root in-process (`tools/synth_data.py` `generate`, CLI
+    `overrides` such as `workers`); return it."""
     from tools.synth_data import generate  # noqa: PLC0415 - heavy, only when generating
 
-    generate(seed, scale, root)
+    generate(seed, scale, root, **overrides)
     herness_config.reset_config()  # generate caches the synth profile's config
     return root
 
@@ -152,6 +155,13 @@ class SynthEnv:
     def open_build(self, build_id: str) -> duckdb.DuckDBPyConnection:
         """The writable connection of an existing build file."""
         return open_for_build(build_id, create=False, cfg=_BUILD_CFG, layout=self.layout)
+
+
+def remove_builds(env: SynthEnv) -> None:
+    """Delete the warehouse folder `env`'s builds wrote under its `data_root`, so a reused
+    (cached) synthetic root is left as generated."""
+    reset_connections()
+    shutil.rmtree(env.layout.warehouse, ignore_errors=True)
 
 
 def plant_enrichment(con: duckdb.DuckDBPyConnection, truth: Truth) -> None:
