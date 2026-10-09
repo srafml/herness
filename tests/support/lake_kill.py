@@ -43,9 +43,7 @@ def _batches(table: pa.Table) -> list[pa.RecordBatch]:
 
 
 def _die_after_first_rename() -> None:
-    """Patch `herness.store.lake.os.replace` so the process dies after its first success."""
-    from herness.store import lake  # noqa: PLC0415 - child process only
-
+    """Patch `os.replace` (used by `LakeWriter.commit`): the process dies after the first rename."""
     real = os.replace
     done: list[str] = []
 
@@ -57,7 +55,7 @@ def _die_after_first_rename() -> None:
             sys.stderr.flush()
             os.kill(os.getpid(), getattr(signal, "SIGKILL", signal.SIGTERM))
 
-    lake.os.replace = replace  # type: ignore[assignment]
+    os.replace = replace  # `herness.store.lake` calls `os.replace` through the module
 
 
 def run(
