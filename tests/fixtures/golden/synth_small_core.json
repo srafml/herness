@@ -1,0 +1,195 @@
+{
+ "core.change": {
+  "columns": [
+   "record_id",
+   "number",
+   "state",
+   "risk",
+   "type",
+   "opened_at",
+   "planned_start",
+   "planned_end",
+   "actual_start",
+   "actual_end",
+   "service_id",
+   "ci_id",
+   "team_id",
+   "outcome",
+   "short_description",
+   "description",
+   "source_updated_at"
+  ],
+  "rows": 10080,
+  "sha256": "h:iganpudpeptrfjvrq6pu76qcm3hdfue3fqsxvzlpgknuvyvs67qq===="
+ },
+ "core.event": {
+  "columns": [
+   "event_id",
+   "source_tool",
+   "ts",
+   "service_id",
+   "host",
+   "severity",
+   "alert_name",
+   "status",
+   "dedup_key",
+   "duration_s",
+   "incident_id"
+  ],
+  "rows": 42800,
+  "sha256": "h:iancslvbu6b44o4f25njhtcgu6aqrmfyt7f5xspracqulp5rxpna===="
+ },
+ "core.incident": {
+  "columns": [
+   "record_id",
+   "number",
+   "opened_at",
+   "acknowledged_at",
+   "resolved_at",
+   "closed_at",
+   "priority",
+   "state",
+   "service_id",
+   "ci_id",
+   "team_id",
+   "reassignment_count",
+   "reopen_count",
+   "short_description",
+   "description",
+   "close_notes",
+   "close_code",
+   "problem_id",
+   "caused_by_change_id",
+   "sla_breached",
+   "business_duration_s",
+   "customer_impact_minutes",
+   "content_hash",
+   "source_updated_at"
+  ],
+  "rows": 103032,
+  "sha256": "h:atawmxlsm7gptgwqsuqgoxssd47ofkndixm4gvlvemypffostwbq===="
+ },
+ "core.metric_daily": {
+  "columns": [
+   "date",
+   "service_id",
+   "metric_name",
+   "value",
+   "unit",
+   "source_tool"
+  ],
+  "rows": 1753600,
+  "sha256": "h:jgw27c7browet3ujtyooowaeb3uilxdoj4ifdip43wx64ysslzua===="
+ },
+ "core.org": {
+  "columns": [
+   "org_id",
+   "name",
+   "parent_org_id",
+   "cost_center",
+   "source"
+  ],
+  "rows": 12,
+  "sha256": "h:klmqpe7xgutdbvr7vjx24qgadpms64vkcejqztsruxk5uvpkwvsq===="
+ },
+ "core.problem": {
+  "columns": [
+   "record_id",
+   "number",
+   "opened_at",
+   "resolved_at",
+   "state",
+   "service_id",
+   "team_id",
+   "known_error",
+   "root_cause_text",
+   "source_updated_at"
+  ],
+  "rows": 1500,
+  "sha256": "h:ai5kdomb53cg3n7dcfudcziltrdmhtksrv6ngev25gt3ndnzgmja===="
+ },
+ "core.service": {
+  "columns": [
+   "service_id",
+   "name",
+   "ci_class",
+   "criticality",
+   "business_owner_team_id",
+   "org_id",
+   "source"
+  ],
+  "rows": 400,
+  "sha256": "h:4lhxaz2ivi2qnya3qtigitq4kgg5bai336kro6i6eupqz5vmsvhq===="
+ },
+ "core.service_map": {
+  "columns": [
+   "service_id",
+   "team_id",
+   "jira_project",
+   "jira_component",
+   "org_id",
+   "role",
+   "link_source",
+   "confidence"
+  ],
+  "rows": 1188,
+  "sha256": "h:wgdvmyfbtkpj62d4rcf6cc6ebflkt7dv56zmktxicyediv42syqq===="
+ },
+ "core.team": {
+  "columns": [
+   "team_id",
+   "name",
+   "org_id",
+   "source",
+   "active"
+  ],
+  "rows": 162,
+  "sha256": "h:aptdokuin6575i2wim4ss6rieauwngqgqechjbntf6ebjekj3xba===="
+ },
+ "core.work_item": {
+  "columns": [
+   "record_id",
+   "key",
+   "type",
+   "parent_key",
+   "project",
+   "component",
+   "components",
+   "labels",
+   "status",
+   "status_category",
+   "created_at",
+   "resolved_at",
+   "story_points",
+   "estimate_cost_usd",
+   "team_id",
+   "service_id",
+   "summary",
+   "description",
+   "source_updated_at"
+  ],
+  "rows": 3998,
+  "sha256": "h:hyv4atzk6uf3ipkxvdwshcrlk6rh44obckyd4xvetd7eqwiv7waa===="
+ },
+ "core.work_item_link": {
+  "columns": [
+   "from_key",
+   "to_key",
+   "link_type"
+  ],
+  "rows": 473,
+  "sha256": "h:npicfmv3soq4hfcm4f2b4cpt3twlmio27hfffzkzqt2q5gvxsora===="
+ },
+ "core.work_item_transition": {
+  "columns": [
+   "record_id",
+   "from_status",
+   "to_status",
+   "from_category",
+   "to_category",
+   "at"
+  ],
+  "rows": 8840,
+  "sha256": "h:hi7iasq53eiobfybjcsjftgbeqk6waqrtczje5ifyvx3l576woka===="
+ }
+}
