@@ -9,7 +9,8 @@ plugin; T11-40 registers `tests.support.ops_store` (U11-78) in place of the inte
 T07-23 adds the process `MemoryStore` and its outcome / maintenance handler seams).
 T11-23 registers `tests.support.stub_http` (`stub_services`) and `tests.support.fake_llm`
 (`fake_llm_registered`). T10-21 registers `tests.support.secret_leak` (`leak_run`). T09-20
-registers `tests.support.cli_env` (`cli_env`).
+registers `tests.support.cli_env` (`cli_env`). T10-26 registers `tests.support.fake_runner`
+(`fake_runner`, the impl 10 §11 `run_cmd` stand-in).
 """
 
 import random
@@ -39,6 +40,7 @@ pytest_plugins = [
     "tests.support.fake_llm",
     "tests.support.secret_leak",
     "tests.support.cli_env",
+    "tests.support.fake_runner",
 ]
 
 collect_ignore = ["support", "fixtures"]

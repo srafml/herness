@@ -39,6 +39,8 @@ ALLOWED_COMMANDS: Final = frozenset(
         "docker",
     }
 )
+# U10-112: the Herness venv's own interpreter, named by absolute path, is allowed too.
+_VENV_PY: Final = re.compile(r"(?:[A-Za-z]:)?[\\/].*[\\/](?:Scripts[\\/]python\.exe|bin/python3?)")
 MAX_TIMEOUT_S: Final = 7200
 MAX_OUTPUT_BYTES: Final = 16 * 1024 * 1024
 _WSL_ARG: Final = re.compile(r"[A-Za-z0-9._:/@=+,%{}-]{1,512}")
@@ -76,7 +78,7 @@ def run_cmd(
     check: bool = False,
 ) -> CmdResult:
     """Run one allowlisted program with no shell (U10-76); output is capped at 16 MiB."""
-    if not argv or argv[0] not in ALLOWED_COMMANDS:
+    if not argv or (argv[0] not in ALLOWED_COMMANDS and not _VENV_PY.fullmatch(argv[0])):
         msg = f"command not allowed: {argv[0] if argv else ''}"
         raise ConfigError(msg)
     elements: Sequence[object] = argv
