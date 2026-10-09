@@ -81,11 +81,6 @@ def plant(path: Path, *, mtime: datetime.datetime | None = None, body: bytes = b
     return path
 
 
-def set_mtime(path: Path, mtime: datetime.datetime) -> None:
-    stamp = mtime.timestamp()
-    os.utime(path, (stamp, stamp))
-
-
 def admin_actions(logs: Path, action: str) -> list[dict[str, Any]]:
     """The ``fields`` of every ``admin_action`` audit line with ``action``, oldest first."""
     found: list[dict[str, Any]] = []

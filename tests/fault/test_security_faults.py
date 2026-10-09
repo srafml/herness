@@ -29,11 +29,13 @@ from tests.support.maintenance_env import (  # noqa: F401 - fixture import
     plant,
 )
 
+from herness.admin import _maintenance_purge as purge_mod
 from herness.admin import maintenance
 from herness.core import _redact_pool as redact_pool
 from herness.core import audit as a
 from herness.core import config as c
 from herness.core import redact, secrets
+from herness.core import time as clock
 from herness.core.errors import ConfigError, EgressBlocked, FatalError, RetryableError, StoreBusy
 from herness.core.logging import configure_logging, reset_logging
 
@@ -239,3 +241,47 @@ def test_ft10_04_copy_os_error_names_relative_path(maint_env: MaintEnv) -> None:
         maintenance.run_backup(maint_env.cfg, FakeCtx().as_ctx(), now=now)
     assert str(caught.value) == "backup copy failed: reports/run_1/manifest.json"
     assert (maint_env.target / "ops" / "ops-2026-09-24.sqlite").is_file()
+
+
+def test_ft10_04_listing_os_error_is_typed(
+    maint_env: MaintEnv,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FT10-04 an OSError while listing a mirrored tree becomes FatalError("backup copy
+    failed: <relative path>") naming the target subdirectory only."""
+    real_listing = maintenance._listing
+
+    def failing(root: Path, globs: tuple[str, ...]) -> list[Path]:
+        if root.name == "reports":
+            raise PermissionError(errno.EACCES, "denied", str(root))
+        return real_listing(root, globs)
+
+    monkeypatch.setattr(maintenance, "_listing", failing)
+    now = datetime.datetime(2026, 9, 24, 1, 30, tzinfo=datetime.UTC)
+    with pytest.raises(FatalError) as caught:
+        maintenance.run_backup(maint_env.cfg, FakeCtx().as_ctx(), now=now)
+    assert str(caught.value) == "backup copy failed: reports"
+    assert str(maint_env.data) not in str(caught.value)
+
+
+def test_ft10_04_purge_os_error_is_typed_and_vanished_file_is_gone(
+    maint_env: MaintEnv,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FT10-04 purge: a path that vanished before its delete counts nothing and does not
+    fail; any other OSError becomes FatalError("purge failed: <relative path>")."""
+    deleter = purge_mod._Deleter(maint_env.data, FakeCtx().as_ctx(), dry_run=False)
+    deleter.delete(maint_env.data / "traces" / "gone.jsonl", "traces")
+    assert deleter.counts["traces"] == 0
+    assert deleter.counts["skipped_in_use"] == 0
+    old = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
+    run = plant(maint_env.data / "reports" / "run_old" / "manifest.json", mtime=old).parent
+
+    def broken(path: object, *args: object, **kwargs: object) -> None:
+        raise OSError(errno.EIO, "I/O error", str(path))
+
+    monkeypatch.setattr(purge_mod.shutil, "rmtree", broken)
+    with pytest.raises(FatalError) as caught:
+        purge_mod.run_purge(maint_env.cfg, FakeCtx().as_ctx(), now=clock.now())
+    assert str(caught.value) == "purge failed: reports/run_old"
+    assert run.is_dir()

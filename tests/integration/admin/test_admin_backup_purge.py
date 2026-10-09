@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime
 import json
 import sqlite3
+import sys
 import threading
 from pathlib import Path
 
@@ -159,7 +160,7 @@ def test_it10_09_purge_three_years_exactly_at_cutoffs(maint_env: MaintEnv) -> No
     counts = run_purge(maint_env.cfg, ctx.as_ctx(), now=NOW)
     expected = {key: len(paths) for key, paths in tree.expired.items()}
     expected |= {"chat_sessions": 1, "chat_messages": 0, "cache_files": 0}
-    expected |= {"skipped_in_use": 0, "skipped_unsafe": 0}
+    expected |= {"skipped_in_use": 0, "skipped_unsafe": 0, "rekey_marker_invalid": 0}
     assert counts == expected
     assert all(not p.exists() for paths in tree.expired.values() for p in paths)
     assert all(p.exists() for p in tree.kept)
@@ -232,3 +233,47 @@ def test_it10_09_purge_rekey_waits_for_newer_build(
     assert counts["cache_files"] == 0
     assert old.exists()
     assert marker.exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="an open handle blocks unlink on Windows only")
+def test_it10_09_purge_rekey_keeps_marker_while_a_cache_file_is_in_use(
+    maint_env: MaintEnv,  # noqa: F811
+) -> None:
+    """IT10-09 a pre-swap cache file in use is counted skipped_in_use and the SWAPPED marker
+    stays, so the next night retries; once the file is free, both go."""
+    swapped_at = datetime.datetime(2026, 9, 18, tzinfo=datetime.UTC)
+    marker = _plant_rekey(maint_env, swapped_at=swapped_at, build=BUILD)
+    cache = maint_env.data / "cache" / "decisions" / "q1"
+    free = plant(cache / "free.parquet", mtime=swapped_at - MARGIN)
+    busy = plant(cache / "busy.parquet", mtime=swapped_at - MARGIN)
+    with busy.open("rb"):
+        first = run_purge(maint_env.cfg, FakeCtx().as_ctx(), now=NOW)
+    assert (first["cache_files"], first["skipped_in_use"]) == (1, 1)
+    assert not free.exists()
+    assert busy.exists()
+    assert marker.exists()
+    second = run_purge(maint_env.cfg, FakeCtx().as_ctx(), now=NOW)
+    assert (second["cache_files"], second["skipped_in_use"]) == (1, 0)
+    assert not busy.exists()
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"{not json", b'{"old_key_id": "k1"}', b'{"swapped_at": "yesterday"}', b'["swapped_at"]'],
+)
+def test_it10_09_purge_malformed_rekey_marker_is_counted_not_fatal(
+    maint_env: MaintEnv,  # noqa: F811
+    body: bytes,
+) -> None:
+    """IT10-09 a malformed SWAPPED marker skips only the rekey step (rekey_marker_invalid=1);
+    retention still runs, the marker and the cache stay."""
+    marker = plant(maint_env.data / "cache" / "rekey" / "SWAPPED", body=body)
+    cached = plant(maint_env.data / "cache" / "decisions" / "a.parquet", mtime=NOW - _days(30))
+    trace = plant(maint_env.data / "traces" / "old.jsonl", mtime=NOW - _days(400))
+    counts = run_purge(maint_env.cfg, FakeCtx().as_ctx(), now=NOW)
+    assert counts["rekey_marker_invalid"] == 1
+    assert counts["traces"] == 1
+    assert not trace.exists()
+    assert marker.exists()
+    assert cached.exists()

@@ -216,7 +216,7 @@ def test_ut10_68_purge_dry_run_then_real(maint_env: MaintEnv) -> None:  # noqa: 
     assert real.result is not None
     expected = {"lake_partitions": 1, "traces": 1, "egress_logs": 1, "audit_logs": 1}
     expected |= {"app_logs": 1, "reports": 2, "cache_files": 0, "skipped_in_use": 0}
-    expected |= {"skipped_unsafe": 0}
+    expected |= {"skipped_unsafe": 0, "rekey_marker_invalid": 0}
     assert dry.result == expected
     assert real.result == expected | {"chat_sessions": 1, "chat_messages": 0}
     names = {p.name for p in maint_env.logs.iterdir()}
