@@ -30,6 +30,7 @@ from herness.core.types import JobOutcome
 from herness.model.promote import CleanupReport
 from herness.store.lake_purge import LakePurgeResult
 from herness.store.ops import privacy as ops_privacy
+from herness.store.ops.core import connection as core_connection
 from herness.store.ops.core import read_all
 
 pytestmark = pytest.mark.unit
@@ -285,6 +286,41 @@ def test_ut10_69_step7_retry_repeats_3b_after_partial_pass(fakes: Fakes) -> None
     assert fakes.events.count("audit") == 1
 
 
+def test_ut10_69_done_build_without_current_is_not_accepted(fakes: Fakes) -> None:
+    """UT10-69 a done build job while no build is CURRENT counts as a failed rebuild."""
+    _, cont = _first_visit(fakes)
+    fakes.job_status[cont["build_job_id"]] = "done"
+    fakes.current = None
+    _run(fakes, cont)
+    assert fakes.enqueued[-2][0][0] == "build_pipeline"
+    assert "cleanup" not in fakes.events
+
+
+def test_ut10_69_busy_trace_file_fails_step4_retryably(
+    fakes: Fakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-69 a trace file held open (PermissionError on unlink) fails step 4 as StoreBusy;
+    a directory named like a trace file is skipped."""
+    from herness.core.config import get_config  # noqa: PLC0415
+
+    traces = get_config().paths.data / "traces"
+    (traces / "dir.jsonl").mkdir(parents=True)
+    held = traces / "run_a.jsonl"
+    held.write_bytes(RID.encode())
+    real_unlink = type(held).unlink
+
+    def unlink(self: Any, missing_ok: bool = False) -> None:
+        if self.name == "run_a.jsonl":
+            raise PermissionError(13, "in use")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(type(held), "unlink", unlink)
+    with pytest.raises(StoreBusy, match="trace file busy"):
+        _run(fakes, dict(BASE))
+    assert _request().steps["4"]["error"] == "StoreBusy"
+    assert held.exists()
+
+
 def test_ut10_69_build_still_running_schedules_next_continuation(fakes: Fakes) -> None:
     """UT10-69 a running build: next continuation in 30 minutes with wait key n+1."""
     _, cont = _first_visit(fakes)
@@ -407,7 +443,8 @@ def test_ut10_69_continuation_request_must_match_record(fakes: Fakes) -> None:
     other = {**cont, "record_id": "servicenow:incident:INC0099"}
     with pytest.raises(ConfigError, match="does not match"):
         _run(fakes, other)
-    for key, value in (("wait", "x"), ("rebuilds", -1), ("build_job_id", "../x")):
+    bad = (("wait", "x"), ("rebuilds", -1), ("build_job_id", "../x"), ("request_id", "del_x"))
+    for key, value in bad:
         with pytest.raises(ConfigError):
             _run(fakes, {**cont, key: value})
 
@@ -437,6 +474,62 @@ def test_ut10_69_trace_files_citing_record_are_deleted(fakes: Fakes) -> None:
     _run(fakes, dict(BASE))
     assert sorted(p.name for p in traces.iterdir()) == ["notes.txt", "run_c.jsonl"]
     assert _request().steps["4"]["counts"]["trace_files"] == 2
+
+
+def test_ut10_69_steps_run_with_secure_delete_and_checkpoint(
+    fakes: Fakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-69 / TH10-42 every step runs with ``secure_delete`` on the ops connection and step
+    4 ends with a WAL truncate, after its scrubs, so deleted rows survive in neither freed
+    pages nor old WAL frames."""
+    real, issued = core_connection(), []
+
+    class Spy:
+        def execute(self, sql: str) -> Any:
+            issued.append(sql)
+            if "wal_checkpoint" in sql:
+                fakes.events.append("checkpoint")
+            return real.execute(sql)
+
+    monkeypatch.setattr(privacy, "connection", Spy)
+    _run(fakes, dict(BASE))
+    assert real.execute("PRAGMA secure_delete").fetchone()[0] == 1
+    assert issued.count("PRAGMA secure_delete = ON") == 6  # steps 1, 2, 3, 3b, 4 and 5
+    assert issued.count("PRAGMA wal_checkpoint(TRUNCATE)") == 1
+    assert fakes.events[-2:] == ["findings", "checkpoint"]
+
+
+class _BusyCheckpoint:
+    """An ops connection whose WAL checkpoint reports busy (a reader holds a snapshot)."""
+
+    def __init__(self, real: Any) -> None:
+        self.real = real
+
+    def execute(self, sql: str, *args: Any) -> Any:
+        if "wal_checkpoint" in sql:
+            return SimpleNamespace(fetchone=lambda: (1, 5, 2))
+        return self.real.execute(sql, *args)
+
+
+def test_ut10_69_busy_checkpoint_fails_step4_retryably(
+    fakes: Fakes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-69 a checkpoint that cannot complete fails step 4 with StoreBusy (retried) instead
+    of reporting the scrub done while deleted bytes remain in the WAL."""
+    real = core_connection()
+    monkeypatch.setattr(privacy, "connection", lambda: _BusyCheckpoint(real))
+    with pytest.raises(StoreBusy, match="checkpoint busy"):
+        _run(fakes, dict(BASE))
+    req = _request()
+    assert (req.status, req.steps["4"]["status"], req.steps["4"]["error"]) == (
+        "running",
+        "failed",
+        "StoreBusy",
+    )
+    assert req.steps["4"]["counts"]["evidence_rows"] == 1  # partial counts are kept
+    monkeypatch.setattr(privacy, "connection", core_connection)
+    _run(fakes, dict(BASE))
+    assert _request().steps["4"]["status"] == "done"
 
 
 # --- UT10-69: dispatch and the memory_purge binding (U10-104, U10-75) ----------------------

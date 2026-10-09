@@ -1,13 +1,14 @@
 """Privacy deletion: the seven steps of design 10 §5.5 plus memory step 3b (impl 10 U10-99;
 F10-13; R-54, R-57, R-77; TH10-42, TH10-50).
 
-Each step result is recorded on the ``deletion_request`` row (U10-105) and a step already
-``done`` is skipped on retry. A failing step records ``failed`` with the error class only,
-leaves the request ``running`` and re-raises: ``StoreBusy`` and ``ModelUnavailable`` as they
-are (impl 08 retries), a ``FatalError`` as it is, anything else as ``FatalError``. No message
-or log field carries the record ID or any record text; logs name the request and the step.
-Step 5 waits for the rebuild through continuation ``maintenance`` jobs whose payload adds
-``request_id``, ``build_job_id``, ``wait``, ``rebuilds`` and ``rebuild_at``.
+Step results go on the ``deletion_request`` row (U10-105); a ``done`` step is skipped on retry.
+A failing step records ``failed`` with the error class only, leaves the request ``running``
+and re-raises (``StoreBusy``, ``ModelUnavailable`` and ``FatalError`` as they are, anything
+else as ``FatalError``). Messages and logs never carry the record ID or record text. Steps
+run with ``secure_delete`` on and steps 4 and 7 checkpoint the WAL, so deleted ops-store bytes
+survive neither in freed pages nor in old WAL frames (TH10-42). Step 5 waits for the rebuild
+through continuation jobs (payload adds ``request_id``, ``build_job_id``, ``wait``,
+``rebuilds``, ``rebuild_at``).
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from herness.enrich import purge_record
 from herness.model.promote import cleanup_builds
 from herness.store.lake_purge import purge_record_ids
 from herness.store.layout import data_layout
-from herness.store.ops.core import run_write
+from herness.store.ops.core import connection, run_write
 from herness.store.ops.evidence import scrub_record_from_evidence
 from herness.store.ops.findings import scrub_record_from_findings
 from herness.store.ops.privacy import (
@@ -100,12 +101,11 @@ def _step(
         return None
     counts: _Counts = {}
     try:
+        connection().execute("PRAGMA secure_delete = ON")  # again: run_write may reopen it
         outcome = work(counts)
     except Exception as exc:
-        rid = run.request.request_id
-        record_deletion_step(
-            rid, step, status="failed", at=run.now, counts=counts, error=type(exc).__name__
-        )
+        rid, err = run.request.request_id, type(exc).__name__
+        record_deletion_step(rid, step, status="failed", at=run.now, counts=counts, error=err)
         fatal = _escalate(rid, step, exc)
         if fatal is None:
             raise
@@ -141,28 +141,27 @@ def _open(payload: Mapping[str, JsonValue], now: datetime.datetime) -> DeletionR
             msg = "privacy deletion request failed"
             raise FatalError(msg, request_id=request_id)
         return request
-    found = open_deletion_request(record_id)
-    if found is not None:
-        return found
-    return create_deletion_request(
+    return open_deletion_request(record_id) or create_deletion_request(
         record_id=record_id, requested_by=requested_by, reason_ref=reason_ref, now=now
     )
 
 
-def _start(run: _Run, counts: _Counts) -> None:
-    del counts
+def _start(run: _Run) -> None:
     if run.request.status == "pending":
         set_deletion_status(run.request.request_id, "running")
 
 
-def _lake(run: _Run, counts: _Counts) -> int:
+def _lake(run: _Run, counts: _Counts) -> None:
     result = purge_record_ids([run.record_id])
     counts.update({k: int(v) for k, v in dataclasses.asdict(result).items()})
-    return result.rows_removed
 
 
-def _first_pass(run: _Run, counts: _Counts) -> None:
-    _lake(run, counts)
+def _seal_ops() -> None:
+    """Fold the WAL into the main file and truncate it (old frames hold deleted rows)."""
+    busy = connection().execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+    if busy:
+        msg = "ops store checkpoint busy"
+        raise StoreBusy(msg)
 
 
 def _caches(run: _Run, counts: _Counts) -> None:
@@ -206,6 +205,7 @@ def _scrub(run: _Run, counts: _Counts) -> None:
         lambda conn: scrub_record_from_findings(rid, conn=conn), op="privacy_scrub_findings"
     )
     counts["trace_files"] = _traces(run.cfg, rid)
+    _seal_ops()
 
 
 def _nightly_payload(cfg: HernessConfig) -> dict[str, JsonValue]:
@@ -283,8 +283,7 @@ def _rebuild(run: _Run, counts: _Counts) -> JobOutcome | None:
     return _continue(run, nxt, wait=wait + 1, rebuilds=rebuilds + 1, since=run.now)
 
 
-def _finish(run: _Run, counts: _Counts) -> None:
-    del counts
+def _finish(run: _Run) -> None:
     request = get_deletion_request(run.request.request_id)
     if request.status == "running":
         set_deletion_status(request.request_id, "done", completed_at=run.now)
@@ -294,11 +293,12 @@ def _finish(run: _Run, counts: _Counts) -> None:
 def _second_pass(run: _Run, counts: _Counts) -> None:
     """Lake pass 2; when it (or a failed earlier attempt) removed rows, repeat 3 and 3b."""
     earlier = run.request.steps.get("7", {}).get("counts", {}).get("rows_removed", 0)
-    removed = _lake(run, counts) + (earlier if isinstance(earlier, int) else 0)
-    counts["rows_removed"] = removed
-    if removed:
+    _lake(run, counts)
+    counts["rows_removed"] += earlier if isinstance(earlier, int) else 0
+    if counts["rows_removed"]:
         _caches(run, counts)
         _memory(run, counts)
+    _seal_ops()
 
 
 def run_privacy_delete(
@@ -315,14 +315,14 @@ def run_privacy_delete(
     payload; step errors as the module docstring says."""
     request = _open(ctx.job.payload, now)
     run = _Run(cfg, ctx.job.payload, now, memory_purge, request)
-    _step(run, "1", lambda c: _start(run, c))
-    _step(run, "2", lambda c: _first_pass(run, c))
+    _step(run, "1", lambda _c: _start(run))
+    _step(run, "2", lambda c: _lake(run, c))
     _step(run, "3", lambda c: _caches(run, c))
     _step(run, "3b", lambda c: _memory(run, c))
     _step(run, "4", lambda c: _scrub(run, c))
     waiting = _step(run, "5", lambda c: _rebuild(run, c))
     if waiting is not None:
         return waiting
-    _step(run, "6", lambda c: _finish(run, c))
+    _step(run, "6", lambda _c: _finish(run))
     _step(run, "7", lambda c: _second_pass(run, c))
     return JobOutcome(status="done", result={"request_id": request.request_id})
