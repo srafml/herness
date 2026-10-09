@@ -226,3 +226,26 @@ def test_ut06_82_log_unremovable_warns_where_and_reason() -> None:
         wi_mod.log_unremovable("run_x", fails)
     events = [e for e in logs if e["event"] == "harness.gate2.unremovable"]
     assert [(e["where"], e["reason"], e["log_level"]) for e in events] == [("odd", "x", "warning")]
+
+
+def test_ut06_78_cited_finding_outside_run_input_is_unverified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT06-78 (review round 2, M5) a recommendation citing a finding outside this run's
+    verified Writer input (e.g. verified in another run) breaks `rule:unverified_finding`;
+    the store is not asked for statuses; a cited in-run verified finding passes the rule."""
+    monkeypatch.setattr(writer, "get_evidence", lambda query_id: None)
+    reports = SimpleNamespace(compiled_numeral_patterns=())
+    env = SimpleNamespace(
+        hcfg=SimpleNamespace(app=SimpleNamespace(reports=reports)),
+        verifier=SimpleNamespace(verify_draft=lambda draft, build_id: d.vresult()),
+        run=SimpleNamespace(run_id=d.RUN_ID, build_id=d.BUILD_ID),
+    )
+    in_run = finding(1).model_copy(update={"status": "verified"})
+    draft = make_draft()  # its recommendation cites FINDING_ID, a finding of another run
+    failures, _ = writer._evaluate(env, _wi([in_run]), draft)  # type: ignore[arg-type]
+    assert {"where": "recommendations[0]", "reason": "rule:unverified_finding"} in failures
+    cited = draft.recommendations[0].model_copy(update={"finding_ids": [in_run.finding_id]})
+    ok = draft.model_copy(update={"recommendations": [cited]})
+    failures, _ = writer._evaluate(env, _wi([in_run]), ok)  # type: ignore[arg-type]
+    assert all(f["reason"] != "rule:unverified_finding" for f in failures)

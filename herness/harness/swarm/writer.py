@@ -59,7 +59,7 @@ from herness.harness.swarm.routing import (
     route_task,
 )
 from herness.harness.swarm.tools import build_task_tools
-from herness.store.ops import finding_statuses, get_evidence, get_task, get_task_by_dedup
+from herness.store.ops import get_evidence, get_task, get_task_by_dedup
 
 if TYPE_CHECKING:
     from herness.core.types import AgentResult, Depth, ToolContext, VerificationResult
@@ -186,8 +186,8 @@ def _evaluate(
     env: RunEnv, wi: WriterInput, draft: ReportDraft
 ) -> tuple[list[Failure], VerificationResult]:
     """Rules, extra text and `verify_draft` of one draft (U06-115 step 6); runs in a thread."""
-    cited = sorted({fid for r in draft.recommendations for fid in r.finding_ids})
-    statuses = finding_statuses(cited) if cited else {}
+    # Only this run's verified input set counts as verified (fail closed, review M5).
+    statuses = dict.fromkeys(wi.by_id, "verified")
     levers = wi.inp.get("levers")
     failures = check_recommendation_rules(
         draft, statuses=statuses, tables_of=functools.cache(_tables),
