@@ -26,7 +26,7 @@ import httpx2
 from herness.core import audit as _audit
 from herness.core import config as _config
 from herness.core import time as clock
-from herness.core._egress_scan import host_reason, rescan
+from herness.core._egress_scan import host_reason, pinned_registries, registry_host, rescan
 from herness.core._egress_transport import (
     MAX_RESPONSE_BYTES,
     AsyncGuardedTransport,
@@ -54,7 +54,7 @@ __all__ = ["BLOCKING_TYPES", "CHARS_PER_TOKEN", "LOOPBACK_HOSTS", "MAX_RESPONSE_
 __all__ += ["MODEL_DOWNLOAD_HOSTS", "PAYLOAD_CLASSES_BY_PROFILE", "EgressGuard", "EgressTicket"]
 __all__ += ["AsyncGuardedTransport", "GuardedTransport", "PayloadClass", "Purpose"]
 __all__ += ["aloopback_http_client", "cloud_chat_allowed", "get_guard", "install_socket_guard"]
-__all__ += ["loopback_http_client", "reset_guard", "source_http_client"]
+__all__ += ["loopback_http_client", "registry_host", "reset_guard", "source_http_client"]
 
 Purpose = Literal["reasoning_final", "reasoning", "bulk_classification", "model_download"]
 PayloadClass = Literal["aggregated_evidence", "redacted_text", "none"]
@@ -144,8 +144,8 @@ class EgressGuard:
             return "url_invalid"
         egress = self._cfg.security.egress
         hosts = frozenset(egress.destinations)
-        if windowed:  # T10-24: add the registry hosts of the pinned deploy.*.image values
-            hosts |= MODEL_DOWNLOAD_HOSTS
+        if windowed:  # plus the registries of the pinned deploy.*.image values (U10-82 step 2)
+            hosts |= MODEL_DOWNLOAD_HOSTS | pinned_registries(self._cfg.deploy)
         if reason := host_reason(parsed, hosts):
             return reason
         if body is None:  # a streaming body cannot be scanned (U10-54 step 1)
