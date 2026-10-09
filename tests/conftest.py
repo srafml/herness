@@ -41,6 +41,7 @@ pytest_plugins = [
     "tests.support.secret_leak",
     "tests.support.cli_env",
     "tests.support.fake_runner",
+    "tests.support.truth",
 ]
 
 collect_ignore = ["support", "fixtures"]

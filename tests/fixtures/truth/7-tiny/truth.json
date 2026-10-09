@@ -1,0 +1,97 @@
+{
+  "seed": 7,
+  "scale": "tiny",
+  "generator_version": "2.0.0",
+  "params_hash": "sha256:b55e288fa65f7aab4325b465df14bf21baf1504c87cfb4516df183e4c6fac7fb",
+  "start": "2026-06-03",
+  "end": "2026-08-31",
+  "question_set_version": "qs-2026-10-01.1",
+  "dataset_root": "data",
+  "row_counts": {
+    "jira/issue": 163,
+    "monitoring/event": 430,
+    "monitoring/metric_daily": 7270,
+    "servicenow/change_request": 331,
+    "servicenow/cmdb_ci": 91,
+    "servicenow/cmdb_ci_service": 20,
+    "servicenow/cmdb_rel_ci": 70,
+    "servicenow/cmn_department": 3,
+    "servicenow/incident": 1551,
+    "servicenow/problem": 41,
+    "servicenow/sys_user_group": 15,
+    "servicenow/task_sla": 1376
+  },
+  "dirty": {
+    "bad_timestamp": 4,
+    "future_ts": 1,
+    "resolved_before_opened": 1,
+    "missing_service": 125,
+    "duplicate_rows": 104,
+    "later_versions": 88,
+    "tombstones": 5,
+    "unknown_enum": 1
+  },
+  "plants": {
+    "T1_bad_team": {
+      "team_id": "servicenow:sys_user_group:faf85ad24639ddc1e9476ccc3e3b3151",
+      "team_name": "Retail Runtime L2",
+      "service_ids": [
+        "servicenow:cmdb_ci:0ef5c63c81742988895a0ddbbef03bdd",
+        "servicenow:cmdb_ci:9f82e66e10a2ef3287322decccd78726",
+        "servicenow:cmdb_ci:b46ad70d4154493902823a795af48e51"
+      ],
+      "metric": "mttr_hours",
+      "lever_usd_model": "mttr",
+      "multiplier_start": 2.0,
+      "multiplier_end": 3.0
+    },
+    "T2_roi_epic": {
+      "epic_key": "SEQU-100",
+      "epic_record_id": "jira:issue:30100",
+      "service_id": "servicenow:cmdb_ci:0ca1e71e5fed499a5ea244fed1b359fb",
+      "cluster_members_file": "t2_members.parquet",
+      "decoy_epic_key": "SEQU-101"
+    },
+    "T2c_cluster_fix": {
+      "service_id": "servicenow:cmdb_ci:b255dcb063bebb07e43ff2e10ec8f5a0",
+      "cluster_members_file": "t2_members.parquet",
+      "template_id": "tpl_cert_expiry"
+    },
+    "T3_change_cluster": {
+      "ci_id": "servicenow:cmdb_ci:ee4c9ccf2589e57360e45f109a8a33b8",
+      "owning_team_id": "servicenow:sys_user_group:526eba39f2bcc9806a313deaeea380c0",
+      "pairs_file": "t3_pairs.parquet",
+      "source_field_share": 0.2994011976047904
+    },
+    "T4_noisy_service": {
+      "service_id": "servicenow:cmdb_ci:a0c785adb73ae455abecc294ae6a729a",
+      "generated_noise_ratio": 1.0
+    },
+    "T5_confounder": {
+      "team_id": "servicenow:sys_user_group:c9e1886b278f82c2c1b0c8c79b2d5349",
+      "service_id": "servicenow:cmdb_ci:959c7b13dc90eb08016556dce2df1654",
+      "peak_window": [
+        "08-02",
+        "08-31"
+      ],
+      "volume_multiplier": 2.8
+    },
+    "T6_outcomes": {
+      "paid": {
+        "epic_key": "LANT-102",
+        "epic_record_id": "jira:issue:10102",
+        "service_id": "servicenow:cmdb_ci:0716d911df5fe7bda452a4e2d8051df6",
+        "metric": "incident_count",
+        "effect": -0.4
+      },
+      "unpaid": {
+        "epic_key": "SEQU-103",
+        "epic_record_id": "jira:issue:30103",
+        "service_id": "servicenow:cmdb_ci:409ee33c155e2f7d8fddf975e3436c92",
+        "metric": "incident_count",
+        "effect": 0.0
+      },
+      "effective_at": "2026-07-20T00:00:00Z"
+    }
+  }
+}

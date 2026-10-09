@@ -9,10 +9,6 @@ security:
   redaction:
     denylist_domains: []    # O-8 open: corporate domains supplied at Phase 1; empty until then
 
-# Carry-over to T11-16 (this card's forward dependency): design 11 §5.1.2 also has this file
-# hold the `mappings.*` custom-field IDs and enum maps that match the synthetic generator, the
-# `sources.sources.files` entry for the `service_costs` inbox CSV, and the
-# `sources.sources.servicenow` field rename `acknowledged_at <- u_acknowledged_at` (spec 01 Q8).
-# `config/sources.yaml` (impl 01/02) and `synth_mappings.yaml` (impl 11) have not shipped yet,
-# so that content would have to be invented rather than read from an owner file or spec table;
-# T11-16 adds it here once both exist. Reported in the T10-13 report.
+# Carry-over: the generator-lake `sources` block for design 11 section 5.1.2 lives in IT11-03's
+# test-local overlay (tests/unit/test_synth_profile.py) until impl 01 adapts IT01-07's `_synth_config`
+# to drop the profile's `sources`; then it moves back here.

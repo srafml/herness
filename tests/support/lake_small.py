@@ -1,6 +1,6 @@
-"""The `lake_small` fixture (impl 02 §11; stand-in for T11-16, cut by the controller).
+"""The hand-made lake fixture `lake_handmade` (impl 02 §11; stand-in cut by the controller).
 
-`tests/fixtures/lake_small/raw/` is a committed raw lake in the connector layout
+`tests/fixtures/lake_handmade/raw/` is a committed raw lake in the connector layout
 (`<source>/<entity>/dt=YYYY-MM-DD/part-<ulid>.parquet`, written by the real `LakeWriter`)
 holding a few synthetic ServiceNow, Jira and monitoring records: every core table of
 000-299 gets rows. `mappings.yaml` beside it is the matching `mappings.yaml` section.
@@ -39,7 +39,7 @@ from herness.core.config import HernessConfig
 from herness.store.lake import LakeWriter
 
 REPO: Final = Path(__file__).resolve().parents[2]
-FIXTURE: Final = REPO / "tests" / "fixtures" / "lake_small"
+FIXTURE: Final = REPO / "tests" / "fixtures" / "lake_handmade"
 GOLDEN_COUNTS: Final = REPO / "tests" / "fixtures" / "golden" / "lake_small_counts.json"
 GOLDEN_CORE: Final = REPO / "tests" / "fixtures" / "golden" / "lake_small_core.json"
 SOURCES_YAML: Final = "version: 1\nbuild:\n  threads: 2\n"
