@@ -225,6 +225,7 @@ class Agents:
     writer: Literal["ok", "fail"] = "ok"
     analyst: dict[str, Mode] = field(default_factory=dict)
     charge: int = 0  # tokens charged to the ledger per analyst call (IT06-03)
+    usd: bool = False  # findings carry a usd number (cross-check planning, U06-110)
     calls: dict[str, int] = field(default_factory=dict)
     running: asyncio.Event | None = None
 
@@ -280,7 +281,8 @@ class Agents:
         args = {
             "claim": f"Team {team} had [[n1]] incidents", "entity_type": "team",
             "entity_id": team, "query_ids": [], "confidence": 0.8,
-            "numbers": [_nref(1, incident_qid(team), "count", "incidents", 7)],
+            "numbers": [_nref(1, incident_qid(team), "usd", "incidents", "1200.50") if self.usd
+                        else _nref(1, incident_qid(team), "count", "incidents", 7)],
         }  # fmt: skip
         out = await asyncio.to_thread(lambda: ctx.task_tools["post_finding"](ctx, **args))
         assert out.ok, out

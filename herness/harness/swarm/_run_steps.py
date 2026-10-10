@@ -229,15 +229,21 @@ class Steps:
         """The plan context of the run, rebuilt on resume (U06-139)."""
         return self.env.plan_ctx is not None or await self._plan_ctx()
 
+    async def _planner_status(self) -> str | None:
+        key = planner_dedup_key(self._id, self.env.run.kind)
+        row = await asyncio.to_thread(get_task_by_dedup, self._id, key)
+        return None if row is None else row.status
+
     async def planning(self) -> None:
+        """F06-03; a dead planner fails the run, a done one (forced restart) moves on."""
+        if await self._planner_status() == "dead":
+            await self._cas("planning", "failed")
+            return
         if not await self.ensure_plan_ctx():
             return  # the planner task was failed: the loop re-reads it (F06-03)
         if await run_planning(self.env) == "failed":
             await self._cas("planning", "failed")
-            return
-        key = planner_dedup_key(self._id, self.env.run.kind)
-        row = await asyncio.to_thread(get_task_by_dedup, self._id, key)
-        if row is not None and row.status == "done":  # a forced restart of a planned run
+        elif await self._planner_status() == "done":  # also a forced restart of a planned run
             await self._cas("planning", "running")
 
     async def _exhausted(self, out: PhaseOutcome) -> bool:
