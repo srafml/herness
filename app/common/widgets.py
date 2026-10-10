@@ -6,9 +6,7 @@ displays show the error type and ids only, never a stack trace (design §5.4, §
 
 from __future__ import annotations
 
-import contextlib
 import contextvars
-import json
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -16,24 +14,25 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol
 
-import pyarrow as pa
 import streamlit as st
 
-from app.common import auth, bootstrap, data, wh
+from app.common import auth, bootstrap, wh
+from app.common._widgets_evidence import CELL_MAX, EVIDENCE_SHOWN, evidence
+from app.common._widgets_evidence import parse_json as _json
 from app.common.sanitize import safe_markdown
 from herness.core import time as clock
 from herness.core.errors import HernessError, SchemaViolation
 from herness.core.logging import get_logger
 from herness.core.resilience.metrics import record_histogram
-from herness.reports.contract import QUERY_ID_RE, unconfirmed_weight_keys
+from herness.reports.contract import unconfirmed_weight_keys
 from herness.reports.rules import Actor, require_role, user_message
 
 if TYPE_CHECKING:
     from app.common.bootstrap import AppServices
 
 __all__ = [
-    "PageContext", "banner_strip", "block", "evidence", "page", "sidebar_build", "user_error",
-    "verification_badge",
+    "CELL_MAX", "EVIDENCE_SHOWN", "PageContext", "banner_strip", "block", "evidence", "page",
+    "sidebar_build", "user_error", "verification_badge",
 ]  # fmt: skip
 
 NOT_AUTHORIZED: Final = "Not authorized"
@@ -41,8 +40,7 @@ NO_BUILD: Final = "No promoted build yet. Run `herness pipeline`."
 D2_TEXT: Final = "Dollar weights are placeholders and not yet confirmed: "
 UNEXPECTED: Final = ("Unexpected error on this page.",
                      "Check the log `data/logs/herness-<date>.jsonl`.")  # fmt: skip
-EVIDENCE_SHOWN: Final = 50
-CELL_MAX: Final = 200
+_SIDEBAR: Final = "Sidebar"
 _CONTROL: Final = frozenset({"StopException", "RerunException"})
 _BADGES: Final = {"verified": (":green-badge[Verified]", None), "partial": (
     ":orange-badge[Partially verified]", "Some figures could not be verified and were removed.")
@@ -113,8 +111,12 @@ def sidebar_build(
             st.caption(f"Build `{build_id.replace('`', '')}`")
         if data_as_of is not None:
             st.caption(f"Data as of {data_as_of.astimezone(UTC):%Y-%m-%d %H:%M} UTC")
-        if unconfirmed_keys:
-            st.warning(D2_TEXT + ", ".join(safe_markdown(key) for key in unconfirmed_keys))
+    _d2_warning(unconfirmed_keys)
+
+
+def _d2_warning(keys: Sequence[str]) -> None:
+    if keys:
+        st.sidebar.warning(D2_TEXT + ", ".join(safe_markdown(key) for key in keys))
 
 
 def _error_card(what: str, fix: str, exc: BaseException, title: str | None) -> None:
@@ -149,67 +151,6 @@ def block(name: str) -> Iterator[None]:
             user_error(exc, title=title)
         else:
             _error_card(*UNEXPECTED, exc, title)
-
-
-def _json(raw: object) -> object:
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except (ValueError, RecursionError):
-            return None
-    return raw
-
-
-def _sample(raw: object) -> list[dict[str, str]] | None:
-    """String cells cut to 200 chars; raw-text columns dropped; ``None`` when not stored."""
-    parsed = _json(raw)
-    if not isinstance(parsed, list):
-        return None
-    return [{str(k): ("" if v is None else str(v))[:CELL_MAX] for k, v in row.items()
-             if str(k) not in wh.FORBIDDEN_TEXT_COLUMNS}
-            for row in parsed if isinstance(row, Mapping)]  # fmt: skip
-
-
-def _meta_rows(ids: list[str]) -> tuple[dict[str, dict[str, object]], str | None]:
-    """``meta.evidence`` rows of the current build for ``ids`` (none without a build)."""
-    try:
-        result = wh.query("evidence.meta", ids=ids)
-    except wh.NoCurrentBuild:
-        return {}, None
-    rows = result.table.to_pylist()
-    return {str(row["query_id"]): row for row in rows}, result.build_id
-
-
-def _entry(query_id: str, row: Mapping[str, object] | None, build_id: str | None) -> None:
-    st.subheader(query_id, anchor=f"ev-{query_id}")
-    if row is None:
-        st.caption("Evidence not found")
-        return
-    st.code(str(row.get("sql") or ""), language="sql")
-    params = _json(row.get("params"))
-    st.json(params if isinstance(params, dict | list) else {})
-    st.text(f"Build {row.get('build_id') or build_id} · {row.get('row_count')} rows")
-    sample = _sample(row.get("result_sample"))
-    if sample is None:
-        st.caption("Sample not stored for this build")
-    else:
-        st.dataframe(pa.Table.from_pylist(sample), hide_index=True)
-
-
-def evidence(query_ids: Sequence[str], *, label: str | None = None) -> None:
-    """The evidence expander: one anchored sub-section per query id (design §5.3, §5.5)."""
-    ids = list(dict.fromkeys(q for q in query_ids if QUERY_ID_RE.fullmatch(q) is not None))
-    shown = ids[:EVIDENCE_SHOWN]
-    with st.expander(label or f"Evidence ({len(ids)} queries)"):
-        ops = data.ops_read("ui_get_evidence_rows", ids=tuple(shown))
-        found: Mapping[str, Mapping[str, object]] = ops if isinstance(ops, Mapping) else {}
-        missing = [q for q in shown if q not in found]
-        meta, meta_build = _meta_rows(missing) if missing else ({}, None)
-        for query_id in shown:
-            row = found.get(query_id)
-            _entry(query_id, row if row is not None else meta.get(query_id), meta_build)
-        if len(ids) > EVIDENCE_SHOWN:
-            st.caption(f"… and {len(ids) - EVIDENCE_SHOWN} more")
 
 
 def _gate() -> tuple[AppServices, Actor]:
@@ -254,7 +195,7 @@ def _sidebar(services: AppServices) -> str | None:
     """Step 5: the current build in the sidebar; returns its id (None without a build)."""
     build_id: str | None = None
     as_of: datetime | None = None
-    with block("Sidebar"):  # the sidebar never takes the page down
+    with block(_SIDEBAR):  # the sidebar never takes the page down
         keys = unconfirmed_weight_keys(services.cfg.weights.model_dump())
         try:
             build_id, _conn = wh.get_conn()
@@ -264,9 +205,10 @@ def _sidebar(services: AppServices) -> str | None:
             build_id = None
         except Exception as exc:  # noqa: BLE001 - step 6 or the page's blocks show the card, once
             _reraise_control(exc)
-            _log.error("app.widget.failed", page=_page_name.get(), block="sidebar",
+            _log.error("app.widget.failed", page=_page_name.get(), block=_SIDEBAR,
                        error_type=type(exc).__name__)  # fmt: skip
             st.sidebar.caption("Build information unavailable")
+            _d2_warning(keys)  # the D2 warning never depends on the warehouse (M-R1)
             return None
         sidebar_build(build_id, as_of, keys)
     return build_id
@@ -295,6 +237,8 @@ def page(title: str, body: Callable[[PageContext], None], *, needs_warehouse: bo
     seconds = clock.monotonic() - started
     _log.debug("app.page.rendered", page=title, duration_ms=int(seconds * 1000), build_id=build_id)
     label = _LABEL_RE.sub("_", title)[:64] or "page"
-    with contextlib.suppress(Exception):  # a metric failure never breaks a rendered page
+    try:
         record_histogram("herness_app_page_seconds", seconds, component="app",
                          labels={"page": label})  # fmt: skip
+    except Exception as exc:  # noqa: BLE001 - a metric failure never breaks a rendered page
+        _log.warning("app.widget.metric_failed", page=title, error_type=type(exc).__name__)
