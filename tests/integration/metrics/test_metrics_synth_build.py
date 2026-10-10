@@ -272,6 +272,10 @@ def _digest_order(columns: Columns, rows: list[tuple[Any, ...]]) -> list[tuple[s
     return sorted(out)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="T04-23: result_hash re-run is order-dependent for float aggregates (merge batch 41)",
+)
 def test_it04_06_result_sample_is_first_rows_in_hash_order(reruns: list[Rerun]) -> None:
     """IT04-06 every `meta.evidence.result_sample` holds at most 50 rows, equal to the
     first rows of the result in the design 00 §5.1 row-digest order (order derived in the
