@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 from tests.integration.harness import _swarm_run_env as e
 from tests.integration.harness._swarm_run_env import Drv
-from tests.unit.harness.memory._write_env import make_writer
+from tests.unit.harness._blackboard_env import test_redactor
+from tests.unit.harness.memory._write_env import PATTERNS, make_writer
 
 from herness.core.types import ReportDraft
 from herness.harness.memory import MemoryStore
@@ -27,17 +28,21 @@ from herness.store.ops import core, get_run, record_evidence
 pytestmark = pytest.mark.integration
 
 drv = e.drv  # fixtures
-test_redactor = e.env_mod.test_redactor
+__all__ = ["drv", "test_redactor"]
 
 
 def _real_memory(drv_: Drv, tmp_path: Path) -> MemoryStore:
     env = make_writer(tmp_path)
     return MemoryStore(
-        MemoryConfig(injection_patterns=[]), conn_factory=core.connection, vectors=env.vectors,
-        embedder=Embedder(env.embed, model_name="bge-m3"), redactor=env.redactor, llms=None,
+        MemoryConfig(injection_patterns=PATTERNS),
+        conn_factory=core.connection,
+        vectors=env.vectors,
+        embedder=Embedder(env.embed, model_name="bge-m3"),
+        redactor=env.redactor,
+        llms=None,
         allowed_numeral_patterns=drv_.hcfg.app.reports.allowed_numeral_patterns,
         data_root=Path(drv_.hcfg.paths.data),
-    )  # fmt: skip
+    )
 
 
 def test_it06_37_candidate_recommendation_records_to_done(drv: Drv, tmp_path: Path) -> None:

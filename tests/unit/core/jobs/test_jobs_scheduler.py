@@ -332,7 +332,7 @@ def test_ut08_80_tuesday_steps_follow_done_and_stop_on_failure(sched_db: Clock) 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"schedule": "weekly_deep", "fire_at": "2026-09-20T01:00:00.000000Z"},  # no `then`
+        {"schedule": "memory_maintenance", "fire_at": "2026-09-20T01:00:00.000000Z"},  # no `then`
         {"schedule": "gone", "fire_at": "2026-09-20T01:00:00.000000Z"},
         {"schedule": 3, "fire_at": "2026-09-20T01:00:00.000000Z"},
         {"schedule": "nightly", "fire_at": 5},

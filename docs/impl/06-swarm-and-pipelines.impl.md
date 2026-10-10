@@ -672,6 +672,7 @@ Returns: `int`, the number of `finding` rows changed.
 | Complexity and limits | One pass over the matching rows; the number of findings citing one record is bounded by the runs that queried it. |
 | Security notes | TH06-10; values are compared exactly, never logged. |
 | Tests | UT06-95 |
+| UT06-96 | U06-85 | the review payloads of `config/resilience.yaml` plus scheduler keys; malformed variants (missing, unknown or `chat` pipeline, bad or non-string depth, list-valued or plural pipeline, extra keys, wrongly typed scheduler keys) | handler | each shipped payload starts one run of its pipeline and depth; each malformed one → `ConfigError`, no run started |
 
 #### U06-45 herness.store.ops.findings.known_query_ids, evidence_sql
 
@@ -1153,6 +1154,8 @@ Spec note (T06-22, review round 1): design 06 §6.2 ("Planner dead → run `fail
 | Errors | `ConfigError` propagates (spec 08 marks the job failed). |
 | Tests | UT06-56 |
 
+T06-22b spec note (2026-10-10, ruling): the scheduler (spec 08 U08-73) submits chain payloads of the `config/resilience.yaml` shape `{"pipeline": "funding_review"|"org_review", "depth": "fast"|"standard"|"deep"}` plus the keys `schedule` (str), `fire_at` (str), `step` (int). Step 2 therefore has a third accepted form: the **scheduled form** (keys within `pipeline`, `depth`, `schedule`, `fire_at`, `step`; `pipeline` required and one of the two review kinds, `depth` optional, default `standard`; every value strictly typed) becomes `RunRequest(kind=pipeline, depth=depth)` and `swarm.start(req, ctx)`. The spec 08 shape was chosen because impl 06 only said "anything else → `ConfigError`" and never named the scheduled payload; the request and resume forms are unchanged. Anything else stays `ConfigError` (fail closed): a missing, unknown or `chat` pipeline, a list-valued `pipeline`, the plural `pipelines`, a bad or non-string `depth`, any other key (`question`, `request`, `run_id`, `resume`) alongside `pipeline`, a wrongly typed scheduler key. One job starts exactly one run (the job's yield and resume carry one `run_id`), so `config/resilience.yaml` `weekly_deep` is a chain: `job` funding_review `deep`, `then` org_review `deep` (previously one job with `pipelines: [funding_review, org_review]`). Test: UT06-96.
+
 ### 3.9 Planner (`herness/harness/swarm/planner.py`)
 
 #### U06-87 herness.harness.swarm.planner.build_plan_context
@@ -1585,6 +1588,8 @@ Spec note (T06-22, review round 1): design 06 §6.2 ("Planner dead → run `fail
 | Algorithm | 1. Load `draft.json` and the cited findings. 2. `rec_ids = await asyncio.to_thread(memory.write_recommendations, run_id, pipeline.recommendation_drafts(draft, findings))` (idempotent per run). 3. Set `rec_id` in order; `write_draft_atomic`. 4. `memory.promote_procedural(run_id)` in a thread. 5. `set_run_status(to="done", allowed_from={"recording"})`. 6. `render(run_id, app.reports.formats)`; a `HernessError` → `update_run_fields(meta_patch={"render_error": "<class>: <message>"})` and log `harness.render.failed` (ERROR); the run stays `done`. 7. Log `harness.record.completed` (INFO: `n_recs`). For `partial` runs U06-82 calls only step 6. |
 | Errors | `ReportContractError` from spec 07 (changed recommendations on resume) → run `failed` through U06-82 step 8. |
 | Tests | IT06-31, IT06-22, FT06-02 |
+
+T06-22b spec note (2026-10-10): a funding run's recommendations target `candidate` (spec 07 U07-07 now lists it), so the drafts of step 2 pass `write_recommendations` unchanged and `rec_id`s are filled for them; the T06-22 IT harness no longer maps `candidate` to `work_item`. Test: IT06-37 (real `MemoryStore.write_recommendations`, run `done`, `rec_id` in `draft.json`).
 
 #### U06-123 herness.harness.swarm.hybrid.build_evidence_pack
 
@@ -2281,6 +2286,7 @@ Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `
 | IT06-34 | U06-136 | job run twice | second run makes no model call |
 | IT06-35 | U06-87 | build with DQ fails, prior recs | context fields filled with query ids |
 | IT06-36 | U06-129 step 5k (R-32) | user message classified as a correction by the fake spec 07 classifier; a second turn with a failing session save | first turn: `correction_captured` event after `final`, answer text has no mention of the capture; second turn: `final` delivered, `harness.chat.session_save_failed` logged, no `error` event |
+| IT06-37 | U06-122, U06-70 (T06-22b) | `drv` funding run whose Writer recommends candidate `c1`; real `MemoryStore` instead of the fake | `start` | run `done`; `recommendation` row (`fund`, `candidate`, `c1`); the `rec_id` filled in `draft.json` |
 
 ### 11.4 Fault tests (`fault`)
 

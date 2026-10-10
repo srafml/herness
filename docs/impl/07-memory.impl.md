@@ -244,7 +244,7 @@ The extra keyword `run_meta` is required because `ToolContext` carries neither `
 |-------|---------|
 | Kind | class (pydantic, `extra="forbid"`, `strict=True`) |
 | Purpose | One recommendation handed to `write_recommendations` (design 07 §3.2). This type and the base-confidence rule of U07-78 are binding on spec 06 (R-30). |
-| Signature | `rank: int` (≥ 1); `kind: Literal["fund","org_action"]`; `target_type: str` (one of `service`, `team`, `org`, `work_item`); `target_id: str` (max 200); `summary: str` (1–400 chars); `numbers: list[NumberRef]` (max 20); `expected_metric: str \| None`; `expected_delta_ref: str \| None` (pattern `^n[0-9]+$`); `expected_usd_ref: str \| None` (pattern `^n[0-9]+$`); `finding_ids: list[str]` (1–50, each `FINDING_ID_RE`) |
+| Signature | `rank: int` (≥ 1); `kind: Literal["fund","org_action"]`; `target_type: str` (one of `service`, `team`, `org`, `work_item`, `candidate`); `target_id: str` (max 200); `summary: str` (1–400 chars); `numbers: list[NumberRef]` (max 20); `expected_metric: str \| None`; `expected_delta_ref: str \| None` (pattern `^n[0-9]+$`); `expected_usd_ref: str \| None` (pattern `^n[0-9]+$`); `finding_ids: list[str]` (1–50, each `FINDING_ID_RE`) |
 | Preconditions | none |
 | Postconditions | NumberRef ids unique. |
 | Invariants | — |
@@ -254,6 +254,8 @@ The extra keyword `run_meta` is required because `ToolContext` carries neither `
 | Concurrency | immutable after construction |
 | Complexity and limits | as signature |
 | Security notes | TH07-03 (markers only). |
+
+T06-22b spec note (2026-10-10, ruling for the open T06-22 carry-over "target_type lacks candidate"): `RecommendationDraft.target_type` is `Literal["service", "team", "org", "work_item", "candidate"]`; `candidate` is the target of a funding (`fund`) recommendation, whose `target_id` is the `candidate_id` of `score.funding` (impl 06 U06-70 maps the draft item's `target_type` through unchanged). No other value changed. The `recommendation.target_type` column is `TEXT NOT NULL` without a CHECK, so no migration; the one whitelist, `REC_CHECKS["target_type"]` of `herness/store/ops/_closed_loop_rows.py` (U07-14 `insert_recommendations` preconditions), takes `candidate` too. The outcome sweep (U07-87) still reads only `work_item` specially: a `candidate` target with an `expected_metric` reaches `peer_group`, whose `ToolInputError` is logged `memory.outcome.skipped` (`reason=invalid_request`); the Writer prompt asks for `expected_metric` on `org_action` items only, so no `fund` item is due. Test: IT06-37.
 | Tests | UT07-03, UT07-63 |
 
 #### U07-08 herness.core.types.memory.PriorRecommendation
@@ -823,7 +825,7 @@ Returns `str | None` (JSON text of the `scratchpad` key of the checkpoint envelo
 | Kind | function (two) |
 | Purpose | Persist a run's recommendations and read them back (backs U07-78). |
 | Signature | Table above. |
-| Preconditions | Each row: `rec_id` matches `REC_ID_RE`; `kind` in (`fund`, `org_action`); `target_type` in (`service`, `team`, `org`, `work_item`); `summary` 1–400 chars (R-30); `confidence` in [0, 1]. Violation → `SchemaViolation("insert_recommendations: invalid <column>")`. `conn` is required because the caller's existence check (U07-78 step 5) must share the transaction. |
+| Preconditions | Each row: `rec_id` matches `REC_ID_RE`; `kind` in (`fund`, `org_action`); `target_type` in (`service`, `team`, `org`, `work_item`, `candidate`); `summary` 1–400 chars (R-30); `confidence` in [0, 1]. Violation → `SchemaViolation("insert_recommendations: invalid <column>")`. `conn` is required because the caller's existence check (U07-78 step 5) must share the transaction. |
 | Postconditions | All rows inserted, or none (the caller's transaction rolls back). |
 | Invariants | — |
 | Algorithm | `insert_recommendations`: validate every row, then one constant `INSERT INTO recommendation (…14 columns…) VALUES (…)` per row with JSON columns through `dump_json`. `run_recommendations`: `SELECT … FROM recommendation WHERE run_id = ? ORDER BY rec_id` (index `recommendation_run`). |
