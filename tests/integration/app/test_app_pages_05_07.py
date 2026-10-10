@@ -2,8 +2,9 @@
 
 The scored ``metrics_tiny`` build (``plant_scored_build``) has no cluster row, no redacted text
 and no delivery metric; ``_plant_extras`` adds one cluster with a Markdown-bearing label, the
-redacted text of its members, raw text in ``core.incident`` that must never show (TH09-11) and
-``throughput`` values. Derived and redacted text appear only as dataframe cells (TH09-02).
+redacted text of its members, raw text in ``core.incident`` that must never show (TH09-11),
+``throughput`` values and one ``change_count`` value (every planted change rate is null).
+Derived and redacted text appear only as dataframe cells (TH09-02).
 """
 
 from __future__ import annotations
@@ -74,7 +75,9 @@ def _plant_extras(warehouse: Path, build_id: str) -> None:
             " DATE '2026-02-01', 9, 9, NULL, 9, 'count', [], 'q_0000000000000001'),"
             " ('throughput', 'team', 'T2', 'month', DATE '2026-02-01', 3, 3, NULL, 3, 'count',"
             " [], 'q_0000000000000001'), ('throughput', 'work_item', 'W1', 'month',"
-            " DATE '2026-02-01', 2, 2, NULL, 2, 'count', [], 'q_0000000000000001')"
+            " DATE '2026-02-01', 2, 2, NULL, 2, 'count', [], 'q_0000000000000001'),"
+            " ('change_count', 'service', 'S1', 'month', DATE '2026-02-01', 5, 5, NULL, 5,"
+            " 'count', [], 'q_0000000000000002')"
         )
     finally:
         con.close()
@@ -149,7 +152,7 @@ def test_it09_10_change_health_metrics_and_caused_incidents(env: SimpleNamespace
     del env
     at = _run("06_Change_Health.py")
     assert at.selectbox(key="change_period").value == "month"
-    assert set(_frame(at, "metric")) == {"change_failure_rate"}
+    assert set(_frame(at, "metric")) == {"change_count", "change_failure_rate"}
     assert _frame(at, "method") == ["time_window"]
     assert _frame(at, "links") == [3]
     assert sorted(_frame(at, "change_id")) == ["CH1", "CH1", "CH4"]
@@ -159,7 +162,12 @@ def test_it09_10_change_health_metrics_and_caused_incidents(env: SimpleNamespace
     at.selectbox(key="change_service").set_value("S2").run()
     assert not at.error
     assert set(_frame(at, "entity_id")) == {"S2"}
-    assert sorted(_frame(at, "change_id")) == ["CH1", "CH4"]
+    assert "No change-caused incidents for these filters." in [c.value for c in at.caption]
+    assert not any("change_id" in d.value.columns for d in at.dataframe)
+    at.selectbox(key="change_service").set_value(None).run()
+    at.selectbox(key="change_team").set_value("T1").run()
+    assert set(_frame(at, "entity_id")) == {"T1"}
+    assert sorted(_frame(at, "change_id")) == ["CH1", "CH1", "CH4"]
 
 
 def test_it09_10_delivery_health_metrics_by_team_and_project(env: SimpleNamespace) -> None:
