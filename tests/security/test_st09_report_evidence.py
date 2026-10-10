@@ -25,12 +25,15 @@ pytestmark = pytest.mark.integration
 PII = "zq7-planted.pii@example.com"
 RAW_TITLE = f"PAY-1 refund for {PII}"
 RUN = "run_01J8ZZZZZZZZZZZZZZZZZZZZZZ"
+NAME_EMAIL = "zq8-colname@example.org"
+NAME_PHONE = "2025550199"
 SAMPLE = [
     {"n": 3, "amount": "12.50", "ok": True, "day": "2026-01-02", "run": RUN,
      "title": RAW_TITLE, " Summary ": RAW_TITLE, "description": RAW_TITLE, "NOTES": RAW_TITLE,
      "short_description": RAW_TITLE, "close_notes": RAW_TITLE, "root_cause_text": RAW_TITLE,
      "comment": f"call {PII}", "meta": {"k": "v", "Title": RAW_TITLE},
-     "phone": 2025550123, "acct_f": 2025550123.0},
+     "phone": 2025550123, "acct_f": 2025550123.0,
+     NAME_EMAIL: "x", NAME_PHONE: "y"},  # PII-shaped column names (review I1)
 ]  # fmt: skip
 
 
@@ -60,6 +63,9 @@ def test_st09_31_raw_sample_text_never_in_report(report_env: ReportEnv, run_id: 
         assert "PAY-1" not in text
         assert "example.com" not in text
         assert "2025550123" not in text  # numbers pass redaction too (T09-15d ruling)
+        assert NAME_EMAIL not in text  # PII-shaped column names never become headers
+        assert "example.org" not in text
+        assert NAME_PHONE not in text
     for text in (html, md):
         # the sample is rendered and its free text redacted (MD escapes ``[``, ``_``, ``]``)
         assert re.search(r"call \\?\[EMAIL\\?_[0-9a-f]+\\?\]", text)

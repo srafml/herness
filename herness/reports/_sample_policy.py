@@ -10,14 +10,14 @@ passed cell by cell through ``redact_text`` on the value's string form with the 
 (``[redacted]`` when it fails closed), or dropped when no key is loaded. The impl 10
 detectors leave counts, small ints and decimals unchanged. A nested dict/list cell is
 redacted as JSON text after its always-dropped keys are removed at any depth. Cells are
-plain strings cut to 200 chars; templates escape them (TH09-23).
+plain strings cut to 200 chars; templates escape them (TH09-23). Column names render as
+headers, so a name is kept only when ``redact_text`` returns it unchanged (key loaded) or,
+without a key, when it is identifier-shaped (``[A-Za-z_][A-Za-z0-9_ .-]{0,63}``) with no run
+of five or more digits; any other column is dropped (T09-15d review I1).
 
-The rule extends T09-15c's ``app/common/_widgets_evidence.py`` (parity test UT09-113) with the
-controller's numeric ruling (T09-15d): numbers no longer bypass redaction. Follow-up (after
-batch 48): ``app/common/_widgets_evidence.py`` must import ``sample_rows``/``parse_json``/
-``ALWAYS_DROPPED`` from here instead of its own copy and so adopt the numeric rule.
-``FORBIDDEN_TEXT_COLUMNS`` repeats ``app.common.wh.FORBIDDEN_TEXT_COLUMNS`` (L5 reports may not
-import ``app``); the parity test asserts the two sets are equal.
+Extends T09-15c's ``app/common/_widgets_evidence.py`` (parity test UT09-113) with the T09-15d
+numeric and column-name rules; that widget must import this module (follow-up, batch 48).
+``FORBIDDEN_TEXT_COLUMNS`` repeats ``app.common.wh``'s set (L5 may not import ``app``).
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ _VERBATIM_RE: Final = re.compile(
     r"|\d{8}-\d{6}-[0-9A-HJKMNP-TV-Z]{6}",
     re.ASCII,
 )
+_NAME_RE: Final = re.compile(r"(?!.*\d{5})[A-Za-z_][A-Za-z0-9_ .-]{0,63}", re.ASCII)
 _MAX_DEPTH: Final = 32
 
 
@@ -96,8 +97,16 @@ def _redacted(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, Mapping | list):
-        value = json.dumps(_strip(value), ensure_ascii=False)
+        value = json.dumps(_strip(value), ensure_ascii=False, default=str)
     return (redact.redact_text(str(value)) or REDACTED)[:CELL_MAX]
+
+
+def _safe_names(names: list[str]) -> list[str]:
+    """Names that ``redact_text`` keeps unchanged; identifier-shaped ones without a key."""
+    try:
+        return [n for n in names if redact.redact_text(n) == n]
+    except HernessError:  # no redaction key loaded (ConfigError)
+        return [n for n in names if _NAME_RE.fullmatch(n) is not None]
 
 
 def sample_rows(raw: object, limit: int | None = None) -> list[dict[str, str]] | None:
@@ -111,7 +120,7 @@ def sample_rows(raw: object, limit: int | None = None) -> list[dict[str, str]] |
         return None
     rows = [{str(k): v for k, v in row.items()} for row in parsed if isinstance(row, Mapping)]
     rows = rows if limit is None else rows[: max(limit, 0)]
-    names = [n for n in dict.fromkeys(k for row in rows for k in row) if not _dropped(n)]
+    names = _safe_names([n for n in dict.fromkeys(k for r in rows for k in r) if not _dropped(n)])
     text = [n for n in names if not all(_verbatim(row.get(n)) for row in rows)]
     try:
         cells = {n: [_redacted(row.get(n)) for row in rows] for n in text}

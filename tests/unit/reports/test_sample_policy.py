@@ -61,16 +61,27 @@ CASES: Final[list[Case]] = [
                       "flag": False}],
      ["phone", "acct_f", "dec", "at", "flag"], ["2025550123", "2025550123.0", "555.0123"],
      ["at", "flag"], POST_RULING),
+    ("pii_names", [{PII: "x", str(PHONE): "y", "n": 2, "day": "2026-01-02"}],
+     ["n", "day"], [PII, str(PHONE), "2"], ["day"], POST_RULING),  # review I1: names checked
 ]  # fmt: skip
 IDS: Final = [c[0] for c in CASES]
+# Column names the double passes through unchanged (the real redactor keeps them as well).
+NAMES: Final = frozenset(
+    {k for c in CASES for row in c[1] for k in row if k not in {PII, str(PHONE)}}
+    | {"meta", "d", "c"}
+)
 
 
 def _double(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """ST09-30's redaction double: ``None`` (fail closed) for ``second``, else a counter."""
+    """ST09-30's redaction double: ``None`` (fail closed) for ``second``, else a counter.
+
+    Known column names come back unchanged and are not recorded."""
     seen: list[str] = []
 
     def fake(text: str | None) -> str | None:
         assert text is not None
+        if text in NAMES:
+            return text
         seen.append(text)
         return None if text == "second" else f"redacted #{len(seen)}"
 
@@ -95,6 +106,8 @@ def test_ut09_113_parity_with_key(monkeypatch: pytest.MonkeyPatch, entry: Case) 
         assert [row["n"] for row in out] == ["redacted #1", "redacted #2", "redacted #3"]
         assert (out[0]["run"], out[0]["ok"], out[0]["blank"]) == (RUN, "True", "")
         assert out[0]["opened_at"] == SAFE["opened_at"]
+    if case == "pii_names":
+        assert out == [{"n": "redacted #3", "day": "2026-01-02"}]
     if case == "numeric_pii":
         assert (out[0]["at"], out[0]["flag"]) == ("12:34:56", "False")
 
@@ -132,6 +145,38 @@ def test_ut09_113_real_redactor_numbers(monkeypatch: pytest.MonkeyPatch) -> None
         "0.75",
         "-0.5",
     )
+
+
+def test_ut09_113_real_redactor_column_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT09-113 (review I1) e-mail- and phone-shaped column names are dropped, real redactor."""
+    install_redactor(monkeypatch)
+    rows = [{PII: "x", str(PHONE): "y", "candidate_id": "epic-1", "value": 4.5}]
+    assert policy.sample_rows(rows) == [{"candidate_id": "epic-1", "value": "4.5"}]
+
+
+@pytest.mark.parametrize(
+    ("name", "kept"),
+    [("candidate_id", True), ("effort cost.usd-2", True), (PII, False), (str(PHONE), False),
+     ("acct 12345", False), ("x" * 65, False), ("1st", False)],
+)  # fmt: skip
+def test_ut09_113_keyless_column_names(
+    monkeypatch: pytest.MonkeyPatch, name: str, *, kept: bool
+) -> None:
+    """UT09-113 (review I1) without a key only identifier-shaped names without 5-digit runs."""
+
+    def no_key() -> object:
+        msg = "redact.hmac_key is not set"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(redact, "get_redactor", no_key)
+    assert policy.sample_rows([{name: True}]) == [{name: "True"} if kept else {}]
+
+
+def test_ut09_113_non_json_nested_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT09-113 (review M3) a non-JSON nested value is stringified, then redacted."""
+    seen = _double(monkeypatch)
+    assert policy.sample_rows([{"meta": {"k": {1, 2}}}]) == [{"meta": "redacted #1"}]
+    assert seen == ['{"k": "{1, 2}"}']
 
 
 def test_ut09_113_deep_nesting_cut(monkeypatch: pytest.MonkeyPatch) -> None:
