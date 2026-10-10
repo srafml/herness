@@ -10,11 +10,13 @@ import pytest
 
 from tools.synth import jira_links
 from tools.synth.catalog import Catalog, build_catalog
+from tools.synth.catalog_plan import planner_id
 from tools.synth.jira import IssueBatch, gen_issues
 from tools.synth.jira_changelog import CATEGORIES, DONE, TODO
 from tools.synth.param_groups import JiraParams, PiiParams
 from tools.synth.params import SynthParams, SynthUsageError, load_params
 from tools.synth.pii import build_name_list
+from tools.synth.plants_delivery import planned_counts_t2c
 from tools.synth.shards import IncidentTimeIndex, Shard
 from tools.synth.text import TemplateBank
 
@@ -277,6 +279,27 @@ def test_ut11_11_mentions_without_index_use_planned_ranges(
     assert len(found) > 250
     assert all(1 <= s <= _planned(cat, "incident") for k, s in found if k == "INC")
     assert all(1 <= s <= _planned(cat, "change_request") for k, s in found if k == "CHG")
+
+
+def test_ut11_11_mentions_never_name_a_t2c_incident(
+    cat: Catalog, params: SynthParams, bank: TemplateBank, names: tuple[tuple[str, str], ...]
+) -> None:
+    """UT11-11 a background issue never mentions a T2c cluster incident (design §5.1.5: T2c
+    has no linked work item; T04-22b): the picked T2c ticket is dropped, other mentions stay."""
+    pid = planner_id(planned_counts_t2c)
+    t2c = {
+        seq
+        for (planner, key), (first, n) in cat.plant_seq.items()
+        if planner == pid and key[:2] == ("servicenow", "incident")
+        for seq in range(first, first + n)
+    }
+    assert t2c
+    out = gen_issues(
+        cat, _mention_params(params), _shard(600), np.random.default_rng(9), bank, names
+    )
+    found = [s for i in out.records for k, s in _tickets(i) if k == "INC"]
+    assert len(found) > 200
+    assert not t2c.intersection(found)
 
 
 def test_ut11_11_mention_rate_default(batch: IssueBatch) -> None:

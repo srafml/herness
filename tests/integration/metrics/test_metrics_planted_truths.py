@@ -16,6 +16,10 @@ epic) at `--start` + 30 days (tools/synth/plants_delivery.py), about three years
 `--end` at `small`/`full`, outside the shipped 365-day funding window; with it the epic has no
 in-window link and ranks 4 (its cluster becomes a `cluster_fix`). Until CO-T04-22a is
 resolved the tests set `scoring.funding.window_days` to 1095 (the allowed maximum).
+
+The `full` variant passes since generator 2.1.0 (T04-22b, CO-T04-22b): T1 owns no service,
+so its scorecard holds only what it resolves, and T2c books max(10 per 30 days, 0.3 % of
+the preset incidents), so its pain keeps pace with the 50x larger background at `full`.
 """
 
 from __future__ import annotations
@@ -90,13 +94,6 @@ def test_it04_08_planted_truths_small(tmp_path: Path) -> None:
     _run(root, tmp_path / "work")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="CO-T04-22b (seed 42 full, 2026-10-09): T2 epic funding rank 1 and T1 top lever"
-    " mttr_hours hold, but T1 team is org rank 3 (composite 1.624 vs 1.831 for a crit_lo"
-    " team scored on 6 of 10 metrics) and the T2c cluster_fix is funding rank 60 of 427"
-    " (needs <= 10)",
-)
 @pytest.mark.timeout(7200)
 def test_it04_08_planted_truths_full(tmp_path: Path) -> None:
     """IT04-08 nightly `full` variant of the design 04 §10.3 planted truths (reuses the root

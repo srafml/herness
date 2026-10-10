@@ -18,6 +18,7 @@ from tools.synth.plants_delivery import (
     cluster_slots,
     e2_links,
     epic_month,
+    is_t2c_incident,
     planned_counts_t2,
     planned_counts_t2c,
     planned_counts_t6,
@@ -150,6 +151,23 @@ def test_ut11_14_t2c_size_scales_with_preset_incidents(
     counts = planned_counts_t2c(cat, full_span)
     assert sum(counts.values()) == total
     assert {k[:2] for k in counts} == {("servicenow", "incident")}
+
+
+def test_ut11_14_is_t2c_incident_matches_the_t2c_numbers(cat: Catalog) -> None:
+    """UT11-14 `is_t2c_incident` is true exactly for the INC numbers of the T2c plant range
+    (T04-22b); T2 numbers, background numbers and CHG numbers are false."""
+    for month in _MONTHS:
+        key = ("servicenow", "incident", month)
+        first, n = plant_range(cat, planned_counts_t2c, key)
+        t2_first, t2_n = plant_range(cat, planned_counts_t2, key)
+        assert n
+        assert all(is_t2c_incident(cat, f"INC{s:07d}") for s in range(first, first + n))
+        assert not is_t2c_incident(cat, f"INC{first + n:07d}")
+        assert not any(
+            is_t2c_incident(cat, f"INC{s:07d}") for s in range(t2_first, t2_first + t2_n)
+        )
+        assert not is_t2c_incident(cat, f"INC{cat.seq_start[key]:07d}")
+        assert not is_t2c_incident(cat, f"CHG{first:07d}")
 
 
 def test_ut11_14_t2_cluster_size_priorities_impact_and_family(

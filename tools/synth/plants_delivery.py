@@ -14,7 +14,7 @@ from typing import Final
 
 import numpy as np
 
-from tools.synth.catalog_plan import plant_range, span_months, split_counts
+from tools.synth.catalog_plan import planner_id, plant_range, span_months, split_counts
 from tools.synth.catalog_rows import Catalog, MonthKey, Planner
 from tools.synth.jira_changelog import IN_PROGRESS, TODO
 from tools.synth.param_groups import TextParams
@@ -104,6 +104,19 @@ def planned_counts_t2c(cat: Catalog, params: SynthParams) -> dict[MonthKey, int]
     """max(round(10 x span days / 30), round(0.003 x preset.incidents)) S2c cluster
     incidents split across months by days."""
     return _incident_counts(params, _t2c_total(params))
+
+
+def is_t2c_incident(cat: Catalog, ticket: str) -> bool:
+    """Whether `ticket` numbers a T2c cluster incident; background Jira issues never mention
+    one, since T2c has no linked work item (design §5.1.5; T04-22b)."""
+    if not ticket.startswith("INC"):
+        return False
+    seq, pid = int(ticket[3:]), planner_id(planned_counts_t2c)
+    return any(
+        first <= seq < first + n
+        for (planner, key), (first, n) in cat.plant_seq.items()
+        if planner == pid and key[:2] == _INCIDENT
+    )
 
 
 def _priority(k: int, p2_percent: int) -> int:
@@ -270,6 +283,7 @@ __all__ = [
     "cluster_slots",
     "e2_links",
     "epic_month",
+    "is_t2c_incident",
     "planned_counts_t2",
     "planned_counts_t2c",
     "planned_counts_t6",

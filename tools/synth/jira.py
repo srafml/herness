@@ -22,6 +22,7 @@ from tools.synth.jira_changelog import CATEGORIES, STATUS_IDS, jira_ts
 from tools.synth.param_groups import JiraParams
 from tools.synth.params import SynthParams, SynthUsageError
 from tools.synth.pii import inject_pii
+from tools.synth.plants_delivery import is_t2c_incident
 from tools.synth.servicenow_common import arrival_times, span_end
 from tools.synth.shards import IncidentTimeIndex, Shard
 from tools.synth.text import TemplateBank, render_jira_text
@@ -189,7 +190,10 @@ def _mention(ctx: _Ctx, rng: np.random.Generator, d: _Draft, text: str) -> tuple
     ticket = jira_links.pick_ticket(ctx.cat, rng, d.service.sys_id, d.created, ctx.index)
     if ticket is None:
         return text, []
-    if rng.random() < _EVEN:
+    in_text = rng.random() < _EVEN
+    if is_t2c_incident(ctx.cat, ticket):  # T2c has no linked work item (design §5.1.5)
+        return text, []
+    if in_text:
         return f"{text}\nSee {ticket} for the operational history.", []
     return text, [jira_links.remote_link(f"{d.id}1", ticket)]
 
