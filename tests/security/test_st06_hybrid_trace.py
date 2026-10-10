@@ -10,15 +10,29 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from tests.integration.harness import _swarm_run_env as e
 from tests.integration.harness._swarm_run_env import Drv
+from tests.support import _f06_hybrid as fh
 from tests.support import _f06_swarm as f6
+from tests.support import _f08_llm as fl
+from tests.support.egress_harness import egress_lines
+from tests.support.fake_keyring import MemoryKeyring
+from tests.unit.harness._blackboard_env import PLANTED_NAME
 
+from herness.core import config as c
+from herness.core import egress
+from herness.core import redact as r
+from herness.core.types import ReportDraft
+from herness.harness.llm.anthropic_client import AnthropicClient
+from herness.harness.llm.registry import LLMRegistry
 from herness.harness.swarm import _run_env
+from herness.harness.swarm.run import Swarm
 from herness.store.ops import query_findings, select_tasks
 
 pytestmark = pytest.mark.integration
@@ -31,6 +45,170 @@ __all__ = ["drv", "test_redactor"]
 def _trace(drv: Drv, run_id: str) -> list[dict[str, Any]]:
     path = Path(drv.hcfg.paths.data) / "traces" / f"{run_id}.jsonl"
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+# --- ST06-06 -----------------------------------------------------------------------------------
+
+API: Final = "https://api.anthropic.com/v1/messages"
+ENTITY_ID: Final = re.compile(r"(?<![A-Za-z0-9_])t[12](?![A-Za-z0-9_])")
+BUILD_ID_GAP = (
+    "product gap (T06-26): every off-network request carries the spec 05 role context line"
+    " 'build: <build_id>' (herness/harness/roles/base.py); a build id (8 digits, 6 digits,"
+    " 6 letters, e.g. 20260925-101500-ABCDEF) has 14 digits and matches the PHONE pattern of"
+    " herness/core/redact_patterns.py, so the egress guard re-scan refuses every hybrid Writer"
+    " and final-Skeptic call (pii_detected, PHONE) and hybrid always falls back locally; with"
+    " that fixed, the Writer still stops at its first paid call (stop_reason task_budget):"
+    " routing.role_budget('writer') leaves TaskBudget.max_cost_usd at 0 and the spec 05 loop"
+    " stops once cost_usd > max_cost_usd"
+)
+BANNER_GAP = (
+    "product gap (T06-26): the Writer sets banner hybrid_fallback only for the cost-cap route"
+    " fallback (route.fallback_local, writer.py); a spec 08 chain fallback after EgressBlocked"
+    " inside run_agent is not reported to the Writer, so the draft has no banner (impl 06"
+    " §6 table 'Hybrid egress refused', design T13)"
+)
+
+
+@dataclass
+class Hybrid:
+    hcfg: c.HernessConfig
+    llms: LLMRegistry
+    guard: fh.SpyGuard
+    wire: fh.WriterRouter
+    opus: AnthropicClient
+
+
+@pytest.fixture
+def hybrid(
+    drv: Drv,
+    test_redactor: r.Redactor,
+    fake_keyring: MemoryKeyring,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Hybrid:
+    """Profile `hybrid` with the chat approval flag (D5 substitute, `fh.hybrid_config`), the
+    real guard spied on (its re-scan directory also holds `fh.GUARD_ONLY_NAME`), the real
+    Anthropic adapter for `claude-opus` (the hybrid Writer) on the scripted Anthropic wire,
+    and ticket text planted in every evidence result sample."""
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    hcfg = fh.hybrid_config(tmp_path / "hybrid", Path(drv.hcfg.paths.data))
+    monkeypatch.setattr(r._State, "redactor", test_redactor)  # the config load dropped it
+    guard = fh.SpyGuard(hcfg, fh.guard_redactor(PLANTED_NAME))
+    monkeypatch.setattr(egress, "get_guard", lambda: guard)
+    fake_keyring.store[("herness", "anthropic.api_key")] = "sk-ant-" + "st0606" + "unused"
+    llms = LLMRegistry(hcfg.models, profile="hybrid", egress_enabled=True)
+    wire = fh.writer_router()
+    wire.router.install(monkeypatch)
+    fh.plant_sample_text()
+    return Hybrid(hcfg, llms, guard, wire, AnthropicClient(llms.config("claude-opus")))
+
+
+def _hybrid_run(drv: Drv, hy: Hybrid, monkeypatch: pytest.MonkeyPatch, name: str) -> ReportDraft:
+    """A standard hybrid funding run (every role local and scripted except the Writer) whose
+    Skeptics write `name` into every check note."""
+    scripts = f6.TaskScripts(skeptic_note=f"Confirmed with {name}.")
+    f6.use_real_agents(drv, monkeypatch, scripts, llms=hy.llms, real={"claude-opus": hy.opus})
+    deps = replace(drv.deps, hcfg=hy.hcfg)
+    swarm = Swarm(hy.hcfg.pipelines, hy.llms, drv.memory, deps=deps)  # type: ignore[arg-type]
+    drv.swarms.append(swarm)
+    res = asyncio.run(swarm.start(drv.request(depth="standard")))
+    assert res.status == "done"
+    assert res.draft_path is not None
+    return ReportDraft.model_validate_json(Path(res.draft_path).read_bytes())
+
+
+def _writer_calls(hy: Hybrid) -> list[fh.Seen]:
+    """The Writer's `POST /v1/messages` requests the guard decided on (allowed or refused)."""
+    return [s for s in hy.guard.seen if s.url == API]
+
+
+def _refusals(hy: Hybrid) -> list[dict[str, Any]]:
+    """The guard's `blocked` egress log lines (reason and per-type scan hit counts)."""
+    return [x for x in egress_lines(hy.hcfg.paths.logs) if x.get("decision") == "blocked"]
+
+
+def test_st06_06_hybrid_pack_has_no_sample_or_ticket_text_and_pseudonymized_entities(
+    drv: Drv, hybrid: Hybrid, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST06-06 (T13) in a hybrid run only the Writer goes off-network (purpose
+    `reasoning_final`); every request body the real guard decided on holds the evidence pack:
+    the run's findings with entity tokens (`team_001`) and no entity id or catalog name, no
+    `result_sample`, none of the ticket text planted in every evidence sample, and the
+    personal name planted in the Skeptic notes only as its redaction token, so the guard found
+    no PERSON in it. The draft is restored to real ids."""
+    draft = _hybrid_run(drv, hybrid, monkeypatch, PLANTED_NAME)
+    sent = _writer_calls(hybrid)
+    assert sent
+    assert {s.purpose for s in sent} == {"reasoning_final"}
+    for seen in sent:
+        text = seen.text()
+        assert "Team team_001 had [[n1]] incidents" in text  # pseudonymized finding claims
+        assert "Team team_002 had [[n1]] incidents" in text
+        assert "result_sample" not in text
+        assert fh.TICKET_TEXT not in text
+        assert "INC-4711" not in text
+        assert ENTITY_ID.search(text) is None
+        assert "Team One" not in text
+        assert "Team Two" not in text
+        assert PLANTED_NAME not in text
+        assert "Confirmed with [PERSON_" in text  # the note went out redacted
+    assert all("PERSON" not in line["scan_hits"] for line in _refusals(hybrid))
+    assert draft.recommendations[0].target_id == "c1"
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=BUILD_ID_GAP)
+def test_st06_06_clean_hybrid_writer_call_is_allowed_and_sent(
+    drv: Drv, hybrid: Hybrid, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST06-06 (T13) without personal data in the pack the Writer's off-network calls pass
+    the guard and reach the (scripted) Anthropic endpoint; no fallback banner."""
+    draft = _hybrid_run(drv, hybrid, monkeypatch, PLANTED_NAME)
+    sent = _writer_calls(hybrid)
+    assert [s.blocked for s in sent] == [None] * len(sent)
+    assert len(hybrid.wire.router.requests) == len(sent)
+    assert "hybrid_fallback" not in draft.banners
+
+
+def _blocked_run(drv: Drv, hy: Hybrid, monkeypatch: pytest.MonkeyPatch) -> ReportDraft:
+    """The hybrid run with `fh.GUARD_ONLY_NAME` planted in every Skeptic check note: a name
+    the swarm's redaction misses and only the guard's re-scan knows, so it reaches the guard."""
+    draft = _hybrid_run(drv, hy, monkeypatch, fh.GUARD_ONLY_NAME)
+    blocked = _writer_calls(hy)
+    assert blocked
+    assert {s.blocked for s in blocked} == {"pii_detected"}
+    assert all(fh.GUARD_ONLY_NAME in s.text() for s in blocked)  # what the guard saw
+    refusals = _refusals(hy)  # the Writer calls and their token counts
+    assert len([x for x in refusals if x["path"] == "/v1/messages"]) == len(blocked)
+    assert all("PERSON" in line["scan_hits"] for line in refusals)
+    assert hy.wire.router.requests == []  # nothing left the process
+    return draft
+
+
+def test_st06_06_planted_pii_is_blocked_and_the_writer_falls_back_locally(
+    drv: Drv, hybrid: Hybrid, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST06-06 (T13) personal data the swarm's own redaction misses reaches the Writer's
+    evidence pack; the real guard's re-scan refuses every off-network Writer call
+    (`EgressBlocked`, reason `pii_detected`, a PERSON hit) before anything is sent; spec 08
+    falls back to the local Writer (`fallback` event claude-opus to local-30b, reason
+    `egress_blocked`) and the run is done with a full draft."""
+    draft = _blocked_run(drv, hybrid, monkeypatch)
+    fallbacks = [
+        (ev["from_profile"], ev["to_profile"], ev["reason"]) for ev in fl.events("fallback")
+    ]
+    assert ("claude-opus", "local-30b", "egress_blocked") in fallbacks
+    assert draft.mode == "full"
+    assert [rec.target_id for rec in draft.recommendations] == ["c1"]
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=BANNER_GAP)
+def test_st06_06_planted_pii_fallback_draft_has_hybrid_fallback_banner(
+    drv: Drv, hybrid: Hybrid, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST06-06 (T13) after the egress refusal and local fallback the draft carries banner
+    `hybrid_fallback`."""
+    draft = _blocked_run(drv, hybrid, monkeypatch)
+    assert "hybrid_fallback" in draft.banners
 
 
 # --- ST06-09 -----------------------------------------------------------------------------------

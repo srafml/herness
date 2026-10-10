@@ -220,12 +220,17 @@ class TaskClient(FakeLLMClient):
 
 
 def use_real_agents(
-    drv: e.Drv, mp: pytest.MonkeyPatch, scripts: TaskScripts | None = None, *, llms: Any = None
+    drv: e.Drv,
+    mp: pytest.MonkeyPatch,
+    scripts: TaskScripts | None = None,
+    *,
+    llms: Any = None,
+    real: Mapping[str, object] | None = None,
 ) -> TaskScripts:
     """Run every role through the real spec 05 loop on `scripts` (see the module doc).
 
-    `llms` is the registry whose `client` is routed (the `drv` registry by default); keys
-    already answered by a real client (`clients` of a hybrid test) are left alone.
+    `llms` is the registry whose `client` is routed (the `drv` registry by default); the
+    client keys in `real` keep the given (real) client.
     """
     scripts = scripts or TaskScripts()
     for module in (planner, scheduler, challenge, writer):
@@ -236,9 +241,9 @@ def use_real_agents(
     for name in _MEMORY_TOOLS:  # spec 07 tools: never called by the scripts
         registry_.register(SyncTool(name), owner="07")
     registry = drv.llms if llms is None else llms
-    clients: dict[str, TaskClient] = {}
+    clients: dict[str, object] = dict(real or {})
 
-    def client(name: str) -> TaskClient:
+    def client(name: str) -> object:
         if name not in clients:
             clients[name] = TaskClient(scripts, name)
         return clients[name]
