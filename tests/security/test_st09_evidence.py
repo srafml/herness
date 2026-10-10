@@ -36,7 +36,11 @@ ALWAYS_DROPPED = ("title", "summary", "description", "notes", "short_description
 
 def _sample() -> list[dict[str, object]]:
     row: dict[str, object] = dict.fromkeys(ALWAYS_DROPPED, RAW_TITLE)
-    return [{**SAFE, **row, "comment": f"call {PII}"}, {"n": 4, "comment": "second"}]
+    return [
+        {**SAFE, **row, "comment": f"call {PII}"},
+        {"n": 4, "comment": "second"},
+        {"n": 5, "comment": None},
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -94,7 +98,11 @@ def test_st09_30_raw_title_never_rendered_with_key(monkeypatch: pytest.MonkeyPat
     assert "PAY-1" not in text
     frame = at.dataframe[0].value
     assert list(frame.columns) == [*SAFE, "comment"]
-    assert list(frame["comment"]) == ["redacted #1", "[redacted]"]  # None from redaction
+    assert list(frame["comment"]) == [
+        "redacted #1",
+        "[redacted]",
+        "",
+    ]  # None from redaction; empty cell
     assert seen == [f"call {PII}", "second"]  # dropped and typed columns never redacted
     assert frame.iloc[0]["run"] == RUN
     assert frame.iloc[0]["ok"] == "True"
@@ -117,4 +125,4 @@ def test_st09_30_raw_title_never_rendered_without_key(monkeypatch: pytest.Monkey
     assert "second" not in text
     frame = at.dataframe[0].value
     assert list(frame.columns) == list(SAFE)
-    assert list(frame["n"]) == ["3", "4"]
+    assert list(frame["n"]) == ["3", "4", "5"]
