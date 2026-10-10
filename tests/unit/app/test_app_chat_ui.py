@@ -10,10 +10,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import pytest
+from streamlit.runtime.scriptrunner_utils.exceptions import StopException
 from streamlit.testing.v1 import AppTest
 from structlog.testing import capture_logs
 from tests.support.app_env import preserved_main
@@ -392,3 +393,23 @@ def test_ut09_97_cache_clear_failure_never_masks_the_turn(monkeypatch: pytest.Mo
     events = [e["event"] for e in logs]
     assert "app.chat.cache_clear_failed" in events
     assert "app.chat.turn_completed" in events
+
+
+def test_ut09_97_interrupted_turn_is_not_logged_as_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT09-97 a stop cutting the stream short: ``turn_failed``, result ``error``, cleanup runs."""
+    store = Store()
+    chat = FakeChatService([[TokenEvent(text="part")]], raises=cast("Any", StopException()))
+    store.install(monkeypatch)
+    with capture_logs() as logs:
+        at = AppTest.from_function(turn_script, args=(_ctx(chat), SES, "q", False)).run()
+    turns = [e for e in logs if str(e["event"]).startswith("app.chat.turn_")]
+    assert [(e["event"], e.get("error_type")) for e in turns] == [
+        ("app.chat.turn_failed", "StopException")
+    ]
+    assert store.metrics[-1] == (
+        "herness_app_chat_turns_total",
+        {"mode": "live", "result": "error"},
+    )
+    assert at.session_state["chat_inflight"] == set()
+    assert store.cleared == 1
+    assert at.session_state["chat_outcome"][SES].error is None  # a stop is no answer failure

@@ -108,6 +108,20 @@ def test_st09_14_oversized_correction_rejected(env: SimpleNamespace) -> None:
     assert env.services.memory.calls == []
 
 
+def test_st09_14_oversized_feedback_note_rejected(env: SimpleNamespace) -> None:
+    """ST09-14 a 1001-char feedback note: rejected; the answer row keeps no feedback."""
+    env.services.chat.scripts = [all_kinds()]
+    at, session_id = open_chat()
+    ask(at, "question")
+    (reply,) = env.services.chat.written
+    at.feedback(key=f"fb-thumbs-{reply}").set_value(1)
+    at.text_input(key=f"fb-note-{reply}").set_value("n" * 1001)
+    click(at, "Send feedback")
+    assert "Note must be at most 1000 characters." in " ".join(texts(at, "error"))
+    row = next(r for r in list_chat_messages(session_id) if r["message_id"] == reply)
+    assert (row["feedback"], row["feedback_note"]) == (None, None)
+
+
 def test_st09_14_double_submit_second_refused(env: SimpleNamespace) -> None:
     """ST09-14 a second submit while the turn is in flight: refused, no second user row.
 

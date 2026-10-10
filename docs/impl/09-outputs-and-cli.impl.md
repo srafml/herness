@@ -2045,6 +2045,8 @@ Returns `TurnState`.
 | Security notes | TH09-02, TH09-12, TH09-14, TH09-21. |
 | Tests | UT09-97, IT09-12, IT09-13, FT09-04, BT09-04 |
 
+Spec note (T09-19, controller ruling 2): the step 8 rerun would make a step 7 Retry button unclickable, so `run_turn` shows the error box without a button and keeps the turn's `TurnState` in `st.session_state["chat_outcome"][session_id]`. After the rerun, the Chat page (U09-83) shows that kept outcome and renders the single Retry (key `retry-<session_id>`). The page also offers it when a turn fails after its user row is stored but before streaming starts, and when the last assistant row is `failed`.
+
 ### 3.10 Dashboard pages (`app/Home.py`, `app/pages/`)
 
 Every page script is two statements: define `body(ctx: PageContext) -> None` and call `page(<title>, body, needs_warehouse=<flag>)`. Each visual section of a body runs inside `block(<name>)`. Tables use `st.dataframe` (cells are plain text, never Markdown). Numbers from score tables are shown in dataframes with a per-row evidence expander (row granularity, open question Q2). Every write goes through a U09-34 – U09-41 action followed by `after_write()`; buttons for actions above the actor's role are not rendered, and the handlers check again. The field table below applies to all page units except where the page table says otherwise: Kind = Streamlit page script; Preconditions = run through `page()`; Side effects = reads plus the listed actions; Errors = shown by `block`/`page`; Concurrency = one script thread per session; Complexity = queries capped per U09-63.

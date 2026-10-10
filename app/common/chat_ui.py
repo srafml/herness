@@ -232,10 +232,6 @@ class _Turn:
     started: float = 0.0
 
 
-def _tool_line(name: str, query_id: str | None, ok: bool) -> str:
-    return f"{name[:_NAME_MAX]} · {query_id or '-'} · {'ok' if ok else 'failed'}"
-
-
 def _events(turn: _Turn, question: str, status: object) -> Iterator[str]:
     """Steps 5 and 6: reduce every event; escaped tokens out, tool lines into the status box."""
     mode = cast("ChatMode", turn.mode)
@@ -247,7 +243,8 @@ def _events(turn: _Turn, question: str, status: object) -> Iterator[str]:
             turn.state = apply_event(turn.state, event)
             if accepted and isinstance(event, ToolEvent):
                 with cast("contextlib.AbstractContextManager[object]", status):
-                    st.text(_tool_line(event.name, event.query_id, event.ok))
+                    st.text(f"{event.name[:_NAME_MAX]} · {event.query_id or '-'} · "
+                            f"{'ok' if event.ok else 'failed'}")  # fmt: skip
             elif accepted and isinstance(event, TokenEvent) and event.text:
                 if first:
                     first = False
@@ -308,12 +305,14 @@ def run_turn(ctx: PageContext, session_id: str, text: str | None) -> TurnState:
     inflight.add(session_id)
     turn = _Turn(ctx, session_id, started=clock.monotonic())
     failed: str | None = None
-    streamed = False
+    question: str | None = None
     try:
-        _stream(turn, _question(ctx, session_id, text))
-        streamed = True
-    except Exception as exc:
+        question = _question(ctx, session_id, text)
+        _stream(turn, question)
+    except BaseException as exc:  # also a rerun or stop cutting the turn short: never "ok"
         failed = type(exc).__name__
+        if isinstance(exc, Exception) and question is not None and turn.state.error is None:
+            turn.state = replace(turn.state, error=(failed, *user_message(exc)), done=True)  # Retry
         raise
     finally:
         inflight.discard(session_id)
@@ -323,6 +322,5 @@ def run_turn(ctx: PageContext, session_id: str, text: str | None) -> TurnState:
         except Exception as exc:  # noqa: BLE001 - never mask the turn's own outcome
             _log.warning("app.chat.cache_clear_failed", error_type=type(exc).__name__)
         _log_turn(turn, failed)
-    if streamed:
-        st.rerun()
-    return turn.state
+    st.rerun()  # reached only after a streamed turn; returns outside a script run
+    return turn.state  # type: ignore[unreachable]  # st.rerun is typed NoReturn

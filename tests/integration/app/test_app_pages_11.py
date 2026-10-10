@@ -33,6 +33,7 @@ from tests.support.ops_store import OpsStoreHandle
 from app.common import chat_ui
 from herness.core.resilience import ProcessState
 from herness.core.types import ChatMode
+from herness.reports import actions
 from herness.store.ops.chat import list_chat_messages, update_chat_message
 
 pytestmark = pytest.mark.integration
@@ -153,13 +154,24 @@ def test_it09_12_correction_calls_propose_with_session_and_source(env: SimpleNam
 def test_it09_12_wrong_owner_session_selection_not_found(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """IT09-12 a selected session is re-checked: another user's id answers "not found"."""
+    """IT09-12 another user's session id in the browser state: "not found", no data (TH09-10)."""
+    env.services.chat.scripts = [all_kinds()]
     at, session_id = open_chat()
+    ask(at, QUESTION)
     install_session(monkeypatch, env.services, user="mallory")
+    audits: list[dict[str, Any]] = []
+    monkeypatch.setattr(actions, "audit", lambda event, actor, **f: audits.append(f))
     at.session_state["chat_session_id"] = session_id
     check(at.run())
-    assert session_id not in "\n".join(texts(at, "text", "markdown", "caption"))
+    assert any(f"chat session {session_id} not found" in e for e in texts(at, "error"))
+    assert [a["result"] for a in audits] == ["denied"]  # require_session_owner ran and refused
     assert not at.chat_message
+    shown = "\n".join(texts(at, "text", "markdown", "caption", "info", "warning"))
+    assert "incidents" not in shown
+    assert not at.sidebar.selectbox
+    check(at.run())  # the refused id was dropped: the page works again for Mallory
+    assert not at.error
+    assert "chat_session_id" not in at.session_state
 
 
 def test_it09_13_fragment_reload_shows_answer(

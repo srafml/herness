@@ -8,7 +8,7 @@ private: a selected session passes ``require_session_owner`` (TH09-10).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Final, cast
 
 import streamlit as st
@@ -55,12 +55,13 @@ def _sessions(ctx: PageContext) -> str | None:
         if st.button("New chat", key="chat-new"):
             st.session_state[SESSION_KEY] = actions.start_session(ctx.actor, now=ctx.now)
             after_write()
-        rows = _list_sessions(ctx.actor.user_ref)
-        if not rows:
+        labels = {row["session_id"]: _label(row) for row in _list_sessions(ctx.actor.user_ref)}
+        ids, current = list(labels), st.session_state.get(SESSION_KEY)
+        if current is not None and current not in labels:  # browser-held id: verify, then drop
+            del st.session_state[SESSION_KEY]
+            actions.require_session_owner(ctx.actor, str(current))  # another user's: not found
+        if not ids:
             return None
-        labels = {row["session_id"]: _label(row) for row in rows}
-        ids = list(labels)
-        current = st.session_state.get(SESSION_KEY)
         chosen = st.selectbox("Session", ids, index=ids.index(current) if current in ids else 0,
                               format_func=labels.__getitem__)  # fmt: skip
     actions.require_session_owner(ctx.actor, chosen)
@@ -175,6 +176,14 @@ def _retry(ctx: PageContext, session_id: str, rows: Sequence[ChatMessageRow]) ->
         chat_ui.run_turn(ctx, session_id, None)
 
 
+def _act(action: Callable[..., object], *args: object) -> None:
+    """Run a turn or Retry; a rejected one shows Error / Fix lines and the page goes on."""
+    try:
+        action(*args)
+    except HernessError as exc:
+        user_error(exc)
+
+
 def body(ctx: PageContext) -> None:
     """Sessions, messages, the last turn's outcome, Retry and the question input."""
     st.title("Chat")
@@ -193,12 +202,9 @@ def body(ctx: PageContext) -> None:
     text = st.chat_input("Ask a question about the data", max_chars=max_chars, disabled=busy)
     if session_id is None:
         return
-    try:
-        _retry(ctx, session_id, rows)
-        if text:
-            chat_ui.run_turn(ctx, session_id, text)
-    except HernessError as exc:
-        user_error(exc)
+    if text:
+        _act(chat_ui.run_turn, ctx, session_id, text)
+    _act(_retry, ctx, session_id, rows)  # after the turn: a failed turn offers Retry at once
 
 
 page("Chat", body, needs_warehouse=False)
