@@ -4,6 +4,12 @@ Every test injects its fault through a JSON plan loaded by `fault_point` under
 `HERNESS_ENV=test` (`fault_env`, R-40); no production shim is added. Retry and probe waits
 run on no-op sleeps (`reset_process_state`) or a fake clock; time bounds are asserted on the
 fake clock or on lease arithmetic, never by sleeping.
+
+F1-F5 live here; F6-F12 live in the private siblings `tests.support._f08_cases_jobs` and
+`tests.support._f08_cases_gpu` and are collected through this module (ENG 400-line limit).
+FT08-08..FT08-10 carry the spec marker `gpu (target PC)` only in name: they run against
+`fake_gpu` on CPU in the normal fault run (open-questions (b)9/(b)15 block real containers),
+so the `gpu` marker, which CI deselects, is not applied.
 """
 
 from __future__ import annotations
@@ -77,8 +83,8 @@ def test_ft08_01_llm_dies_mid_review_breaker_opens_fallback_run_done(
     retried, the `model:local-30b` breaker opens, the remaining analyst calls fall back to
     `local-small-cpu`, the run ends `done` and no `done` task has `attempts > 1`.
 
-    Driver level with the T06-22 stub pipeline (IT06-01/02 shape): a real review cannot pass
-    the record step until T06-22b (carry-over T06-26)."""
+    Driver level with the T06-22 stub pipeline, as the driver's own run tests do: a real
+    review cannot pass the record step until T06-22b (carry-over T06-26)."""
     server = FakeLLMServer(fl.book(fl.text_turns(20)), service_name=None)
     server.start()
     monkeypatch.setenv("HERNESS_STUB_SERVICES", json.dumps({"vllm-reasoning": server.base_url}))

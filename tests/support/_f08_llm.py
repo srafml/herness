@@ -93,18 +93,41 @@ class Info:
 
 @dataclass
 class Registry:
-    """`ChainRegistry` whose `analyst` chain is `CHAIN` at every depth."""
+    """`ChainRegistry` whose `analyst` chain is `CHAIN` at every depth, unless `chains`
+    names the chain of a `(model_role, depth)`."""
 
     infos: dict[str, Info] = field(
         default_factory=lambda: {PRIMARY: Info("reasoning"), FALLBACK: Info(None)}
     )
+    chains: dict[tuple[str, str], list[str]] | None = None
 
     def chain_for(self, model_role: str, depth: str) -> list[str]:
-        del depth
+        if self.chains is not None:
+            return list(self.chains.get((model_role, depth), []))
         return list(CHAIN) if model_role == "analyst" else []
 
     def config(self, name: str) -> Info:
         return self.infos[name]
+
+
+class LoopRegistry:
+    """Chain and client registry of the loop's `HarnessHooks`: the `analyst` chain is the
+    one in-process client `fake` (a CPU client: `llm_local` policy)."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def chain_for(self, model_role: str, depth: str) -> list[str]:
+        del depth
+        return ["fake"] if model_role == "analyst" else []
+
+    def config(self, name: str) -> Info:
+        del name
+        return Info(None, model="small-cpu-model")
+
+    def client(self, name: str) -> Any:
+        del name
+        return self._client
 
 
 class Gpu:

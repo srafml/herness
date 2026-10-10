@@ -59,8 +59,8 @@ def test_ft08_06_kill_after_finding_write_then_resume_no_duplicates(
     the run is `done`, its finding count equals a clean run's, no finding is posted twice and
     no evidence row or `evidence_use` row is duplicated.
 
-    Driver level with the T06-22 stub pipeline (IT06-01/02 shape): a real review cannot pass
-    the record step until T06-22b (carry-over T06-26)."""
+    Driver level with the T06-22 stub pipeline, as the driver's own run tests do: a real
+    review cannot pass the record step until T06-22b (carry-over T06-26)."""
     clean = asyncio.run(drv.swarm().start(drv.request(depth="standard")))
     assert clean.status == "done"
     clean_findings = query_findings(clean.run_id, limit=500)
