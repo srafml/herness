@@ -12,8 +12,8 @@ detectors leave counts, small ints and decimals unchanged. A nested dict/list ce
 redacted as JSON text after its always-dropped keys are removed at any depth. Cells are
 plain strings cut to 200 chars; templates escape them (TH09-23). Column names render as
 headers, so a name is kept only when ``redact_text`` returns it unchanged (key loaded) or,
-without a key, when it is identifier-shaped (``[A-Za-z_][A-Za-z0-9_ .-]{0,63}``) with no run
-of five or more digits; any other column is dropped (T09-15d review I1).
+without a key, when it is identifier-shaped (``[A-Za-z_][A-Za-z0-9_ .-]{0,63}``) with at most
+four digits in total; any other column is dropped (T09-15d review I1).
 
 Extends T09-15c's ``app/common/_widgets_evidence.py`` (parity test UT09-113) with the T09-15d
 numeric and column-name rules; that widget must import this module (follow-up, batch 48).
@@ -52,7 +52,7 @@ _VERBATIM_RE: Final = re.compile(
     r"|\d{8}-\d{6}-[0-9A-HJKMNP-TV-Z]{6}",
     re.ASCII,
 )
-_NAME_RE: Final = re.compile(r"(?!.*\d{5})[A-Za-z_][A-Za-z0-9_ .-]{0,63}", re.ASCII)
+_NAME_RE: Final = re.compile(r"(?!(?:\D*\d){5})[A-Za-z_][A-Za-z0-9_ .-]{0,63}", re.ASCII)
 _MAX_DEPTH: Final = 32
 
 

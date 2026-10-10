@@ -157,12 +157,13 @@ def test_ut09_113_real_redactor_column_names(monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.parametrize(
     ("name", "kept"),
     [("candidate_id", True), ("effort cost.usd-2", True), (PII, False), (str(PHONE), False),
-     ("acct 12345", False), ("x" * 65, False), ("1st", False)],
+     ("acct 12345", False), ("x" * 65, False), ("1st", False), ("v1234", True),
+     ("tel 202 555 0123", False), ("x4111 1111 1111 1111", False)],  # post-ruling (round 2)
 )  # fmt: skip
 def test_ut09_113_keyless_column_names(
     monkeypatch: pytest.MonkeyPatch, name: str, *, kept: bool
 ) -> None:
-    """UT09-113 (review I1) without a key only identifier-shaped names without 5-digit runs."""
+    """UT09-113 (review I1) without a key only identifier-shaped names with at most 4 digits."""
 
     def no_key() -> object:
         msg = "redact.hmac_key is not set"
