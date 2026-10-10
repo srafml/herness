@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from pydantic import BaseModel, ConfigDict
 
 from herness.core.ids import new_ulid
+from herness.core.logging import get_logger
 from herness.core.secrets import scrub_secrets
 from herness.core.types import (
     ChatAnswer,
@@ -46,6 +47,8 @@ ERROR_MESSAGE_MAX: Final = 500
 FINDINGS_LIMIT: Final = 500  # the store's per-call maximum (U06-43)
 EVAL_USER_REF: Final = "eval"
 _WITHHELD: Final = "[message withheld]"
+
+_log = get_logger("eval.invoke")
 
 
 class PipelineOutput(BaseModel):
@@ -119,18 +122,22 @@ def invoke_review(
 ) -> PipelineOutput:
     """Run one review and read its draft and findings (U11-62); never raises."""
     started = now()
+    run_id = ""
     try:
         result = asyncio.run(swarm.start(req, job))
+        run_id = result.run_id
         if result.draft_path is None:
-            error = f"NoDraft: run {result.run_id} ended {result.status} without a draft"
-            return PipelineOutput(run_id=result.run_id, latency_s=now() - started, error=error)
+            error = f"NoDraft: run {run_id} ended {result.status} without a draft"
+            return PipelineOutput(run_id=run_id, latency_s=now() - started, error=error)
         text = Path(result.draft_path).read_text(encoding="utf-8")
         draft = ReportDraft.model_validate_json(text)
-        found = query_findings(result.run_id, statuses=None, limit=FINDINGS_LIMIT)
+        found = query_findings(run_id, statuses=None, limit=FINDINGS_LIMIT)
         latency = now() - started
     except Exception as err:  # noqa: BLE001 - U11-62: a pipeline exception is never raised
-        return PipelineOutput(latency_s=now() - started, error=_exc_text(err))
-    return _from_draft(result.run_id, draft, found, latency)
+        return PipelineOutput(run_id=run_id, latency_s=now() - started, error=_exc_text(err))
+    if len(found) >= FINDINGS_LIMIT:  # the store caps one read; later findings are not seen
+        _log.warning("eval.invoke.findings_truncated", run_id=run_id, limit=FINDINGS_LIMIT)
+    return _from_draft(run_id, draft, found, latency)
 
 
 def _from_draft(
@@ -156,12 +163,16 @@ def _full(draft: ReportDraft) -> tuple[list[str], list[NumberCarrier], list[str]
         p for section in draft.sections for p in section.paragraphs
     ]
     items += draft.recommendations
-    texts = [draft.title, *(c.text for c in carriers_from(items)), *draft.caveats]
-    if draft.prior_outcomes_commentary is not None:
-        items.append(draft.prior_outcomes_commentary)
-        texts.append(draft.prior_outcomes_commentary.text)
+    poc = draft.prior_outcomes_commentary
+    if poc is not None:
+        items.append(poc)
+    carriers = carriers_from(items)
+    body = carriers[:-1] if poc is not None else carriers  # the commentary goes last
+    texts = [draft.title, *(c.text for c in body), *draft.caveats]
+    if poc is not None:
+        texts.append(poc.text)
     ranked = [e.entity_id for e in draft.ranked_entities]
-    return texts, carriers_from(items), ranked
+    return texts, carriers, ranked
 
 
 def _findings_only(
@@ -230,6 +241,9 @@ class ReviewCache:
             except Exception as err:  # noqa: BLE001 - U11-62: a pipeline exception is never raised
                 slot.output = PipelineOutput(error=_exc_text(err))
             finally:
+                if slot.output is None:  # owner died (BaseException): later callers re-run
+                    with self._lock:
+                        self._slots.pop(key, None)
                 slot.done.set()
         else:
             slot.done.wait()

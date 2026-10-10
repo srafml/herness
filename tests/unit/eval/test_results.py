@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from herness.core.errors import ConfigError
+from herness.eval import results as results_mod
 from herness.eval.grading import GradeResult, UnsupportedReport
 from herness.eval.results import QuestionResult, ResultsLog
 
@@ -75,7 +76,7 @@ def test_ut11_56_append_existing_key_refused(tmp_path: Path) -> None:
 
 
 def test_cv_t11_28_results_log_missing_file_and_blank_lines(tmp_path: Path) -> None:
-    """A missing file has no keys; blank lines are skipped; the parent dir is created."""
+    """CV-T11-28 A missing file has no keys; blank lines are skipped; the parent dir is created."""
     path = tmp_path / "run" / "results.jsonl"
     log = ResultsLog(path)
     assert log.done_keys() == set()
@@ -88,7 +89,8 @@ def test_cv_t11_28_results_log_missing_file_and_blank_lines(tmp_path: Path) -> N
 
 
 def test_cv_t11_28_results_log_invalid_complete_line_is_config_error(tmp_path: Path) -> None:
-    """A complete line that is JSON but not a QuestionResult is corruption: ConfigError."""
+    """CV-T11-28 A complete line that is JSON but not a QuestionResult is corruption:
+    ConfigError."""
     path = tmp_path / "results.jsonl"
     path.write_text(
         '{"id": "G01", "repeat": 1}\n["not", "an", "object"]\n{"id": 7, "repeat": "x"}\n',
@@ -102,7 +104,7 @@ def test_cv_t11_28_results_log_invalid_complete_line_is_config_error(tmp_path: P
 
 
 def test_cv_t11_28_results_log_concurrent_appends(tmp_path: Path) -> None:
-    """Appends from several threads give one readable line each."""
+    """CV-T11-28 Appends from several threads give one readable line each."""
     log = ResultsLog(tmp_path / "results.jsonl")
     threads = [threading.Thread(target=log.append, args=(_result(f"G{i:02}", 1),))
                for i in range(8)]  # fmt: skip
@@ -111,3 +113,59 @@ def test_cv_t11_28_results_log_concurrent_appends(tmp_path: Path) -> None:
     for t in threads:
         t.join()
     assert log.done_keys() == {(f"G{i:02}", 1) for i in range(8)}
+
+
+def test_cv_t11_28_unterminated_whole_record_counts_as_stored(tmp_path: Path) -> None:
+    """CV-T11-28 a crash just before the newline leaves a whole record unterminated: it is
+    stored (done_keys, read_all), its key is refused, and the next append closes the line."""
+    path = tmp_path / "results.jsonl"
+    ResultsLog(path).append(_result("G01", 1))
+    with path.open("ab") as fh:
+        fh.write(_result("G02", 1).model_dump_json().encode())
+    log = ResultsLog(path)
+    assert log.done_keys() == {("G01", 1), ("G02", 1)}
+    assert [r.id for r in log.read_all()] == ["G01", "G02"]
+    with pytest.raises(ConfigError, match="already recorded"):
+        log.append(_result("G02", 1, status="failed"))
+    log.append(_result("G03", 1))
+    results = ResultsLog(path).read_all()
+    assert [(r.id, r.status) for r in results] == [
+        ("G01", "passed"), ("G02", "passed"), ("G03", "passed"),
+    ]  # fmt: skip
+    assert len(path.read_bytes().splitlines()) == 3
+
+    with path.open("ab") as fh:  # an unterminated JSON object that is not a whole result
+        fh.write(b'{"id": "G04", "repeat": 1}')
+    assert ("G04", 1) not in ResultsLog(path).done_keys()
+    assert len(ResultsLog(path).read_all()) == 3
+
+
+def test_cv_t11_28_read_all_keeps_first_record_per_key(tmp_path: Path) -> None:
+    """CV-T11-28 defence in depth: a duplicate `(id, repeat)` line is skipped by read_all."""
+    path = tmp_path / "results.jsonl"
+    lines = [_result("G01", 1), _result("G01", 1, status="failed"), _result("G01", 2)]
+    path.write_text("".join(r.model_dump_json() + "\n" for r in lines), encoding="utf-8")
+    log = ResultsLog(path)
+    assert [(r.repeat, r.status) for r in log.read_all()] == [(1, "passed"), (2, "passed")]
+    assert log.done_keys() == {("G01", 1), ("G01", 2)}
+
+
+def test_cv_t11_28_fsync_failure_retry_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T11-28 fsync raises after the bytes were written: the retry re-reads the file and
+    is refused, so the log never holds a second record for the key."""
+    path = tmp_path / "results.jsonl"
+    log = ResultsLog(path)
+    log.append(_result("G01", 1))
+
+    def broken(fd: int) -> None:
+        raise OSError(fd, "fsync failed")
+
+    monkeypatch.setattr(results_mod.os, "fsync", broken)
+    with pytest.raises(OSError, match="fsync failed"):
+        log.append(_result("G02", 1))
+    monkeypatch.undo()
+    with pytest.raises(ConfigError, match="already recorded"):
+        log.append(_result("G02", 1))
+    assert [r.id for r in log.read_all()] == ["G01", "G02"]

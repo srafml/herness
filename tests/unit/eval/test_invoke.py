@@ -17,11 +17,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import structlog
 from tests.support.fake_chat import FakeChatService, all_kinds, error_script
 from tests.support.report_drafts import draft_dict, paragraph
 
 from herness.core.errors import ConfigError, ModelUnavailable
 from herness.core.types import Finding, ReportDraft
+from herness.eval import invoke as invoke_mod
 from herness.eval.grading import NumberCarrier
 from herness.eval.invoke import PipelineOutput, ReviewCache, invoke_chat, invoke_review
 from herness.harness.swarm import RunRequest, RunResult
@@ -146,7 +148,7 @@ def _write_draft(tmp_path: Path, data: dict[str, Any]) -> Path:
 
 
 def test_cv_t11_28_full_draft(ops_store: object, tmp_path: Path) -> None:
-    """Full mode: title, paragraphs, recommendation, caveats, prior-outcomes commentary;
+    """CV-T11-28 Full mode: title, paragraphs, recommendation, caveats, prior-outcomes commentary;
     carriers per paragraph and recommendation; ranked ids from `ranked_entities`."""
     poc = paragraph("Last quarter's fix held at [[n1]]")
     data = draft_dict(run_id=_RUN, prior_outcomes_commentary=poc)
@@ -178,8 +180,8 @@ def test_cv_t11_28_full_draft(ops_store: object, tmp_path: Path) -> None:
 def test_cv_t11_28_findings_only_ranked_entities_and_unknown_finding(
     ops_store: object, tmp_path: Path
 ) -> None:
-    """findings_only with `ranked_entities` set uses them; a draft finding missing from the
-    store adds no entity id; a finding cited twice yields its entity id once."""
+    """CV-T11-28 findings_only with `ranked_entities` set uses them; a draft finding missing
+    from the store adds no entity id; a finding cited twice yields its entity id once."""
     data = ReportDraft.model_validate_json(_FIXTURE.read_text("utf-8")).model_dump(mode="json")
     _insert(_finding(_F1, "jira:issue:PAY-12", "c", 14, "q_0123456789abcdef", n=1))
     swarm = _FakeSwarm(tmp_path, _write_draft(tmp_path, data))
@@ -194,7 +196,7 @@ def test_cv_t11_28_findings_only_ranked_entities_and_unknown_finding(
 
 
 def test_cv_t11_28_review_errors_never_raise(ops_store: object, tmp_path: Path) -> None:
-    """A pipeline exception or a run without a draft becomes `error`, scrubbed and cut."""
+    """CV-T11-28 A pipeline exception or a run without a draft becomes `error`, scrubbed and cut."""
     token = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"  # pragma: allowlist secret
     swarm = _FakeSwarm(tmp_path, None, raises=ConfigError(f"bad {token} " + "x" * 900))
     out = invoke_review(cast("Any", swarm), _req(), job=None, now=_clock(0.0, 3.0))
@@ -210,9 +212,40 @@ def test_cv_t11_28_review_errors_never_raise(ops_store: object, tmp_path: Path) 
     assert out.run_id == _RUN
     assert out.error == f"NoDraft: run {_RUN} ended failed without a draft"
 
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    out = invoke_review(cast("Any", _FakeSwarm(tmp_path, bad)), _req(), job=None,
+                        now=_clock(0.0, 1.0))  # fmt: skip
+    assert out.run_id == _RUN  # a failure after start keeps the run id (pipeline_run_id)
+    assert out.error is not None
+    assert out.error.startswith("ValidationError: ")
+
+
+def test_cv_t11_28_findings_cap_is_flagged(
+    ops_store: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T11-28 a read that hits the store cap (500) logs a truncation warning with the run
+    id and limit only; below the cap nothing is logged."""
+    one = _finding(_F1, "jira:issue:PAY-12", "Epic PAY-12 is [[n1]]", 14, "q_0123456789abcdef",
+                   n=1)  # fmt: skip
+    rows: list[Finding] = [one] * invoke_mod.FINDINGS_LIMIT
+    monkeypatch.setattr(invoke_mod, "query_findings", lambda *_a, **_k: rows)
+    with structlog.testing.capture_logs() as logs:
+        out = invoke_review(cast("Any", _FakeSwarm(tmp_path, _FIXTURE)), _req(), job=None,
+                            now=_clock(0.0, 1.0))  # fmt: skip
+    assert out.error is None
+    warned = [e for e in logs if e["event"] == "eval.invoke.findings_truncated"]
+    assert [(e["run_id"], e["limit"], e["log_level"]) for e in warned] == [(_RUN, 500, "warning")]
+    assert set(warned[0]) <= {"event", "run_id", "limit", "log_level", "component"}
+    rows = rows[:3]
+    with structlog.testing.capture_logs() as logs:
+        invoke_review(cast("Any", _FakeSwarm(tmp_path, _FIXTURE)), _req(), job=None,
+                      now=_clock(0.0, 1.0))  # fmt: skip
+    assert not [e for e in logs if e["event"] == "eval.invoke.findings_truncated"]
+
 
 def test_cv_t11_28_invoke_chat(ops_store: object) -> None:
-    """Chat: eval session, `eval` user ref and the given mode; final answer text, one
+    """CV-T11-28 Chat: eval session, `eval` user ref and the given mode; final answer text, one
     carrier, entity ids from the name index; error events and exceptions become `error`."""
     chat = FakeChatService(scripts=[all_kinds("live"), error_script()])
     out = invoke_chat(cast("Any", chat), "How many incidents?", mode="live",
@@ -249,7 +282,7 @@ def _output(tag: str) -> PipelineOutput:
 
 
 def test_cv_t11_28_review_cache_keys() -> None:
-    """Same key → factory once; another pipeline, profile, depth or framing question → a
+    """CV-T11-28 Same key → factory once; another pipeline, profile, depth or framing question → a
     separate run; a framing question is its own key; a factory exception is an error."""
     cache = ReviewCache()
     calls: list[str] = []
@@ -284,7 +317,8 @@ def test_cv_t11_28_review_cache_keys() -> None:
 
 
 def test_cv_t11_28_review_cache_concurrent_callers_share_one_run() -> None:
-    """Eight threads asking for the same key: the factory runs once, all get its output."""
+    """CV-T11-28 Eight threads asking for the same key: the factory runs once, all get its
+    output."""
     cache = ReviewCache()
     started, release = threading.Event(), threading.Event()
     calls: list[int] = []
@@ -316,9 +350,15 @@ def test_cv_t11_28_review_cache_concurrent_callers_share_one_run() -> None:
 
 
 def test_cv_t11_28_review_cache_owner_interrupted() -> None:
-    """When the owning call dies with a non-Exception, waiters get an error output."""
+    """CV-T11-28 When the owning call dies with a non-Exception, a current waiter gets an
+    error output and the slot is freed, so a later caller runs the factory again."""
     cache = ReviewCache()
-    entered, proceed = threading.Event(), threading.Event()
+    entered, proceed, waiting = threading.Event(), threading.Event(), threading.Event()
+
+    class _SeenWait(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            waiting.set()
+            return super().wait(timeout)
 
     def factory() -> PipelineOutput:
         entered.set()
@@ -332,19 +372,23 @@ def test_cv_t11_28_review_cache_owner_interrupted() -> None:
     t = threading.Thread(target=owner)
     t.start()
     assert entered.wait(5)
+    cast("Any", cache)._slots[("p", "x", "fast")].done = _SeenWait()
     seen: list[PipelineOutput] = []
     waiter = threading.Thread(
         target=lambda: seen.append(cache.get_or_run("p", "x", "fast", None, factory))
     )
     waiter.start()
+    assert waiting.wait(5)
     proceed.set()
     t.join(5)
     waiter.join(5)
     assert seen[0].error == "ReviewCacheError: the shared run did not complete"
+    again = cache.get_or_run("p", "x", "fast", None, lambda: _output("rerun"))
+    assert again.run_id == "rerun"
 
 
 def test_cv_t11_28_pipeline_output_defaults() -> None:
-    """An error-only output needs no pipeline fields."""
+    """CV-T11-28 An error-only output needs no pipeline fields."""
     out = PipelineOutput(error="X: y")
     assert (out.run_id, out.final_text, out.carriers, out.numbers) == ("", "", [], [])
     assert out.findings == []
