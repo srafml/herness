@@ -152,3 +152,16 @@ coalesce(list_extract({{ vals }}, list_position({{ keys }}, {{ key_expr }})), {{
 (SELECT greatest(1, least({{ p('s_window_days') }}, date_diff('day', CAST(min(odf.opened_at) AT TIME ZONE {{ p('tz') }} AS DATE), {{ p('as_of') }}))) FROM metrics.incident_fact odf WHERE NOT odf.excluded)
 {%- endmacro -%}
 {#- END observed_days -#}
+
+{#- BEGIN dsum davg (U04-35; T04-23) -#}
+{#- Order-independent DOUBLE aggregates: DuckDB's parallel sum/avg add values in a run-dependent
+    order, so a re-run can differ in the last ulp and flip a `.9g` result_hash token. Ordering
+    the input by its own value fixes the addition sequence (equal keys are equal values). -#}
+{%- macro dsum(expr) -%}
+sum({{ expr }} ORDER BY {{ expr }})
+{%- endmacro -%}
+
+{%- macro davg(expr) -%}
+avg({{ expr }} ORDER BY {{ expr }})
+{%- endmacro -%}
+{#- END dsum davg -#}
