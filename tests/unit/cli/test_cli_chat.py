@@ -25,7 +25,7 @@ from tests.support.fake_chat import (
 from tests.support.ops_store import OpsStoreHandle
 
 from herness import cli
-from herness._cli import cmd_chat
+from herness._cli import _chat_turn, cmd_chat
 from herness.core import time as clock
 from herness.core.errors import ConfigError, NotFound, StoreBusy
 from herness.core.types import ModeEvent, ToolEvent, VerificationEvent
@@ -398,3 +398,17 @@ def test_ut09_91_build_services_wires_the_dashboard_parts(
     service, memory = cmd_chat.build_services(cfg)  # type: ignore[arg-type]
     llms = ("llms", "models", "local")
     assert (service, memory, bound) == (("chat", "pipelines", llms, "memory"), "memory", [llms])
+
+
+def test_ut09_91_policy_reads_the_server_side_chat_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UT09-91 the mode comes from ``chat_policy`` (R-38); the slot only for ``defer``."""
+    from herness.core.jobs import chat_policy  # noqa: PLC0415
+
+    now = clock.now()
+    modes = iter(["defer", "live"])
+    monkeypatch.setattr(chat_policy, "chat_policy", lambda _now: next(modes))
+    monkeypatch.setattr(chat_policy, "chat_next_live_at", lambda at: at)
+    assert _chat_turn.policy(now) == ("defer", now)
+    assert _chat_turn.policy(now) == ("live", None)
