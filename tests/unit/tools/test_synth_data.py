@@ -154,7 +154,7 @@ def test_rf_generate_writes_layout_marker_and_manifest(
         assert (root / rel).is_file(), rel
     assert not (root / "truth" / ".parts").exists()
     assert load_truth(root / "truth") == manifest
-    assert manifest.generator_version == "2.0.0"
+    assert manifest.generator_version == "2.1.0"
     assert manifest.question_set_version == "qs-2026-10-01.1"
     assert manifest.seed == _SEED
     assert manifest.scale == "tiny"

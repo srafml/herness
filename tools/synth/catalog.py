@@ -257,7 +257,8 @@ def _plants(
     rng: np.random.Generator, d: _Draft, params: SynthParams, teams: list[str], appls: list[str]
 ) -> tuple[PlantTargets, int, int]:
     """Choose the plant targets (step 8), apply weight overrides (step 9); also return the
-    indices of teams T1 and T5."""
+    indices of teams T1 and T5. T1 owns no service (its owned services get owners drawn
+    outside the plant teams), so its scorecard holds only what it resolves (T04-22b)."""
     pick = _Picker(rng, d)
     s6p, s6u = pick.pick("T6", 3), pick.pick("T6", 3)
     if len(peers := pick.free(3)) < _T6_MIN_PEERS:
@@ -276,6 +277,8 @@ def _plants(
     t1 = _draw_team(rng, d, tied, set())  # prefer teams with no role on a plant service
     t5 = _draw_team(rng, d, tied | {t1}, {t1})
     _plant_teams(rng, d, {t1: t1_services, t5: [s5]}, [s3, s4], plant_services)
+    for i in np.flatnonzero(d.owner == t1):  # T1 only resolves its services: owns none
+        d.owner[i] = _draw_team(rng, d, tied | {t1, t5}, {t1, t5})
     effective_at, peak = _windows(params)
     ids = d.ids
     targets = PlantTargets(

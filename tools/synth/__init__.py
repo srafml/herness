@@ -2,6 +2,6 @@
 
 from typing import Final
 
-GENERATOR_VERSION: Final = "2.0.0"
+GENERATOR_VERSION: Final = "2.1.0"
 
 __all__ = ["GENERATOR_VERSION"]

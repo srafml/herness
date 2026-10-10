@@ -105,7 +105,7 @@ def test_ut11_02_tiny_span_ignores_start() -> None:
 
 def test_ut11_02_defaults_equal_design() -> None:
     """UT11-02 defaults equal design §5.1.3, §5.1.4 and §5.1.6 plus delta DD11-05."""
-    assert GENERATOR_VERSION == "2.0.0"  # fixtures regenerate when this or a default changes
+    assert GENERATOR_VERSION == "2.1.0"  # fixtures regenerate when this or a default changes
     p = _load()
     assert p.sources == _ALL_SOURCES
     assert (p.dirty, p.fetch_mode, p.business_timezone) == ("default", "initial", "UTC")

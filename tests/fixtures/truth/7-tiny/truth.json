@@ -1,7 +1,7 @@
 {
   "seed": 7,
   "scale": "tiny",
-  "generator_version": "2.0.0",
+  "generator_version": "2.1.0",
   "params_hash": "sha256:b55e288fa65f7aab4325b465df14bf21baf1504c87cfb4516df183e4c6fac7fb",
   "start": "2026-06-03",
   "end": "2026-08-31",

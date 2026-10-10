@@ -18,6 +18,7 @@ from tools.synth.plants_delivery import (
     cluster_slots,
     e2_links,
     epic_month,
+    is_t2c_incident,
     planned_counts_t2,
     planned_counts_t2c,
     planned_counts_t6,
@@ -126,6 +127,47 @@ def test_ut11_14_planners_are_registered_after_the_ops_planners(
     for planner in (planned_counts_t2, planned_counts_t2c):
         for key, n in planner(cat, params).items():
             assert plant_range(cat, planner, key)[1] == n
+
+
+@pytest.mark.parametrize(
+    ("scale", "total"),
+    [("full", round(0.003 * 5_000_000)), ("small", round(10 * 1096 / 30))],
+)
+def test_ut11_14_t2c_size_scales_with_preset_incidents(
+    cat: Catalog, scale: str, total: int
+) -> None:
+    """UT11-14 T2c books max(10 per 30 days, round(0.003 x preset.incidents)) (T04-22b): at
+    `full` the share wins so the cluster's pain keeps pace with the background; at `small`
+    (and `tiny`) the 10-per-30-days floor is unchanged."""
+    full_span = load_params(
+        scale,
+        start=date(2023, 9, 1),
+        end=_END,
+        sources=("servicenow",),
+        dirty="none",
+        fetch_mode="initial",
+        params_file=None,
+    )
+    counts = planned_counts_t2c(cat, full_span)
+    assert sum(counts.values()) == total
+    assert {k[:2] for k in counts} == {("servicenow", "incident")}
+
+
+def test_ut11_14_is_t2c_incident_matches_the_t2c_numbers(cat: Catalog) -> None:
+    """UT11-14 `is_t2c_incident` is true exactly for the INC numbers of the T2c plant range
+    (T04-22b); T2 numbers, background numbers and CHG numbers are false."""
+    for month in _MONTHS:
+        key = ("servicenow", "incident", month)
+        first, n = plant_range(cat, planned_counts_t2c, key)
+        t2_first, t2_n = plant_range(cat, planned_counts_t2, key)
+        assert n
+        assert all(is_t2c_incident(cat, f"INC{s:07d}") for s in range(first, first + n))
+        assert not is_t2c_incident(cat, f"INC{first + n:07d}")
+        assert not any(
+            is_t2c_incident(cat, f"INC{s:07d}") for s in range(t2_first, t2_first + t2_n)
+        )
+        assert not is_t2c_incident(cat, f"INC{cat.seq_start[key]:07d}")
+        assert not is_t2c_incident(cat, f"CHG{first:07d}")
 
 
 def test_ut11_14_t2_cluster_size_priorities_impact_and_family(

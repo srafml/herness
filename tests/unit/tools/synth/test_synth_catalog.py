@@ -147,6 +147,21 @@ def test_ut11_05_plant_teams_are_disjoint_over_seeds(scale: str, seeds: range) -
         assert not (s3_teams | s4_teams) & set(plants.teams), seed
 
 
+@pytest.mark.parametrize(("scale", "seeds"), [("small", range(20)), ("tiny", range(40))])
+def test_ut11_05_t1_team_owns_no_service(scale: str, seeds: range) -> None:
+    """UT11-05 T1 only resolves its three services (design §5.1.5, T04-22b): it owns no
+    service, so no owner-attributed record (events, work items) reaches its scorecard; T5
+    and every other team keep their owner roles."""
+    params = _load(scale)
+    for seed in seeds:
+        cat = build_catalog(seed, params)
+        plants = cat.plants
+        assert not [s.sys_id for s in cat.services if s.owner_team_sys_id == plants.t1_team]
+        supported = {s.sys_id for s in cat.services if s.support_team_sys_id == plants.t1_team}
+        assert supported == set(plants.t1_services), seed
+        assert all(s.owner_team_sys_id in {t.sys_id for t in cat.teams} for s in cat.services)
+
+
 @pytest.mark.parametrize("seed", range(30))
 def test_ut11_05_team_counts_per_org(seed: int) -> None:
     """UT11-05 standard: per-org team counts stay in [6, 20] and total 150; tiny: 4 per org."""
