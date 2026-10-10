@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; style-src &#39;unsafe-inline&#39;; img-src data:">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Funding review for the platform portfolio</title>
+<style>
+:root {
+  --c-bg: #ffffff;
+  --c-fg: #1f2328;
+  --c-muted: #6e7781;
+  --c-accent: #0b5cad;
+  --c-axis: #8c959f;
+  --c-bar: #3a7bd5;
+  --c-border: #d0d7de;
+  --c-panel: #f6f8fa;
+  --c-banner: #fff8c5;
+  --c-mark: #fbe3e4;
+  --c-warn: #9a3412;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-bg: #0d1117;
+    --c-fg: #e6edf3;
+    --c-muted: #8b949e;
+    --c-accent: #58a6ff;
+    --c-axis: #6e7681;
+    --c-bar: #4c8ee8;
+    --c-border: #30363d;
+    --c-panel: #161b22;
+    --c-banner: #3b2e05;
+    --c-mark: #4a1d21;
+    --c-warn: #fdba74;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto; max-width: 72rem; padding: 1.5rem 1rem 4rem;
+  background: var(--c-bg); color: var(--c-fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+h1 { font-size: 1.7rem; margin: 0.2rem 0 0.8rem; }
+h2 { font-size: 1.3rem; margin-top: 2.2rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--c-border); }
+h3 { font-size: 1.05rem; margin: 1.2rem 0 0.4rem; }
+code, pre { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.9em; }
+pre { background: var(--c-panel); border: 1px solid var(--c-border); padding: 0.6rem; overflow-x: auto; white-space: pre-wrap; }
+a { color: var(--c-accent); }
+a.num { text-decoration: none; border-bottom: 1px dotted var(--c-accent); }
+.num-na { color: var(--c-muted); }
+mark.uncited { background: var(--c-mark); color: inherit; }
+table { border-collapse: collapse; margin: 0.5rem 0 1rem; font-size: 0.92em; }
+th, td { border: 1px solid var(--c-border); padding: 0.25rem 0.5rem; text-align: left; vertical-align: top; }
+th { background: var(--c-panel); }
+tr.marked td:first-child::before { content: "* "; color: var(--c-warn); }
+.kind, .empty, .used-by, .target, .findings { color: var(--c-muted); }
+.meta, .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.2rem 1rem; margin: 0.5rem 0; }
+.meta dt, .facts dt, .extras dt { font-size: 0.8em; color: var(--c-muted); }
+.meta dd, .facts dd, .extras dd { margin: 0; }
+.extras { display: flex; flex-wrap: wrap; gap: 0.2rem 1.5rem; margin: 0.4rem 0; }
+.banner { background: var(--c-banner); border-left: 4px solid var(--c-warn); padding: 0.4rem 0.8rem; margin: 0.5rem 0; }
+.banner p { margin: 0.2rem 0; }
+.card, .scenario, .scorecard, .retro-item, .evidence-entry { border: 1px solid var(--c-border); border-radius: 6px; padding: 0.4rem 1rem; margin: 0.8rem 0; }
+.rank { color: var(--c-accent); }
+.tag { font-size: 0.75em; border: 1px solid var(--c-border); border-radius: 3px; padding: 0 0.3rem; }
+figure.chart { margin: 0.5rem 0; max-width: 40rem; }
+figure.chart svg, td.spark svg { width: 100%; height: auto; }
+td.spark { min-width: 6rem; }
+svg text { fill: var(--c-fg); font-size: 11px; }
+.watermark {
+  position: fixed; top: 0.5rem; right: 0.5rem; z-index: 10; padding: 0.3rem 0.8rem;
+  border: 2px solid var(--c-warn); color: var(--c-warn); background: var(--c-bg);
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+}
+body.not-for-decision h1::after { content: " (draft)"; color: var(--c-warn); font-weight: 400; }
+footer { margin-top: 3rem; color: var(--c-muted); font-size: 0.85em; }
+@media print {
+  body { max-width: none; padding: 0; font-size: 11pt; }
+  details > summary { list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::marker { content: ""; }
+  details::details-content { content-visibility: visible; display: contents; }
+  details > .details-body { display: block !important; }
+  .card, .scenario, .scorecard, .retro-item, .evidence-entry, table, figure { break-inside: avoid; }
+  a { color: inherit; text-decoration: none; }
+}
+</style>
+</head>
+<body class="report report-funding_review">
+<header>
+<p class="kind">Funding review</p>
+<h1>Funding review for the platform portfolio</h1>
+<dl class="meta">
+<div><dt>run</dt><dd><code>run_01JA0000000000000000000001</code></dd></div>
+<div><dt>build</dt><dd><code>20260926-100000-000001</code></dd></div>
+<div><dt>data as of</dt><dd>2026-09-25T09:30:00+00:00</dd></div>
+<div><dt>rendered</dt><dd>2026-09-26T12:00:00+00:00</dd></div>
+<div><dt>depth · profile</dt><dd>standard · <code>local</code></dd></div>
+<div><dt>tasks</dt><dd>3 of 3 done, 0 dead</dd></div>
+<div><dt>must-cover</dt><dd>2 of 2</dd></div>
+<div><dt>findings</dt><dd>1 verified, 0 rejected</dd></div>
+<div><dt>gate 2</dt><dd>passed: 0 numbers, 0 failed</dd></div>
+<div><dt>numbers linked</dt><dd>42 of 42</dd></div>
+</dl>
+</header>
+<div class="banners">
+<div class="banner banner-unconfirmed_weights" role="note">
+<p>Dollar weights are placeholders and not yet confirmed.</p>
+<ul><li><code>change</code></li><li><code>cluster_fix</code></li><li><code>cost_per_downtime_hour</code></li><li><code>cost_per_engineer_hour</code></li><li><code>expected_reduction</code></li><li><code>hours_per_story_point</code></li><li><code>impact_fallback</code></li><li><code>priority_impact_multiplier</code></li><li><code>sla_penalty_usd</code></li><li><code>strategic_weights</code></li><li><code>team_capacity_points_per_quarter</code></li><li><code>toil</code></li></ul>
+</div>
+
+<div class="banner banner-dq_warnings" role="note">
+<p>Some data quality checks failed. See Data quality and caveats.</p>
+</div>
+
+</div>
+<main>
+<section id="executive_summary">
+<h2>Executive summary</h2>
+<p class="text">Incidents for team Payments reached <a class="num" href="#ev-q_13310206480f64e6" title="n · team=t1">42</a> this quarter; the cache rewrite costs <a class="num" href="#ev-q_819b680380edd148" title="n · team=t1">$1.2K</a>.</p>
+
+<p class="text">Failed changes stayed at <a class="num" href="#ev-q_8cc4f05711c1f705" title="n · team=t1">7</a>.</p>
+
+
+
+</section>
+
+<section id="recommendations">
+<h2>Recommendations</h2>
+<p class="text">Two candidates lead the ranking; both are worth funding.</p>
+
+
+<article class="card" id="rec-1">
+<h3><span class="rank">#1</span> Fund the cache rewrite</h3>
+<p class="target">fund · epic <code>epic-1</code></p>
+<p>It removes <a class="num" href="#ev-q_13310206480f64e6" title="n · team=t1">42</a> incidents for an effort of <a class="num" href="#ev-q_819b680380edd148" title="n · team=t1">$1.2K</a>.</p>
+<dl class="extras">
+<div><dt>priority</dt><dd><a class="num" href="#ev-q_00000000000000f1" title="priority · candidate_id=epic-1">0.75</a></dd></div>
+<div><dt>wsjf</dt><dd><a class="num" href="#ev-q_00000000000000f1" title="wsjf · candidate_id=epic-1">2.50</a></dd></div>
+<div><dt>confidence</dt><dd><a class="num" href="#ev-q_00000000000000f1" title="confidence · candidate_id=epic-1">high</a></dd></div>
+<div><dt>unconfirmed</dt><dd><a class="num" href="#ev-q_00000000000000f1" title="unconfirmed · candidate_id=epic-1">yes</a></dd></div>
+</dl>
+<p class="findings">Findings: <code>fnd_01JA0000000000000000000011</code></p>
+</article>
+
+<article class="card" id="rec-2">
+<h3><span class="rank">#2</span> Fund the queue retry work</h3>
+<p class="target">fund · epic <code>epic-2</code></p>
+<p>Failed changes would drop below <a class="num" href="#ev-q_8cc4f05711c1f705" title="n · team=t1">7</a>.</p>
+<dl class="extras">
+<div><dt>priority</dt><dd><a class="num" href="#ev-q_00000000000000f1" title="priority · candidate_id=epic-2">0.50</a></dd></div>
+<div><dt>wsjf</dt><dd><a class="num" href="#ev-q_00000000000000f1" title="wsjf · candidate_id=epic-2">1.00</a></dd></div>
+<div><dt>confidence</dt><dd>—</dd></div>
+<div><dt>unconfirmed</dt><dd><a class="num" href="#ev-q_00000000000000f1" title="unconfirmed · candidate_id=epic-2">no</a></dd></div>
+</dl>
+<p class="findings">Findings: <code>fnd_01JA0000000000000000000011</code></p>
+</article>
+
+<h3>Funding ranking</h3>
+<figure class="chart"><svg role="img" class="chart bar-h" viewBox="0 0 640 72" width="640" height="72"><title>Priority by candidate</title><text class="label" x="237.2" y="18.0" text-anchor="end" dominant-baseline="middle" style="fill:var(--c-axis)">Cache rewrite</text><rect class="bar" x="243.2" y="9.0" width="388.8" height="18" style="fill:var(--c-bar)"/><text class="label" x="237.2" y="42.0" text-anchor="end" dominant-baseline="middle" style="fill:var(--c-axis)">Queue retry</text><rect class="bar" x="243.2" y="33.0" width="259.2" height="18" style="fill:var(--c-bar)"/></svg></figure>
+
+<table>
+<thead><tr><th scope="col">rank</th><th scope="col">candidate id</th><th scope="col">title</th><th scope="col">priority</th><th scope="col">wsjf</th><th scope="col">confidence</th><th scope="col">effort cost usd</th></tr></thead>
+<tbody>
+<tr class="marked" title="unconfirmed"><td>1</td><td>epic-1</td><td>Cache rewrite</td><td><a class="num" href="#ev-q_00000000000000f1" title="priority · candidate_id=epic-1">0.75</a></td><td><a class="num" href="#ev-q_00000000000000f1" title="wsjf · candidate_id=epic-1">2.50</a></td><td><a class="num" href="#ev-q_00000000000000f1" title="confidence · candidate_id=epic-1">high</a></td><td><a class="num" href="#ev-q_00000000000000f1" title="effort_cost_usd · candidate_id=epic-1">$1.2K</a></td></tr>
+<tr><td>2</td><td>epic-2</td><td>Queue retry</td><td><a class="num" href="#ev-q_00000000000000f1" title="priority · candidate_id=epic-2">0.50</a></td><td><a class="num" href="#ev-q_00000000000000f1" title="wsjf · candidate_id=epic-2">1.00</a></td><td>—</td><td><a class="num" href="#ev-q_00000000000000f1" title="effort_cost_usd · candidate_id=epic-2">$500</a></td></tr>
+</tbody>
+</table>
+
+<p class="empty">* weights not yet confirmed for this row.</p>
+
+</section>
+<section id="portfolio">
+<h2>Portfolio</h2>
+<p class="text">The base scenario selects the cache rewrite first.</p>
+
+
+<article class="scenario">
+<h3>Scenario base</h3>
+<p>Budget $2.0K · solver status <code>OPTIMAL</code></p>
+<figure class="chart"><svg role="img" class="chart step-budget" viewBox="0 0 640 220" width="640" height="220"><title>Impact vs budget: base</title><line class="axis" x1="8.0" y1="212.0" x2="632.0" y2="212.0" style="stroke:var(--c-axis)"/><line class="axis" x1="8.0" y1="8.0" x2="8.0" y2="212.0" style="stroke:var(--c-axis)"/><line class="budget" x1="632.0" y1="8.0" x2="632.0" y2="212.0" stroke-dasharray="4 3" style="stroke:var(--c-accent)"/><path class="step" d="M8.0 212.0 H382.6 V8.0" style="fill:none;stroke:var(--c-bar)"/></svg></figure>
+
+<table>
+<thead><tr><th scope="col">order rank</th><th scope="col">candidate id</th><th scope="col">expected impact usd</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>epic-1</td><td><a class="num" href="#ev-q_00000000000000f1" title="impact · epic-1">$3.0K</a></td></tr>
+</tbody>
+</table>
+
+</article>
+
+</section>
+
+<section id="org_scorecards">
+<h2>Org scorecards</h2>
+
+<article class="scorecard">
+<h3>team <code>t1</code></h3>
+<table>
+<thead><tr><th scope="col">metric</th><th scope="col">value</th><th scope="col">peer group</th><th scope="col">peer median</th><th scope="col">z score</th><th scope="col">trend</th><th scope="col">sample size</th><th scope="col">composite</th><th scope="col">rank</th><th scope="col">flags</th></tr></thead>
+<tbody>
+<tr><td>composite</td><td>—</td><td>team:all</td><td>—</td><td>—</td><td class="spark"><svg role="img" class="empty" viewBox="0 0 120 24" width="120" height="24"><title>composite: t1</title></svg></td><td><a class="num" href="#ev-q_00000000000000f2" title="sample_size · team=t1, metric=composite">5</a></td><td><a class="num" href="#ev-q_00000000000000f2" title="composite · team=t1, metric=composite">0.75</a></td><td><a class="num" href="#ev-q_00000000000000f2" title="rank · team=t1, metric=composite">1</a></td><td></td></tr>
+<tr><td>mttr</td><td><a class="num" href="#ev-q_00000000000000f2" title="value · team=t1, metric=mttr">4.5</a></td><td>team:all</td><td><a class="num" href="#ev-q_00000000000000f2" title="peer_median · team=t1, metric=mttr">3</a></td><td><a class="num" href="#ev-q_00000000000000f2" title="z_score · team=t1, metric=mttr">1.25</a></td><td class="spark"><svg role="img" class="sparkline" viewBox="0 0 120 24" width="120" height="24"><title>mttr: t1</title><polyline points="2.0,22.0 18.6,19.1 35.1,16.3 51.7,13.4 68.3,10.6 84.9,7.7 101.4,4.9 118.0,2.0" style="fill:none;stroke:var(--c-bar)"/></svg></td><td><a class="num" href="#ev-q_00000000000000f2" title="sample_size · team=t1, metric=mttr">12</a></td><td><a class="num" href="#ev-q_00000000000000f2" title="composite · team=t1, metric=mttr">0.75</a></td><td><a class="num" href="#ev-q_00000000000000f2" title="rank · team=t1, metric=mttr">1</a></td><td>small</td></tr>
+</tbody>
+</table>
+</article>
+<article class="scorecard">
+<h3>team <code>t2</code></h3>
+<table>
+<thead><tr><th scope="col">metric</th><th scope="col">value</th><th scope="col">peer group</th><th scope="col">peer median</th><th scope="col">z score</th><th scope="col">trend</th><th scope="col">sample size</th><th scope="col">composite</th><th scope="col">rank</th><th scope="col">flags</th></tr></thead>
+<tbody>
+<tr><td>mttr</td><td><a class="num" href="#ev-q_00000000000000f2" title="value · team=t2, metric=mttr">2</a></td><td>team:all</td><td><a class="num" href="#ev-q_00000000000000f2" title="peer_median · team=t2, metric=mttr">3</a></td><td><a class="num" href="#ev-q_00000000000000f2" title="z_score · team=t2, metric=mttr">-0.50</a></td><td class="spark"><svg role="img" class="sparkline" viewBox="0 0 120 24" width="120" height="24"><title>mttr: t2</title><polyline points="2.0,12.0 40.7,12.0 79.3,12.0 118.0,12.0" style="fill:none;stroke:var(--c-bar)"/></svg></td><td><a class="num" href="#ev-q_00000000000000f2" title="sample_size · team=t2, metric=mttr">9</a></td><td><a class="num" href="#ev-q_00000000000000f2" title="composite · team=t2, metric=mttr">0.25</a></td><td><a class="num" href="#ev-q_00000000000000f2" title="rank · team=t2, metric=mttr">2</a></td><td></td></tr>
+</tbody>
+</table>
+</article>
+
+</section>
+
+<section id="actions">
+<h2>Recommended actions</h2>
+
+<table>
+<thead><tr><th scope="col">entity</th><th scope="col">metric</th><th scope="col">target</th><th scope="col">delta usd</th><th scope="col">rationale</th><th scope="col">cards</th></tr></thead>
+<tbody>
+<tr class="marked" title="unconfirmed"><td>team <code>t1</code></td><td>mttr</td><td>peer_median</td><td><a class="num" href="#ev-q_00000000000000f2" title="delta_usd · team=t1, metric=mttr">$1.5K</a></td><td>Payments cuts MTTR from 4.5 to 3</td><td><a href="#rec-1">rec-1</a></td></tr>
+</tbody>
+</table>
+
+</section>
+
+<section id="retrospective">
+<h2>Did last quarter&#39;s recommendations work?</h2>
+<p class="text">The prior cache work paid off: incidents fell to <a class="num" href="#ev-q_13310206480f64e6" title="n · team=t1">42</a>.</p>
+
+
+<p class="verdicts">paid_off: 1</p>
+<article class="retro-item">
+<h3><code>rec_01JA0000000000000000000024</code> · <code>epic-9</code></h3>
+<p>Saved <a class="num" href="#ev-q_13310206480f64e6" title="n · team=t1">42</a> incidents</p>
+<p>Decision: accepted</p>
+<table>
+<thead><tr><th scope="col">measurement</th><th scope="col">metric</th><th scope="col">baseline</th><th scope="col">actual</th><th scope="col">delta</th><th scope="col">verdict</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>mttr</td><td><a class="num" href="#ev-q_8cc4f05711c1f705" title="baseline · rec_id=rec_01JA0000000000000000000024, measurement=1">4</a></td><td><a class="num" href="#ev-q_8cc4f05711c1f705" title="actual · rec_id=rec_01JA0000000000000000000024, measurement=1">3</a></td><td><a class="num" href="#ev-q_8cc4f05711c1f705" title="delta · rec_id=rec_01JA0000000000000000000024, measurement=1">-1</a></td><td>paid_off</td></tr>
+</tbody>
+</table>
+
+</article>
+</section>
+
+<section id="risks_and_caveats">
+<h2>Data quality and caveats</h2>
+<p class="text">Service mapping is incomplete for some incidents.</p>
+
+
+<p class="text">Effort estimates are placeholders until finance confirms them.</p>
+
+
+<h3>Failed data quality checks</h3>
+<table>
+<thead><tr><th scope="col">check name</th><th scope="col">severity</th><th scope="col">value</th><th scope="col">threshold</th></tr></thead>
+<tbody>
+<tr><td>incidents_service_null</td><td>warn</td><td>0.125</td><td>0.1</td></tr>
+</tbody>
+</table>
+<dl class="facts">
+<div><dt>unmapped incident share</dt><dd>0.125</dd></div>
+<div><dt>unconfirmed weights</dt><dd><code>change</code>, <code>cluster_fix</code>, <code>cost_per_downtime_hour</code>, <code>cost_per_engineer_hour</code>, <code>expected_reduction</code>, <code>hours_per_story_point</code>, <code>impact_fallback</code>, <code>priority_impact_multiplier</code>, <code>sla_penalty_usd</code>, <code>strategic_weights</code>, <code>team_capacity_points_per_quarter</code>, <code>toil</code></dd></div>
+<div><dt>contested findings</dt><dd>none</dd></div>
+</dl>
+
+</section>
+
+<section id="method">
+<h2>Method</h2>
+<p class="text">Analysts queried the warehouse; the verifier checked every number.</p>
+
+
+<dl class="facts">
+<div><dt>depth</dt><dd>standard</dd></div>
+<div><dt>profile</dt><dd><code>local</code></dd></div>
+<div><dt>verification</dt><dd>gate 2 passed: 0 numbers checked, 0 failed</dd></div>
+<div><dt>model calls by role</dt><dd>analyst 3, writer 1</dd></div>
+</dl>
+
+</section>
+
+</main>
+<section id="evidence">
+<h2>Evidence appendix</h2>
+<article class="evidence-entry">
+<a id="ev-q_13310206480f64e6"></a>
+<h3><code>q_13310206480f64e6</code></h3>
+<pre><code>SELECT count(*) AS n FROM core.incident WHERE team_id = $team</code></pre>
+<table class="params">
+<thead><tr><th scope="col">param</th><th scope="col">value</th></tr></thead>
+<tbody><tr><td><code>team</code></td><td>t1</td></tr></tbody>
+</table>
+<dl class="facts">
+<div><dt>build</dt><dd><code>20260926-100000-000001</code></dd></div>
+<div><dt>rows</dt><dd>1</dd></div>
+<div><dt>executed</dt><dd>2026-09-26T09:30:00.000000Z</dd></div>
+</dl>
+<details open><summary>Sample (1 rows)</summary>
+<div class="details-body"><table class="sample">
+<thead><tr><th scope="col">team</th><th scope="col">n</th></tr></thead>
+<tbody>
+<tr><td>t1</td><td>42</td></tr>
+</tbody>
+</table></div>
+</details>
+<p class="used-by">Used by: executive_summary, <a href="#rec-1">rec-1</a>, retrospective, retrospective: rec_01JA0000000000000000000024</p>
+</article>
+
+<article class="evidence-entry">
+<a id="ev-q_819b680380edd148"></a>
+<h3><code>q_819b680380edd148</code></h3>
+<pre><code>SELECT effort_cost_usd FROM score.funding WHERE candidate_id = $c</code></pre>
+<table class="params">
+<thead><tr><th scope="col">param</th><th scope="col">value</th></tr></thead>
+<tbody><tr><td><code>c</code></td><td>epic-1</td></tr></tbody>
+</table>
+<dl class="facts">
+<div><dt>build</dt><dd><code>20260926-100000-000001</code></dd></div>
+<div><dt>rows</dt><dd>1</dd></div>
+<div><dt>executed</dt><dd>2026-09-26T09:30:00.000000Z</dd></div>
+</dl>
+<details open><summary>Sample (1 rows)</summary>
+<div class="details-body"><table class="sample">
+<thead><tr><th scope="col">candidate_id</th><th scope="col">effort_cost_usd</th></tr></thead>
+<tbody>
+<tr><td>epic-1</td><td>1200.50</td></tr>
+</tbody>
+</table></div>
+</details>
+<p class="used-by">Used by: executive_summary, <a href="#rec-1">rec-1</a></p>
+</article>
+
+<article class="evidence-entry">
+<a id="ev-q_8cc4f05711c1f705"></a>
+<h3><code>q_8cc4f05711c1f705</code></h3>
+<pre><code>SELECT count(*) AS n FROM core.change WHERE outcome = $o</code></pre>
+<table class="params">
+<thead><tr><th scope="col">param</th><th scope="col">value</th></tr></thead>
+<tbody><tr><td><code>o</code></td><td>failed</td></tr></tbody>
+</table>
+<dl class="facts">
+<div><dt>build</dt><dd><code>20260926-100000-000001</code></dd></div>
+<div><dt>rows</dt><dd>1</dd></div>
+<div><dt>executed</dt><dd>2026-09-26T09:30:00.000000Z</dd></div>
+</dl>
+<details open><summary>Sample (1 rows)</summary>
+<div class="details-body"><table class="sample">
+<thead><tr><th scope="col">n</th></tr></thead>
+<tbody>
+<tr><td>7</td></tr>
+</tbody>
+</table></div>
+</details>
+<p class="used-by">Used by: executive_summary, <a href="#rec-1">rec-1</a>, <a href="#rec-2">rec-2</a>, retrospective, retrospective: rec_01JA0000000000000000000024</p>
+</article>
+
+<article class="evidence-entry">
+<a id="ev-q_00000000000000f1"></a>
+<h3><code>q_00000000000000f1</code></h3>
+<pre><code>SELECT * FROM score.funding ORDER BY rank</code></pre>
+<dl class="facts">
+<div><dt>build</dt><dd><code>20260926-100000-000001</code></dd></div>
+<div><dt>rows</dt><dd>1</dd></div>
+<div><dt>executed</dt><dd>2026-09-26T09:00:00.000000Z</dd></div>
+</dl>
+<details open><summary>Sample (1 rows)</summary>
+<div class="details-body"><table class="sample">
+<thead><tr><th scope="col">candidate_id</th><th scope="col">rank</th></tr></thead>
+<tbody>
+<tr><td>epic-1</td><td>1</td></tr>
+</tbody>
+</table></div>
+</details>
+<p class="used-by">Used by: <a href="#rec-1">rec-1</a>, <a href="#rec-2">rec-2</a>, funding_table, portfolio: base</p>
+</article>
+
+<article class="evidence-entry">
+<a id="ev-q_00000000000000f2"></a>
+<h3><code>q_00000000000000f2</code></h3>
+<pre><code>SELECT * FROM score.org ORDER BY rank</code></pre>
+<dl class="facts">
+<div><dt>build</dt><dd><code>20260926-100000-000001</code></dd></div>
+<div><dt>rows</dt><dd>1</dd></div>
+<div><dt>executed</dt><dd>2026-09-26T09:00:00.000000Z</dd></div>
+</dl>
+<details open><summary>Sample (1 rows)</summary>
+<div class="details-body"><table class="sample">
+<thead><tr><th scope="col">entity_id</th></tr></thead>
+<tbody>
+<tr><td>t1</td></tr>
+</tbody>
+</table></div>
+</details>
+<p class="used-by">Used by: scorecard: team=t1, scorecard: team=t2, actions</p>
+</article>
+
+</section>
+<section id="run">
+<h2>Run appendix</h2>
+<h3>Ranked entities</h3>
+<table><thead><tr><th scope="col">rank</th><th scope="col">entity type</th><th scope="col">entity id</th></tr></thead>
+<tbody><tr><td>1</td><td>candidate</td><td><code>epic-1</code></td></tr><tr><td>2</td><td>candidate</td><td><code>epic-2</code></td></tr></tbody></table>
+<h3>Tasks by role and status</h3>
+<table><thead><tr><th scope="col">role</th><th scope="col">status</th><th scope="col">tasks</th></tr></thead>
+<tbody><tr><td>analyst</td><td>done</td><td>2</td></tr><tr><td>writer</td><td>done</td><td>1</td></tr></tbody></table>
+<dl class="facts">
+<div><dt>tokens in · out</dt><dd>1200 · 340</dd></div>
+<div><dt>cost</dt><dd>$0.42</dd></div>
+<div><dt>config hash</dt><dd><code>cfg_00000000000000aa</code></dd></div>
+</dl>
+</section>
+<footer>Template version 1 · rendered 2026-09-26T12:00:00+00:00</footer>
+</body>
+</html>

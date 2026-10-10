@@ -10,7 +10,9 @@ T07-23 adds the process `MemoryStore` and its outcome / maintenance handler seam
 T11-23 registers `tests.support.stub_http` (`stub_services`) and `tests.support.fake_llm`
 (`fake_llm_registered`). T10-21 registers `tests.support.secret_leak` (`leak_run`). T09-20
 registers `tests.support.cli_env` (`cli_env`). T10-23 registers `tests.support.fake_runner`
-(`fake_runner`, the impl 10 §11 `run_cmd` stand-in; T10-26/T10-27 extend it).
+(`fake_runner`, the impl 10 §11 `run_cmd` stand-in; T10-26/T10-27 extend it). T09-11
+registers `tests.support.snapshot` (`--snapshot-update`, `snapshot`) and
+`tests.support.report_env` (`report_env`, `report_warehouse`).
 """
 
 import random
@@ -44,6 +46,8 @@ pytest_plugins = [
     "tests.support.truth",
     "tests.support.bench",
     "tests.support.builds",
+    "tests.support.snapshot",
+    "tests.support.report_env",
 ]
 
 collect_ignore = ["support", "fixtures"]

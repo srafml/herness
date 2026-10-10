@@ -1,9 +1,9 @@
 """Tests for the Markdown report templates (impl 09 U09-28 Markdown part, T09-10; UT09-92).
 
-``render_run`` and ``build_environment`` arrive with T09-11, so this module builds a test-local
-environment with U09-23's postconditions verbatim and wraps ``jinja2.TemplateError`` into
-``SchemaViolation("report template error: <template name>")`` as U09-24 does. The context ``r``
-carries every ``ReportData`` field plus ``evidence`` (``EvidenceEntry`` list) and ``manifest``.
+Templates render through ``render._render_template`` on ``render.build_environment`` (T09-11),
+which wraps ``jinja2.TemplateError`` into ``SchemaViolation("report template error: <name>")``.
+The context ``r`` carries every ``ReportData`` field plus ``evidence`` (``EvidenceEntry`` list)
+and ``manifest``.
 """
 
 from __future__ import annotations
@@ -15,11 +15,11 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
-import jinja2
 import pytest
 
 from herness.core.errors import SchemaViolation
 from herness.core.types import Coverage
+from herness.reports import render
 from herness.reports._data import (
     Card,
     Caveats,
@@ -48,32 +48,9 @@ _ANCHOR_RE = re.compile(r'<a id="ev-q_[0-9a-f]{16}"></a>')
 _T0 = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
 
 
-def _environment() -> jinja2.Environment:
-    """U09-23 postconditions verbatim (T09-11 replaces this with ``build_environment``)."""
-    env = jinja2.Environment(
-        loader=jinja2.PackageLoader("herness.reports", "templates"),
-        autoescape=jinja2.select_autoescape(
-            enabled_extensions=("html.j2",), default_for_string=False, default=False
-        ),
-        undefined=jinja2.StrictUndefined,
-        trim_blocks=True,
-        lstrip_blocks=True,
-        keep_trailing_newline=True,
-        auto_reload=False,
-    )
-    env.filters["md"] = md_escape
-    env.globals["REPORT_CSP"] = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
-    env.globals["TEMPLATE_VERSION"] = "1"
-    return env
-
-
-def _render(name: str, r: object) -> str:
-    """Render ``name``; any template error becomes SchemaViolation naming it (as U09-24)."""
-    try:
-        return _environment().get_template(name).render(r=r)
-    except jinja2.TemplateError as exc:
-        msg = f"report template error: {name}"
-        raise SchemaViolation(msg) from exc
+def _render(name: str, r: SimpleNamespace) -> str:
+    """Render ``name`` through U09-24's wrapper on U09-23's environment (SchemaViolation)."""
+    return render._render_template(name, vars(r))
 
 
 def _text(text: str, qid: str | None = None) -> list[Segment]:
