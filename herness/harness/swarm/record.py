@@ -31,6 +31,7 @@ __all__ = ["run_record_step"]
 
 _log = get_logger("harness.swarm")
 _MAX_ERROR_CHARS: Final = 500
+_WITHHELD: Final = "message withheld"
 
 
 def _fill_rec_ids(draft: ReportDraft, rec_ids: Sequence[str]) -> ReportDraft:
@@ -70,7 +71,7 @@ async def _render(env: RunEnv, render: Callable[[str, Sequence[str]], object]) -
     try:
         await asyncio.to_thread(render, run_id, formats)
     except HernessError as err:
-        scrubbed = scrub_secrets(None, "", {"m": str(err)})["m"]
+        scrubbed = scrub_secrets(None, "", {"m": str(err)}).get("m", _WITHHELD)
         text = f"{type(err).__name__}: {scrubbed}"[:_MAX_ERROR_CHARS]
         patch = functools.partial(
             update_run_fields, run_id=run_id, meta_patch={"render_error": text}

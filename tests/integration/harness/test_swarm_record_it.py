@@ -175,3 +175,51 @@ def test_it06_22_changed_recommendations_propagates(sched: base_it.Sched, tmp_pa
     mem.ids = [_REC.format(1)]
     with pytest.raises(ReportContractError):
         _run(sched, _Render())
+
+
+def test_it06_22_scrub_failure_keeps_done_with_placeholder(
+    sched: base_it.Sched, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT06-22 a failing scrubber does not abort the step: `done`, placeholder message."""
+    _setup(sched, tmp_path, _Memory())
+    monkeypatch.setattr(record, "scrub_secrets", lambda *_a: {"event": "log.scrub.failed"})
+    _run(sched, _Render(FatalError("secret text")))
+    run = get_run(sched.bb.run_id)
+    assert run is not None
+    assert run.status == "done"
+    assert run.meta["render_error"] == "FatalError: message withheld"
+
+
+def test_rf_t06_20_differing_stored_rec_id_fails_closed(
+    sched: base_it.Sched, tmp_path: Path
+) -> None:
+    """RF-T06-20 a different `rec_id` already on the draft → FatalError; run stays recording."""
+    path = _setup(sched, tmp_path, _Memory())
+    stored = ReportDraft.model_validate_json(path.read_bytes())
+    recs = [r.model_copy(update={"rec_id": _REC.format(9)}) for r in stored.recommendations]
+    writer.write_draft_atomic(path, stored.model_copy(update={"recommendations": recs}))
+    with pytest.raises(FatalError):
+        _run(sched, _Render())
+    assert _status(sched) == "recording"
+
+
+def test_rf_t06_20_repeated_ids_fail_closed(sched: base_it.Sched, tmp_path: Path) -> None:
+    """RF-T06-20 repeated ids from memory → FatalError; draft untouched."""
+    mem = _Memory()
+    path = _setup(sched, tmp_path, mem)
+    mem.ids = [_REC.format(1), _REC.format(1)]
+    before = path.read_bytes()
+    with pytest.raises(FatalError):
+        _run(sched, _Render())
+    assert path.read_bytes() == before
+
+
+def test_rf_t06_20_wrong_run_status_fails_closed(sched: base_it.Sched, tmp_path: Path) -> None:
+    """RF-T06-20 a run neither `recording` nor `done` → FatalError."""
+    _setup(sched, tmp_path, _Memory())
+    run_write(
+        lambda c: set_run_status(c, sched.bb.run_id, "failed", {"recording"}, now=clock.now()),
+        op="t",
+    )
+    with pytest.raises(FatalError):
+        _run(sched, _Render())
