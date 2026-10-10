@@ -70,7 +70,9 @@ def correctness_check(
     notes: list[str] = []
     if baseline is None:
         notes.append(_NO_BASELINE)
-    elif baseline.answer_correctness is not None:
+    elif baseline.answer_correctness is None:
+        notes.append(f"{_NO_BASELINE} correctness")
+    else:
         drop_pp = round((baseline.answer_correctness - actual) * 100, 6)
         if drop_pp > settings.correctness_drop_max_pp:
             fails.append(f"dropped {drop_pp:.1f} pp vs baseline")
@@ -81,14 +83,16 @@ def planted_check(
     m: EvalMetrics, depth: str, status: Mapping[str, str], dataset_kind: str
 ) -> ThresholdResult:
     """Synthetic only: a planted question in `status` (id → aggregated status) that did not
-    pass, or T5 not caught at standard or deep depth."""
+    pass, or T5 not caught at standard or deep depth; planted ids not run are named only."""
     if dataset_kind != "synthetic":
         return _row("planted_truth", [], ["not synthetic"], None, None)
     missed = [qid for qid in PLANTED_IDS if qid in status and status[qid] != "passed"]
+    not_run = [qid for qid in PLANTED_IDS if qid not in status]
     fails = [f"not passed: {', '.join(missed)}"] if missed else []
     if depth in {"standard", "deep"} and m.skeptic_catch is False:
         fails.append("T5 confounder not caught")
-    return _row("planted_truth", fails, [], not fails, None)
+    notes = [f"not run: {', '.join(not_run)}"] if not_run else []
+    return _row("planted_truth", fails, notes, not fails, None)
 
 
 def tool_check(m: EvalMetrics, profile: str, settings: Thresholds) -> ThresholdResult:
@@ -105,8 +109,8 @@ def tool_check(m: EvalMetrics, profile: str, settings: Thresholds) -> ThresholdR
 def latency_check(
     m: EvalMetrics, run: tuple[str, str, str], baseline: EvalMetrics | None, settings: Thresholds
 ) -> ThresholdResult:
-    """Chat p95 vs ratio x baseline and the 30 s local-standard cap; standard review runs
-    over 5,400 s only on a full-scale dataset."""
+    """Chat p95 vs ratio x baseline and the 30 s local-standard cap; any standard review run
+    (the slowest, `review_latency_max_s`) over 5,400 s, only on a full-scale dataset."""
     profile, depth, scale = run
     p95 = m.chat_latency_p95_s
     fails: list[str] = []
@@ -121,7 +125,7 @@ def latency_check(
     limit = min(limits) if limits else None
     if p95 is not None and limit is not None and p95 > limit:
         fails.append(f"chat p95 {p95:.1f} s above {limit:.1f} s")
-    review = m.review_latency_p95_s
+    review = m.review_latency_max_s
     if (
         depth == "standard"
         and scale == "full"

@@ -118,7 +118,7 @@ def test_ut11_96_strict_majority_of_repeats() -> None:
         _result("G02", 1, status="failed"), _result("G02", 2, status="failed"),
         _result("G02", 3),
     ]  # fmt: skip
-    m = aggregate_metrics(results, {}, {}, skeptic=None)
+    m = aggregate_metrics(results, {}, {}, skeptic=None, questions={})
     assert m.question_status == {"G01": "passed", "G02": "failed"}
     assert m.answer_correctness == pytest.approx(0.5)
 
@@ -126,7 +126,7 @@ def test_ut11_96_strict_majority_of_repeats() -> None:
 def test_ut11_96_even_split_is_not_a_majority() -> None:
     """UT11-96 a 1-1 split of two repeats is not a strict majority: the question fails."""
     results = [_result("G01", 1), _result("G01", 2, status="error")]
-    m = aggregate_metrics(results, {}, {}, skeptic=None)
+    m = aggregate_metrics(results, {}, {}, skeptic=None, questions={})
     assert m.question_status == {"G01": "failed"}
 
 
@@ -176,7 +176,7 @@ def test_ut11_97_trace_rates_and_per_run_counts() -> None:
         RUN_A: _run(RUN_A, tokens=(100, 40), cost="0.50"),
         RUN_B: _run(RUN_B, tokens=(20, 5), cost="0.25"),
     }
-    m = aggregate_metrics(results, traces, runs, skeptic=True)
+    m = aggregate_metrics(results, traces, runs, skeptic=True, questions={})
     assert m.tool_call_success_rate == pytest.approx(3 / 4)
     assert m.verifier_rejection_rate == pytest.approx(1 / 3)
     assert m.retries_per_run == pytest.approx(1.0)
@@ -208,7 +208,7 @@ def test_ut11_98_nearest_rank_latency_and_judge_mean() -> None:
         _result("F02", latency_s=500.0, pipeline_run_id=RUN_C, draft_mode="full"),
         _result("O01", latency_s=900.0, pipeline_run_id=RUN_A, draft_mode="findings_only"),
     ]  # fmt: skip
-    m = aggregate_metrics([*chat, *review], {RUN_C: [], RUN_A: []}, {}, skeptic=None)
+    m = aggregate_metrics([*chat, *review], {RUN_C: [], RUN_A: []}, {}, skeptic=None, questions={})
     assert m.chat_latency_p50_s == pytest.approx(10.0)
     assert m.chat_latency_p95_s == pytest.approx(19.0)
     assert m.review_latency_p50_s == pytest.approx(500.0)
@@ -354,7 +354,7 @@ def test_ut11_105_latency_vs_baseline_and_full_review() -> None:
     base = _metrics(chat_latency_p95_s=4.0)
     assert _check(_metrics(chat_latency_p95_s=5.1), baseline=base)["latency"].passed is False
     assert _check(_metrics(chat_latency_p95_s=4.9), baseline=base)["latency"].passed is True
-    slow = _metrics(review_latency_p95_s=5401.0)
+    slow = _metrics(review_latency_max_s=5401.0)
     assert _check(slow, dataset_scale="full")["latency"].passed is False
     assert _check(slow, dataset_scale="small")["latency"].passed is True
     assert _check(slow, dataset_scale="full", depth="deep")["latency"].passed is True
@@ -388,7 +388,9 @@ def test_cv_t11_29_missing_trace_noted_and_left_out() -> None:
         started_at=_T0, finished_at=None, cost_usd=Decimal("0.1"), config_hash="h", meta={},
         token_usage={"chat": {"tokens_in": True, "tokens_out": "9"}, "flag": 1},
     )  # fmt: skip
-    m = aggregate_metrics(results, {RUN_A: [{"type": "retry"}]}, {RUN_C: odd}, skeptic=None)
+    m = aggregate_metrics(
+        results, {RUN_A: [{"type": "retry"}]}, {RUN_C: odd}, skeptic=None, questions={}
+    )
     assert m.notes == [f"trace missing: {RUN_B}"]
     assert m.retries_per_run == pytest.approx(1.0)
     assert m.tool_call_success_rate is None
@@ -398,7 +400,7 @@ def test_cv_t11_29_missing_trace_noted_and_left_out() -> None:
 
 def test_cv_t11_29_empty_results() -> None:
     """CV-T11-29 no results: rates None, per-run counts 0, unsupported rate 0."""
-    m = aggregate_metrics([], {}, {}, skeptic=None)
+    m = aggregate_metrics([], {}, {}, skeptic=None, questions={})
     assert m.answer_correctness is None
     assert m.retries_per_run == pytest.approx(0.0)
     assert m.unsupported_number_rate == pytest.approx(0.0)
@@ -448,8 +450,45 @@ def test_cv_t11_29_threshold_edges() -> None:
     assert rows["cost"].limit == pytest.approx(12.0)
     ok = _check(_metrics(answer_correctness=0.95), profile="premium", baseline=base)
     assert ok["correctness"].passed is True
-    assert ok["correctness"].detail == "ok"
+    assert ok["correctness"].detail == "no baseline correctness"
     other = _check(_metrics(), profile="mystery")
     assert other["tool_calls"].detail == "no minimum"
     assert other["cost"].detail == "not premium"
     assert other["suite_errors"].passed is True
+
+
+def test_ut11_104_planted_ids_not_run_are_named() -> None:
+    """UT11-104 a filtered run that skipped planted questions passes `planted_truth` and the
+    detail names the planted ids that were not run."""
+    row = _check(_metrics(skeptic_catch=True), results=[_result("G06"), _result("F01")])
+    assert row["planted_truth"].passed is True
+    assert row["planted_truth"].detail == "not run: G03, O01"
+    every = [_result(qid) for qid in ("G03", "G06", "F01", "O01")]
+    assert _check(_metrics(skeptic_catch=True), results=every)["planted_truth"].detail == "ok"
+
+
+def test_ut11_105_slowest_of_many_review_runs_fails() -> None:
+    """UT11-105 with 21 review runs where only the slowest exceeds 5,400 s, the standard
+    review check on a full dataset fails (max, not the nearest-rank p95)."""
+    runs = ["run_" + f"{i:026d}" for i in range(21)]
+    review = [
+        _result(f"F{i:02d}", latency_s=6000.0 if i == 20 else 100.0, pipeline_run_id=rid,
+                draft_mode="full")
+        for i, rid in enumerate(runs)
+    ]  # fmt: skip
+    m = aggregate_metrics(review, {}, {}, skeptic=None, questions={})
+    assert m.review_latency_p95_s == pytest.approx(100.0)
+    assert m.review_latency_max_s == pytest.approx(6000.0)
+    row = _check(m, dataset_scale="full")["latency"]
+    assert row.passed is False
+    assert "review 6000 s" in row.detail
+
+
+def test_ut11_103_baseline_without_correctness_reported() -> None:
+    """UT11-103 a baseline without `answer_correctness` skips the drop check visibly:
+    `no baseline` appears in the correctness detail."""
+    base = _metrics(answer_correctness=None)
+    row = _check(_metrics(answer_correctness=0.5), baseline=base)["correctness"]
+    assert row.passed is False
+    assert "below floor" in row.detail
+    assert "no baseline" in row.detail

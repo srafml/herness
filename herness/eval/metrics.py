@@ -79,6 +79,7 @@ class EvalMetrics(BaseModel):
     chat_latency_p95_s: float | None = None
     review_latency_p50_s: float | None = None
     review_latency_p95_s: float | None = None
+    review_latency_max_s: float | None = None
     judge_mean: float | None = None
     skeptic_catch: bool | None = None
     notes: list[str] = []
@@ -93,19 +94,19 @@ def aggregate_metrics(
     runs: Mapping[str, RunRow],
     *,
     skeptic: bool | None,
-    questions: Mapping[str, EvalQuestion] | None = None,
+    questions: Mapping[str, EvalQuestion],
 ) -> EvalMetrics:
     """Aggregate per-question results, traces and run rows into `EvalMetrics`.
 
-    `questions` (id → suite question) supplies pipeline and tags; without it the per-pipeline
-    and per-tag correctness stay empty and a result with no draft counts as a chat question.
+    `questions` (id → suite question, required) supplies pipeline and tags; a result whose id
+    is not in it is left out of the per-pipeline and per-tag rates and counts as a chat
+    question when it has no draft.
     """
-    known = questions or {}
     status = question_statuses(results)
-    by_pipeline, by_tag = _grouped(status, known)
+    by_pipeline, by_tag = _grouped(status, questions)
     trace_values, notes = _trace_metrics(results, traces)
     tokens_in, tokens_out, cost = _usage(runs.values())
-    chat, review = _latencies(results, known)
+    chat, review = _latencies(results, questions)
     return EvalMetrics(
         question_status=status,
         answer_correctness=_rate(status.values()),
@@ -119,6 +120,7 @@ def aggregate_metrics(
         chat_latency_p95_s=_nearest_rank(chat, 95),
         review_latency_p50_s=_nearest_rank(review, 50),
         review_latency_p95_s=_nearest_rank(review, 95),
+        review_latency_max_s=max(review, default=None),
         judge_mean=_judge_mean(results),
         skeptic_catch=skeptic,
         notes=notes,
