@@ -1,11 +1,12 @@
 """Terminal chat test helpers (T09-25): ``herness chat`` through Typer's ``CliRunner``.
 
 ``chat_cli_env`` combines ``cli_env`` (config tree, OS user ``alice``, user-ref key) with the
-migrated ``ops_store``. It registers ``herness chat`` on the real root app (the command list is
-restored afterwards; ``_registered`` stays set, so ``main`` sees ``chat`` once), replaces the chat
-service and memory store with a ``FakeChatService`` that writes the assistant row like spec 06
-and a ``FakeMemoryStore``, masks e-mail addresses in place of the keyed redaction, fixes the chat
-policy at ``env.mode[0]`` and records the ``clock.sleep`` calls of the ``defer`` poll.
+migrated ``ops_store``. It registers the command groups (``herness chat`` among them) on the
+real root app (lists restored afterwards; registration is idempotent, so ``main`` sees ``chat``
+once), replaces the chat service and memory store with a ``FakeChatService`` that writes the
+assistant row like spec 06 and a ``FakeMemoryStore``, masks e-mail addresses in place of the keyed
+redaction, fixes the chat policy at ``env.mode[0]`` and records the ``clock.sleep`` calls of the
+``defer`` poll.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from tests.support.cli_env import CliEnv
+from tests.support.cli_env import CliEnv, preserved_app
 from tests.support.fake_chat import FakeChatService
 from tests.support.fake_memory import FakeMemoryStore
 from tests.support.ops_store import OpsStoreHandle
@@ -107,10 +108,6 @@ def chat_cli_env(
 
     mp.setattr(_chat_turn, "policy", policy)
     mp.setattr(clock, "sleep", sleep)
-    saved = list(cli.app.registered_commands)
-    cmd_chat.register(cli.app)
-    mp.setattr(cli, "_registered", True)  # `main` must not register the groups a second time
-    try:
+    with preserved_app():
+        cli._register_groups(cli.app)  # idempotent: a later `main` adds nothing twice
         yield env
-    finally:
-        cli.app.registered_commands[:] = saved
