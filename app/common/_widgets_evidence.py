@@ -2,9 +2,12 @@
 
 Stored ``result_sample`` cells reach the page only as dataframe string cells (TH09-23) and never
 as raw text (TH09-11): ``title``, ``summary``, ``description``, ``notes`` and the
-FORBIDDEN_TEXT_COLUMNS are always dropped; every other column whose values are not all numeric,
-boolean, date/time or ids is passed through ``redact_text`` with the loaded key, or dropped when
-no key is loaded. Its public names are re-exported by ``app.common.widgets``.
+FORBIDDEN_TEXT_COLUMNS are always dropped (names compared stripped and case-folded); every other
+column whose values are not all numeric, boolean, date/time or ids is passed through
+``redact_text`` with the loaded key, or dropped when no key is loaded. A nested dict/list cell is
+redacted as JSON text after its always-dropped keys are removed. Decimal-shaped strings
+(``555.1234``) count as numeric and are shown. Public names are re-exported by
+``app.common.widgets``.
 """
 
 from __future__ import annotations
@@ -32,16 +35,17 @@ ALWAYS_DROPPED: Final = frozenset(
     {"title", "summary", "description", "notes", *wh.FORBIDDEN_TEXT_COLUMNS}
 )
 # Typed text as the evidence encoder writes it (impl 04 U04-02): decimals with a fraction,
-# non-finite floats, dates, timestamps, times, query ids, (prefixed) ULIDs and build ids. A
-# digit-only string may be a phone number or ticket text, so it counts as text.
+# non-finite floats, dates, timestamps, times, query ids, (prefixed) ULIDs with at least one
+# letter and build ids. A digit-only string (phone, account number) counts as text.
 _TYPED_RE: Final = re.compile(
     r"[-+]?\d+\.\d+|-?inf|nan"
     r"|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?"
     r"|\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?"
-    r"|q_[0-9a-f]{16}|(?:[a-z]{1,16}_)?[0-7][0-9A-HJKMNP-TV-Z]{25}"
+    r"|q_[0-9a-f]{16}|(?:[a-z]{1,16}_)?(?=[0-9]*[A-HJKMNP-TV-Z])[0-7][0-9A-HJKMNP-TV-Z]{25}"
     r"|\d{8}-\d{6}-[0-9A-HJKMNP-TV-Z]{6}",
     re.ASCII,
 )
+_MAX_DEPTH: Final = 32
 
 
 def parse_json(raw: object) -> object:
@@ -60,6 +64,21 @@ def _typed(value: object) -> bool:
     return isinstance(value, str) and _TYPED_RE.fullmatch(value) is not None
 
 
+def _dropped(name: str) -> bool:
+    return name.strip().casefold() in ALWAYS_DROPPED
+
+
+def _strip(value: object, depth: int = 0) -> object:
+    """``value`` without always-dropped keys at any depth; ``None`` below ``_MAX_DEPTH``."""
+    if depth > _MAX_DEPTH:
+        return None
+    if isinstance(value, Mapping):
+        return {str(k): _strip(v, depth + 1) for k, v in value.items() if not _dropped(str(k))}
+    if isinstance(value, list):
+        return [_strip(v, depth + 1) for v in value]
+    return value
+
+
 def _cell(value: object) -> str:
     return ("" if value is None else str(value))[:CELL_MAX]
 
@@ -68,6 +87,8 @@ def _redacted(value: object) -> str:
     """The redacted cell; ``[redacted]`` when redaction fails closed (``None``)."""
     if value is None:
         return ""
+    if isinstance(value, Mapping | list):
+        value = json.dumps(_strip(value), ensure_ascii=False)
     return (redact.redact_text(str(value)) or REDACTED)[:CELL_MAX]
 
 
@@ -77,8 +98,7 @@ def sample_rows(raw: object) -> list[dict[str, str]] | None:
     if not isinstance(parsed, list):
         return None
     rows = [{str(k): v for k, v in row.items()} for row in parsed if isinstance(row, Mapping)]
-    names = [n for n in dict.fromkeys(k for row in rows for k in row)
-             if n.lower() not in ALWAYS_DROPPED]  # fmt: skip
+    names = [n for n in dict.fromkeys(k for row in rows for k in row) if not _dropped(n)]
     text = [n for n in names if not all(_typed(row.get(n)) for row in rows)]
     try:
         cells = {n: [_redacted(row.get(n)) for row in rows] for n in text}
