@@ -38,9 +38,18 @@ def child_env(monkeypatch: pytest.MonkeyPatch, state: ProcessState) -> dict[str,
     return env
 
 
-def child(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
-    """Run ``python -m tests.support._f08_children <args>`` to its end."""
-    argv = [sys.executable, "-m", "tests.support._f08_children", *args]
+def child_env_without_plan() -> dict[str, str]:
+    """The current environment for a child, without any fault plan."""
+    env = dict(os.environ, PYTHONUTF8="1", HERNESS_ENV="test")
+    env.pop("HERNESS_FAULTS", None)
+    return env
+
+
+def child(
+    env: dict[str, str], *args: str, module: str = "tests.support._f08_children"
+) -> subprocess.CompletedProcess[str]:
+    """Run ``python -m <module> <args>`` (default the suite's children) to its end."""
+    argv = [sys.executable, "-m", module, *args]
     return subprocess.run(  # noqa: S603 - fixed argv list, no shell
         argv,
         cwd=REPO,
@@ -54,21 +63,21 @@ def child(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def killed(done: subprocess.CompletedProcess[str]) -> None:
+def killed(done: subprocess.CompletedProcess[str], prefix: str = RESULT_PREFIX) -> None:
     """The child died at a `kill` fault point of a plan it loaded from `HERNESS_FAULTS`."""
     logs = done.stdout + done.stderr
     assert done.returncode == KILLED_RETURNCODE, (done.returncode, logs[-3000:])
-    assert RESULT_PREFIX not in done.stdout
+    assert prefix not in done.stdout
     assert "resilience.faults.enabled" in logs
     assert "resilience.faults.kill" in logs
 
 
-def result(done: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+def result(done: subprocess.CompletedProcess[str], prefix: str = RESULT_PREFIX) -> dict[str, Any]:
     """The child's result line (it must have exited 0)."""
     logs = done.stdout + done.stderr
     assert done.returncode == 0, logs[-3000:]
-    [line] = [x for x in done.stdout.splitlines() if x.startswith(RESULT_PREFIX)]
-    out: dict[str, Any] = json.loads(line.removeprefix(RESULT_PREFIX))
+    [line] = [x for x in done.stdout.splitlines() if x.startswith(prefix)]
+    out: dict[str, Any] = json.loads(line.removeprefix(prefix))
     return out
 
 

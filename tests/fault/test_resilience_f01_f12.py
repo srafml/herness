@@ -19,6 +19,13 @@ from tests.integration.harness._swarm_run_env import Drv, drv
 from tests.support import _f08_llm as fl
 from tests.support import _f08_sources as fs
 from tests.support import loop_standin as ls
+from tests.support._f08_cases_gpu import (
+    gpu_worker,
+    test_ft08_08_kill_before_promote_current_unchanged_rerun_promotes,
+    test_ft08_09_kill_after_stop_restart_detects_one_class_or_none,
+    test_ft08_10_preempted_at_08_00_yields_then_resumes_at_19_00,
+    test_ft08_12_build_pipeline_in_job_switches_on_the_gpu_slot,
+)
 from tests.support._f08_cases_jobs import (
     test_ft08_06_kill_after_finding_write_then_resume_no_duplicates,
     test_ft08_07_claim_then_kill_requeued_by_reaper_within_lease_plus_30s,
@@ -41,14 +48,19 @@ from herness.store.ops import get_watermark, select_tasks
 
 pytestmark = pytest.mark.fault
 
-# Fixtures used here, and the FT08-06/07/11 tests collected from their private sibling
-# module (the ENG 400-line limit splits the suite; they run under this module's marker).
+# Fixtures used here, and the FT08-06..FT08-12 tests collected from their private sibling
+# modules (the ENG 400-line limit splits the suite; they run under this module's marker).
 __all__ = [
     "drv",
+    "gpu_worker",
     "test_ft08_06_kill_after_finding_write_then_resume_no_duplicates",
     "test_ft08_07_claim_then_kill_requeued_by_reaper_within_lease_plus_30s",
     "test_ft08_07_claim_then_kill_requeued_on_restart_and_completed",
+    "test_ft08_08_kill_before_promote_current_unchanged_rerun_promotes",
+    "test_ft08_09_kill_after_stop_restart_detects_one_class_or_none",
+    "test_ft08_10_preempted_at_08_00_yields_then_resumes_at_19_00",
     "test_ft08_11_store_busy_writes_retried_no_lost_job_state",
+    "test_ft08_12_build_pipeline_in_job_switches_on_the_gpu_slot",
     "test_redactor",
     "worker_env",
 ]

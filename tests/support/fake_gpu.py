@@ -11,6 +11,11 @@
 * `gpu` is the shipped `resilience.gpu` with each service URL pointed at its stub server;
   it is installed as the `R.gpu` that `gpu_services` reads, so no config load is needed
   except for the `vllm-reasoning` warm-up, which reads `models.yaml`.
+* T08-24 (fault suite) adds `running_services` (the running service set after each compose
+  command) with `assert_single_service`, and an opt-in shared compose state: after
+  `fake.share(path)` the settings, `states`, `sticky` and both histories live in a JSON file,
+  so a child process that calls `attach_shared(path, setattr)` (killed mid-swap, FT08-09)
+  and this process act on one fake compose host. Unshared fakes behave as before.
 
 Nothing here reaches a real network or starts a real process.
 """
@@ -19,10 +24,11 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import subprocess
 import threading
 import types
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -136,6 +142,40 @@ class FakeGpu:
     sticky: set[str] = field(default_factory=set)
     running_classes: list[frozenset[str]] = field(default_factory=list)
     http: LoopbackHttp = field(default_factory=LoopbackHttp)
+    running_services: list[frozenset[str]] = field(default_factory=list)
+    state_file: Path | None = None
+
+    def share(self, path: Path) -> Path:
+        """Keep the compose state in `path` from now on (T08-24): the settings, `states`,
+        `sticky` and both running histories are JSON there, so a child process using
+        `attach_shared(path, ...)` and this process see one compose host. Returns `path`."""
+        self.state_file = path
+        self._save()
+        return path
+
+    def load_shared(self) -> None:
+        """Reload `states`, `sticky` and the histories from the shared file (if shared)."""
+        if self.state_file is None:
+            return
+        data = json.loads(self.state_file.read_text(encoding="utf-8"))
+        self.states = dict(data["states"])
+        self.sticky = set(data["sticky"])
+        self.running_classes = [frozenset(x) for x in data["running_classes"]]
+        self.running_services = [frozenset(x) for x in data["running_services"]]
+
+    def _save(self) -> None:
+        if self.state_file is None:
+            return
+        data = {
+            "gpu": self.gpu.model_dump(mode="json"),
+            "states": self.states,
+            "sticky": sorted(self.sticky),
+            "running_classes": [sorted(x) for x in self.running_classes],
+            "running_services": [sorted(x) for x in self.running_services],
+        }
+        tmp = self.state_file.with_name(f".{self.state_file.name}.tmp")
+        tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, self.state_file)
 
     @property
     def prefix(self) -> list[str]:
@@ -184,7 +224,8 @@ class FakeGpu:
         return ""
 
     def run(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        """The fake `subprocess.run`."""
+        """The fake `subprocess.run` (on the shared state, when `share` was called)."""
+        self.load_shared()
         if argv == list(self.gpu.vram_check_cmd):
             self.vram_argv.append(list(argv))
             return subprocess.CompletedProcess(argv, 0, self._vram(), "")
@@ -199,11 +240,40 @@ class FakeGpu:
             return subprocess.CompletedProcess(argv, rc, "", stderr)
         stdout = self._compose(tail)
         self.running_classes.append(frozenset(self.class_of(s) for s in self.running()))
+        self.running_services.append(frozenset(self.running()))
+        self._save()
         return subprocess.CompletedProcess(argv, 0, stdout, "")
 
     def assert_single_class(self) -> None:
         """Services of two classes were never running at the same time."""
         assert all(len(classes) <= 1 for classes in self.running_classes), self.running_classes
+
+    def assert_single_service(self) -> None:
+        """Two services were never running at the same time (T08-24, FT08-12)."""
+        assert all(len(names) <= 1 for names in self.running_services), self.running_services
+
+
+def _install(fake: FakeGpu, set_attr: Callable[[Any, str, Any], None]) -> None:
+    """Make `fake` the subprocess and `R.gpu` of `gpu_services` (through `set_attr`)."""
+    namespace = types.SimpleNamespace(
+        run=fake.run,
+        TimeoutExpired=subprocess.TimeoutExpired,
+        SubprocessError=subprocess.SubprocessError,
+    )
+    set_attr(gpu_services, "subprocess", namespace)
+    set_attr(gpu_services, "_gpu", lambda: fake.gpu)
+
+
+def attach_shared(path: Path, set_attr: Callable[[Any, str, Any], None]) -> FakeGpu:
+    """In another process: a `FakeGpu` on the compose state that `FakeGpu.share(path)` wrote
+    (settings with the parent's stub service URLs; no stub servers of its own), installed into
+    `gpu_services` through `set_attr` (`setattr` in a child, `monkeypatch.setattr` in a
+    test)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    fake = FakeGpu(gpu=GpuSettings.model_validate(data["gpu"]), stubs={}, state_file=path)
+    fake.load_shared()
+    _install(fake, set_attr)
+    return fake
 
 
 @pytest.fixture
@@ -213,13 +283,7 @@ def fake_gpu(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeGpu]:
     names = [name for spec in base.classes.values() for name in spec.services]
     stubs = {name: _start_stub() for name in names}
     fake = FakeGpu(gpu=_with_urls(base, {n: s.url for n, s in stubs.items()}), stubs=stubs)
-    namespace = types.SimpleNamespace(
-        run=fake.run,
-        TimeoutExpired=subprocess.TimeoutExpired,
-        SubprocessError=subprocess.SubprocessError,
-    )
-    monkeypatch.setattr(gpu_services, "subprocess", namespace)
-    monkeypatch.setattr(gpu_services, "_gpu", lambda: fake.gpu)
+    _install(fake, monkeypatch.setattr)
     try:
         yield fake
     finally:
