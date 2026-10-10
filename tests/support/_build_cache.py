@@ -43,7 +43,7 @@ from tools.synth._manifest import MARKER
 from tools.synth.params import SOURCES, load_params, params_hash
 
 FINGERPRINT: Final = ".fixture_build.json"
-FIXTURE_REV: Final = 1  # bump when `builds` changes how a build is made
+FIXTURE_REV: Final = 2  # bump when `builds` changes how a build is made (2: T11-34 stubs)
 LOCK_WAIT_S: Final = 30 * 60.0
 LOCK_POLL_S: Final = 1.0
 EMPTY_LOCK_STALE_S: Final = 60.0

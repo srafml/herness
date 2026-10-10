@@ -3,6 +3,7 @@ data/
 !.env.example
 .venv/
 build/
+!tests/fixtures/llm_scripts/build/
 dist/
 *.egg-info/
 __pycache__/
