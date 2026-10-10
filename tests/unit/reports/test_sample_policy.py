@@ -1,12 +1,10 @@
-"""UT09-113: ``herness.reports._sample_policy`` keeps the T09-15c dashboard rule (T09-15d).
+"""UT09-113: ``herness.reports._sample_policy`` is the one sample rule of both surfaces (T09-15e).
 
 The case table copies ST09-30's inputs and expected keep/drop/redact decisions
-(``tests/security/test_st09_evidence.py`` of T09-15c) so the report appendix and the dashboard
-evidence widget cannot drift. Rows marked ``POST_RULING`` intentionally diverge from the
-T09-15c dashboard (bc903cf): under the T09-15d controller ruling numeric cells (ints, floats,
-decimal-shaped strings) pass ``redact_text`` instead of being shown verbatim, and are dropped
-without a key. Post-ruling; dashboard must follow: ``app/common/_widgets_evidence.py`` imports
-this policy (follow-up after batch 48); until then this table is the parity check.
+(``tests/security/test_st09_evidence.py``). The dashboard evidence widget
+(``app/common/_widgets_evidence.py``) re-exports this module's ``sample_rows`` (T09-15e), so
+the report appendix and the dashboard give identical results for every case. Numeric cells
+(ints, floats, decimal-shaped strings) pass ``redact_text`` and are dropped without a key.
 """
 
 from __future__ import annotations
@@ -37,32 +35,30 @@ VERBATIM: Final[dict[str, object]] = {
 SAFE: Final[dict[str, object]] = {"n": 3, "amount": "12.50", **VERBATIM}
 ALWAYS: Final = ("title", "summary", "description", "notes", "short_description", "close_notes")
 NESTED: Final = {"k": "v", "Title": RAW_TITLE, "deep": [{"notes": RAW_TITLE}]}
-POST_RULING: Final = "post-ruling; dashboard must follow"
-SAME: Final = "same as T09-15c dashboard"
 
 # (case, stored rows, columns with a key, values passed to redact_text in order,
-#  columns without a key, parity note)
-type Case = tuple[str, list[dict[str, object]], list[str], list[str], list[str], str]
+#  columns without a key)
+type Case = tuple[str, list[dict[str, object]], list[str], list[str], list[str]]
 CASES: Final[list[Case]] = [
     ("with_key", [
         {**SAFE, **dict.fromkeys(ALWAYS, RAW_TITLE), "comment": f"call {PII}"},
         {"n": 4, "comment": "second"},
         {"n": 5, "comment": None},
     ], [*SAFE, "comment"], ["3", "4", "5", "12.50", f"call {PII}", "second"],
-     list(VERBATIM), POST_RULING),  # n, amount now redacted / dropped without a key
+     list(VERBATIM)),  # n, amount redacted / dropped without a key
     ("digit_strings", [{"n": 1, "acct": ACCT, "ref": "acct_" + ACCT, "run": RUN}],
-     ["n", "acct", "ref", "run"], ["1", ACCT, "acct_" + ACCT], ["run"], POST_RULING),
+     ["n", "acct", "ref", "run"], ["1", ACCT, "acct_" + ACCT], ["run"]),
     ("name_variants_nested", [
         {" title": RAW_TITLE, "Title ": RAW_TITLE, "NOTES": RAW_TITLE, "n": 1, "meta": NESTED},
-    ], ["n", "meta"], ["1", json.dumps({"k": "v", "deep": [{}]})], [], POST_RULING),
+    ], ["n", "meta"], ["1", json.dumps({"k": "v", "deep": [{}]})], []),
     ("text_only", [{"comment": f"call {PII}", "run": RUN, "title": RAW_TITLE}],
-     ["comment", "run"], [f"call {PII}"], ["run"], SAME),
+     ["comment", "run"], [f"call {PII}"], ["run"]),
     ("numeric_pii", [{"phone": PHONE, "acct_f": ACCT_F, "dec": "555.0123", "at": "12:34:56",
                       "flag": False}],
      ["phone", "acct_f", "dec", "at", "flag"], ["2025550123", "2025550123.0", "555.0123"],
-     ["at", "flag"], POST_RULING),
+     ["at", "flag"]),
     ("pii_names", [{PII: "x", str(PHONE): "y", "n": 2, "day": "2026-01-02"}],
-     ["n", "day"], [PII, str(PHONE), "2"], ["day"], POST_RULING),  # review I1: names checked
+     ["n", "day"], [PII, str(PHONE), "2"], ["day"]),  # review I1: names checked
 ]  # fmt: skip
 IDS: Final = [c[0] for c in CASES]
 # Column names the double passes through unchanged (the real redactor keeps them as well).
@@ -92,7 +88,7 @@ def _double(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 @pytest.mark.parametrize("entry", CASES, ids=IDS)
 def test_ut09_113_parity_with_key(monkeypatch: pytest.MonkeyPatch, entry: Case) -> None:
     """UT09-113 cases with a key: always-drop columns gone, only non-verbatim cells redacted."""
-    case, rows, columns, redacted, _keyless, _note = entry
+    case, rows, columns, redacted, _keyless = entry
     seen = _double(monkeypatch)
     out = policy.sample_rows(json.dumps(rows))
     assert out is not None
@@ -115,7 +111,7 @@ def test_ut09_113_parity_with_key(monkeypatch: pytest.MonkeyPatch, entry: Case) 
 @pytest.mark.parametrize("entry", CASES, ids=IDS)
 def test_ut09_113_parity_without_key(monkeypatch: pytest.MonkeyPatch, entry: Case) -> None:
     """UT09-113 cases without a key: every non-verbatim column dropped, verbatim ones kept."""
-    _case, rows, _columns, redacted, keyless, _note = entry
+    _case, rows, _columns, redacted, keyless = entry
 
     def no_key() -> object:
         msg = "redact.hmac_key is not set"
@@ -205,6 +201,24 @@ def test_ut09_113_limit_cut_before_redaction(monkeypatch: pytest.MonkeyPatch) ->
 def test_ut09_113_not_stored(raw: object) -> None:
     """UT09-113 NULL, unparsable or non-list samples are ``None`` ("Sample not stored")."""
     assert policy.sample_rows(raw) is None
+
+
+@pytest.mark.parametrize("entry", CASES, ids=IDS)
+def test_ut09_113_dashboard_identical(monkeypatch: pytest.MonkeyPatch, entry: Case) -> None:
+    """UT09-113 the dashboard widget gives the identical output for every case (T09-15e)."""
+    from app.common import _widgets_evidence as widget  # noqa: PLC0415 - the other surface
+
+    assert widget.sample_rows is policy.sample_rows
+    rows = entry[1]
+    _double(monkeypatch)
+    from_widget = widget.sample_rows(rows)
+    _double(monkeypatch)  # fresh counter
+    assert from_widget == policy.sample_rows(rows)
+    assert (widget.ALWAYS_DROPPED, widget.CELL_MAX, widget.REDACTED) == (
+        policy.ALWAYS_DROPPED,
+        policy.CELL_MAX,
+        policy.REDACTED,
+    )
 
 
 def test_ut09_113_forbidden_columns_match_dashboard() -> None:

@@ -1,8 +1,10 @@
 """ST09-30: no raw text from a stored ``result_sample`` reaches the evidence widget (TH09-11).
 
-T09-15c: ``title``, ``summary``, ``description``, ``notes`` and the FORBIDDEN_TEXT_COLUMNS are
-always dropped; every other text column is redacted with the loaded key, or dropped when no key
-is loaded; numeric, boolean, date/time and id columns are shown as stored.
+T09-15c/T09-15e: ``title``, ``summary``, ``description``, ``notes`` and the FORBIDDEN_TEXT_COLUMNS
+are always dropped; every other column, numeric ones included, is redacted with the loaded key or
+dropped when no key is loaded; only boolean, date/time, id and NULL columns are shown as stored.
+Column names are kept only when ``redact_text`` leaves them unchanged (identifier-shaped with at
+most four digits without a key). The dashboard shares ``herness.reports._sample_policy``.
 """
 
 from __future__ import annotations
@@ -86,9 +88,12 @@ def _rendered(at: AppTest) -> str:
 
 def _redaction_double(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     seen: list[str] = []
+    names = {*SAFE, "comment", "acct", "ref", "meta"}  # column names stay unchanged
 
     def fake(text: str | None) -> str | None:
         assert text is not None
+        if text in names:
+            return text
         seen.append(text)
         return None if text == "second" else f"redacted #{len(seen)}"
 
@@ -108,18 +113,20 @@ def test_st09_30_raw_title_never_rendered_with_key(monkeypatch: pytest.MonkeyPat
     frame = at.dataframe[0].value
     assert list(frame.columns) == [*SAFE, "comment"]
     assert list(frame["comment"]) == [
-        "redacted #1",
+        "redacted #5",
         "[redacted]",
         "",
     ]  # None from redaction; empty cell
-    assert seen == [f"call {PII}", "second"]  # dropped and typed columns never redacted
+    assert list(frame["n"]) == ["redacted #1", "redacted #2", "redacted #3"]  # numbers redacted
+    assert list(frame["amount"]) == ["redacted #4", "", ""]
+    assert seen == ["3", "4", "5", "12.50", f"call {PII}", "second"]  # dropped/id columns never
     assert frame.iloc[0]["run"] == RUN
     assert frame.iloc[0]["ok"] == "True"
     assert frame.iloc[0]["opened_at"] == SAFE["opened_at"]
 
 
 def test_st09_30_raw_title_never_rendered_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ST09-30 no key loaded: every text column dropped; typed columns still shown."""
+    """ST09-30 no key loaded: text and numeric columns dropped; verbatim-safe columns shown."""
 
     def no_key() -> object:
         msg = "redact.hmac_key is not set"
@@ -133,8 +140,8 @@ def test_st09_30_raw_title_never_rendered_without_key(monkeypatch: pytest.Monkey
     assert RAW_TITLE not in text
     assert "second" not in text
     frame = at.dataframe[0].value
-    assert list(frame.columns) == list(SAFE)
-    assert list(frame["n"]) == ["3", "4", "5"]
+    assert list(frame.columns) == [k for k in SAFE if k not in {"n", "amount"}]
+    assert frame.iloc[0]["ok"] == "True"
 
 
 def test_st09_30_digit_strings_are_text_not_ids(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -145,7 +152,7 @@ def test_st09_30_digit_strings_are_text_not_ids(monkeypatch: pytest.MonkeyPatch)
     at = AppTest.from_function(evidence_script).run()
     assert not at.exception
     assert acct not in _rendered(at)
-    assert seen == [acct, "acct_" + acct]  # the ULID-shaped run id stays an id
+    assert seen == ["1", acct, "acct_" + acct]  # the ULID-shaped run id stays an id
     assert list(at.dataframe[0].value["run"]) == [RUN]
 
 
@@ -158,7 +165,7 @@ def test_st09_30_name_variants_and_nested_keys_dropped(monkeypatch: pytest.Monke
     at = AppTest.from_function(evidence_script).run()
     assert not at.exception
     assert list(at.dataframe[0].value.columns) == ["n", "meta"]
-    assert seen == [json.dumps({"k": "v", "deep": [{}]})]
+    assert seen == ["1", json.dumps({"k": "v", "deep": [{}]})]
     assert PII not in _rendered(at)
 
 
@@ -177,6 +184,40 @@ def test_st09_30_real_redactor_with_loaded_key(tmp_path: Path, fake_keyring: Mem
     assert list(frame.columns) == [*SAFE, "comment"]
     assert frame.iloc[0]["comment"].startswith("call [EMAIL_")
     assert frame.iloc[1]["comment"] == "second"
+    assert list(frame["n"]) == ["3", "4", "5"]  # counts pass the real redactor unchanged
+    assert frame.iloc[0]["amount"] == "12.50"
+
+
+def test_st09_30_real_redactor_numbers_and_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_keyring: MemoryKeyring
+) -> None:
+    """ST09-30 real redactor: a phone-like number is masked; PII-shaped column names dropped."""
+    config.reset_config()
+    fake_keyring.store[("herness", "redact.hmac_key")] = bytes(range(32)).hex()
+    config.init_config("local", config_dir=write_full_config(tmp_path), env={})
+    _plant(monkeypatch, [{"phone": 2025550123, "n": 7, PII: "x", "2025550123": "y"}])
+    at = AppTest.from_function(evidence_script).run()
+    assert not at.exception
+    frame = at.dataframe[0].value
+    assert list(frame.columns) == ["phone", "n"]
+    assert frame.iloc[0]["phone"].startswith("[PHONE_")
+    assert frame.iloc[0]["n"] == "7"
+    assert "2025550123" not in _rendered(at)
+    assert PII not in _rendered(at)
+
+
+def test_st09_30_column_names_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ST09-30 no key: only identifier-shaped names with at most four digits are kept."""
+
+    def no_key() -> object:
+        msg = "redact.hmac_key is not set"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(redact, "get_redactor", no_key)
+    _plant(monkeypatch, [{"ok": True, "v1234": False, PII: True, "2025550123": True}])
+    at = AppTest.from_function(evidence_script).run()
+    assert not at.exception
+    assert list(at.dataframe[0].value.columns) == ["ok", "v1234"]
 
 
 def test_st09_30_deep_nesting_cut(monkeypatch: pytest.MonkeyPatch) -> None:
