@@ -59,30 +59,34 @@ def _rows(fn_name: str, /, **params: object) -> list[Row]:
 
 
 def _builds(ctx: PageContext) -> None:
-    if ctx.build_id is None:
+    # Queried even when the sidebar found no build: only NoCurrentBuild means "none promoted";
+    # any other warehouse failure reaches this block's error card.
+    try:
+        result = wh.query("home.builds")
+    except wh.NoCurrentBuild:
         st.info(NO_BUILD)
         return
-    rows = wh.query("home.builds").table.to_pylist()
     st.dataframe(
         [
             {
                 "build": _text(r["build_id"]),
-                "current": "current" if r["build_id"] == ctx.build_id else "",
+                "current": "current" if r["build_id"] == result.build_id else "",
                 "status": _text(r["status"]),
                 "started": _text(r["started_at"]),
                 "age": _between(r["finished_at"] or r["started_at"], ctx.now),
             }
-            for r in rows
+            for r in result.table.to_pylist()
         ],
         hide_index=True,
     )
 
 
-def _data_quality(ctx: PageContext) -> None:
-    if ctx.build_id is None:
+def _data_quality() -> None:
+    try:
+        rows = wh.query("home.dq_failed").table.to_pylist()
+    except wh.NoCurrentBuild:
         st.caption("No promoted build")
         return
-    rows = wh.query("home.dq_failed").table.to_pylist()
     if not rows:
         st.success("All checks passed")
         return
@@ -96,19 +100,11 @@ def _runs() -> None:
         st.caption("No runs yet.")
     else:
         st.dataframe(
-            [
-                {
-                    "run": _text(r["run_id"]),
-                    "kind": _text(r["kind"]),
-                    "depth": _text(r["depth"]),
-                    "status": _text(r["status"]),
-                    "duration": _between(r["started_at"], r["finished_at"]),
-                    "cost_usd": _text(r["cost_usd"]),
-                }
-                for r in rows
-            ],
+            [{**{c: _text(r[c]) for c in ("run_id", "kind", "depth", "status")},
+              "duration": _between(r["started_at"], r["finished_at"]),
+              "cost_usd": _text(r["cost_usd"])} for r in rows],
             hide_index=True,
-        )
+        )  # fmt: skip
     st.markdown(RUNS_LINK)
 
 
@@ -117,15 +113,31 @@ def _error_class(raw: object) -> str:
     return _text(value)[:80]
 
 
-def _jobs(ctx: PageContext) -> None:
+type Snapshot = Mapping[str, object] | Exception
+
+
+def _read_snapshot() -> Snapshot:
+    """``status_snapshot`` read once per render; a failure is kept and raised in each block."""
+    try:
+        return cast("Mapping[str, object]", data.ops_read("status_snapshot"))
+    except Exception as exc:  # noqa: BLE001 - re-raised inside the Jobs and Workers blocks
+        return exc
+
+
+def _part(snapshot: Snapshot, key: str) -> Sequence[Row]:
+    if isinstance(snapshot, Exception):
+        raise snapshot
+    return cast("Sequence[Row]", snapshot[key])
+
+
+def _jobs(ctx: PageContext, snapshot: Snapshot) -> None:
     counts = cast("Mapping[str, int]", data.ops_read("ui_job_status_counts"))
     st.dataframe(
         [{"status": s, "jobs": str(n)} for s, n in sorted(counts.items())], hide_index=True
     )
     oldest = cast("float | None", data.ops_read("ui_oldest_queued_age_s", now=ctx.now))
     st.caption(f"Oldest queued job: {_age(oldest)}")
-    snapshot = cast("Mapping[str, object]", data.ops_read("status_snapshot"))
-    running = cast("Sequence[Row]", snapshot["running"])
+    running = _part(snapshot, "running")
     st.caption(f"Running: {len(running)}")
     if running:
         st.dataframe(
@@ -150,9 +162,8 @@ def _jobs(ctx: PageContext) -> None:
         )  # fmt: skip
 
 
-def _workers() -> None:
-    snapshot = cast("Mapping[str, object]", data.ops_read("status_snapshot"))
-    workers = cast("Sequence[Row]", snapshot["workers"])
+def _workers(snapshot: Snapshot) -> None:
+    workers = _part(snapshot, "workers")
     if not workers:
         st.info(NO_WORKER)
         return
@@ -188,12 +199,13 @@ def _sources() -> None:
 def body(ctx: PageContext) -> None:
     """The Overview blocks, each isolated so one failure leaves the rest of the page."""
     st.title("Overview")
+    snapshot = _read_snapshot()
     sections: tuple[tuple[str, Callable[[], None]], ...] = (
         ("Builds", lambda: _builds(ctx)),
-        ("Data quality", lambda: _data_quality(ctx)),
+        ("Data quality", _data_quality),
         ("Runs", _runs),
-        ("Jobs", lambda: _jobs(ctx)),
-        ("Workers", _workers),
+        ("Jobs", lambda: _jobs(ctx, snapshot)),
+        ("Workers", lambda: _workers(snapshot)),
         ("Sources", _sources),
     )
     for name, render in sections:

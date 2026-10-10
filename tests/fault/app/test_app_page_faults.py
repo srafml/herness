@@ -21,7 +21,7 @@ from tests.support.app_env import (
 from tests.support.ops_store import OpsStoreHandle
 
 from app.common import data, wh
-from herness.core.errors import QueryError
+from herness.core.errors import ConfigError, QueryError
 from herness.core.resilience import ProcessState
 from herness.store.ops import bind_core_backends
 
@@ -40,12 +40,13 @@ def _isolated() -> Iterator[None]:
     wh._pool.clear()
 
 
-def test_ft09_05_one_query_fails_rest_renders(
+@pytest.fixture
+def home(
     ops_store: OpsStoreHandle,
     reset_process_state: ProcessState,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """FT09-05 `home.dq_failed` raises QueryError: "Data quality" error card, others render."""
+) -> str:
+    """Scored build, seeded ops store, bound backends, a fixed snapshot; returns the build id."""
     del reset_process_state
     bind_core_backends()
     reads = cast("dict[str, object]", data.OPS_READS)
@@ -53,6 +54,66 @@ def test_ft09_05_one_query_fails_rest_renders(
     build = plant_scored_build(ops_store.data_root / "warehouse")
     seed_home_ops()
     install_session(monkeypatch, page_services(ops_store.data_root))
+    return build
+
+
+def _run() -> AppTest:
+    return AppTest.from_file(str(APP_DIR / "Home.py"), default_timeout=60).run()
+
+
+def _cards(at: AppTest) -> list[str]:
+    return [e.value.split("\n")[0] for e in at.error]
+
+
+def test_ft09_05_snapshot_read_once_failure_isolated(
+    home: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FT09-05 status_snapshot is read once per render; its failure cards Jobs and Workers only."""
+    calls: list[str] = []
+    real = data.ops_read
+
+    def spy(name: str, /, **params: object) -> object:
+        calls.append(name)
+        if name == "status_snapshot":
+            msg = "snapshot failed"
+            raise QueryError(msg)
+        return real(name, **params)
+
+    monkeypatch.setattr(data, "ops_read", spy)
+    at = _run()
+    assert not at.exception
+    assert calls.count("status_snapshot") == 1
+    assert _cards(at) == ["**Jobs could not load**", "**Workers could not load**"]
+    frames = "\n".join(d.value.to_string() for d in at.dataframe)
+    assert home in frames
+    assert RUN_ID in frames
+    assert "servicenow" in frames
+
+
+def test_ft09_05_sidebar_warehouse_failure_not_reported_as_no_build(
+    home: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FT09-05 get_conn failing (not NoCurrentBuild): no "No promoted build" text, one card per
+    warehouse block, none from the sidebar; ops blocks render."""
+    del home
+
+    def broken() -> object:
+        msg = "warehouse could not be hardened"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(wh, "get_conn", broken)
+    at = _run()
+    assert not at.exception
+    assert _cards(at) == ["**Builds could not load**", "**Data quality could not load**"]
+    assert [c.value for c in at.sidebar.caption] == ["Build information unavailable"]
+    shown = [str(e.value) for kind in ("info", "caption") for e in getattr(at.main, kind)]
+    assert not [s for s in shown if "No promoted build" in s]
+    assert RUN_ID in "\n".join(d.value.to_string() for d in at.dataframe)
+
+
+def test_ft09_05_one_query_fails_rest_renders(home: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FT09-05 `home.dq_failed` raises QueryError: "Data quality" error card, others render."""
+    build = home
     real = wh.query
 
     def flaky(name: str, /, **params: object) -> wh.QueryResult:
