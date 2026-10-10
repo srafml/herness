@@ -2,7 +2,8 @@
 
 Parametrised over ``tests.support.app_env.APP_PAGES``; T09-16 - T09-19 append their pages.
 Spec 11's ``tiny_build`` is not on this base: the scored ``metrics_tiny`` build planted by
-``plant_scored_build`` stands in (T09-14 carry-over).
+``plant_scored_build`` stands in (T09-14 carry-over). Tests load no redaction key, so the
+fixture installs ``install_redaction_double`` (T09-16: titles pass ``redact_text``).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from tests.support.app_env import (
     NO_BUILD_TEXT,
     RUN_ID,
     PageSpec,
+    install_redaction_double,
     install_session,
     page_services,
     plant_scored_build,
@@ -74,7 +76,8 @@ def env(
     monkeypatch.setitem(reads, "status_snapshot", lambda: SNAPSHOT)
     services = page_services(ops_store.data_root)
     install_session(monkeypatch, services)
-    return SimpleNamespace(data_root=ops_store.data_root, services=services)
+    titles = install_redaction_double(monkeypatch)  # T09-16: tests load no redaction key
+    return SimpleNamespace(data_root=ops_store.data_root, services=services, titles=titles)
 
 
 STUB_PAGE = PageSpec(
