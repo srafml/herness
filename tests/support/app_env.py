@@ -5,7 +5,8 @@ and ``roster`` are read by ``current_actor``); ``actor_script`` is an AppTest sc
 the session actor as ``role|user_ref|display``. T09-14 adds ``wh_services`` (the fields the
 warehouse and ops-cache modules read), ``wh_script`` and ``plant_scored_build``. T09-15 adds
 the page list ``APP_PAGES``, ``page_services`` and ``install_session``. T09-16 appends
-pages 01 - 04 and adds ``install_redaction_double``.
+pages 01 - 04 and adds ``install_redaction_double``. T09-19 appends the Chat page and gives
+``page_services`` the chat fields (``FakeChatService``, ``FakeMemoryStore``).
 """
 
 from __future__ import annotations
@@ -207,6 +208,12 @@ APP_PAGES: tuple[PageSpec, ...] = (
         needs_warehouse=True,
         key_texts=("Delivery Health", "Filters", "Metrics"),
     ),
+    # T09-19: the Chat page (no session yet: the "New chat" hint)
+    PageSpec(
+        APP_DIR / "pages" / "11_Chat.py",
+        needs_warehouse=False,
+        key_texts=("Chat", "Start a chat with “New chat” in the sidebar."),
+    ),
 )
 
 
@@ -236,7 +243,19 @@ def page_services(
     services.cfg.weights = _weights(unconfirmed)
     services.roster = build_roster(ui.roles, USER_REF_KEY)
     services.cfg.app.reports = SimpleNamespace(top_n=10)  # `cfg.app.reports.top_n` (T09-16)
+    _chat_fields(services)  # T09-19
     return services
+
+
+def _chat_fields(services: SimpleNamespace) -> None:
+    """The fields the Chat page reads (T09-19): chat limits, time zone, chat and memory."""
+    from tests.support.fake_chat import FakeChatService  # noqa: PLC0415
+    from tests.support.fake_memory import FakeMemoryStore  # noqa: PLC0415
+
+    services.cfg.app.chat = SimpleNamespace(max_question_chars=4000, poll_queued_s=15)
+    services.cfg.weights.business_timezone = "Europe/Berlin"
+    services.chat = FakeChatService()
+    services.memory = FakeMemoryStore()
 
 
 RUN_ID = "run_01J0000000000000000000000A"
