@@ -3,21 +3,18 @@ the generator marker check and the build fingerprint, split off for the 350-line
 `builds.py`, which re-exports `BuildFixtureError`; imported only by `builds`.
 
 Lock (F11-06 step 1): `<root>.lock` is created with `os.open(O_CREAT | O_EXCL)` and holds the
-holder's host and pid as JSON; a waiter polls every 1 s for up to 30 min, then fails with
-"build lock timeout". Stale locks: a lock whose holder pid is dead on this host
-(`psutil.pid_exists`), or an empty lock older than 60 s (holder killed between create and
-write), is removed and the create retried; the content is re-read just before the unlink so
-only a lock unchanged since the staleness check is removed. A lock held from another host
-(shared drive) is never broken: it times out. `PermissionError` counts as "exists" (Windows
-reports a delete-pending file that way).
+holder's host, pid and process create time as JSON; a waiter polls every 1 s for up to
+30 min, then fails with "build lock timeout". Stale locks: a lock whose holder is gone on
+this host (no such pid, or the pid was reused: create time differs), or an empty lock older
+than 60 s (holder killed between create and write), is removed and the create retried; the
+content is re-read just before the unlink so only a lock unchanged since the staleness check
+is removed. A live holder that is this process or one of its ancestors fails at once (a
+spawn child re-running `ensure_build`). A lock held from another host (shared drive) is never
+broken: it times out. `PermissionError` counts as "exists" while the lock path exists
+(Windows reports a delete-pending file that way); with no lock path it fails at once.
 
-Cache location (security ruling on U11-48, a spec deviation): the persistent cache root is
-per user (`<tempfile.gettempdir()>/herness-synth-builds-<user>`, or the given directory) and
-is created with mode 0o700. `private_dir` refuses an existing root or `<seed>-<scale>` subdir
-that is a symlink or junction, not a directory, or (POSIX only: Windows has no `st_uid`, its
-per-user temp directory is already private) owned by another user. `safe_rmtree` refuses a
-symlink or junction instead of deleting through it, so reuse and invalidation never follow
-links. The lock file lives inside the private cache root, created 0o600.
+The lock file lives inside the private cache root (`builds.private_dir`), created 0o600;
+clearing a partial generated root refuses a linked child instead of deleting through it.
 """
 
 from __future__ import annotations
@@ -28,7 +25,6 @@ import json
 import os
 import shutil
 import socket
-import stat
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -57,76 +53,81 @@ class BuildFixtureError(RuntimeError):
     """The build fixture could not lock, generate or build (the message says which)."""
 
 
-# --- private cache directories -------------------------------------------------------------
-
-
-def _linked(path: Path) -> bool:
-    return path.is_symlink() or path.is_junction()
-
-
-def private_dir(path: Path) -> Path:
-    """Create `path` (mode 0o700) or accept it; refuse a link, a non-directory or (POSIX) a
-    directory owned by another user."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with contextlib.suppress(FileExistsError):
-        path.mkdir(mode=0o700)
-    info = os.lstat(path)
-    if _linked(path) or not stat.S_ISDIR(info.st_mode):
-        msg = f"refusing build cache path (symlink, junction or not a directory): {path}"
-        raise BuildFixtureError(msg)
-    if hasattr(os, "getuid") and info.st_uid != os.getuid():
-        msg = f"refusing build cache path owned by another user: {path}"
-        raise BuildFixtureError(msg)
-    return path
-
-
-def safe_rmtree(path: Path) -> None:
-    """`shutil.rmtree(path)`, refused when `path` itself is a symlink or junction."""
-    if _linked(path):
-        msg = f"refusing to delete through a symlink or junction: {path}"
-        raise BuildFixtureError(msg)
-    shutil.rmtree(path)
-
-
-def clear_build_outputs(data_root: Path, keep: frozenset[str]) -> None:
-    """Remove every child of `data_root` except `keep`; a linked child is refused."""
-    for child in private_dir(data_root).iterdir():
-        if child.name in keep:
-            continue
-        if _linked(child):
-            msg = f"refusing to delete through a symlink or junction: {child}"
-            raise BuildFixtureError(msg)
-        if child.is_dir():
-            shutil.rmtree(child)
-        else:
-            child.unlink()
-
-
 # --- lock -----------------------------------------------------------------------------------
 
 
-def _holder() -> str:
-    return json.dumps({"host": socket.gethostname().lower(), "pid": os.getpid()})
+def _host() -> str:
+    return socket.gethostname().lower()
+
+
+def holder_json(pid: int) -> str:
+    """Lock content: host, pid and the process create time (a reused pid does not match)."""
+    return json.dumps({"host": _host(), "pid": pid, "created": psutil.Process(pid).create_time()})
+
+
+def _local_holder(text: str) -> tuple[int, float | None] | None:
+    """`(pid, created)` of a holder on this host; None for another host or unreadable text."""
+    try:
+        doc = json.loads(text)
+        if str(doc["host"]) != _host():
+            return None
+        created = doc.get("created")
+        return int(doc["pid"]), None if created is None else float(created)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _alive(pid: int, created: float | None) -> bool:
+    """The holder process still runs (same pid and, when recorded, same create time)."""
+    try:
+        started = psutil.Process(pid).create_time()
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.Error:  # exists but cannot be inspected: assume alive
+        return True
+    return created is None or abs(started - created) < 1e-3
+
+
+def _check_reentry(text: str) -> None:
+    """Fail at once when this process or an ancestor holds the lock (a spawn child without a
+    `__main__` guard re-running `ensure_build` would otherwise wait 30 min)."""
+    holder = _local_holder(text)
+    if holder is None or not _alive(*holder):
+        return
+    mine = {os.getpid(), *(p.pid for p in psutil.Process().parents())}
+    if holder[0] in mine:
+        msg = (
+            "build lock held by this process or an ancestor: ensure_build re-entered"
+            " (missing `if __name__ == '__main__':` guard in a spawn child?)"
+        )
+        raise BuildFixtureError(msg)
 
 
 def _stale(text: str, lock: Path) -> bool:
     """A dead holder on this host, or an empty lock older than `EMPTY_LOCK_STALE_S`."""
     if not text.strip():
         return time.time() - lock.stat().st_mtime > EMPTY_LOCK_STALE_S
+    holder = _local_holder(text)
+    return holder is not None and holder[0] != os.getpid() and not _alive(*holder)
+
+
+def _lock_present(lock: Path) -> bool:
+    """False only when the lock path is truly absent (Windows reports a delete-pending file
+    with an access error: present)."""
     try:
-        doc = json.loads(text)
-        host, pid = str(doc["host"]), int(doc["pid"])
-    except (ValueError, KeyError, TypeError):
-        return False  # not ours to judge: wait for the timeout
-    return (
-        host == socket.gethostname().lower() and pid != os.getpid() and not psutil.pid_exists(pid)
-    )
+        os.lstat(lock)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def _break_stale(lock: Path) -> bool:
-    """Remove `lock` when its holder is gone; True when it was removed."""
+    """Remove `lock` when its holder is gone; True when it was removed. Raises on re-entry."""
     try:
         text = lock.read_text(encoding="utf-8")
+        _check_reentry(text)
         if not _stale(text, lock) or lock.read_text(encoding="utf-8") != text:
             return False
         lock.unlink()
@@ -147,7 +148,10 @@ def build_lock(
         try:
             fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             break
-        except (FileExistsError, PermissionError):  # Windows: delete-pending lock file
+        except (FileExistsError, PermissionError) as exc:  # Windows: delete-pending lock file
+            if isinstance(exc, PermissionError) and not _lock_present(lock):
+                msg = f"cannot create the build lock (permission denied): {lock}"
+                raise BuildFixtureError(msg) from exc
             if _break_stale(lock):
                 continue
             if time.monotonic() >= deadline:
@@ -156,7 +160,7 @@ def build_lock(
             time.sleep(poll_s)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(_holder())
+            handle.write(holder_json(os.getpid()))
         yield lock
     finally:
         lock.unlink(missing_ok=True)
@@ -188,8 +192,11 @@ def generate_root(seed: int, scale: Scale, root: Path) -> None:
 
     if not (root / MARKER).is_file() and any(root.iterdir()):
         for child in root.iterdir():  # a partial root: `overwrite` needs the marker
+            if child.is_symlink() or child.is_junction():
+                msg = f"refusing to delete through a symlink or junction: {child}"
+                raise BuildFixtureError(msg)
             if child.is_dir():
-                safe_rmtree(child)
+                shutil.rmtree(child)
             else:
                 child.unlink()
     try:
