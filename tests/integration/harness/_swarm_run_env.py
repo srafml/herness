@@ -44,6 +44,7 @@ from herness.core.types import (
     EntityScope,
     Evidence,
     Finding,
+    PriorContext,
     RankedEntity,
     RecommendationDraft,
     ReportDraft,
@@ -238,6 +239,8 @@ class Agents:
             return self._planner(task_input)
         if role == "analyst":
             return await self._analyst(ctx, hooks)
+        if role == "judge":
+            return result({"choice": 0, "scores": [4.0, 3.0, 2.0], "reasons": ["a", "b", "c"]})
         if role == "skeptic":
             return result({"checks": [{"check": k, "result": "pass", "note": ""}
                                       for k in SKEPTIC_CHECKS],
@@ -269,7 +272,7 @@ class Agents:
         if mode == "block":
             if self.running is not None:
                 self.running.set()
-            while not hooks.stop():  # noqa: ASYNC110 - polls the stop callback (after_step)
+            while not hooks._stop():  # noqa: ASYNC110 - polls stop like after_step
                 await asyncio.sleep(0.01)
             raise asyncio.CancelledError  # spec 05 `after_step` on a stop
         if self.charge:
@@ -366,6 +369,10 @@ class Memory:
 
     def promote_procedural(self, run_id: str) -> None:
         self.promoted.append(run_id)
+
+    def prior_context(self, run_ctx: object) -> PriorContext:
+        del run_ctx
+        return PriorContext(items=[], rendered="", memory_ids=[], tally={})
 
 
 class _Gpu:

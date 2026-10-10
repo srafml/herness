@@ -234,6 +234,11 @@ class Steps:
             return  # the planner task was failed: the loop re-reads it (F06-03)
         if await run_planning(self.env) == "failed":
             await self._cas("planning", "failed")
+            return
+        key = planner_dedup_key(self._id, self.env.run.kind)
+        row = await asyncio.to_thread(get_task_by_dedup, self._id, key)
+        if row is not None and row.status == "done":  # a forced restart of a planned run
+            await self._cas("planning", "running")
 
     async def _exhausted(self, out: PhaseOutcome) -> bool:
         """U06-82 step 3: an exhausted ledger or blocked tasks end the analysis (U06-84)."""

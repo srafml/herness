@@ -134,7 +134,11 @@ class Swarm:
         if run is None:
             msg = f"run not found: run_id={run_id}"
             raise NotFound(msg)
-        if run.status in TERMINAL and not (force and run.status == "canceled"):
+        key = planner_dedup_key(run_id, run.kind)
+        planner = await asyncio.to_thread(get_task_by_dedup, run_id, key)
+        dead_planner = planner is not None and planner.status == "dead"
+        restart = force and (run.status == "canceled" or (run.status == "failed" and dead_planner))
+        if run.status in TERMINAL and not restart:
             return await asyncio.to_thread(build_result, run, self._reports)
         if self._config_hash(run) != run.config_hash and not force:
             _log.warning("harness.run.resume_refused", run_id=run_id, reason="config_changed")
@@ -145,11 +149,9 @@ class Swarm:
             msg = f"build retired; start a new run: run_id={run_id}"
             raise ConfigError(msg)
         board = self._board()
-        if force and run.status == "canceled":
-            await cas(board, run_id, "canceled", "planning", {"canceled"}, self._deps.clock())
-        key = planner_dedup_key(run_id, run.kind)
-        planner = await asyncio.to_thread(get_task_by_dedup, run_id, key)
-        retry_dead = force and planner is not None and planner.status == "dead"
+        if restart:  # U06-80 step 5; a failed run with a dead planner too (IT06-20, spec note)
+            await cas(board, run_id, run.status, "planning", {run.status}, self._deps.clock())
+        retry_dead = force and dead_planner
         recover = functools.partial(
             recover_run_tasks, run_id, max_task_attempts=self._cfg.swarm.max_task_attempts,
             retry_dead=retry_dead,
