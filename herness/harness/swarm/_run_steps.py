@@ -4,8 +4,8 @@ Private sibling of `herness.harness.swarm.run` (T06-22 split). One coroutine per
 calls the owner step (U06-88, F06-04 with U06-103 and U06-110, U06-109, U06-114, U06-115,
 U06-122) and ends with the status compare-and-set of design 06 §5.1 (`cas`, which logs
 `harness.run.status_changed`; run-row helpers live in `_run_ops`). Every step is idempotent:
-it computes what is missing from the
-`task` and `finding` tables, so a kill at any step boundary resumes at the stored status.
+it computes what is missing from the `task` and `finding` tables, so a kill at any step
+boundary resumes at the stored status.
 """
 
 from __future__ import annotations
