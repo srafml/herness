@@ -6,8 +6,9 @@ job); the mode comes only from the server-side ``chat_policy`` (R-38); every ses
 write checks ownership (TH09-10). A slash command is parsed and validated before anything runs
 (fail closed). Every stored or model-made text is printed through ``safe_terminal_text``
 (TH09-15). Store, job and harness modules are imported inside functions so ``herness --help``
-stays fast (BT09-07). No ``from __future__ import annotations``: Typer reads the real option
-annotations of ``chat`` (identity ``guarded`` evaluates them since T09-23 as well).
+stays fast (BT09-07). ``chat`` calls ``check_command_role`` itself (what ``guarded`` does) so the
+``--json`` refusal comes first; no ``from __future__ import annotations``, so every option
+annotation is a real object whichever way the signature is read (controller addendum, T09-23).
 """
 
 import json
