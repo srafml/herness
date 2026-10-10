@@ -31,7 +31,7 @@ This spec builds the package `herness/metrics/`, the stage file `herness/model/s
 | 04 §4.1 D6 | Resolving team for org scores; service owner for funding | 3.4, 3.5, 3.9 | U04-35, U04-43, U04-64 | T04-04, T04-06, T04-14 | UT04-23, UT04-30, UT04-76 |
 | 04 §4.2 | Fact tables and closures, column types, `query_id` per row | 3.5, 4.1 | U04-41…U04-47 | T04-06, T04-07 | UT04-30…UT04-35 |
 | 04 §4.3 | Output tables, `metric_value` coverage, `SCORE_UNITS` | 3.3, 3.7, 4.1 | U04-27, U04-58 | T04-03, T04-13 | UT04-117, UT04-118 |
-| 04 §4.4 | `run_recorded`, `params` shape, stored-table hashing, `meta.evidence` row, `result_sample` | 3.1, 3.2 | U04-06, U04-09…U04-12 | T04-01, T04-05 | UT04-05…UT04-10, IT04-06 |
+| 04 §4.4 | `run_recorded`, `params` shape, stored-table hashing, `meta.evidence` row, `result_sample` | 3.1, 3.2 | U04-06, U04-09…U04-12 | T04-01, T04-05, T04-23 | UT04-05…UT04-10, UT04-123, IT04-06 |
 | 04 §4.4 tolerance | Verifier cell tolerance; the Verifier (05) calls `rows_equivalent` (R-15) | 3.1 | U04-07 | T04-01 | UT04-11, PT04-11 |
 | 04 §5.1 | Fact derivations (exclusion, durations, repeat, change_caused, cluster, change, work item, `cat_at`) | 3.4, 3.5 | U04-35, U04-43…U04-45 | T04-04, T04-06, T04-07 | UT04-30…UT04-33 |
 | 04 §5.2 | 28 metric definitions | 3.6 | U04-48, U04-40 | T04-08…T04-11 | UT04-36…UT04-63, PT04-03, PT04-04 |
@@ -88,7 +88,7 @@ All paths are repo-relative. Layer L3 per ENG §2.1. `herness.metrics` MUST NOT 
 | `herness/metrics/levers.py` | Levers step | `run_levers_step`, `USD_MODELS`, `LEVER_PLACEHOLDERS` | L3 | `duckdb` | 130 |
 | `herness/metrics/_solver.py` | Pure CP-SAT model build/solve and ordering | `PortfolioCandidate`, `SolveOutcome`, `solve_portfolio`, `order_selected`, `binding_constraints` | L3 | `ortools` | 300 |
 | `herness/metrics/portfolio.py` | Portfolio API, scenario resolution, persistence | `Scenario`, `PortfolioRow`, `PortfolioResult`, `resolve_scenario`, `optimize_portfolio`, `run_portfolio_step` | L3 | `duckdb` | 360 |
-| `herness/metrics/sql/_macros.sql.j2` | Jinja macros: `p`, `entity_col`, `entity_join`, `period_start`, `period_start_date`, `period_end_date`, `period_spine`, `filter_clause`, `entity_filter`, `owner_team`, `cat_at_join`, `cat_at`, `lkp`, `team_bucket`, `observed_days` | — | SQL | — | 260 |
+| `herness/metrics/sql/_macros.sql.j2` | Jinja macros: `p`, `entity_col`, `entity_join`, `period_start`, `period_start_date`, `period_end_date`, `period_spine`, `filter_clause`, `entity_filter`, `owner_team`, `cat_at_join`, `cat_at`, `lkp`, `team_bucket`, `observed_days`, `dsum`, `davg` | — | SQL | — | 260 |
 | `herness/metrics/sql/metric_wrapper.sql.j2` | Wraps a catalog SELECT: min-sample rule, flags, identity columns, order | — | SQL | — | 60 |
 | `herness/metrics/sql/peer_group.sql.j2` | One recorded peer query | — | SQL | — | 130 |
 | `herness/metrics/sql/funding_attribution.sql.j2` | Both allocation passes, stored pass 2 | — | SQL | — | 320 |
@@ -794,11 +794,11 @@ Filter support and the column each filter binds to. `$f_<key>` is always a list;
 |-------|---------|
 | Kind | SQL file (Jinja macros) |
 | Purpose | The macro contract of design 04 §4.1 plus helpers. Imported into every metric, fact and score render via `make_module(vars=context)`, so macros see `entity_type`, `period`, `filters` and the render state `rs`. |
-| Signature | Context: `entity_type: EntityType`, `period: Period`, `filters: dict[FilterKey, str]` (key → bind name `f_<key>`; never values), `rs: RenderState` (Python object: `rs.p(name) -> str`, `rs.set_entity(expr) -> str` (returns empty text), `rs.entity() -> str`, `rs.use_source(source) -> str`, `rs.fail(message)` raises `ConfigError`). Macros: `p(name)`; `entity_col(source, alias)`; `entity_join(source, alias)`; `period_start(ts_expr)`; `period_start_date(date_expr)`; `period_spine()`; `filter_clause(source, alias)`; `entity_filter()`; `owner_team(service_expr, alias)`; `cat_at_join(ts_expr, item_alias, name)`; `cat_at(ts_expr, item_alias, name)`; `lkp(keys, vals, key_expr, default_expr)`; `team_bucket(team_expr)`. |
+| Signature | Context: `entity_type: EntityType`, `period: Period`, `filters: dict[FilterKey, str]` (key → bind name `f_<key>`; never values), `rs: RenderState` (Python object: `rs.p(name) -> str`, `rs.set_entity(expr) -> str` (returns empty text), `rs.entity() -> str`, `rs.use_source(source) -> str`, `rs.fail(message)` raises `ConfigError`). Macros: `p(name)`; `entity_col(source, alias)`; `entity_join(source, alias)`; `period_start(ts_expr)`; `period_start_date(date_expr)`; `period_spine()`; `filter_clause(source, alias)`; `entity_filter()`; `owner_team(service_expr, alias)`; `cat_at_join(ts_expr, item_alias, name)`; `cat_at(ts_expr, item_alias, name)`; `lkp(keys, vals, key_expr, default_expr)`; `team_bucket(team_expr)`; `dsum(expr)`; `davg(expr)` (T04-23). |
 | Preconditions | `source ∈ Source`; aliases match `^[a-z][a-z0-9_]{0,15}$` (else `rs.fail`). |
 | Postconditions | Output is SQL text containing only identifiers from this file, the aliases passed, `CAST($name AS type)` placeholders and SQL keywords. |
 | Invariants | No macro emits a value; every runtime value is a `p()` placeholder. |
-| Algorithm | `p(name)` → `rs.p(name)`: records `name` in the used set; unknown name → `ConfigError("template uses unknown parameter <name>")`; returns `CAST($<name> AS <BIND_TYPES[name]>)`. `entity_col(source, alias)` → calls `rs.use_source(source)`, computes the entity expression for `entity_type` from the grain table below, calls `rs.set_entity(expr)`, returns `expr`; an unsupported (source, grain) → `rs.fail("grain <g> not supported by source <s>")`. `entity_join(source, alias)` → the join text from the table below (empty when none). `period_start(ts)` → week/month/quarter: `CAST(date_trunc('<period>', <ts> AT TIME ZONE p('tz')) AS DATE)`; `t12w`/`t12m`: `p('window_start_date')`. `period_start_date(d)` → week/month/quarter: `CAST(date_trunc('<period>', <d>) AS DATE)`; `t12w`/`t12m`: `p('window_start_date')`. `period_spine()` → a derived table `spine(period_start DATE, period_end DATE, start_ts TIMESTAMPTZ, end_ts TIMESTAMPTZ, snap_ts TIMESTAMPTZ)`: for week/month/quarter one row per period with `period_start` from `date_trunc('<period>', window_start_date)` stepping one period while `period_start < window_end_date`, `period_end = period_start + 1 period`; for `t12w`/`t12m` one row (`window_start_date`, `window_end_date`); `start_ts`/`end_ts` = local midnight of `period_start`/`period_end` as TIMESTAMPTZ (`timezone(p('tz'), CAST(d AS TIMESTAMP))`); `snap_ts` = local midnight of `least(period_end, as_of)`. `filter_clause(source, alias)` → for each key of `filters` in sorted order: `AND list_contains(p('f_<key>'), <column>)` with the column from the `SOURCE_FILTERS` table; `org_id` → `AND EXISTS (SELECT 1 FROM metrics.org_closure ocf WHERE ocf.org_id = <org column> AND list_contains(p('f_org_id'), ocf.ancestor_org_id))`; a key the source does not support → `rs.fail`. `entity_filter()` → `AND (p('entity_ids') IS NULL OR list_contains(p('entity_ids'), <rs.entity()>))`. `owner_team(service_expr, alias)` → `LEFT JOIN (SELECT service_id, team_id FROM core.service_map WHERE role = 'owner' QUALIFY row_number() OVER (PARTITION BY service_id ORDER BY confidence DESC NULLS LAST, team_id) = 1) <alias> ON <alias>.service_id = <service_expr>`. `cat_at_join(ts, w, name)` → `ASOF LEFT JOIN (SELECT record_id, at, arg_max(to_category, CASE to_category WHEN 'done' THEN 3 WHEN 'in_progress' THEN 2 ELSE 1 END) AS to_category FROM core.work_item_transition GROUP BY record_id, at) <name> ON <name>.record_id = <w>.record_id AND <ts> >= <name>.at` (one category per (record, instant): done beats in_progress beats todo). `cat_at(ts, w, name)` → `coalesce(<name>.to_category, CASE WHEN <w>.created_at <= <ts> THEN 'todo' END)` (NULL means the item did not exist at `ts`). `lkp(keys, vals, key, default)` → `coalesce(list_extract(<vals>, list_position(<keys>, <key>)), <default>)`. `team_bucket(team_expr)` → `CASE` over the minimum `core.service.criticality` of services joined through `core.service_map` rows with `team_id = <team_expr>` and `role IN ('owner','support')`: 1–2 → `'hi'`, 3–4 → `'lo'`, NULL → `'none'`. |
+| Algorithm | `p(name)` → `rs.p(name)`: records `name` in the used set; unknown name → `ConfigError("template uses unknown parameter <name>")`; returns `CAST($<name> AS <BIND_TYPES[name]>)`. `entity_col(source, alias)` → calls `rs.use_source(source)`, computes the entity expression for `entity_type` from the grain table below, calls `rs.set_entity(expr)`, returns `expr`; an unsupported (source, grain) → `rs.fail("grain <g> not supported by source <s>")`. `entity_join(source, alias)` → the join text from the table below (empty when none). `period_start(ts)` → week/month/quarter: `CAST(date_trunc('<period>', <ts> AT TIME ZONE p('tz')) AS DATE)`; `t12w`/`t12m`: `p('window_start_date')`. `period_start_date(d)` → week/month/quarter: `CAST(date_trunc('<period>', <d>) AS DATE)`; `t12w`/`t12m`: `p('window_start_date')`. `period_spine()` → a derived table `spine(period_start DATE, period_end DATE, start_ts TIMESTAMPTZ, end_ts TIMESTAMPTZ, snap_ts TIMESTAMPTZ)`: for week/month/quarter one row per period with `period_start` from `date_trunc('<period>', window_start_date)` stepping one period while `period_start < window_end_date`, `period_end = period_start + 1 period`; for `t12w`/`t12m` one row (`window_start_date`, `window_end_date`); `start_ts`/`end_ts` = local midnight of `period_start`/`period_end` as TIMESTAMPTZ (`timezone(p('tz'), CAST(d AS TIMESTAMP))`); `snap_ts` = local midnight of `least(period_end, as_of)`. `filter_clause(source, alias)` → for each key of `filters` in sorted order: `AND list_contains(p('f_<key>'), <column>)` with the column from the `SOURCE_FILTERS` table; `org_id` → `AND EXISTS (SELECT 1 FROM metrics.org_closure ocf WHERE ocf.org_id = <org column> AND list_contains(p('f_org_id'), ocf.ancestor_org_id))`; a key the source does not support → `rs.fail`. `entity_filter()` → `AND (p('entity_ids') IS NULL OR list_contains(p('entity_ids'), <rs.entity()>))`. `owner_team(service_expr, alias)` → `LEFT JOIN (SELECT service_id, team_id FROM core.service_map WHERE role = 'owner' QUALIFY row_number() OVER (PARTITION BY service_id ORDER BY confidence DESC NULLS LAST, team_id) = 1) <alias> ON <alias>.service_id = <service_expr>`. `cat_at_join(ts, w, name)` → `ASOF LEFT JOIN (SELECT record_id, at, arg_max(to_category, CASE to_category WHEN 'done' THEN 3 WHEN 'in_progress' THEN 2 ELSE 1 END) AS to_category FROM core.work_item_transition GROUP BY record_id, at) <name> ON <name>.record_id = <w>.record_id AND <ts> >= <name>.at` (one category per (record, instant): done beats in_progress beats todo). `cat_at(ts, w, name)` → `coalesce(<name>.to_category, CASE WHEN <w>.created_at <= <ts> THEN 'todo' END)` (NULL means the item did not exist at `ts`). `lkp(keys, vals, key, default)` → `coalesce(list_extract(<vals>, list_position(<keys>, <key>)), <default>)`. `team_bucket(team_expr)` → `CASE` over the minimum `core.service.criticality` of services joined through `core.service_map` rows with `team_id = <team_expr>` and `role IN ('owner','support')`: 1–2 → `'hi'`, 3–4 → `'lo'`, NULL → `'none'`. `dsum(expr)` → `sum(<expr> ORDER BY <expr>)`; `davg(expr)` → `avg(<expr> ORDER BY <expr>)` (T04-23): DuckDB adds the inputs of a plain `sum`/`avg` over DOUBLE in a thread- and run-dependent order, so a re-run can differ in the last ulp and flip a `.9g` token of U04-01 step 6; an ordered aggregate adds in ascending value order (ties are equal values), so the result is the same double on every run, thread count and row order. |
 | Side effects | Records used bind names and sources in `rs`. |
 | Errors | `ConfigError` via `rs.fail` / `rs.p`. |
 | Concurrency | Per-render state. |
@@ -1087,7 +1087,7 @@ Fixture check (design 04 §10.1): with the design's four incidents and weights, 
 | Signature | Output of each template: `entity_id, period_start, value, numerator, denominator, sample_size` plus the optional columns named in table A. |
 | Preconditions | Fact tables materialized. |
 | Postconditions | Every ratio in [0, 1]; durations ≥ 0; counts are non-negative integers (except `change_count`, a per-week rate). |
-| Invariants | Anchor window: TIMESTAMPTZ anchors satisfy `anchor >= p('window_start') AND anchor < p('window_end')`; DATE anchors use `window_start_date`/`window_end_date`. Every template ends with `filter_clause(...)`, `entity_filter()` and `GROUP BY ALL`. `NX` below means `NOT f.excluded`. "Resolved" means `NX AND f.resolve_h IS NOT NULL`. `median` is DuckDB `median` (interpolated 0.5 quantile). |
+| Invariants | Anchor window: TIMESTAMPTZ anchors satisfy `anchor >= p('window_start') AND anchor < p('window_end')`; DATE anchors use `window_start_date`/`window_end_date`. Every template ends with `filter_clause(...)`, `entity_filter()` and `GROUP BY ALL`. `NX` below means `NOT f.excluded`. "Resolved" means `NX AND f.resolve_h IS NOT NULL`. `median` is DuckDB `median` (interpolated 0.5 quantile). Every `sum`/`avg` over a DOUBLE expression (tables A #3, #5, #6, #7, #13, #26, #27, #28 and the per-pair `avg(value)` of #27/#28) is written `dsum`/`davg` (U04-35, T04-23) so a re-run of the recorded SELECT reproduces its `result_hash`; `sum` over DECIMAL (#14) and `count` are exact and stay plain. |
 | Algorithm | Tables A and B. |
 | Side effects | none |
 | Errors | — |
@@ -1346,7 +1346,7 @@ Filter letters: P `priority`, S `service_id`, T `team_id`, O `org_id`, C `cluste
 | Side effects | Table and evidence writes. |
 | Errors | `SchemaViolation`. |
 | Concurrency | Build writer. |
-| Complexity and limits | About 28 × 3.5 × 5 ≈ 490 queries; BT04-02 < 120 s. |
+| Complexity and limits | About 28 × 3.5 × 5 ≈ 490 queries; BT04-02 < 120 s. The T04-23 ordered `dsum`/`davg` aggregates cost about +11 % on this step (same-host A/B on `full`: 115.4 s plain vs 127.9 s ordered); accepted (sub-controller ruling, T04-23 review). |
 | Security notes | none |
 | Tests | UT04-118, BT04-02 |
 
@@ -1935,6 +1935,8 @@ None. The component reads no secret and holds no credential.
 |------|--------|-------|
 | An operator with write access to `config/metrics.yaml` can write a misleading but valid metric | Config changes are audited (spec 10 `config_change`) and reviewed in git; operators are trusted | spec 10 security role |
 | `mad`/`median` float order can differ between DuckDB versions | Verifier tolerance absorbs it; DuckDB is pinned | metrics owner |
+| Plain DOUBLE `sum`/`avg` in score templates (`funding_attribution`, `funding_score`, `levers`, `checks`) and in operator-written custom metrics can still differ in the last ulp between runs (T04-23 fixed the shipped catalog and `portfolio_input` with `dsum`/`davg` only) | A `.9g` token flips only when the value sits within a few ulps of a 9-digit halfway point (about 1e-6 per value for unstructured doubles); a flip makes the Verifier fall back to `rows_equivalent` / per-value `float_rel_tol` (spec 05 U05-64 step 5e), never a false pass; follow-up card T04-23b: dsum/davg in funding/levers/checks templates after T04-22b merges | metrics owner |
+| Ordered `dsum`/`davg` aggregates sort each group's input: scoring step `metrics` is about 11 % slower (BT04-02 same-host A/B on `full`: 115.4 s plain vs 127.9 s ordered, over the 120 s target; BT04-01 and BT04-03 unchanged) | Reproducible evidence hashes outweigh the step time; cost accepted by sub-controller ruling (T04-23 review); the BT04-02 xfail reason names it | metrics owner |
 
 ## 8. Observability
 
@@ -2011,7 +2013,7 @@ Hardware per design 02 §9 (16 cores, 64 GB RAM, NVMe); dataset `synth_data.py -
 | ID | Measure | Threshold |
 |----|---------|-----------|
 | BT04-01 | `materialize_facts` wall time | < 90 s |
-| BT04-02 | step `metrics` | < 120 s |
+| BT04-02 | step `metrics` | < 120 s (T04-23 ordered aggregates add about 11 %: 115.4 s plain vs 127.9 s ordered, same host; accepted, xfail reason names it) |
 | BT04-03 | step `funding` (both passes) | < 45 s |
 | BT04-04 | steps `org` + `levers` | < 20 s |
 | BT04-05 | step `portfolio`, per scenario | < 30 s wall |
@@ -2119,6 +2121,7 @@ Markers per design 11 §4.1. Property tests use Hypothesis profiles `commit`/`ni
 | UT04-120 | U04-83 | fake ops store with one approved `weight_change` payload; config snapshot with the block unconfirmed; catalog with one forbidden column; missing `LAST` | run validator | catalog `error` issue kept; confirmed block with a matching payload gives no issue, without it one `error` `ConfigIssue` at `weights.<block>.unconfirmed` with `file` `weights.yaml`; missing `LAST` treated as first load; registered on the hook, `run_owner_validators` returns the same issues |
 | UT04-121 | U04-56 | read-only connection; call without `con` | `run_scoring` | `ConfigError` for the read-only connection; a call without `con` is a `TypeError` (required keyword); an import scan of `herness/metrics/` finds no `herness.store._warehouse_rw` import (C12) |
 | UT04-122 | U04-80 | `persist=True`, `build_id` given, no `con` | `optimize_portfolio` | `ConfigError("persist=True needs the build writer's connection")`; no file opened |
+| UT04-123 | U04-35, U04-48 | four `error_rate`/`request_count` pairs whose Σ v·rc lies on a `.9g` halfway point (748.43336150), loaded in two orders, one DuckDB thread | `error_rate` at quarter | plain sequential and DuckDB `sum` give tokens 748.433362 vs 748.433361; the catalog (`dsum`/`davg`) gives the same numerator token, value and `result_hash` for both orders (T04-23) |
 
 ### 11.2 Property tests (`unit`, Hypothesis)
 
@@ -2493,6 +2496,20 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Tests | IT04-01…IT04-11, BT04-01…BT04-08 |
 | Threats | TH04-06 |
 | Acceptance checks | `pytest -m integration -k IT04` passes; `pytest -m slow -k BT04` meets §10 on the dev box |
+| Blocked by | none |
+| Size | M |
+
+#### T04-23 Deterministic evidence result hashing under float aggregation (follow-up, merge batch 41)
+
+| Field | Content |
+|-------|---------|
+| Goal | A re-run of a stored catalog-metric evidence query reproduces its `result_hash`: catalog DOUBLE `sum`/`avg` become the ordered `dsum`/`davg` macros (U04-35, U04-48 invariant). The `.9g` token rule (DD04-07, R-15) and the Verifier (spec 05) are unchanged. |
+| Depends on | T04-22, T11-16 |
+| Units | U04-35, U04-48 |
+| Files | `herness/metrics/sql/_macros.sql.j2`, `config/metrics.yaml`, `herness/metrics/sql/portfolio_input.sql.j2` (remaining-points `dsum`), `tests/bench/test_metrics_bench.py` (BT04-02 xfail reason only), `tests/unit/metrics/test_metrics_float_determinism.py`, `tests/integration/metrics/test_metrics_synth_build.py` (IT04-06 strict xfail removed) |
+| Tests | UT04-123, IT04-06 |
+| Threats | TH04-06 |
+| Acceptance checks | `pytest tests/integration/metrics/test_metrics_synth_build.py tests/unit/metrics` passes; IT04-06 10/10 runs |
 | Blocked by | none |
 | Size | M |
 
