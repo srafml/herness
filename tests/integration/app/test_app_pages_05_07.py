@@ -3,8 +3,8 @@
 The scored ``metrics_tiny`` build (``plant_scored_build``) has no cluster row, no redacted text
 and no delivery metric; ``_plant_extras`` adds one cluster with a Markdown-bearing label, the
 redacted text of its members, raw text in ``core.incident`` that must never show (TH09-11),
-``throughput`` values and one ``change_count`` value (every planted change rate is null).
-Derived and redacted text appear only as dataframe cells (TH09-02).
+``throughput`` values (``W99`` is in no project) and one ``change_count`` value (every
+planted change rate is null). Derived and redacted text appear only as dataframe cells (TH09-02).
 """
 
 from __future__ import annotations
@@ -76,6 +76,8 @@ def _plant_extras(warehouse: Path, build_id: str) -> None:
             " ('throughput', 'team', 'T2', 'month', DATE '2026-02-01', 3, 3, NULL, 3, 'count',"
             " [], 'q_0000000000000001'), ('throughput', 'work_item', 'W1', 'month',"
             " DATE '2026-02-01', 2, 2, NULL, 2, 'count', [], 'q_0000000000000001'),"
+            " ('throughput', 'work_item', 'W99', 'month', DATE '2026-02-01', 1, 1, NULL, 1,"
+            " 'count', [], 'q_0000000000000001'),"
             " ('change_count', 'service', 'S1', 'month', DATE '2026-02-01', 5, 5, NULL, 5,"
             " 'count', [], 'q_0000000000000002')"
         )
@@ -175,7 +177,7 @@ def test_it09_10_delivery_health_metrics_by_team_and_project(env: SimpleNamespac
     del env
     at = _run("07_Delivery_Health.py")
     assert set(_frame(at, "metric")) == {"throughput"}
-    assert set(_frame(at, "entity_id")) == {"T1", "T2", "W1"}
+    assert set(_frame(at, "entity_id")) == {"T1", "T2", "W1", "W99"}
     assert at.get("arrow_vega_lite_chart") or at.get("vega_lite_chart")
     at.selectbox(key="delivery_team").set_value("T1").run()
     assert not at.error
