@@ -35,7 +35,7 @@ cf AS (
     {{ owner_team('o.service_id', 'ow') }}
 ),
 pts AS (
-    SELECT wc.ancestor_record_id AS k, sum(w.story_points) AS points
+    SELECT wc.ancestor_record_id AS k, {{ dsum('w.story_points') }} AS points
     FROM metrics.work_item_closure wc
     JOIN core.work_item w ON w.record_id = wc.record_id
     WHERE w.status_category <> 'done' AND wc.ancestor_record_id IN (SELECT candidate_id FROM wi)

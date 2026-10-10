@@ -31,7 +31,7 @@ This spec builds the package `herness/metrics/`, the stage file `herness/model/s
 | 04 §4.1 D6 | Resolving team for org scores; service owner for funding | 3.4, 3.5, 3.9 | U04-35, U04-43, U04-64 | T04-04, T04-06, T04-14 | UT04-23, UT04-30, UT04-76 |
 | 04 §4.2 | Fact tables and closures, column types, `query_id` per row | 3.5, 4.1 | U04-41…U04-47 | T04-06, T04-07 | UT04-30…UT04-35 |
 | 04 §4.3 | Output tables, `metric_value` coverage, `SCORE_UNITS` | 3.3, 3.7, 4.1 | U04-27, U04-58 | T04-03, T04-13 | UT04-117, UT04-118 |
-| 04 §4.4 | `run_recorded`, `params` shape, stored-table hashing, `meta.evidence` row, `result_sample` | 3.1, 3.2 | U04-06, U04-09…U04-12 | T04-01, T04-05 | UT04-05…UT04-10, IT04-06 |
+| 04 §4.4 | `run_recorded`, `params` shape, stored-table hashing, `meta.evidence` row, `result_sample` | 3.1, 3.2 | U04-06, U04-09…U04-12 | T04-01, T04-05, T04-23 | UT04-05…UT04-10, UT04-123, IT04-06 |
 | 04 §4.4 tolerance | Verifier cell tolerance; the Verifier (05) calls `rows_equivalent` (R-15) | 3.1 | U04-07 | T04-01 | UT04-11, PT04-11 |
 | 04 §5.1 | Fact derivations (exclusion, durations, repeat, change_caused, cluster, change, work item, `cat_at`) | 3.4, 3.5 | U04-35, U04-43…U04-45 | T04-04, T04-06, T04-07 | UT04-30…UT04-33 |
 | 04 §5.2 | 28 metric definitions | 3.6 | U04-48, U04-40 | T04-08…T04-11 | UT04-36…UT04-63, PT04-03, PT04-04 |
@@ -1346,7 +1346,7 @@ Filter letters: P `priority`, S `service_id`, T `team_id`, O `org_id`, C `cluste
 | Side effects | Table and evidence writes. |
 | Errors | `SchemaViolation`. |
 | Concurrency | Build writer. |
-| Complexity and limits | About 28 × 3.5 × 5 ≈ 490 queries; BT04-02 < 120 s. |
+| Complexity and limits | About 28 × 3.5 × 5 ≈ 490 queries; BT04-02 < 120 s. The T04-23 ordered `dsum`/`davg` aggregates cost about +11 % on this step (same-host A/B on `full`: 115.4 s plain vs 127.9 s ordered); accepted (sub-controller ruling, T04-23 review). |
 | Security notes | none |
 | Tests | UT04-118, BT04-02 |
 
@@ -1935,7 +1935,8 @@ None. The component reads no secret and holds no credential.
 |------|--------|-------|
 | An operator with write access to `config/metrics.yaml` can write a misleading but valid metric | Config changes are audited (spec 10 `config_change`) and reviewed in git; operators are trusted | spec 10 security role |
 | `mad`/`median` float order can differ between DuckDB versions | Verifier tolerance absorbs it; DuckDB is pinned | metrics owner |
-| Plain DOUBLE `sum`/`avg` in score templates (`funding_attribution`, `funding_score`, `levers`, `checks`) and in operator-written custom metrics can still differ in the last ulp between runs (T04-23 fixed the shipped catalog with `dsum`/`davg` only) | A `.9g` token flips only when the value sits within a few ulps of a 9-digit halfway point (about 1e-6 per value for unstructured doubles); a flip makes the Verifier fall back to `rows_equivalent` / per-value `float_rel_tol` (spec 05 U05-64 step 5e), never a false pass; templates can adopt `dsum`/`davg` | metrics owner |
+| Plain DOUBLE `sum`/`avg` in score templates (`funding_attribution`, `funding_score`, `levers`, `checks`) and in operator-written custom metrics can still differ in the last ulp between runs (T04-23 fixed the shipped catalog and `portfolio_input` with `dsum`/`davg` only) | A `.9g` token flips only when the value sits within a few ulps of a 9-digit halfway point (about 1e-6 per value for unstructured doubles); a flip makes the Verifier fall back to `rows_equivalent` / per-value `float_rel_tol` (spec 05 U05-64 step 5e), never a false pass; follow-up card T04-23b: dsum/davg in funding/levers/checks templates after T04-22b merges | metrics owner |
+| Ordered `dsum`/`davg` aggregates sort each group's input: scoring step `metrics` is about 11 % slower (BT04-02 same-host A/B on `full`: 115.4 s plain vs 127.9 s ordered, over the 120 s target; BT04-01 and BT04-03 unchanged) | Reproducible evidence hashes outweigh the step time; cost accepted by sub-controller ruling (T04-23 review); the BT04-02 xfail reason names it | metrics owner |
 
 ## 8. Observability
 
@@ -2012,7 +2013,7 @@ Hardware per design 02 §9 (16 cores, 64 GB RAM, NVMe); dataset `synth_data.py -
 | ID | Measure | Threshold |
 |----|---------|-----------|
 | BT04-01 | `materialize_facts` wall time | < 90 s |
-| BT04-02 | step `metrics` | < 120 s |
+| BT04-02 | step `metrics` | < 120 s (T04-23 ordered aggregates add about 11 %: 115.4 s plain vs 127.9 s ordered, same host; accepted, xfail reason names it) |
 | BT04-03 | step `funding` (both passes) | < 45 s |
 | BT04-04 | steps `org` + `levers` | < 20 s |
 | BT04-05 | step `portfolio`, per scenario | < 30 s wall |
@@ -2505,7 +2506,7 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Goal | A re-run of a stored catalog-metric evidence query reproduces its `result_hash`: catalog DOUBLE `sum`/`avg` become the ordered `dsum`/`davg` macros (U04-35, U04-48 invariant). The `.9g` token rule (DD04-07, R-15) and the Verifier (spec 05) are unchanged. |
 | Depends on | T04-22, T11-16 |
 | Units | U04-35, U04-48 |
-| Files | `herness/metrics/sql/_macros.sql.j2`, `config/metrics.yaml`, `tests/unit/metrics/test_metrics_float_determinism.py`, `tests/integration/metrics/test_metrics_synth_build.py` (IT04-06 strict xfail removed) |
+| Files | `herness/metrics/sql/_macros.sql.j2`, `config/metrics.yaml`, `herness/metrics/sql/portfolio_input.sql.j2` (remaining-points `dsum`), `tests/bench/test_metrics_bench.py` (BT04-02 xfail reason only), `tests/unit/metrics/test_metrics_float_determinism.py`, `tests/integration/metrics/test_metrics_synth_build.py` (IT04-06 strict xfail removed) |
 | Tests | UT04-123, IT04-06 |
 | Threats | TH04-06 |
 | Acceptance checks | `pytest tests/integration/metrics/test_metrics_synth_build.py tests/unit/metrics` passes; IT04-06 10/10 runs |

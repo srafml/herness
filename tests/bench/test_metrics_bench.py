@@ -126,7 +126,9 @@ def test_bt04_01_materialize_facts(bench: Bench) -> None:
 @pytest.mark.xfail(
     strict=False,
     reason="CO-T04-22c rerun on idle box: dev box under heavy shared load (2026-10-09),"
-    " step metrics measured 124.1 s vs spec < 120 s (seed 42 full); threshold kept",
+    " step metrics measured 124.1 s vs spec < 120 s (seed 42 full); threshold kept."
+    " Also T04-23 ordered dsum/davg catalog aggregates (accepted cost): same-host A/B"
+    " 115.4 s plain vs 127.9 s ordered (+10.8%)",
 )
 @pytest.mark.timeout(TIMEOUT_S)
 def test_bt04_02_step_metrics(bench: Bench) -> None:
