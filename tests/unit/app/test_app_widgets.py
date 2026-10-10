@@ -118,6 +118,16 @@ def evidence_script(ids: list[str], label: str | None = None) -> None:
     evidence(ids, label=label)
 
 
+def evidence_in_block_script(ids: list[str]) -> None:
+    import streamlit as st  # noqa: PLC0415
+
+    from app.common.widgets import block, evidence  # noqa: PLC0415
+
+    with block("Evidence"):
+        evidence(ids)
+    st.text("after")
+
+
 def helpers_script(status: str | None) -> None:
     from typing import cast  # noqa: PLC0415
 
@@ -253,10 +263,55 @@ def test_ut09_73_require_role_failure_stops(
         raise RuntimeError(msg)
 
     monkeypatch.setattr(widgets, "require_role", refuse)
+    with capture_logs() as logs:
+        at = AppTest.from_function(body_script, args=("ok",)).run()
+    assert not at.exception
+    assert [e.value.split("\n")[0] for e in at.error] == ["Error: Unexpected error on this page."]
+    assert not _page_texts(at)
+    failed = [e for e in logs if e["event"] == "app.page.failed"]
+    assert [(e["page"], e["error_type"], e["stage"]) for e in failed] == [
+        ("Test Page", "RuntimeError", "gate")
+    ]
+    assert not [e for e in logs if e["event"] == "app.page.gate_failed"]
+
+
+@pytest.mark.parametrize("error", [ConfigError("warehouse could not be hardened"), OSError("x")])
+def test_ut09_73_step6_failure_one_card_and_stop(
+    services: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """UT09-73 step 6: any get_conn failure -> one error card (not one per sidebar), stop."""
+    del services
+
+    def broken() -> object:
+        raise error
+
+    monkeypatch.setattr(wh, "get_conn", broken)
+    with capture_logs() as logs:
+        at = AppTest.from_function(body_script, args=("ok", True)).run()
+    assert not at.exception
+    assert len(at.error) == 1
+    assert not _page_texts(at)
+    assert [c.value for c in at.sidebar.caption] == ["Build information unavailable"]
+    assert "Traceback" not in _all_text(at)
+    stages = [e.get("stage") for e in logs if e["event"] == "app.page.failed"]
+    assert stages == ([] if isinstance(error, ConfigError) else ["warehouse"])
+
+
+def test_ut09_73_metric_failure_does_not_break_page(
+    services: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-73 step 8: a failing histogram record never escapes the wrapper."""
+    del services
+
+    def broken(*_: object, **__: object) -> None:
+        msg = "metric"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(widgets, "record_histogram", broken)
     at = AppTest.from_function(body_script, args=("ok",)).run()
     assert not at.exception
-    assert [e.value.split("\n")[0] for e in at.error] == ["Error: Unexpected error."]
-    assert not _page_texts(at)
+    assert not at.error
+    assert [t.value for t in at.text][-1] == "after page"
 
 
 def test_ut09_73_denied_sees_only_not_authorized(
@@ -441,8 +496,18 @@ def test_ut09_84_errors_reach_enclosing_block(monkeypatch: pytest.MonkeyPatch) -
         raise StoreBusy(msg)
 
     monkeypatch.setattr(data, "ops_read", broken)
-    at = AppTest.from_function(evidence_script, args=([Q1],)).run()
-    assert at.exception
+    with capture_logs() as logs:
+        at = AppTest.from_function(evidence_in_block_script, args=([Q1],)).run()
+    assert not at.exception
+    assert len(at.error) == 1
+    assert at.error[0].value.startswith(
+        f"**Evidence could not load**\n\nError: {safe_markdown('Ops store is locked.')}"
+    )
+    texts = [t.value for t in at.text]
+    assert texts[0] == "Error type: StoreBusy"
+    assert texts[-1] == "after"  # the StoreBusy reached the block; the script went on
+    failed = [e for e in logs if e["event"] == "app.widget.failed"]
+    assert [(e["block"], e["error_type"]) for e in failed] == [("Evidence", "StoreBusy")]
 
 
 # --- UT09-96 presentational helpers -------------------------------------------------------------

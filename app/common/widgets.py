@@ -1,14 +1,12 @@
 """Page wrapper, block isolation, evidence, badges, banners, sidebar (impl 09 U09-65 - U09-68).
 
-Every page script calls ``page(title, body)``: identity, role gate, sidebar, empty-warehouse state
-and the page-level error boundary (design §5.4, §6). Identity, audit and role failures stop the
-page before any read (TH09-08; controller ruling T09-15). Widgets render constant text or text
-passed through ``safe_markdown``; evidence samples are dataframe string cells, never Markdown
-(TH09-23), and error displays show the error type and ids only, never a stack trace.
-"""
+Identity, audit and role failures stop the page before any read (TH09-08). Widgets render only
+constant or ``safe_markdown`` text; evidence samples are dataframe string cells (TH09-23); error
+displays show the error type and ids only, never a stack trace (design §5.4, §6)."""
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import json
 import re
@@ -224,11 +222,20 @@ def _gate() -> tuple[AppServices, Actor]:
             _halt()
         require_role(actor, "view")
     except Exception as exc:  # noqa: BLE001 - controller ruling: stop on any gate failure
-        _reraise_control(exc)
-        _log.error("app.page.gate_failed", page=_page_name.get(), error_type=type(exc).__name__)
-        _error_card(*user_message(exc), exc, None)
+        _boundary(exc, "gate")
         _halt()
     return services, actor
+
+
+def _boundary(exc: Exception, stage: Literal["gate", "warehouse", "body"]) -> None:
+    """``user_error``, or log ``app.page.failed`` (with ``stage``) and a generic card."""
+    _reraise_control(exc)
+    if isinstance(exc, HernessError) and stage != "gate":
+        user_error(exc)
+        return
+    _log.error("app.page.failed", page=_page_name.get(), error_type=type(exc).__name__,
+               stage=stage)  # fmt: skip
+    _error_card(*(user_message(exc) if isinstance(exc, HernessError) else UNEXPECTED), exc, None)
 
 
 def _data_as_of(row: Mapping[str, object]) -> datetime | None:
@@ -255,20 +262,14 @@ def _sidebar(services: AppServices) -> str | None:
             as_of = _data_as_of(rows[0]) if rows else None
         except wh.NoCurrentBuild:
             build_id = None
+        except Exception as exc:  # noqa: BLE001 - step 6 or the page's blocks show the card, once
+            _reraise_control(exc)
+            _log.error("app.widget.failed", page=_page_name.get(), block="sidebar",
+                       error_type=type(exc).__name__)  # fmt: skip
+            st.sidebar.caption("Build information unavailable")
+            return None
         sidebar_build(build_id, as_of, keys)
     return build_id
-
-
-def _run_body(title: str, body: Callable[[PageContext], None], ctx: PageContext) -> None:
-    """Step 7: the page-level error boundary."""
-    try:
-        body(ctx)
-    except HernessError as exc:
-        user_error(exc)
-    except Exception as exc:  # noqa: BLE001 - the page error boundary (ENG §3.4)
-        _reraise_control(exc)
-        _log.error("app.page.failed", page=title, error_type=type(exc).__name__)
-        _error_card(*UNEXPECTED, exc, None)
 
 
 def page(title: str, body: Callable[[PageContext], None], *, needs_warehouse: bool = True) -> None:
@@ -284,11 +285,16 @@ def page(title: str, body: Callable[[PageContext], None], *, needs_warehouse: bo
         except wh.NoCurrentBuild:
             st.info(NO_BUILD)
             _halt()
-        except HernessError as exc:
-            user_error(exc)
+        except Exception as exc:  # noqa: BLE001 - step 6 never leaks a stack trace
+            _boundary(exc, "warehouse")
             _halt()
-    _run_body(title, body, PageContext(actor, services, build_id, clock.now()))
+    try:  # step 7
+        body(PageContext(actor, services, build_id, clock.now()))
+    except Exception as exc:  # noqa: BLE001 - the page error boundary (ENG §3.4)
+        _boundary(exc, "body")
     seconds = clock.monotonic() - started
     _log.debug("app.page.rendered", page=title, duration_ms=int(seconds * 1000), build_id=build_id)
     label = _LABEL_RE.sub("_", title)[:64] or "page"
-    record_histogram("herness_app_page_seconds", seconds, component="app", labels={"page": label})
+    with contextlib.suppress(Exception):  # a metric failure never breaks a rendered page
+        record_histogram("herness_app_page_seconds", seconds, component="app",
+                         labels={"page": label})  # fmt: skip
