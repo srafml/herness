@@ -16,6 +16,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from herness.connectors._breaker_gate import guard
 from herness.connectors._write_loop import StreamOutcome
 from herness.connectors.base import UNORDERED_SOURCES, split_range
 from herness.connectors.deletion import DeletionFilter
@@ -23,7 +24,6 @@ from herness.connectors.runner import FetchOf, SyncResult
 from herness.core import time as clock
 from herness.core.errors import FatalError
 from herness.core.logging import get_logger
-from herness.core.resilience import guard
 from herness.store.ops import (
     SliceRow,
     ensure_slices,
