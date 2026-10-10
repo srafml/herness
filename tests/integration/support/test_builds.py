@@ -56,7 +56,7 @@ _CHANGE_TS = ("opened_at", "planned_start", "planned_end", "actual_start", "actu
 # are made, then re-pin.
 _SOURCE_PIN = {
     1: "ucacjh275w565zygyagr2olgvsptypywf4tarh2tseqlz3gbuk6a",  # pragma: allowlist secret
-    2: "mz24cep43nsn3i64e3ze6e2vcdoy7rizrfpt6vukq37ybtx4ciqq",  # pragma: allowlist secret
+    2: "wbh7wqagj6sfzjegwotrkfnpkfz2qmgihxrdox7inaul46ce7g6a",  # pragma: allowlist secret
 }
 
 

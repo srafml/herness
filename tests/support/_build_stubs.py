@@ -13,20 +13,21 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import hashlib
 import json
 import subprocess
 import sys
 import types
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
+import numpy as np
 import pytest
 import yaml
 from tests.support.fake_gpu import FakeGpu, shipped_gpu_settings
 from tests.support.fake_laya import FakeLayaAgent, fake_laya_module, write_laya_version
 from tests.support.fake_llm import FakeLLMServer
-from tests.support.make_tiny_st import TINY_ST
 from tests.support.stub_decider import StubDeciderServer
 
 from herness.core.config import get_config
@@ -34,8 +35,9 @@ from herness.core.jobs import gpu_services
 from herness.core.resilience.settings import GpuSettings
 from herness.core.types import GpuClass, ServiceName
 from herness.enrich import _pipeline_stages, decide_stage, embed
-from herness.enrich.embed import Encoder
+from herness.enrich.embed import Device, Encoder
 from herness.harness.llm.registry import LLMRegistry
+from herness.store.vectors import EMBEDDING_DIM
 
 __all__ = [
     "BUILD_SCRIPTS",
@@ -52,6 +54,7 @@ __all__ = [
 
 BUILD_SCRIPTS: Final = Path(__file__).resolve().parents[1] / "fixtures" / "llm_scripts" / "build"
 STUB_SECRETS: Final = ("vllm.api_key", "openjev_api_key")  # the keyring names the clients read
+DIM: Final = EMBEDDING_DIM
 LAYA_VERSION: Final = "laya-20260901-1"
 TRUTH_LABELS: Final = "truth/truth_labels.parquet"
 
@@ -85,6 +88,8 @@ def stub_overrides(config_dir: Path, urls: StubUrls) -> list[str]:
     distinct, so the large class has its own stub)."""
     models = yaml.safe_load((config_dir / "models.yaml").read_text(encoding="utf-8"))
     out = ["decisions.escalation.bootstrap_window_days=3650",  # the synth lake is in scope
+           "decisions.escalation.max_rows_per_night=1500",  # bounds the stub round trips
+           "decisions.change_link.decider_max_pairs=500",
            "decisions.escalation.llm_max_rows_per_night=0",  # the stub LLM only names clusters
            f"models.deciders.openjev.base_url={urls.decider}",
            "models.deciders.openjev.concurrency=4",  # the stub's listen backlog is small
@@ -131,6 +136,38 @@ def llm_factory(role: Literal["enrich_decider", "cluster_namer"]) -> tuple[Any, 
     return registry.client(key), cfg.model, cfg.max_concurrency
 
 
+class HashEncoder(Encoder):
+    """A deterministic CPU stand-in for bge-m3 (no model files, no torch): the sum of one
+    seeded Gaussian vector per word plus a small one per text, unit-norm. Texts sharing words
+    are close, so clusters form, yet no two texts coincide (the vector index needs diverse
+    rows; a tiny sentence-transformers fixture collapsed the `small` lake to 67 groups)."""
+
+    def __init__(self) -> None:
+        super().__init__(Path("hash-encoder"), model_name="test/hash")
+        self._words: dict[str, np.ndarray] = {}
+
+    def load(self, device: Device) -> None:
+        self._device = device
+
+    def encode(self, texts: Sequence[str], *, batch_size: int) -> np.ndarray:
+        del batch_size
+        rows = np.stack([self._vector(text) for text in texts]) if texts else np.empty((0, DIM))
+        return rows.astype(np.float32)
+
+    def _vector(self, text: str) -> np.ndarray:
+        total = 0.3 * _gauss(text)
+        for word in text.lower().split():
+            if word not in self._words:
+                self._words[word] = _gauss(word)
+            total = total + self._words[word]
+        return total / max(float(np.linalg.norm(total)), 1e-12)
+
+
+def _gauss(key: str) -> np.ndarray:
+    seed = int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:8], "big")
+    return np.random.default_rng(seed).standard_normal(DIM)
+
+
 def _gpu_for(urls: StubUrls) -> GpuSettings:
     """The shipped `resilience.gpu` with each service on its stub; the LLM stubs have no
     `/health`, so their health probe is `/v1/models`."""
@@ -167,7 +204,7 @@ class _StubGpuState:
 
 def wire_enrichment(patch: pytest.MonkeyPatch, urls: StubUrls) -> None:
     """Run the real enrichment on a CPU box with nothing real behind it: compose is answered by
-    `FakeGpu` over the stubs, the tiny sentence-transformers fixture is the encoder (no bge-m3
+    `FakeGpu` over the stubs, `HashEncoder` is the encoder (no bge-m3
     download) and no CUDA is touched."""
     fake = FakeGpu(gpu=_gpu_for(urls), stubs={})
     namespace = types.SimpleNamespace(run=fake.run, TimeoutExpired=subprocess.TimeoutExpired,
@@ -176,7 +213,7 @@ def wire_enrichment(patch: pytest.MonkeyPatch, urls: StubUrls) -> None:
     patch.setattr(gpu_services, "_gpu", lambda: fake.gpu)
     state = _StubGpuState(fake)
     patch.setattr(decide_stage, "gpu_state", lambda: state)
-    encoder = Encoder(TINY_ST, model_name="test/tiny")
+    encoder = HashEncoder()
     patch.setattr(_pipeline_stages, "get_encoder", lambda: encoder)
     patch.setattr(_pipeline_stages, "device", lambda: "cpu")
     patch.setattr(embed, "release_cuda", lambda: None)
