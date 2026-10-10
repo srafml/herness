@@ -31,6 +31,7 @@ from herness.admin.doctor_host import HostCheckResult
 from herness.admin.wsl import CmdResult
 from herness.core import time as clock
 from herness.core.config import HernessConfig
+from herness.core.errors import ConfigError
 
 pytestmark = pytest.mark.unit
 
@@ -177,7 +178,13 @@ def test_ut10_71_wsl_distro(host: GpuHost, listing: str, status: str) -> None:
 
 @pytest.mark.parametrize(
     ("stdout", "code", "status"),
-    [("active\n", 0, "PASS"), ("inactive\n", 3, "FAIL"), ("active\n", 1, "FAIL")],
+    [
+        ("active\n", 0, "PASS"),
+        ("inactive\n", 3, "FAIL"),
+        ("active\n", 1, "FAIL"),
+        ("act\tive\n", 0, "FAIL"),
+        ("active\x00\n", 0, "FAIL"),
+    ],
 )
 def test_ut10_71_wsl_systemd_docker(host: GpuHost, stdout: str, code: int, status: str) -> None:
     """UT10-71 ``systemctl is-active docker`` must print ``active`` with exit 0."""
@@ -428,6 +435,10 @@ def test_ut10_71_firewall_inbound(host: GpuHost) -> None:
         ("644:root\n", "FAIL"),
         ("600:herness\n", "FAIL"),
         ("600 root", "FAIL"),
+        ("600:\troot\n", "FAIL"),
+        ("600:root x\n", "FAIL"),
+        ("600:root\n600:root\n", "FAIL"),
+        ("600:root\x1b\n", "FAIL"),
     ],
 )
 def test_ut10_71_env_file(host: GpuHost, stdout: str, status: str) -> None:
@@ -460,8 +471,49 @@ def test_ut10_71_unsafe_config_values_rejected(
 
 def test_ut10_71_unsafe_argv_rejected_by_runner(fake_runner: FakeRunner) -> None:
     """UT10-71 the U10-77 runner refuses an unsafe distro or argument before any call."""
-    with pytest.raises(Exception, match="unsafe"):
+    with pytest.raises(ConfigError, match="unsafe"):
         wsl.run_wsl("-d", ["true"], timeout_s=1)
-    with pytest.raises(Exception, match="unsafe"):
+    with pytest.raises(ConfigError, match="unsafe"):
         wsl.run_wsl("herness", ["stat", "-c", "%a %U", "/x"], timeout_s=1)
     assert fake_runner.calls == []
+
+
+def test_ut10_71_firewall_outbound_nonzero_exit_with_block_body(host: GpuHost) -> None:
+    """UT10-71 the read-back exits non-zero although its body says ``Block``: FAIL."""
+    body = '{"DefaultOutboundAction": "Block"}'
+    host.runner.add([*PS, f"Get-NetFirewallHyperVVMSetting -Name '{deploy_pull.WSL_VM_CREATOR_ID}'"
+                     " | ConvertTo-Json -Depth 3"], body, returncode=1)  # fmt: skip
+    assert run("firewall_outbound", host.cfg).status == "FAIL"
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"Enabled": 1, "Direction": 1, "Action": 4},
+        {"DisplayName": "herness-block-inbound-8000x"},
+        {"DisplayName": "herness-block-inbound-08000"},
+        {"DisplayName": "herness-block-inbound-\uff18\uff10\uff10\uff10"},
+        {"DisplayName": "herness-block-inbound-80000"},
+    ],
+)
+def test_ut10_71_firewall_inbound_bad_rule_names_do_not_count(
+    host: GpuHost, rule: dict[str, Any]
+) -> None:
+    """UT10-71 a rule without a name, a garbled, zero-padded, full-width or out-of-range port
+    does not cover 8000."""
+    ui = host.cfg.security.ui.port
+    good = [
+        {"DisplayName": f"herness-block-inbound-{p}", "Enabled": 1, "Direction": 1, "Action": 4}
+        for p in (8100, 8200, ui)
+    ]
+    bad = {"Enabled": 1, "Direction": 1, "Action": 4, **rule}
+    host.inbound = CmdResult(0, json.dumps([*good, bad]), "", 0.0)
+    row = run("firewall_inbound", host.cfg)
+    assert (row.status, row.detail) == ("WARN", "not covered: 8000")
+
+
+@pytest.mark.parametrize("stdout", ["git version 2.43.0\x1b[0m\n", "git version\n", "x\n"])
+def test_ut10_71_wsl_git_garbled_version_fails(host: GpuHost, stdout: str) -> None:
+    """UT10-71 wsl_git compares the raw ``git --version`` line: control bytes or no version FAIL."""
+    host.set("git", stdout)
+    assert run("wsl_git", host.cfg).status == "FAIL"

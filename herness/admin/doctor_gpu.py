@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import json
+import re
 from typing import TYPE_CHECKING, Final, Literal
 
 from herness.admin import _pull_verify as pv
@@ -46,6 +47,9 @@ _LOCAL_COLUMN: Final = 3  # ``ss -ltn``: State Recv-Q Send-Q Local-Address:Port 
 _TIMED_OUT: Final = 124  # ``CmdResult`` exit code of a timeout
 _MODEL_PORTS: Final = (8000, 8100, 8200)  # R-51
 _INBOUND_PREFIX: Final = "herness-block-inbound-"
+_PORT: Final = re.compile(r"[1-9][0-9]{0,4}")  # ASCII digits, no leading zero
+_MAX_PORT: Final = 65_535
+_GIT_VERSION: Final = re.compile(r"git version [0-9][0-9A-Za-z.()_ -]{0,80}")
 _ENV_FILE_MODE: Final = "600:root"  # ``%a:%U``; the spec's ``%a %U`` fails the U10-77 pattern
 # (doctor class, deploy section): ``decider`` is served by OpenJev (U10-83)
 _CLASSES: Final[tuple[tuple[WeightClass, PinClass], ...]] = (
@@ -130,10 +134,9 @@ def _check_wsl_distro(cfg: HernessConfig) -> HostCheckResult:
 
 def _check_wsl_systemd_docker(cfg: HernessConfig) -> HostCheckResult:
     result = _wsl(cfg, ["systemctl", "is-active", "docker"])
-    state = _clean(result.stdout.strip())
-    if result.returncode == 0 and state == "active":
+    if result.returncode == 0 and result.stdout.strip() == "active":
         return _row("wsl_systemd_docker", "PASS", "docker active")
-    return _row("wsl_systemd_docker", "FAIL", f"docker {state or 'unknown'}")
+    return _row("wsl_systemd_docker", "FAIL", f"docker {_clean(result.stdout.strip()) or '?'}")
 
 
 def _docker_api_listeners(stdout: str) -> list[str] | None:
@@ -234,8 +237,8 @@ def _check_images_pinned(cfg: HernessConfig) -> HostCheckResult:
 
 def _check_wsl_git(cfg: HernessConfig) -> HostCheckResult:
     result = _wsl(cfg, ["git", "--version"])
-    version = _clean(result.stdout.strip())
-    if result.returncode == 0 and version.startswith("git version "):
+    version = result.stdout.strip()
+    if result.returncode == 0 and _GIT_VERSION.fullmatch(version):
         return _row("wsl_git", "PASS", version)
     return _row("wsl_git", "FAIL", f"git not usable in the distro (exit {result.returncode})")
 
@@ -313,7 +316,7 @@ def _inbound_ports(stdout: str) -> set[int] | None:
         live = rule.get("Enabled") in _TRUE and rule.get("Direction") in _INBOUND
         if live and rule.get("Action") in _BLOCK and name.startswith(_INBOUND_PREFIX):
             parts = name.removeprefix(_INBOUND_PREFIX).split("-")
-            ports |= {int(p) for p in parts if p.isdigit()}
+            ports |= {int(p) for p in parts if _PORT.fullmatch(p) and int(p) <= _MAX_PORT}
     return ports
 
 
@@ -333,10 +336,10 @@ def _check_env_file(cfg: HernessConfig) -> HostCheckResult:
     path = _positional(cfg.deploy.env_file, "env_file")
     argv = ["stat", "-c", "%a:%U", path]
     result = wsl.run_wsl(cfg.deploy.wsl_distro, argv, user="root", timeout_s=_TIMEOUT_S)
-    found = _clean(result.stdout.strip())
+    found = result.stdout.strip()
     if result.returncode == 0 and found == _ENV_FILE_MODE:
         return _row("env_file", "PASS", f"{path} 600 root")
-    return _row("env_file", "FAIL", f"{path}: {found or 'unreadable'} (want 600 root)")
+    return _row("env_file", "FAIL", f"{path}: {_clean(found) or 'unreadable'} (want 600 root)")
 
 
 GPU_CHECKS: Final[tuple[_Check, ...]] = tuple(
