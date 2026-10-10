@@ -1851,7 +1851,7 @@ Every query below is a parameterised `SELECT` over `meta`, `score`, `metrics`, `
 
 | Function | Signature | Behavior |
 |----------|-----------|----------|
-| `ops_read` | `(fn_name: str, **params) -> object` | Allowlisted names: the U09-52 functions, impl 02's `list_review_items` and `get_review_item` (T02-07 (herness.store.ops.shared.list_review_items, herness.store.ops.shared.get_review_item), R-08) and `status_snapshot` (T08-22 (herness.core.jobs.status_snapshot)); cached with `st.cache_data(ttl=cfg.app.app.cache_ttl_s.ops, max_entries=500)` keyed on `(fn_name, params)`; unknown name → `ConfigError`. Chat reads (U09-49) are never routed here and never cached |
+| `ops_read` | `(fn_name: str, **params) -> object` | Allowlisted names: the U09-52 functions, impl 02's `list_review_items` and `get_review_item` (T02-07 (herness.store.ops.shared.list_review_items, herness.store.ops.shared.get_review_item), R-08) and `status_snapshot` (T08-22 (herness.core.jobs.status_snapshot)); cached with `st.cache_data(ttl=cfg.app.app.cache_ttl_s.ops, max_entries=500)` keyed on `(fn_name, params)`; unknown name → `ConfigError`. Chat reads (U09-49) are never routed here and never cached. T09-18 note: `ReviewItem` results are cached with a plain `dict` payload (impl 02 returns a read-only mapping, which `st.cache_data` cannot pickle) |
 | `after_write` | `() -> None` | `ops_read.clear()` (design §5.3: ops caches are cleared after the session writes) |
 | `read_trace_page` | `(run_id: str, *, type_filter: str \| None, page: int, include_payload: bool) -> TracePage` | See algorithm |
 
