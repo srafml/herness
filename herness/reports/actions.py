@@ -159,13 +159,16 @@ def set_feedback(
     r.require_role(actor, "chat_feedback")
     r.check_id(r.MESSAGE_ID_RE, message_id, "message")
     msg = get_chat_message(message_id)
+    missing = NotFound(f"chat message {message_id} not found")
     if msg is None:
-        text = f"chat message {message_id} not found"
-        raise NotFound(text)
+        raise missing
     if msg["role"] != "assistant":
         text = "Feedback applies to answers only."
         raise UserInputError(text)
-    require_session_owner(actor, msg["session_id"])
+    try:
+        require_session_owner(actor, msg["session_id"])
+    except NotFound:
+        raise missing from None  # never echo the session id of another user's message
     clean = r.validate_note(note, required=False)
     stored = None if clean is None else _redacted(clean)
     retry_call(
@@ -369,14 +372,9 @@ def resume_run(actor: Actor, *, run_id: str, retry_dead: bool = False, force: bo
 
 
 def rerender_report(
-    actor: Actor,
-    *,
-    run_id: str,
-    formats: Sequence[str] | None = None,
-    out_dir: Path | None = None,
-    strict: bool | None = None,
-    top_n: int | None = None,
-) -> ReportManifest:
+    actor: Actor, *, run_id: str, formats: Sequence[str] | None = None,
+    out_dir: Path | None = None, strict: bool | None = None, top_n: int | None = None,
+) -> ReportManifest:  # fmt: skip
     """Render a run's report: any viewer on the CLI, admins (audited) on the dashboard."""
     action = "report_render" if actor.channel == "cli" else "report_rerender"
     r.require_role(actor, action)

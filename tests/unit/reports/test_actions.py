@@ -835,8 +835,12 @@ def test_st09_11_feedback_on_other_users_message_is_not_found(real: AuditLines) 
     posted = a.post_user_message(alice, session, "hello there", max_chars=100, now=NOW)
     answer: Any = ops.upsert_assistant_placeholder(session, reply_to=posted.message_id, now=NOW)
     answer_id = answer if isinstance(answer, str) else answer["message_id"]
-    with pytest.raises(NotFound, match=f"chat session {session} not found"):
+    with pytest.raises(NotFound, match=f"^chat message {answer_id} not found$") as info:
         a.set_feedback(bob, answer_id, feedback="down", note="bad")
+    assert session not in str(info.value)  # A's session id is never echoed to B
+    with pytest.raises(NotFound) as missing:
+        a.set_feedback(bob, "msg_" + MISSING, feedback="down")
+    assert type(missing.value) is type(info.value)
     row = ops.get_chat_message(answer_id)
     assert row is not None
     assert (row["feedback"], row["feedback_note"]) == (None, None)
