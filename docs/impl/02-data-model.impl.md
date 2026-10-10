@@ -3620,6 +3620,7 @@ Fixtures (spec 11 layout): `ops_store` (temp `ops.sqlite`, `reset_connections`),
 | UT02-77 | U02-133 | existing build file; valid ID without file; `../x` | call | `True`; `False`; `False` without any path built |
 | UT02-78 | U02-134, U02-98 | `fake_job_context` whose `job.payload` holds `{"stages": ["build"]}`; recording `run_build_pipeline` stub | build the handler with a fake `llm_factory`, call it with `ctx` | the handler takes one argument; payload read from `ctx.job.payload` (R-42); `llm_factory` reaches `run_build_pipeline` |
 | UT02-79 | U02-58 | `label_check` items with payload `question` `q1`/`q2` and `purpose` `spot_check`/`gold` | list with `payload_match={"question": "q1", "purpose": "gold"}`; with a value containing `'` and `%`; with key `a.b`; with 9 keys | only items matching both keys; the quoted value matches literally; `ConfigError` for the bad key and for 9 keys (RQ-02) |
+| UT02-80 | T02-22b | `tests/fixtures/golden/synth_small_counts.json` and `synth_small_core.json`; `tools.synth.GENERATOR_VERSION` | read each golden's `generator_version` | equals `GENERATOR_VERSION`; the failure message names the regeneration command `python -m tests.support.synth_build <root> <cfg_root>` |
 
 ### 11.2 Property tests (`unit`, hypothesis)
 
@@ -3662,7 +3663,7 @@ Fixtures (spec 11 layout): `ops_store` (temp `ops.sqlite`, `reset_connections`),
 | IT02-28 | U02-127, U02-94 | crafted core tables per check | stage dq | each row's value, threshold, severity, passed as in U02-127 |
 | IT02-29 | F02-02 | previous promoted build; new lake with 10 % fewer incidents | pipeline to promote | `DqGateFailed` with `row_count_drop:core.incident`; status `failed`; `CURRENT` unchanged |
 | IT02-30 | U02-94 | warn failures only | pipeline | promoted; warnings logged |
-| IT02-31 | `T11-19 (tests/integration/test_build_dirty.py)` | synthetic `small`, dirty `default` | pipeline | DQ counts within ±1 of truth; promoted |
+| IT02-31 | `T11-19 (tests/integration/test_build_dirty.py)` | synthetic `small`, dirty `default` | pipeline | DQ counts within ±1 of truth; promoted; goldens are regenerated whenever GENERATOR_VERSION changes; the UT02 guard (UT02-80) enforces it |
 | IT02-32 | U02-104, U02-105 | 5 promoted builds, one pinned by a running run | promote a new build with `keep_last=3` | CURRENT new; newest 2 others kept plus the pinned one; rest deleted; previous marked `retired` |
 | IT02-33 | 140 | configured `files/service_costs` entity | build | `stg.files_service_costs` with latest rows and no `_payload` |
 
