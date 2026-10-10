@@ -23,11 +23,20 @@ from herness.core.audit import audit
 from herness.core.config import get_config
 from herness.core.errors import NotFound, PolicyViolation, SchemaViolation
 from herness.core.ids import canonical_json
+from herness.core.jobs.status import FINISHED_RUN
 from herness.core.logging import get_logger
 from herness.core.redact import redact_text
 from herness.core.resilience import retry_call
 from herness.core.types import MemoryProposal, Provenance
 from herness.reports import rules as r
+from herness.reports._actions_audit import (
+    Decided,
+    admin_change,
+    already_finished,
+    completed,
+    failed,
+    memory_decide,
+)
 from herness.reports.contract import RUN_ID_RE
 from herness.reports.render import Format, render_run
 from herness.reports.rules import Actor, UserInputError
@@ -58,13 +67,10 @@ __all__ = [
 ]  # fmt: skip
 
 type EntityType = Literal["service", "team", "org", "work_item", "cluster"]
-type Decided = Literal["approved", "rejected"]
 
-_log = get_logger("app.action")
 _chat_log = get_logger("app.chat")
 _auth_log = get_logger("app.auth")
 _UNSAFE: Final = "Your message could not be processed safely."
-_NOT_PENDING: Final = frozenset({"approve.not_pending", "reject.not_pending"})
 _REVIEW_ACTION: Final = {
     "weight_change": "review_decide_weight_change",
     "memory_write": "memory_decide",
@@ -93,10 +99,6 @@ def _redacted(text: str) -> str:
 
 def _session_not_found(session_id: str) -> NotFound:
     return NotFound(f"chat session {session_id} not found")
-
-
-def _completed(actor: Actor, action: str, **fields: object) -> None:
-    _log.info("app.action.completed", action=action, **fields, channel=actor.channel)
 
 
 # --- U09-42 require_session_owner ----------------------------------------------------------
@@ -162,13 +164,13 @@ def set_feedback(
     missing = NotFound(f"chat message {message_id} not found")
     if msg is None:
         raise missing
+    try:  # owner first: another user's message (any kind) looks missing, its session not echoed
+        require_session_owner(actor, msg["session_id"])
+    except NotFound:
+        raise missing from None
     if msg["role"] != "assistant":
         text = "Feedback applies to answers only."
         raise UserInputError(text)
-    try:
-        require_session_owner(actor, msg["session_id"])
-    except NotFound:
-        raise missing from None  # never echo the session id of another user's message
     clean = r.validate_note(note, required=False)
     stored = None if clean is None else _redacted(clean)
     retry_call(
@@ -242,31 +244,18 @@ def decide_recommendation(
         text = f"recommendation {rec_id} not found"
         raise NotFound(text)
     eff = None if effective_at is None else datetime.combine(effective_at, time(0), UTC)
-    # impl 10's schema is {rec_id, decision, decided_by}; it has no `reason_len` (see report).
+    # impl 10 schema {rec_id, decision, decided_by}: no reason_len, no detail (impl 09 note).
     audit("recommendation_decision", actor.user_ref, rec_id=rec_id, decision=decision,
           decided_by=actor.user_ref)  # fmt: skip
-    memory.decide(rec_id, decision, why, actor.user_ref, eff)
-    _completed(actor, "decide_recommendation", rec_id=rec_id, decision=decision)
+    try:
+        memory.decide(rec_id, decision, why, actor.user_ref, eff)
+    except Exception as exc:
+        failed(actor, "decide_recommendation", rec_id, exc, line=False)
+        raise
+    completed(actor, "decide_recommendation", rec_id=rec_id, decision=decision)
 
 
 # --- U09-38 decide_review, U09-101 decide_memory ----------------------------------------------
-
-
-def _memory_decide(
-    memory: MemoryStore, memory_id: str, actor: Actor, note: str | None, *, approve: bool,
-    refusal: str,
-) -> Decided:  # fmt: skip
-    """``MemoryStore.approve`` or ``reject``; impl 07 "not pending" → UserInputError(refusal)."""
-    try:
-        if approve:
-            memory.approve(memory_id, actor.user_ref, note)
-        else:
-            memory.reject(memory_id, actor.user_ref, note or "")  # required: validated non-empty
-    except PolicyViolation as exc:
-        if exc.details.get("rule") in _NOT_PENDING:
-            raise UserInputError(refusal) from None
-        raise
-    return "approved" if approve else "rejected"
 
 
 def _stored_note(kind: str, approve: bool, note: str | None, answer: str | None) -> str | None:
@@ -307,7 +296,7 @@ def decide_review(  # noqa: PLR0913 - keyword parameters fixed by U09-38
             msg = f"review item {item_id} has no memory_id"
             raise SchemaViolation(msg)
         refusal = f"Item {item_id} is no longer pending."
-        status = _memory_decide(memory, memory_id, actor, clean, approve=approve, refusal=refusal)
+        status = memory_decide(memory, memory_id, actor, clean, approve=approve, refusal=refusal)
     else:
         stored = _stored_note(item.kind, approve, clean, answer)
         status = "approved" if approve else "rejected"
@@ -317,7 +306,7 @@ def decide_review(  # noqa: PLR0913 - keyword parameters fixed by U09-38
         except ReviewItemConflict:
             text = f"Item {item_id} was already decided."
             raise UserInputError(text) from None
-    _completed(actor, action, item_id=item_id, kind=item.kind, status=status)
+    completed(actor, action, item_id=item_id, kind=item.kind, status=status)
     return status
 
 
@@ -329,8 +318,8 @@ def decide_memory(
     r.check_id(r.MEMORY_ID_RE, memory_id, "memory")
     clean = r.validate_note(note, required=not approve, max_chars=500 if approve else 1000)
     refusal = f"Memory item {memory_id} is not pending."
-    status = _memory_decide(memory, memory_id, actor, clean, approve=approve, refusal=refusal)
-    _completed(actor, "memory_decide", memory_id=memory_id, status=status)
+    status = memory_decide(memory, memory_id, actor, clean, approve=approve, refusal=refusal)
+    completed(actor, "memory_decide", memory_id=memory_id, status=status)
     return status
 
 
@@ -338,20 +327,23 @@ def decide_memory(
 
 
 def job_control(actor: Actor, *, job_id: str, op: Literal["cancel", "retry"]) -> str:
-    """Cancel or retry a job after the ``admin_action`` audit line (DD-19)."""
+    """Cancel or retry a job after the ``admin_action`` request line (DD-19); ``not_active``
+    is an outcome (completed log), a raised spec 08 error a ``failed:`` line."""
     action = "job_cancel" if op == "cancel" else "job_retry"
     r.require_role(actor, action)
     r.check_id(r.JOB_ID_RE, job_id, "job")
     if not ui_job_exists(job_id):
         text = f"job {job_id} not found"
         raise NotFound(text)
-    audit("admin_action", actor.user_ref, action=action, target=job_id)
-    if op == "cancel":
-        result: str = jobs.cancel(job_id)
-    else:
+
+    def change() -> str:
+        if op == "cancel":
+            return str(jobs.cancel(job_id))
         jobs.retry(job_id)
-        result = "queued"
-    _completed(actor, action, job_id=job_id, result=result)
+        return "queued"
+
+    result = admin_change(actor, action, job_id, change)
+    completed(actor, action, job_id=job_id, result=result)
     return result
 
 
@@ -359,16 +351,22 @@ def resume_run(actor: Actor, *, run_id: str, retry_dead: bool = False, force: bo
     """Re-enqueue an unfinished run; idempotent through impl 08's ``resume:<run_id>`` key."""
     r.require_role(actor, "run_resume")
     r.check_id(RUN_ID_RE, run_id, "run")
-    if get_run(run_id) is None:
+    run = get_run(run_id)
+    if run is None:
         text = f"run {run_id} not found"
         raise NotFound(text)
-    audit("admin_action", actor.user_ref, action="run_resume", target=run_id)
-    res = jobs.enqueue_resume(run_id, force=force, retry_dead=retry_dead)
-    if res.job_id is None:
-        text = f"Run {run_id} is already {res.run_status}; use --force to resume it."
-        raise UserInputError(text)
-    _completed(actor, "run_resume", run_id=run_id, job_id=res.job_id)
-    return res.job_id
+    if run.status in FINISHED_RUN and not force:  # refused before the line (review I1)
+        raise already_finished(run_id, run.status)
+
+    def change() -> str:
+        res = jobs.enqueue_resume(run_id, force=force, retry_dead=retry_dead)
+        if res.job_id is None:  # finished between get_run and enqueue
+            raise already_finished(run_id, res.run_status)
+        return res.job_id
+
+    job_id = admin_change(actor, "run_resume", run_id, change)
+    completed(actor, "run_resume", run_id=run_id, job_id=job_id)
+    return job_id
 
 
 def rerender_report(
@@ -378,9 +376,14 @@ def rerender_report(
     """Render a run's report: any viewer on the CLI, admins (audited) on the dashboard."""
     action = "report_render" if actor.channel == "cli" else "report_rerender"
     r.require_role(actor, action)
-    if actor.channel == "dashboard":
-        audit("admin_action", actor.user_ref, action="report_render", target=run_id)
+    r.check_id(RUN_ID_RE, run_id, "run")
     settings = get_config().app.reports
     chosen = cast("Sequence[Format]", settings.formats if formats is None else formats)
     strict_numbers = settings.strict_numbers if strict is None else strict
-    return render_run(run_id, chosen, out_dir, strict_numbers, clock.now(), top_n=top_n)
+
+    def change() -> ReportManifest:
+        return render_run(run_id, chosen, out_dir, strict_numbers, clock.now(), top_n=top_n)
+
+    if actor.channel == "dashboard":
+        return admin_change(actor, "report_render", run_id, change)
+    return change()

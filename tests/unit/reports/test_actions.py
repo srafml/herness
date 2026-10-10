@@ -12,6 +12,7 @@ import dataclasses
 import datetime as dt
 import json
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,13 +23,16 @@ from herness.core import audit as core_audit
 from herness.core import jobs
 from herness.core.errors import (
     FatalError,
+    JobStateError,
     NotFound,
     PermissionDenied,
     PolicyViolation,
+    ReportContractError,
     SchemaViolation,
 )
 from herness.core.jobs import ResumeResult
 from herness.harness.memory.types import MemoryNotFound
+from herness.reports import _actions_audit as aa
 from herness.reports import actions as a
 from herness.reports import rules
 from herness.reports.rules import Actor, UiRole, UserInputError
@@ -92,7 +96,11 @@ class Env:
         }
         self.item = _item("mapping_suggestion")
         self.stale_item: ReviewItem | None = None
-        self.resume = ResumeResult(job_id=RESUME_JOB, created=True, run_status="running")
+        # spec 08 stand-in with state: job statuses, runs (kind, status), resume idem keys
+        self.job_status: dict[str, str] = {JOB: "queued"}
+        self.runs: dict[str, tuple[str, str]] = {RUN: ("review", "running")}
+        self.idem: dict[str, str] = {}
+        self.fail: dict[str, BaseException] = {}
         self.memory = FakeMemoryStore(self.events)
         for name in (
             "create_chat_session", "append_chat_message", "update_chat_message",
@@ -102,6 +110,7 @@ class Env:
         ):  # fmt: skip
             mp.setattr(a, name, getattr(self, name))
         mp.setattr(a, "audit", self.audit)
+        mp.setattr(aa, "audit", self.audit)
         mp.setattr(rules, "audit", self.audit)
         mp.setattr(jobs, "cancel", self.cancel)
         mp.setattr(jobs, "retry", self.retry)
@@ -145,10 +154,15 @@ class Env:
         return {"rec_id": REC} if rec_id == REC else None
 
     def ui_job_exists(self, job_id: str) -> bool:
-        return job_id == JOB
+        return job_id in self.job_status
 
     def get_run(self, run_id: str) -> object | None:
-        return object() if run_id == RUN else None
+        found = self.runs.get(run_id)
+        return (
+            None
+            if found is None
+            else SimpleNamespace(run_id=run_id, kind=found[0], status=found[1])
+        )
 
     def get_review_item(self, item_id: str) -> ReviewItem:
         if item_id != ITEM:
@@ -166,20 +180,42 @@ class Env:
         return self.item
 
     def render_run(self, run_id: str, *args: Any, **kw: Any) -> str:
+        if "render" in self.fail:
+            raise self.fail["render"]
         self.events.append(("render", run_id, args, kw))
         return "manifest"
 
-    # --- spec 08 jobs
+    # --- spec 08 jobs (U08-51, U08-52, U08-93 rules)
     def cancel(self, job_id: str) -> str:
+        if "cancel" in self.fail:
+            raise self.fail["cancel"]
         self.events.append(("cancel", job_id))
-        return "canceled"
+        status = self.job_status[job_id]
+        result = {"queued": "canceled", "running": "cancel_requested"}.get(status, "not_active")
+        if result != "not_active":
+            self.job_status[job_id] = result
+        return result
 
     def retry(self, job_id: str) -> None:
+        if self.job_status.get(job_id) != "failed":
+            msg = "job is not failed"
+            raise JobStateError(msg)
         self.events.append(("job_retry", job_id))
+        self.job_status[job_id] = "queued"
 
     def enqueue_resume(self, run_id: str, *, force: bool, retry_dead: bool) -> ResumeResult:
+        kind, status = self.runs[run_id]
+        if kind == "chat":
+            msg = "chat runs resume through their chat job"
+            raise JobStateError(msg)
+        if status in {"done", "partial", "failed", "canceled"} and not force:
+            return ResumeResult(job_id=None, created=False, run_status=status)
         self.events.append(("enqueue_resume", run_id, force, retry_dead))
-        return self.resume
+        key = f"resume:{run_id}"
+        created = key not in self.idem
+        job_id = self.idem.setdefault(key, RESUME_JOB)
+        self.job_status.setdefault(job_id, "queued")
+        return ResumeResult(job_id=job_id, created=created, run_status=status)
 
     # --- views
     def audits(self, event: str | None = None) -> list[tuple[Any, ...]]:
@@ -311,6 +347,19 @@ def test_ut09_75_set_feedback_refusals(env: Env) -> None:
     assert env.changes() == []
 
 
+def test_ut09_75_set_feedback_owner_check_before_row_kind(env: Env) -> None:
+    """UT09-75 (review M2) B on A's *user* row gets the same NotFound as a missing message, not
+    "Feedback applies to answers only.", so B learns nothing about A's message."""
+    bob = actor("viewer", ref=BOB)
+    with pytest.raises(NotFound, match=rf"^chat message {MSG_USER} not found$") as other:
+        a.set_feedback(bob, MSG_USER, feedback="up")
+    with pytest.raises(NotFound) as missing:
+        a.set_feedback(bob, "msg_" + MISSING, feedback="up")
+    assert type(other.value) is type(missing.value)
+    assert SES not in str(other.value)
+    assert env.changes() == []
+
+
 # --- UT09-75 U09-36 propose_correction -------------------------------------------------------
 
 
@@ -431,6 +480,22 @@ def test_ut09_75_decide_recommendation_refusals_write_nothing(env: Env) -> None:
     assert env.memory.calls == []
 
 
+def test_ut09_75_decide_recommendation_failure_after_line_is_logged(env: Env) -> None:
+    """UT09-75 (review I1) memory.decide raising after the line: app.action.failed is logged,
+    no second audit line (impl 10's recommendation_decision has no detail), error propagates."""
+    env.memory.raises["decide"] = MemoryNotFound("recommendation", REC)
+    mem: Any = env.memory
+    with capture_logs() as logs, pytest.raises(MemoryNotFound):
+        a.decide_recommendation(
+            actor("reviewer"), rec_id=REC, decision="accepted", reason=REASON, memory=mem
+        )
+    assert len(env.audits("recommendation_decision")) == 1
+    assert len(env.audits()) == 1
+    failed = _one(logs, "app.action.failed")
+    assert (failed["action"], failed["target"]) == ("decide_recommendation", REC)
+    assert failed["error_type"] == "MemoryNotFound"
+
+
 # --- UT09-75 U09-38 decide_review ------------------------------------------------------------
 
 
@@ -474,16 +539,18 @@ def test_ut09_75_decide_review_memory_write_routes_to_memory_store(env: Env) -> 
     kw: dict[str, Any] = {"item_id": ITEM, "memory": mem, "now": NOW}
     env.item = _item("memory_write", payload={"memory_id": MEM})
     assert a.decide_review(actor("reviewer"), approve=True, note="ok", **kw) == "approved"
+    assert env.memory.status[MEM] == "active"
+    env.memory.status[MEM] = "pending_approval"  # a fresh pending item for the reject path
     with pytest.raises(UserInputError, match="at most 500"):
         a.decide_review(actor("reviewer"), approve=True, note="x" * 501, **kw)
     assert a.decide_review(actor("reviewer"), approve=False, note="x" * 1000, **kw) == "rejected"
+    assert env.memory.status[MEM] == "rejected"
     assert env.memory.calls == [
         ("approve", (MEM, ALICE, "ok"), {}),
         ("reject", (MEM, ALICE, "x" * 1000), {}),
     ]
     assert [e for e in env.changes() if e[0] == "decide_item"] == []
-    rule = "reject.not_pending"
-    env.memory.raises["reject"] = PolicyViolation(rule, details={"rule": rule})
+    # deciding again: the store's own state refuses it (impl 07 reject.not_pending)
     with pytest.raises(UserInputError, match=rf"^Item {ITEM} is no longer pending\.$"):
         a.decide_review(actor("reviewer"), approve=False, note="no", **kw)
     env.memory.raises["reject"] = PolicyViolation("other", details={"rule": "rate_limit"})
@@ -514,21 +581,88 @@ def test_ut09_75_decide_review_refusals(env: Env) -> None:
 # --- UT09-75 U09-39 job_control, U09-40 resume_run, U09-41 rerender_report -------------------
 
 
+REQ = "requested"
+
+
+def _admin(action: str, target: str, detail: str = REQ) -> tuple[Any, ...]:
+    return ("audit", "admin_action", ALICE, {"action": action, "target": target, "detail": detail})
+
+
 def test_ut09_75_job_control_audits_before_cancel_and_retry(env: Env) -> None:
-    """UT09-75 job_control: `admin_action` audit line, then spec 08 cancel / retry."""
+    """UT09-75 job_control: one `admin_action` line (detail="requested"), then spec 08 cancel /
+    retry; the job state the fake store holds changes only after the line."""
     with capture_logs() as logs:
         assert a.job_control(actor("admin"), job_id=JOB, op="cancel") == "canceled"
+    assert env.job_status[JOB] == "canceled"
+    env.job_status[JOB] = "failed"
     assert a.job_control(actor("admin", channel="cli"), job_id=JOB, op="retry") == "queued"
+    assert env.job_status[JOB] == "queued"
     assert env.events == [
-        ("audit", "admin_action", ALICE, {"action": "job_cancel", "target": JOB}),
+        _admin("job_cancel", JOB),
         ("cancel", JOB),
-        ("audit", "admin_action", ALICE, {"action": "job_retry", "target": JOB}),
+        _admin("job_retry", JOB),
         ("job_retry", JOB),
     ]
     line = _one(logs, "app.action.completed")
     assert line["action"] == "job_cancel"
     assert line["job_id"] == JOB
     assert line["result"] == "canceled"
+
+
+def test_ut09_75_job_control_not_active_is_an_outcome(env: Env) -> None:
+    """UT09-75 (review I1) cancel of a finished job returns `not_active`: one `requested` line,
+    the outcome in app.action.completed, no failure line."""
+    env.job_status[JOB] = "done"
+    with capture_logs() as logs:
+        assert a.job_control(actor("admin"), job_id=JOB, op="cancel") == "not_active"
+    assert env.audits() == [_admin("job_cancel", JOB)]
+    assert _one(logs, "app.action.completed")["result"] == "not_active"
+    assert not [e for e in logs if e["event"] == "app.action.failed"]
+
+
+def test_ut09_75_job_control_failed_change_writes_failed_line(env: Env) -> None:
+    """UT09-75 (review I1) retry of a job that is not failed: `requested` then `failed:<Type>`
+    lines, app.action.failed logged, the spec 08 error propagates, job state unchanged."""
+    env.job_status[JOB] = "running"
+    with capture_logs() as logs, pytest.raises(JobStateError):
+        a.job_control(actor("admin"), job_id=JOB, op="retry")
+    assert env.audits() == [
+        _admin("job_retry", JOB),
+        _admin("job_retry", JOB, "failed:JobStateError"),
+    ]
+    assert env.job_status[JOB] == "running"
+    failed = _one(logs, "app.action.failed")
+    assert (failed["action"], failed["target"]) == ("job_retry", JOB)
+    assert (failed["error_type"], failed["channel"]) == ("JobStateError", "dashboard")
+    env.fail["cancel"] = OSError("backend down")
+    with pytest.raises(OSError, match="backend down"):
+        a.job_control(actor("admin"), job_id=JOB, op="cancel")
+    assert env.audits()[-2:] == [
+        _admin("job_cancel", JOB),
+        _admin("job_cancel", JOB, "failed:OSError"),
+    ]
+
+
+def test_ut09_75_failed_line_audit_error_is_logged_not_raised(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-75 (review I1) when the follow-up `failed:` line cannot be written it is logged and
+    the original change error still propagates."""
+    calls: list[dict[str, Any]] = []
+
+    def flaky(event: str, actor_ref: str, **fields: Any) -> None:
+        calls.append(fields)
+        if fields.get("detail", "").startswith("failed:"):
+            msg = "audit write failed: admin_action"
+            raise FatalError(msg)
+
+    monkeypatch.setattr(aa, "audit", flaky)
+    env.job_status[JOB] = "running"
+    with capture_logs() as logs, pytest.raises(JobStateError):
+        a.job_control(actor("admin"), job_id=JOB, op="retry")
+    assert [c["detail"] for c in calls] == [REQ, "failed:JobStateError"]
+    audit_failed = _one(logs, "app.action.audit_failed")
+    assert (audit_failed["action"], audit_failed["error_type"]) == ("job_retry", "FatalError")
 
 
 def test_ut09_75_job_control_refusals(env: Env) -> None:
@@ -544,27 +678,58 @@ def test_ut09_75_job_control_refusals(env: Env) -> None:
 
 
 def test_ut09_75_resume_run(env: Env) -> None:
-    """UT09-75 resume_run: audit, then enqueue_resume; a finished run without force refuses."""
+    """UT09-75 resume_run: one `requested` line, then enqueue_resume; refusals before the line."""
     assert a.resume_run(actor("admin"), run_id=RUN, retry_dead=True) == RESUME_JOB
-    assert env.events == [
-        ("audit", "admin_action", ALICE, {"action": "run_resume", "target": RUN}),
-        ("enqueue_resume", RUN, False, True),
-    ]
-    env.resume = ResumeResult(job_id=None, created=False, run_status="done")
-    done = rf"^Run {RUN} is already done; use --force to resume it\.$"
-    with pytest.raises(UserInputError, match=done):
-        a.resume_run(actor("admin"), run_id=RUN)
+    assert env.events == [_admin("run_resume", RUN), ("enqueue_resume", RUN, False, True)]
     with pytest.raises(PermissionDenied):
         a.resume_run(actor("reviewer"), run_id="bad")
     with pytest.raises(UserInputError, match="invalid run id"):
         a.resume_run(actor("admin"), run_id="bad")
     with pytest.raises(NotFound):
         a.resume_run(actor("admin"), run_id="run_" + U2)
-    assert len(env.audits("admin_action")) == 2
+    assert len(env.audits("admin_action")) == 1
+
+
+def test_ut09_75_resume_finished_run_refused_before_audit(env: Env) -> None:
+    """UT09-75 (review I1) a finished run without --force is refused from its `get_run` status
+    before any audit line; with --force it is resumed."""
+    env.runs[RUN] = ("review", "done")
+    done = rf"^Run {RUN} is already done; use --force to resume it\.$"
+    with pytest.raises(UserInputError, match=done):
+        a.resume_run(actor("admin"), run_id=RUN)
+    assert env.events == []
+    assert a.resume_run(actor("admin"), run_id=RUN, force=True) == RESUME_JOB
+    assert env.events == [_admin("run_resume", RUN), ("enqueue_resume", RUN, True, False)]
+
+
+def test_ut09_75_resume_failure_after_line_writes_failed_line(env: Env) -> None:
+    """UT09-75 (review I1) enqueue_resume raising (chat run) or finding the run finished after
+    the line (a race) → `requested` + `failed:<Type>` lines; the error propagates."""
+    env.runs[RUN] = ("chat", "running")
+    with capture_logs() as logs, pytest.raises(JobStateError):
+        a.resume_run(actor("admin"), run_id=RUN)
+    assert env.audits() == [
+        _admin("run_resume", RUN),
+        _admin("run_resume", RUN, "failed:JobStateError"),
+    ]
+    assert _one(logs, "app.action.failed")["target"] == RUN
+    env.events.clear()
+    env.runs[RUN] = ("review", "running")
+    env.enqueue_resume = lambda run_id, **kw: ResumeResult(None, False, "done")  # type: ignore[method-assign]
+    jobs_enqueue = env.enqueue_resume
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(jobs, "enqueue_resume", jobs_enqueue)
+        with pytest.raises(UserInputError, match="already done"):
+            a.resume_run(actor("admin"), run_id=RUN)
+    assert env.audits() == [
+        _admin("run_resume", RUN),
+        _admin("run_resume", RUN, "failed:UserInputError"),
+    ]
 
 
 def test_ut09_75_rerender_report_channels(env: Env) -> None:
-    """UT09-75 rerender_report: CLI viewers render without audit; dashboard needs admin + audit."""
+    """UT09-75 rerender_report: CLI viewers render without audit; dashboard needs admin + one
+    `requested` line; run_id is validated before the line (review M1)."""
     cfg = a.get_config().app.reports
     assert a.rerender_report(actor("viewer", channel="cli"), run_id=RUN) == "manifest"
     ((_, run_id, args, kw),) = env.changes()
@@ -575,16 +740,36 @@ def test_ut09_75_rerender_report_channels(env: Env) -> None:
     with pytest.raises(PermissionDenied):
         a.rerender_report(actor("reviewer"), run_id=RUN)
     env.events.clear()
+    with pytest.raises(UserInputError, match="invalid run id"):
+        a.rerender_report(actor("admin"), run_id="../etc")
+    assert env.events == []
     a.rerender_report(actor("admin"), run_id=RUN, formats=["md"], strict=False, top_n=3)
-    audit_line = ("audit", "admin_action", ALICE, {"action": "report_render", "target": RUN})
-    assert env.events[0] == audit_line
+    assert env.events[0] == _admin("report_render", RUN)
     assert env.events[1][2][0] == ["md"]
     assert env.events[1][2][2] is False
     assert env.events[1][3] == {"top_n": 3}
+    assert len(env.audits()) == 1
     env.audit_error = FatalError("audit write failed: admin_action")
     with pytest.raises(FatalError):
         a.rerender_report(actor("admin"), run_id=RUN)
     assert len(env.changes()) == 1
+
+
+def test_ut09_75_rerender_failure_writes_failed_line(env: Env) -> None:
+    """UT09-75 (review I1) render_run raising on the dashboard → `requested` + `failed:<Type>`;
+    on the CLI no audit line at all; the error propagates."""
+    env.fail["render"] = ReportContractError("draft invalid", details={"code": "draft_invalid"})
+    with capture_logs() as logs, pytest.raises(ReportContractError):
+        a.rerender_report(actor("admin"), run_id=RUN)
+    assert env.audits() == [
+        _admin("report_render", RUN),
+        _admin("report_render", RUN, "failed:ReportContractError"),
+    ]
+    assert _one(logs, "app.action.failed")["action"] == "report_render"
+    env.events.clear()
+    with pytest.raises(ReportContractError):
+        a.rerender_report(actor("viewer", channel="cli"), run_id=RUN)
+    assert env.audits() == []
 
 
 # --- UT09-81 U09-42 require_session_owner ----------------------------------------------------
@@ -640,10 +825,15 @@ def test_ut09_99_decide_memory(env: Env) -> None:
     with pytest.raises(UserInputError, match="invalid memory id"):
         a.decide_memory(actor("reviewer"), memory_id="mem_x", approve=True, memory=mem)
     assert len(env.memory.calls) == 1
+    assert env.memory.status[MEM] == "active"
+    with pytest.raises(UserInputError, match=rf"^Memory item {MEM} is not pending\.$"):
+        a.decide_memory(actor("reviewer"), memory_id=MEM, approve=False, note="late", memory=mem)
+    other = "mem_" + U2
     status = a.decide_memory(
-        actor("reviewer"), memory_id=MEM, approve=False, note="x" * 1000, memory=mem
+        actor("reviewer"), memory_id=other, approve=False, note="x" * 1000, memory=mem
     )
     assert status == "rejected"
+    assert env.memory.status[other] == "rejected"
     rule = "approve.not_pending"
     env.memory.raises["approve"] = PolicyViolation(rule, details={"rule": rule})
     with pytest.raises(UserInputError, match=rf"^Memory item {MEM} is not pending\.$"):
@@ -744,7 +934,11 @@ def test_st09_14_oversized_inputs_and_double_submit(env: Env) -> None:
     with pytest.raises(UserInputError, match=rf"^Item {ITEM} was already decided\.$"):
         a.decide_review(actor("reviewer"), **kw)
     assert [e[0] for e in env.changes()] == ["decide_item"]
-    assert a.resume_run(actor("admin"), run_id=RUN) == a.resume_run(actor("admin"), run_id=RUN)
+    first = a.resume_run(actor("admin"), run_id=RUN)
+    jobs_before = dict(env.job_status)
+    assert a.resume_run(actor("admin"), run_id=RUN) == first
+    assert env.job_status == jobs_before  # no second job row
+    assert env.idem == {f"resume:{RUN}": first}
 
 
 def test_st09_27_injected_correction_stays_pending(env: Env) -> None:
@@ -756,6 +950,7 @@ def test_st09_27_injected_correction_stays_pending(env: Env) -> None:
         source_message_id=MSG_USER, memory=mem,
     )  # fmt: skip
     assert result.status == "pending_approval"
+    assert env.memory.status[result.memory_id] == "pending_approval"
     assert env.memory.names() == ["propose"]
     assert env.memory.calls[0][1][0].provenance.via == "chat"
 
@@ -778,7 +973,7 @@ def real(ops_store: object, monkeypatch: pytest.MonkeyPatch) -> AuditLines:
     def spy(event: str, actor_ref: str, **fields: Any) -> None:
         lines.append((event, actor_ref, fields))
 
-    for module in (shared, a, rules):
+    for module in (shared, a, aa, rules):
         monkeypatch.setattr(module, "audit", spy)
     monkeypatch.setattr(a, "redact_text", lambda text: None if text is None else text.upper())
     return lines
@@ -857,17 +1052,23 @@ def test_ft09_02_audit_failure_blocks_approve_and_cancel(
     nothing, and the error reaches the caller with a user message."""
     monkeypatch.setattr(shared, "audit", _raise_audit)
     monkeypatch.setattr(a, "audit", _raise_audit)
+    monkeypatch.setattr(aa, "audit", _raise_audit)
     item_id = ops.create_review_item("mapping_suggestion", {"source": "x"}, now=NOW)
     mem: Any = FakeMemoryStore()
     with pytest.raises(FatalError) as approve_err:
         a.decide_review(actor("reviewer"), item_id=item_id, approve=True, memory=mem, now=NOW)
     assert ops.get_review_item(item_id).status == "pending"
-    cancelled: list[str] = []
-    monkeypatch.setattr(a, "ui_job_exists", lambda job_id: True)
-    monkeypatch.setattr(jobs, "cancel", cancelled.append)
+    job_rows = {JOB: "queued"}  # spec 08 stand-in: job id -> status
+
+    def cancel(job_id: str) -> str:
+        job_rows[job_id] = "canceled"
+        return "canceled"
+
+    monkeypatch.setattr(a, "ui_job_exists", job_rows.__contains__)
+    monkeypatch.setattr(jobs, "cancel", cancel)
     with pytest.raises(FatalError) as cancel_err:
         a.job_control(actor("admin"), job_id=JOB, op="cancel")
-    assert cancelled == []
+    assert job_rows == {JOB: "queued"}
     for exc in (approve_err.value, cancel_err.value):
         what, fix = rules.user_message(exc)
         assert what
