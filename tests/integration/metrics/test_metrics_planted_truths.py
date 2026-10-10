@@ -86,19 +86,22 @@ def _run(root: Path, work: Path) -> None:
 
 
 @pytest.mark.timeout(1800)
-def test_it04_08_planted_truths_small(tmp_path: Path) -> None:
+def test_it04_08_planted_truths_small(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """IT04-08 `synth_data.py --scale small`: the design 04 §10.3 planted truths hold on
     the scored build (T2 epic funding rank 1, T1 team org rank 1 with its planted metric as
     top lever, T2c `cluster_fix` in the funding top 10)."""
+    # HERNESS_* env vars are config overrides: the synth workers reject this one (T04-22b).
+    monkeypatch.delenv(FULL_ROOT_ENV, raising=False)
     root = generate_root(SEED, "small", tmp_path / "synth")
     _run(root, tmp_path / "work")
 
 
 @pytest.mark.timeout(7200)
-def test_it04_08_planted_truths_full(tmp_path: Path) -> None:
+def test_it04_08_planted_truths_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """IT04-08 nightly `full` variant of the design 04 §10.3 planted truths (reuses the root
     named by HERNESS_SYNTH_FULL_ROOT when set, else generates one and removes it after)."""
     cached = os.environ.get(FULL_ROOT_ENV)
+    monkeypatch.delenv(FULL_ROOT_ENV, raising=False)  # not a config key (see the small test)
     root = Path(cached) if cached else generate_root(SEED, "full", tmp_path / "synth")
     try:
         _run(root, tmp_path / "work")
