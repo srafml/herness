@@ -52,11 +52,16 @@ class QuestionResult(BaseModel):
 
 
 class ResultsLog:
-    """Append-only `results.jsonl` of one eval run (U11-63); appends are serialised."""
+    """Append-only `results.jsonl` of one eval run (U11-63); appends are serialised.
+
+    One writer per file (the eval job): the stored keys are read once, at the first append,
+    and kept in memory, so an append does not re-read the whole file.
+    """
 
     def __init__(self, path: Path) -> None:
         self._path = path
         self._lock = threading.Lock()
+        self._keys: set[tuple[str, int]] | None = None
 
     @property
     def path(self) -> Path:
@@ -110,8 +115,11 @@ class ResultsLog:
     def append(self, r: QuestionResult) -> None:
         """Append `r` as one fsynced line; an existing `(id, repeat)` → `ConfigError`."""
         line = r.model_dump_json().encode("utf-8") + b"\n"
+        key = (r.id, r.repeat)
         with self._lock:
-            if (r.id, r.repeat) in self.done_keys():
+            if self._keys is None:
+                self._keys = self.done_keys()
+            if key in self._keys:
                 msg = f"result already recorded: id={r.id} repeat={r.repeat}"
                 raise ConfigError(msg)
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,6 +129,7 @@ class ResultsLog:
                 fh.write(line)
                 fh.flush()
                 os.fsync(fh.fileno())
+            self._keys.add(key)
 
     def _ends_with_newline(self) -> bool:
         with self._path.open("rb") as fh:

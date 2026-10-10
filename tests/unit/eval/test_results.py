@@ -67,6 +67,9 @@ def test_ut11_56_append_existing_key_refused(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"G01.*1"):
         log.append(_result("G01", 1, status="failed"))
     assert path.read_bytes() == before
+    with pytest.raises(ConfigError, match="already recorded"):  # a new writer reads the file
+        ResultsLog(path).append(_result("G01", 1))
+    assert path.read_bytes() == before
     log.append(_result("G01", 2))
     assert ResultsLog(path).done_keys() == {("G01", 1), ("G01", 2)}
 
