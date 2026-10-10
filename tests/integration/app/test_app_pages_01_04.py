@@ -161,3 +161,24 @@ def test_it09_10_portfolio_chart_compare(env: SimpleNamespace) -> None:
     assert sum(c.startswith("Budget (") for c in captions) == 2, captions
     assert "Solver status: OPTIMAL" in captions
     assert len(at.get("vega_lite_chart")) == 1  # one chart, a series per scenario
+
+
+ORG = APP_DIR / "pages" / "03_Org_Scorecards.py"
+LEVERS = APP_DIR / "pages" / "04_Action_Levers.py"
+
+
+def test_it09_10_org_scorecards_peer_and_trend(env: SimpleNamespace) -> None:
+    """IT09-10 Org Scorecards: the peer table, the selected row's monthly trend and evidence."""
+    with duckdb.connect(str(env.db)) as con:  # the planted monthly values are NULL
+        con.execute(
+            "UPDATE metrics.metric_value SET value = 0.25 WHERE metric = 'change_failure_rate'"
+            " AND entity_type = 'team' AND entity_id = 'T1' AND period = 'month'"
+        )
+    at = _run(ORG)
+    frames = _page_frames(at)
+    for column in ("peer_median", "z_score", "composite"):
+        assert column in frames, column
+    captions = [str(c.value) for c in at.main.caption]
+    assert any(c.endswith("last 8 months") for c in captions), captions
+    assert len(at.get("vega_lite_chart")) == 1
+    assert any(e.label.startswith("Evidence (") for e in at.main.expander)
