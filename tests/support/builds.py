@@ -22,10 +22,13 @@ sessions, and concurrent xdist workers) reuse the build while its fingerprint is
 Deviations (sub-controller rulings, T11-17):
 
 * The build root is NOT `<repo>/data/synth/<seed>-<scale>`: nothing is written into the repo.
-  The cache directory defaults to `<tempfile.gettempdir()>/herness-synth-builds` and can be
-  set with the `cache_dir` keyword or the `--synth-builds-dir` pytest option (no new
-  `HERNESS_*` variable: impl 10's env guard rejects unknown ones). `repo_root` still names
-  the fingerprinted inputs.
+  The per-user cache directory defaults to `<tempfile.gettempdir()>/herness-synth-builds-<user>`
+  and can be set with the `cache_dir` keyword or the `--synth-builds-dir` pytest option (no
+  new `HERNESS_*` variable: impl 10's env guard rejects unknown ones). `repo_root` still names
+  the fingerprinted inputs. Security ruling: the cache root and each `<seed>-<scale>` subdir
+  are private (0o700; a symlink, junction or, on POSIX, another user's directory is refused,
+  also for the option / keyword value), deletions never follow links, and the lock file lives
+  inside the private root (`tests.support._build_cache`).
 * Phase 1: the `enrich` and `score` stages run the same fake spec 03 / 04 hooks as impl 02's
   T02-22 (`tests.support.synth_build`), so no stub decider or stub LLM is started and
   `BuildHandle.stubs` is empty. T11-34 starts the oracle `StubDeciderServer` and the
@@ -43,6 +46,9 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import getpass
+import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -117,8 +123,12 @@ class BuildHandle:
 
 
 def default_cache_dir() -> Path:
-    """`<system temp>/herness-synth-builds`: outside the repository (ruling 1, T11-17)."""
-    return Path(tempfile.gettempdir()) / "herness-synth-builds"
+    """`<system temp>/herness-synth-builds-<user>`: outside the repository, per user."""
+    try:
+        user = getpass.getuser()
+    except (OSError, KeyError):  # no login name (some containers)
+        user = "uid" + str(getattr(os, "getuid", os.getpid)())
+    return Path(tempfile.gettempdir()) / ("herness-synth-builds-" + re.sub(r"[^\w.-]", "_", user))
 
 
 # --- build ----------------------------------------------------------------------------------
@@ -138,8 +148,8 @@ def _scoring(*_args: object, **_kwargs: object) -> _Report:
 
 def _config_dir(root: Path) -> Path:
     cfg_root = root / "build_config"
-    if cfg_root.exists():
-        shutil.rmtree(cfg_root)
+    if cfg_root.exists() or cfg_root.is_symlink():
+        cache.safe_rmtree(cfg_root)
     cfg_dir = write_full_config(cfg_root)
     shutil.copyfile(SHIPPED / "mappings.yaml", cfg_dir / "mappings.yaml")
     (cfg_dir / "sources.yaml").write_text("version: 1\nbuild:\n  threads: 2\n", encoding="utf-8")
@@ -170,12 +180,7 @@ def _test_keyring() -> Iterator[None]:
 
 def _run_build(root: Path, data_root: Path) -> str:
     """F11-06 steps 4-5 on a fresh `data_root`; returns the build id."""
-    for child in data_root.iterdir():  # earlier build outputs; the generated lake stays
-        if child.name not in GENERATED:
-            if child.is_dir():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
+    cache.clear_build_outputs(data_root, GENERATED)  # the generated lake stays
     cfg_dir = _config_dir(root)
     env = {"HERNESS_ENV": "test", "HERNESS_SYNTH_CONFIG": str(root / "synth_mappings.yaml")}
     with pytest.MonkeyPatch.context() as patch, _test_keyring():
@@ -215,7 +220,8 @@ def ensure_build(
     seed: int, scale: Scale, *, repo_root: Path, cache_dir: Path | None = None
 ) -> BuildHandle:
     """Build `seed` / `scale` once (or reuse it) under `cache_dir` (U11-48; module doc)."""
-    root = (cache_dir or default_cache_dir()) / f"{seed}-{scale}"
+    base = cache.private_dir(cache_dir or default_cache_dir())
+    root = cache.private_dir(base / f"{seed}-{scale}")
     data_root = root / "data"
     phash = cache.default_params_hash(scale)
     with cache.build_lock(root):

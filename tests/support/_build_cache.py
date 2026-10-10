@@ -10,6 +10,14 @@ write), is removed and the create retried; the content is re-read just before th
 only a lock unchanged since the staleness check is removed. A lock held from another host
 (shared drive) is never broken: it times out. `PermissionError` counts as "exists" (Windows
 reports a delete-pending file that way).
+
+Cache location (security ruling on U11-48, a spec deviation): the persistent cache root is
+per user (`<tempfile.gettempdir()>/herness-synth-builds-<user>`, or the given directory) and
+is created with mode 0o700. `private_dir` refuses an existing root or `<seed>-<scale>` subdir
+that is a symlink or junction, not a directory, or (POSIX only: Windows has no `st_uid`, its
+per-user temp directory is already private) owned by another user. `safe_rmtree` refuses a
+symlink or junction instead of deleting through it, so reuse and invalidation never follow
+links. The lock file lives inside the private cache root, created 0o600.
 """
 
 from __future__ import annotations
@@ -20,6 +28,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -46,6 +55,51 @@ Scale = Literal["tiny", "small"]
 
 class BuildFixtureError(RuntimeError):
     """The build fixture could not lock, generate or build (the message says which)."""
+
+
+# --- private cache directories -------------------------------------------------------------
+
+
+def _linked(path: Path) -> bool:
+    return path.is_symlink() or path.is_junction()
+
+
+def private_dir(path: Path) -> Path:
+    """Create `path` (mode 0o700) or accept it; refuse a link, a non-directory or (POSIX) a
+    directory owned by another user."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(FileExistsError):
+        path.mkdir(mode=0o700)
+    info = os.lstat(path)
+    if _linked(path) or not stat.S_ISDIR(info.st_mode):
+        msg = f"refusing build cache path (symlink, junction or not a directory): {path}"
+        raise BuildFixtureError(msg)
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        msg = f"refusing build cache path owned by another user: {path}"
+        raise BuildFixtureError(msg)
+    return path
+
+
+def safe_rmtree(path: Path) -> None:
+    """`shutil.rmtree(path)`, refused when `path` itself is a symlink or junction."""
+    if _linked(path):
+        msg = f"refusing to delete through a symlink or junction: {path}"
+        raise BuildFixtureError(msg)
+    shutil.rmtree(path)
+
+
+def clear_build_outputs(data_root: Path, keep: frozenset[str]) -> None:
+    """Remove every child of `data_root` except `keep`; a linked child is refused."""
+    for child in private_dir(data_root).iterdir():
+        if child.name in keep:
+            continue
+        if _linked(child):
+            msg = f"refusing to delete through a symlink or junction: {child}"
+            raise BuildFixtureError(msg)
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
 
 
 # --- lock -----------------------------------------------------------------------------------
@@ -91,7 +145,7 @@ def build_lock(
     deadline = time.monotonic() + wait_s
     while True:
         try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             break
         except (FileExistsError, PermissionError):  # Windows: delete-pending lock file
             if _break_stale(lock):
@@ -132,8 +186,12 @@ def marker_current(root: Path, phash: str) -> bool:
 def generate_root(seed: int, scale: Scale, root: Path) -> None:
     from tools.synth_data import generate  # noqa: PLC0415 - heavy, only when generating
 
-    if root.exists() and not (root / MARKER).is_file():
-        shutil.rmtree(root)  # a partial root: `overwrite` needs the marker
+    if not (root / MARKER).is_file() and any(root.iterdir()):
+        for child in root.iterdir():  # a partial root: `overwrite` needs the marker
+            if child.is_dir():
+                safe_rmtree(child)
+            else:
+                child.unlink()
     try:
         generate(seed, scale, root, overwrite=True)
     except HernessError as exc:
