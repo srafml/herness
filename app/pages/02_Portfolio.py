@@ -16,11 +16,12 @@ import streamlit as st
 from app.common import wh
 from app.common.widgets import PageContext, block, evidence, page
 from herness.core import redact
-from herness.reports._format import format_value
+from herness.core.numbers import format_value
 
 NO_COMPARE: Final = "None"
-SHOWN: Final = ("order_rank", "candidate_id", "title", "selected", "expected_impact_usd",
-                "effort_cost_usd", "flags")  # fmt: skip
+NO_BUDGET: Final = "—"
+SHOWN: Final = ("order_rank", "candidate_id", "title", "expected_impact_usd", "effort_cost_usd",
+                "flags")  # fmt: skip
 X: Final = "cumulative_effort_usd"
 Y: Final = "cumulative_impact_usd"
 type Row = Mapping[str, object]
@@ -32,9 +33,16 @@ def _title(raw: object) -> str:
     return "[redacted]" if out is None else out
 
 
-def _rows(scenario: str) -> list[Row]:
-    rows: list[Row] = wh.query("portfolio.rows", scenario=scenario).table.to_pylist()
+def _rows(scenario: Row) -> list[Row]:
+    """The scenario's rows by ``order_rank``; fetched once per render and scenario."""
+    rows: list[Row] = wh.query(
+        "portfolio.rows", scenario=str(scenario["scenario"])
+    ).table.to_pylist()
     return rows
+
+
+def _selected(rows: Sequence[Row]) -> list[Row]:
+    return [r for r in rows if r["selected"] is True]
 
 
 def _usd(value: object) -> Decimal:
@@ -56,33 +64,38 @@ def _scenario() -> tuple[Row, Row | None] | None:
     return scenarios[name], (None if other is None else scenarios[other])
 
 
-def _table(scenario: Row) -> None:
+def _table(scenario: Row, rows: Sequence[Row]) -> None:
+    """Selected candidates by ``order_rank`` (the query's order); titles redacted."""
     st.caption(f"Solver status: {scenario['solver_status']}")
-    rows = _rows(str(scenario["scenario"]))
-    if not rows:
-        st.caption("No candidates in this scenario.")
+    selected = _selected(rows)
+    if not selected:
+        st.caption("No candidates selected in this scenario.")
         return
-    shown = [{c: _title(r[c]) if c == "title" else r[c] for c in SHOWN} for r in rows]
+    shown = [{c: _title(r[c]) if c == "title" else r[c] for c in SHOWN} for r in selected]
     st.dataframe(pa.Table.from_pylist(shown), hide_index=True)
 
 
-def _curve(scenario: Row) -> list[dict[str, object]]:
+def _curve(scenario: Row, rows: Sequence[Row]) -> list[dict[str, object]]:
     """Cumulative impact against cumulative effort over the selected rows by ``order_rank``."""
+    name = str(scenario["scenario"])
     effort = impact = Decimal(0)
-    points: list[dict[str, object]] = [{"scenario": str(scenario["scenario"]), X: 0.0, Y: 0.0}]
-    for row in _rows(str(scenario["scenario"])):
-        if row["selected"] is True:
-            effort += _usd(row["effort_cost_usd"])
-            impact += _usd(row["expected_impact_usd"])
-            points.append({"scenario": str(scenario["scenario"]), X: float(effort),
-                           Y: float(impact)})  # fmt: skip
+    points: list[dict[str, object]] = [{"scenario": name, X: 0.0, Y: 0.0}]
+    for row in _selected(rows):
+        effort += _usd(row["effort_cost_usd"])
+        impact += _usd(row["expected_impact_usd"])
+        points.append({"scenario": name, X: float(effort), Y: float(impact)})
     return points
 
 
-def _chart(scenarios: Sequence[Row]) -> None:
-    curves = [_curve(s) for s in scenarios]
-    for scenario in scenarios:
-        st.caption(f"Budget ({scenario['scenario']}): {format_value(_budget(scenario), 'usd')}")
+def _budget(scenario: Row) -> str:
+    value = scenario["budget_usd"]
+    return NO_BUDGET if value is None else format_value(_usd(value), "usd", "usd")
+
+
+def _chart(series: Sequence[tuple[Row, Sequence[Row]]]) -> None:
+    curves = [_curve(scenario, rows) for scenario, rows in series]
+    for scenario, _ in series:
+        st.caption(f"Budget ({scenario['scenario']}): {_budget(scenario)}")
     if all(len(curve) == 1 for curve in curves):
         st.caption("No selected candidates to chart.")
         return
@@ -91,13 +104,8 @@ def _chart(scenarios: Sequence[Row]) -> None:
     st.caption("Candidates without an effort estimate count as 0.")
 
 
-def _budget(scenario: Row) -> Decimal | None:
-    value = scenario["budget_usd"]
-    return None if value is None else _usd(value)
-
-
-def _query_ids(scenario: Row) -> list[str]:
-    raw = [r["query_ids"] for r in _rows(str(scenario["scenario"]))]
+def _query_ids(rows: Sequence[Row]) -> list[str]:
+    raw = [r["query_ids"] for r in rows]
     return [str(q) for ids in raw if isinstance(ids, list | tuple) for q in ids]
 
 
@@ -112,14 +120,16 @@ def body(ctx: PageContext) -> None:
     if picked is None:
         return
     scenario, other = picked
+    rows: list[Row] = []
     st.subheader("Table")
     with block("Table"):
-        _table(scenario)
+        rows = _rows(scenario)
+        _table(scenario, rows)
     st.subheader("Chart")
     with block("Chart"):
-        _chart([scenario] if other is None else [scenario, other])
+        _chart([(scenario, rows)] + ([] if other is None else [(other, _rows(other))]))
     with block("Evidence"):
-        evidence(_query_ids(scenario))
+        evidence(_query_ids(rows))
 
 
 page("Portfolio", body)

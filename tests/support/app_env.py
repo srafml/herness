@@ -173,7 +173,14 @@ APP_PAGES: tuple[PageSpec, ...] = (
     PageSpec(
         APP_DIR / "pages" / "02_Portfolio.py",
         needs_warehouse=True,
-        key_texts=("Portfolio", "Scenario", "Table", "Chart", "Solver status: OPTIMAL"),
+        key_texts=(
+            "Portfolio",
+            "Scenario",
+            "Table",
+            "Chart",
+            "Solver status: OPTIMAL",
+            "No candidates selected in this scenario.",
+        ),
     ),
     PageSpec(
         APP_DIR / "pages" / "03_Org_Scorecards.py",

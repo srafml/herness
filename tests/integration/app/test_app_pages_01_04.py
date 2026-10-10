@@ -91,9 +91,22 @@ def _run(path: Path) -> AppTest:
     return at
 
 
+def _select_portfolio(db: Path, *candidates: str) -> None:
+    """Mark ``candidates`` selected in every scenario; W1 ranks first."""
+    with duckdb.connect(str(db)) as con:  # the planted build selects nothing
+        con.execute(
+            "UPDATE score.portfolio SET selected = true,"
+            " order_rank = CASE candidate_id WHEN 'W1' THEN 1 ELSE 2 END"
+            " WHERE list_contains(?, candidate_id)",
+            [list(candidates)],
+        )
+
+
 @pytest.mark.parametrize("path", [FUNDING, PORTFOLIO], ids=lambda p: p.name)
 def test_it09_10_titles_pass_redaction(env: SimpleNamespace, path: Path) -> None:
     """IT09-10 Funding Ranking / Portfolio titles go through ``redact_text`` (TH09-11, D9)."""
+    if path == PORTFOLIO:
+        _select_portfolio(env.db, "W1", "W2")  # the table lists selected candidates only
     at = _run(path)
     assert set(RAW_TITLES) <= set(env.titles)
     frames = _page_frames(at)
@@ -145,11 +158,7 @@ def test_it09_10_funding_detail(env: SimpleNamespace) -> None:
 
 def test_it09_10_portfolio_chart_compare(env: SimpleNamespace) -> None:
     """IT09-10 Portfolio: selected rows chart cumulative impact; "Compare with" adds a series."""
-    with duckdb.connect(str(env.db)) as con:
-        con.execute(
-            "UPDATE score.portfolio SET selected = true,"
-            " order_rank = CASE candidate_id WHEN 'W1' THEN 1 ELSE 2 END"
-        )
+    _select_portfolio(env.db, "W1", "W2")
     at = _run(PORTFOLIO)
     assert "No selected candidates to chart." not in _values(at)
     assert len(at.get("vega_lite_chart")) == 1
@@ -161,6 +170,20 @@ def test_it09_10_portfolio_chart_compare(env: SimpleNamespace) -> None:
     assert sum(c.startswith("Budget (") for c in captions) == 2, captions
     assert "Solver status: OPTIMAL" in captions
     assert len(at.get("vega_lite_chart")) == 1  # one chart, a series per scenario
+
+
+def test_it09_10_portfolio_selected_only(env: SimpleNamespace) -> None:
+    """IT09-10 Portfolio table: only selected candidates, by ``order_rank`` (U09-74)."""
+    at = _run(PORTFOLIO)  # planted build: nothing selected
+    assert "No candidates selected in this scenario." in _values(at)
+    assert "candidate_id" not in _page_frames(at)
+    st.cache_data.clear()
+    wh._pool().close_all()  # release the read-only connection before writing
+    wh._pool.clear()
+    _select_portfolio(env.db, "W1")
+    frames = _page_frames(_run(PORTFOLIO))
+    assert "W1" in frames
+    assert "W2" not in frames
 
 
 ORG = APP_DIR / "pages" / "03_Org_Scorecards.py"
@@ -207,3 +230,31 @@ def test_it09_10_action_levers_rationale(env: SimpleNamespace) -> None:
     frames = _page_frames(at)
     assert "T1" in frames
     assert "S1" not in frames
+
+
+def _seam_script(path: str) -> None:
+    """AppTest script: load the Org Scorecards page (``page`` patched out), call the seam."""
+    import importlib.util  # noqa: PLC0415 - AppTest runs this function's body as a script
+
+    spec = importlib.util.spec_from_file_location("org_scorecards_page", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    row = {"rank": 1, "entity_id": "T1", "value": 0.5, "peer_median": 0.4, "z_score": 1.0,
+           "sample_size": 3, "composite": 0.7, "peer_group": "g", "flags": [],
+           "unconfirmed": False}  # fmt: skip
+    module._score_table([row], {"T1": "Payments"}, extra=("coverage", lambda _r: "80%"))
+
+
+def test_it09_10_score_table_extra_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    """IT09-10 Org Scorecards seam (T09-15b): an extra column appears right after ``name``."""
+    from app.common import widgets  # noqa: PLC0415 - patched only for this script run
+
+    monkeypatch.setattr(widgets, "page", lambda *_a, **_k: None)
+    at = AppTest.from_function(_seam_script, args=(str(ORG),), default_timeout=TIMEOUT_S).run()
+    assert not at.exception
+    frame = at.dataframe[0]
+    order = list(frame.proto.column_order)
+    assert order[order.index("name") + 1] == "coverage", order
+    assert frame.value["coverage"].tolist() == ["80%"]
