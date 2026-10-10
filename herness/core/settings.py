@@ -30,6 +30,7 @@ _POSIX_PATH: Final = re.compile(r"/[A-Za-z0-9._/-]{1,200}")
 # U10-07 load-time rule: argv-safe characters, or a whole-value <placeholder>.
 _ARGV_SAFE: Final = r"^(?:[A-Za-z0-9._:/@+-]{1,256}|<[^<>\s]{1,64}>)$"
 _REPO: Final = r"^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$"
+_INDEX: Final = r"^https://download\.pytorch\.org/whl/[a-z0-9]{1,16}$"  # T10-26c
 _WORKFLOW: Final = (
     r"^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}/\.github/workflows/[A-Za-z0-9._-]{1,100}\.ya?ml$"
 )
@@ -321,6 +322,7 @@ class ReleaseDeploy(_Section):
     repo: Annotated[str, _re(_REPO)] | None = None
     signer_workflow: Annotated[str, _re(_WORKFLOW)] | None = None
     trusted_root_sha256: Annotated[str, _re(r"^[0-9a-f]{64}$")] | None = None
+    extra_index_url: Annotated[str, _re(_INDEX)] = "https://download.pytorch.org/whl/cu128"
     licence_exceptions: tuple[_Safe, ...] = ()
     duckdb_extensions: dict[Literal["excel"], Annotated[str, _re(r"^[0-9a-f]{64}$")]] = Field(
         default_factory=dict

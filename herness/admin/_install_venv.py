@@ -12,6 +12,7 @@ leaves ``current`` untouched and removes the new venv. The process must restart 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from collections.abc import Callable
@@ -33,7 +34,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "HISTORY_CLASS",
-    "TORCH_LINKS",
     "build_venv",
     "install_root",
     "rollback_venv",
@@ -42,9 +42,9 @@ __all__ = [
 
 _log = get_logger("admin.deploy")
 HISTORY_CLASS: Final = "herness-venv"  # DeployHistory key of venv switches; not a GPU class
-# impl 00 O-05: the cu128 torch wheels. A links page for ``torch`` only, so no other package
-# can come from this host; ``--require-hashes`` still pins every file (Ruling T10-26c).
-TORCH_LINKS: Final = "https://download.pytorch.org/whl/cu128/torch/"
+# impl 00 O-05: a ``+cu<nnn>`` local-version pin (torch) is served only by the extra index;
+# ``--require-hashes`` still binds every installed file to its pinned hash (Ruling T10-26c).
+_CUDA_PIN: Final = re.compile(r"==[^\s;\\]+\+cu[0-9]+")
 _NEW: Final = ".current-new"
 _OLD: Final = ".current-old"
 _NO_ROLLBACK: Final = "no previous venv to roll back to"
@@ -165,7 +165,9 @@ def build_venv(
         venv = [sys.executable, "-I", "-m", "venv", "--without-pip", str(target)]
         wsl.run_cmd(venv, timeout_s=300, check=True)
         sync = ["uv", "pip", "sync", "--require-hashes", "--python", python]
-        sync += ["--find-links", TORCH_LINKS, str(copy.requirements)]
+        if _CUDA_PIN.search(copy.requirements.read_text(encoding="utf-8")):
+            sync += ["--extra-index-url", cfg.deploy.release.extra_index_url]
+        sync.append(str(copy.requirements))
         wsl.run_cmd(sync, timeout_s=1800, check=True)
         wheel = ["uv", "pip", "install", "--no-deps", "--python", python, str(copy.wheel)]
         wsl.run_cmd(wheel, timeout_s=600, check=True)

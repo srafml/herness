@@ -16,14 +16,13 @@ from typing import Any
 import pytest
 import structlog
 from tests.support.fake_runner import FakeRunner
-from tests.support.fake_venv import make_venv, use_install_root, venv_answer
+from tests.support.fake_venv import ext_prefix, make_venv, use_install_root, venv_answer
 from tests.support.release_bundle import EXT_BYTES, build_bundle, fake_gh, init_release_config
 
 from herness.admin import _install_venv, attest
 from herness.admin._install_venv import HISTORY_CLASS, rollback_venv
 from herness.admin.attest import ReleaseBundle, verify_bundle
 from herness.admin.deploy import DeployHistory
-from herness.admin.duckdb_ext import venv_python
 from herness.admin.wsl import CmdResult
 from herness.core import time as clock
 from herness.core.errors import ConfigError, FatalError
@@ -90,9 +89,7 @@ def test_st10_62_failed_extension_install_keeps_current(
     row = {"loaded": failure != "not-loaded", "installed": True, "extension_version": "v1"}
     row["install_path"] = str(installed)
     code = 1 if failure == "exit" else 0
-    runner.add(
-        [str(venv_python(root / "venvs" / "1.2.3"))], CmdResult(code, json.dumps(row), "", 0)
-    )
+    runner.add(ext_prefix(root / "venvs" / "1.2.3"), CmdResult(code, json.dumps(row), "", 0))
     summary = verify_bundle(bundle, cfg)
     with structlog.testing.capture_logs() as logs, pytest.raises(FatalError, match="excel"):
         attest.install_bundle(bundle, summary, venv=running, actor=USER)

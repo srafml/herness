@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import structlog
 from tests.support.fake_runner import FakeRunner
+from tests.support.fake_venv import ext_prefix
 from tests.support.release_bundle import EXT_BYTES, BundleSpec, build_bundle, init_release_config
 
 from herness.admin import duckdb_ext, wsl
@@ -51,18 +52,19 @@ def setup(tmp_path: Path) -> tuple[ReleaseBundle, Path, str]:
 def test_ut10_85_right_pin_installs(
     tmp_path: Path, setup: tuple[ReleaseBundle, Path, str], fake_runner: FakeRunner
 ) -> None:
-    """UT10-85 exact argv (``-I``, EXT_INSTALL_SCRIPT, path, ``excel``); version returned and
+    """UT10-85 exact argv (``uv run --python <venv python> python -I``, EXT_INSTALL_SCRIPT,
+    path, ``excel``); version returned and
     ``deploy.install.extension_installed`` logged."""
     bundle, installed, pin = setup
     cfg = init_release_config(tmp_path, ext_sha256=pin)
     venv = VENV
-    python = str(venv_python(venv))
-    fake_runner.add([python], recorded(installed))
+    fake_runner.add(ext_prefix(venv), recorded(installed))
     with structlog.testing.capture_logs() as logs:
         versions = install_duckdb_extensions(bundle, cfg, venv=venv)
     assert versions == {"excel": "v1.5.5"}
     ext = str(bundle.duckdb_extensions["excel"])
-    assert fake_runner.argvs() == [[python, "-I", "-c", EXT_INSTALL_SCRIPT, ext, "excel"]]
+    script = ["python", "-I", "-c", EXT_INSTALL_SCRIPT, ext, "excel"]
+    assert fake_runner.argvs() == [[*ext_prefix(venv), *script]]  # T10-26c: via uv
     assert fake_runner.calls[0].timeout_s == 120
     done = [e for e in logs if e["event"] == "deploy.install.extension_installed"]
     assert len(done) == 1
@@ -117,12 +119,12 @@ def test_ut10_85_differing_installed_file_fails(
     installed.write_bytes(EXT_BYTES + b"tampered")
     cfg = init_release_config(tmp_path, ext_sha256=pin)
     venv = VENV
-    fake_runner.add([str(venv_python(venv))], recorded(installed))
+    fake_runner.add(ext_prefix(venv), recorded(installed))
     with pytest.raises(FatalError, match="excel"):
         install_duckdb_extensions(bundle, cfg, venv=venv)
     missing = recorded(tmp_path / "nowhere.duckdb_extension")
     fake_runner.table.clear()
-    fake_runner.add([str(venv_python(venv))], missing)
+    fake_runner.add(ext_prefix(venv), missing)
     with pytest.raises(FatalError, match="excel"):
         install_duckdb_extensions(bundle, cfg, venv=venv)
 
@@ -145,7 +147,7 @@ def test_ut10_85_failed_install_raises(
     bundle, _, pin = setup
     cfg = init_release_config(tmp_path, ext_sha256=pin)
     venv = VENV
-    fake_runner.add([str(venv_python(venv))], result)
+    fake_runner.add(ext_prefix(venv), result)
     with pytest.raises(FatalError, match=r"^duckdb extension install failed: excel$"):
         install_duckdb_extensions(bundle, cfg, venv=venv)
 

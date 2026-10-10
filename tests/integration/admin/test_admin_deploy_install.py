@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 from tests.support.fake_runner import FakeRunner
-from tests.support.fake_venv import use_install_root
+from tests.support.fake_venv import ext_prefix, use_install_root
 from tests.support.release_bundle import (
     EXT_BYTES,
     BundleSpec,
@@ -33,7 +33,6 @@ from tests.support.release_bundle import (
 
 from herness.admin import attest, commands_deploy
 from herness.admin.commands_deploy import cmd_deploy_install
-from herness.admin.duckdb_ext import venv_python
 from herness.admin.wsl import CmdResult
 
 pytestmark = pytest.mark.integration
@@ -76,7 +75,7 @@ def test_it10_14_deploy_install_into_temp_venv(
     row["install_path"] = str(installed_ext)
     fake_runner.passthrough = True
     new_venv = tmp_path / "venvs" / "1.2.3"
-    fake_runner.add([str(venv_python(new_venv))], CmdResult(0, json.dumps(row), "", 0.1))
+    fake_runner.add(ext_prefix(new_venv), CmdResult(0, json.dumps(row), "", 0.1))
     monkeypatch.setattr(commands_deploy, "_venv_dir", lambda: venv)
     # The temp venv plays the running Herness venv (sys.prefix, sys.executable and the wsl
     # allowlist): its real interpreter runs ``-m venv``; the new interpreter's DuckDB call is

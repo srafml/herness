@@ -17,9 +17,10 @@ from typing import Any
 import pytest
 import structlog
 from tests.support.fake_runner import FakeRunner
-from tests.support.fake_venv import make_venv, use_install_root, venv_answer
+from tests.support.fake_venv import ext_prefix, make_venv, use_install_root, venv_answer
 from tests.support.release_bundle import (
     EXT_BYTES,
+    BundleSpec,
     build_bundle,
     fake_gh,
     init_release_config,
@@ -28,7 +29,6 @@ from tests.support.release_bundle import (
 from herness.admin import _install_venv, attest, wsl
 from herness.admin._install_venv import (
     HISTORY_CLASS,
-    TORCH_LINKS,
     install_root,
     rollback_venv,
     staged_venv,
@@ -92,11 +92,10 @@ def site(tmp_path: Path, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatc
     installed.write_bytes(EXT_BYTES)
     row = {"loaded": True, "installed": True, "extension_version": "v1.5.5"}
     row["install_path"] = str(installed)
-    new_python = str(venv_python(root / "venvs" / "1.2.3"))
     fake_runner.add(["gh", "attestation", "verify"], gh_answer)
     fake_runner.add([sys.executable, "-I", "-m", "venv"], venv_answer)
     fake_runner.add(["uv", "pip"], CmdResult(0, "", "", 0.1))
-    fake_runner.add([new_python], CmdResult(0, json.dumps(row), "", 0.1))
+    fake_runner.add(ext_prefix(root / "venvs" / "1.2.3"), CmdResult(0, json.dumps(row), "", 0))
     monkeypatch.setattr(attest, "worker_alive", lambda: False)
     monkeypatch.setattr(_install_venv, "worker_alive", lambda: False)
     built = build_bundle(tmp_path / "bundle")
@@ -118,20 +117,13 @@ def test_ut10_88_install_root_of_each_layout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, running: str
 ) -> None:
     """UT10-88 a plain ``<root>/.venv``, ``<root>/venvs/<v>`` and the ``<root>/current``
-    junction all resolve to ``<root>``; the wsl allowlist names the same ``venvs`` dir."""
+    junction all resolve to ``<root>``."""
     root = tmp_path / "inst"
     if running == "current":
         make_venv(root / "venvs" / "1.0.0")
         link(root / "venvs" / "1.0.0", root / "current")
     venv = use_install_root(monkeypatch, root, running)
     assert install_root(venv) == root
-    assert os.path.normcase(str(install_root(venv) / "venvs")) == wsl._VENVS
-
-
-def test_ut10_88_wsl_install_root_rule_matches(tmp_path: Path) -> None:
-    """UT10-88 wsl's import-time ``_VENVS`` follows the same rule as ``install_root`` for the
-    real running venv."""
-    assert os.path.normcase(str(install_root(Path(sys.prefix)) / "venvs")) == wsl._VENVS
 
 
 def test_ut10_88_other_venv_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,8 +165,9 @@ def test_ut10_88_install_never_writes_under_sys_prefix(site: Any) -> None:
 
 def test_ut10_89_venv_creation_and_install_argv(site: Any) -> None:
     """UT10-89 exact argv, timeouts and ``check`` of: ``<running python> -I -m venv
-    --without-pip <target>``, ``uv pip sync --require-hashes`` with the torch-only cu128 links
-    page, ``uv pip install --no-deps``, then the extension script in the new interpreter."""
+    --without-pip <target>``, ``uv pip sync --require-hashes`` (no extra index: no ``+cu`` pin),
+    ``uv pip install --no-deps``, then the extension script through ``uv run --python <new>``
+    (Ruling T10-26c: the new interpreter is an argument, never the argv head)."""
     root, _, bundle, _, runner = site
     install(site)
     target = root / "venvs" / "1.2.3"
@@ -187,7 +180,7 @@ def test_ut10_89_venv_creation_and_install_argv(site: Any) -> None:
         ([sys.executable, "-I", "-m", "venv", "--without-pip", str(target)], 300, True),
         (
             ["uv", "pip", "sync", "--require-hashes", "--python", python,
-             "--find-links", TORCH_LINKS, str(private / "requirements.txt")],
+             str(private / "requirements.txt")],
             1800,
             True,
         ),
@@ -198,38 +191,39 @@ def test_ut10_89_venv_creation_and_install_argv(site: Any) -> None:
             True,
         ),
     ]  # fmt: skip
-    ext_argv = calls[3][0]
-    assert ext_argv[:4] == [python, "-I", "-c", EXT_INSTALL_SCRIPT]
-    assert ext_argv[4:] == [str(private / "duckdb" / "excel.duckdb_extension"), "excel"]
-    assert TORCH_LINKS == "https://download.pytorch.org/whl/cu128/torch/"
+    ext = str(private / "duckdb" / "excel.duckdb_extension")
+    script = ["python", "-I", "-c", EXT_INSTALL_SCRIPT, ext, "excel"]
+    assert calls[3] == ([*ext_prefix(target), *script], 120, False)
+    assert all(argv[0] in wsl.ALLOWED_COMMANDS | {sys.executable} for argv, _, _ in calls)
 
 
-def test_ut10_89_allowlist_admits_only_staged_interpreters(
+@pytest.mark.parametrize("pin", ["2.11.0+cu128", "2.11.0+cpu", "2.11.0"])
+def test_ut10_89_extra_index_only_for_cuda_pin(tmp_path: Path, site: Any, pin: str) -> None:
+    """UT10-89 ``--extra-index-url <deploy.release.extra_index_url>`` is passed to ``uv pip
+    sync`` (with ``--require-hashes``) only when requirements.txt pins a ``+cu`` local
+    version (impl 00 O-05)."""
+    _, running, _, cfg, runner = site
+    built = build_bundle(tmp_path / "torch", BundleSpec(requirements={"torch": (pin, "0" * 64)}))
+    bundle = ReleaseBundle.load(built.root)
+    attest.install_bundle(bundle, verify_bundle(bundle, cfg), venv=running, actor=USER)
+    (sync,) = [c.argv for c in runner.calls if c.argv[:3] == ["uv", "pip", "sync"]]
+    assert "--require-hashes" in sync
+    extra = ["--extra-index-url", "https://download.pytorch.org/whl/cu128"]
+    flagged = sync[6:8] == extra
+    assert flagged == ("+cu" in pin)
+    assert ("--extra-index-url" in sync) == ("+cu" in pin)
+    assert cfg.deploy.release.extra_index_url == extra[1]
+
+
+def test_ut10_89_new_interpreter_not_admitted_as_argv_head(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT10-89 ``admits``: listed programs, the running interpreter and exactly
-    ``<install root>/venvs/<version>/<layout>``; never another root, name or layout."""
+    """UT10-89 the U10-76 allowlist is not widened: the new venv's interpreter as argv head
+    is still refused (only uv and the running interpreter drive it)."""
     root = tmp_path / "inst"
     use_install_root(monkeypatch, root)
-    good = venv_python(root / "venvs" / "1.2.3")
-    assert wsl.admits("uv")
-    assert wsl.admits(sys.executable)
-    assert wsl.admits(str(good))
-    assert wsl.admits(str(good).upper()) == (os.name == "nt")
-    bad = [
-        venv_python(tmp_path / "other" / "venvs" / "1.2.3"),
-        venv_python(root / "venvs" / "latest"),
-        venv_python(root / "venvs" / ".."),
-        venv_python(root / "venvs" / "1.2.3" / "venvs" / "1.2.3"),
-        root / "venvs" / "1.2.3" / "python.exe",
-        root / "venvs" / ".." / "venvs" / "1.2.3" / good.parent.name / good.name,
-        good.parent / "pythonw.exe",
-        Path("python"),
-    ]
-    for path in bad:
-        assert not wsl.admits(str(path)), path
     with pytest.raises(ConfigError, match="command not allowed"):
-        wsl.run_cmd([str(bad[0]), "-c", "pass"], timeout_s=5)
+        wsl.run_cmd([str(venv_python(root / "venvs" / "1.2.3")), "-c", "pass"], timeout_s=5)
 
 
 # --- UT10-90: atomic marker repoint and rollback ------------------------------------------

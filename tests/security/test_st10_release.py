@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 import structlog
 from tests.support.fake_runner import FakeRunner
-from tests.support.fake_venv import use_install_root, venv_answer
+from tests.support.fake_venv import ext_prefix, use_install_root, venv_answer
 from tests.support.release_bundle import (
     EXT_BYTES,
     REPO,
@@ -39,7 +39,6 @@ from tests.support.release_bundle import (
 )
 
 from herness.admin import _attest_copy, attest, commands_deploy
-from herness.admin._install_venv import TORCH_LINKS
 from herness.admin.attest import ReleaseBundle, verify_bundle
 from herness.admin.commands_deploy import cmd_deploy_install
 from herness.admin.duckdb_ext import EXT_INSTALL_SCRIPT, install_duckdb_extensions, venv_python
@@ -77,7 +76,7 @@ def env(tmp_path: Path, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
     fake_runner.add(["uv", "pip"], CmdResult(0, "", "", 0.1))
     fake_runner.add([sys.executable, "-I", "-m", "venv"], venv_answer)
     for python in (venv_python(venv), venv_python(tmp_path / "inst" / "venvs" / "1.2.3")):
-        fake_runner.add([str(python)], CmdResult(0, json.dumps(row), "", 0.1))
+        fake_runner.add(ext_prefix(python.parent.parent), CmdResult(0, json.dumps(row), "", 0.1))
     monkeypatch.setattr(commands_deploy, "_venv_dir", lambda: venv)
     monkeypatch.setattr(attest, "worker_alive", lambda: False)
     return fake_runner
@@ -375,16 +374,16 @@ def test_st10_53_install_audited_with_version_and_sha256(tmp_path: Path, env: Fa
         p.name for p in built.root.iterdir()
     )
     # T10-26b: uv and DuckDB read verify_bundle's private copy, removed once installed.
-    (private,) = {Path(argv[-1]).parent for argv in env.argvs() if argv[0] == "uv"}
+    (private,) = {Path(argv[-1]).parent for argv in env.argvs() if argv[:2] == ["uv", "pip"]}
     assert private.parent == cfg.paths.data / ".release"
     assert private.name.startswith(".verify-")
     assert not private.exists()
     python = str(venv_python(new_venv))
-    uv_calls = [c for c in env.calls if c.argv[0] == "uv"]
+    uv_calls = [c for c in env.calls if c.argv[:2] == ["uv", "pip"]]
     assert [(c.argv, c.timeout_s, c.check) for c in uv_calls] == [
         (
             ["uv", "pip", "sync", "--require-hashes", "--python", python,
-             "--find-links", TORCH_LINKS, str(private / "requirements.txt")],
+             str(private / "requirements.txt")],
             1800,
             True,
         ),
@@ -395,7 +394,7 @@ def test_st10_53_install_audited_with_version_and_sha256(tmp_path: Path, env: Fa
             True,
         ),
     ]  # fmt: skip
-    assert env.argvs()[-1][4] == str(private / "duckdb" / "excel.duckdb_extension")
+    assert env.argvs()[-1][-2] == str(private / "duckdb" / "excel.duckdb_extension")
 
 
 def test_st10_53_keeps_two_newest_release_dirs(tmp_path: Path, env: FakeRunner) -> None:

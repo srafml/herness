@@ -6,8 +6,7 @@ their own argument checks and no test needs a real ``wsl.exe``, ``docker``, ``gh
 ``powershell.exe``. ``add(prefix, answer)`` answers every argv starting with ``prefix``; the
 answer is a ``CmdResult``, a callable ``argv -> CmdResult``, or a stdout string (with
 ``returncode``/``stderr`` keywords). The longest matching prefix wins (the newest on a tie).
-The runner's checks are mirrored (``wsl.admits``, which admits the staged blue/green venv
-interpreters of T10-26c, plus the running interpreter ``sys.executable``, read live; NUL-free
+The runner's checks are mirrored (allowlist incl. the running venv interpreter, NUL-free
 string elements, timeout range) before a call is recorded; ``check=True`` turns a non-zero
 exit into ``FatalError``. An argv no row matches fails the test (``pytest.fail``, a
 ``BaseException``) unless ``passthrough`` is set (integration only: the real runner runs it).
@@ -111,8 +110,9 @@ class FakeRunner:
     ) -> CmdResult:
         args = list(argv)
         argv0 = str(args[0]) if args else ""
-        if not args or not (
-            wsl.admits(argv0) or os.path.normcase(argv0) == os.path.normcase(sys.executable)
+        if not args or (
+            argv0 not in wsl.ALLOWED_COMMANDS
+            and os.path.normcase(argv0) != os.path.normcase(sys.executable)
         ):
             msg = f"command not allowed: {argv0}"
             raise ConfigError(msg)

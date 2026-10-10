@@ -1,8 +1,8 @@
 """Blue/green venv fakes for ``install_bundle`` tests (impl 10 U10-88; Ruling T10-26c).
 
 ``use_install_root`` makes ``<root>/<running>`` play the running Herness venv: ``sys.prefix``,
-``sys.executable`` and the U10-76 allowlist constants of ``herness.admin.wsl`` point into
-``root``, so ``<root>/venvs/<version>/`` is the only place an install may create a venv and no
+``sys.executable`` and the running-interpreter constant of ``herness.admin.wsl`` point
+into ``root``, so ``<root>/venvs/<version>/`` is the only place an install may create a venv and no
 test can reach the real ``.venv``. ``venv_answer`` stands in for ``python -m venv <dir>`` in
 ``fake_runner``: it creates the interpreter file and ``pyvenv.cfg`` the real command would.
 """
@@ -19,7 +19,7 @@ from herness.admin import wsl
 from herness.admin.duckdb_ext import venv_python
 from herness.admin.wsl import CmdResult
 
-__all__ = ["make_venv", "use_install_root", "venv_answer"]
+__all__ = ["ext_prefix", "make_venv", "use_install_root", "venv_answer"]
 
 
 def make_venv(venv: Path) -> Path:
@@ -39,8 +39,12 @@ def use_install_root(monkeypatch: pytest.MonkeyPatch, root: Path, running: str =
     monkeypatch.setattr(sys, "prefix", str(venv))
     monkeypatch.setattr(sys, "executable", str(python))
     monkeypatch.setattr(wsl, "_VENV_PY", os.path.normcase(str(python)))
-    monkeypatch.setattr(wsl, "_VENVS", os.path.normcase(str(root / "venvs")))
     return venv
+
+
+def ext_prefix(venv: Path) -> list[str]:
+    """The ``fake_runner`` prefix of U10-112's extension install in ``venv`` (via uv)."""
+    return ["uv", "run", "--no-project", "--offline", "--python", str(venv_python(venv))]
 
 
 def venv_answer(argv: list[str]) -> CmdResult:
