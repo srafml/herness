@@ -20,8 +20,10 @@ from tests.support.app_env import (
     FAILED_JOB_ID,
     HIDDEN_ERROR_TEXT,
     NO_BUILD_TEXT,
+    REDACTED_TITLE,
     RUN_ID,
     PageSpec,
+    install_redaction_double,
     install_session,
     page_services,
     plant_scored_build,
@@ -74,7 +76,8 @@ def env(
     monkeypatch.setitem(reads, "status_snapshot", lambda: SNAPSHOT)
     services = page_services(ops_store.data_root)
     install_session(monkeypatch, services)
-    return SimpleNamespace(data_root=ops_store.data_root, services=services)
+    titles = install_redaction_double(monkeypatch)  # T09-16: tests load no redaction key
+    return SimpleNamespace(data_root=ops_store.data_root, services=services, titles=titles)
 
 
 STUB_PAGE = PageSpec(
@@ -140,3 +143,35 @@ def test_it09_11_no_current_build(env: SimpleNamespace, spec: PageSpec) -> None:
         shown = _values(at)
         for key in spec.key_texts:
             assert key in shown, key
+
+
+TITLE_PAGES = tuple(s for s in APP_PAGES if s.path.name in {"01_Funding_Ranking.py",
+                                                            "02_Portfolio.py"})  # fmt: skip
+RAW_TITLES = ("PAY-1", "PAY-2")  # score.funding titles of the planted build
+
+
+def _page_frames(at: AppTest) -> str:
+    """The page's own tables: dataframes outside the evidence expanders.
+
+    Evidence samples are stored ``result_sample`` cells shown by the T09-15 evidence widget
+    (``widgets._sample``), not titles this page renders; see the T09-16 report.
+    """
+    inside = {id(d.proto) for e in at.main.expander for d in e.dataframe}
+    return "\n".join(d.value.to_string() for d in at.main.dataframe if id(d.proto) not in inside)
+
+
+@pytest.mark.parametrize("spec", TITLE_PAGES, ids=lambda s: s.path.name)
+def test_it09_10_titles_pass_redaction(env: SimpleNamespace, spec: PageSpec) -> None:
+    """IT09-10 Funding Ranking / Portfolio titles go through ``redact_text`` (TH09-11, D9)."""
+    plant_scored_build(env.data_root / "warehouse")
+    at = AppTest.from_file(str(spec.path), default_timeout=TIMEOUT_S).run()
+    assert not at.exception
+    assert not at.error, [e.value for e in at.error]
+    assert set(RAW_TITLES) <= set(env.titles)
+    frames = _page_frames(at)
+    assert REDACTED_TITLE in frames
+    shown = "\n".join([frames, *_values(at)])
+    for raw in RAW_TITLES:
+        assert raw not in shown, raw
+    if spec.path.name == "01_Funding_Ranking.py":
+        assert "Unconfirmed weights" in frames  # both planted rows have unconfirmed = true

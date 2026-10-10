@@ -4,7 +4,8 @@
 and ``roster`` are read by ``current_actor``); ``actor_script`` is an AppTest script that shows
 the session actor as ``role|user_ref|display``. T09-14 adds ``wh_services`` (the fields the
 warehouse and ops-cache modules read), ``wh_script`` and ``plant_scored_build``. T09-15 adds
-the page list ``APP_PAGES``, ``page_services`` and ``install_session``.
+the page list ``APP_PAGES``, ``page_services`` and ``install_session``. T09-16 appends
+pages 01 - 04 and adds ``install_redaction_double``.
 """
 
 from __future__ import annotations
@@ -163,6 +164,27 @@ APP_PAGES: tuple[PageSpec, ...] = (
         needs_warehouse=False,
         key_texts=("Builds", "Data quality", "Runs", "Jobs", "Workers", "Sources"),
     ),
+    # T09-16: pages 01 - 04 (texts as rendered over the planted scored build)
+    PageSpec(
+        APP_DIR / "pages" / "01_Funding_Ranking.py",
+        needs_warehouse=True,
+        key_texts=("Funding Ranking", "Filters", "Ranking", "Detail", "Attribution"),
+    ),
+    PageSpec(
+        APP_DIR / "pages" / "02_Portfolio.py",
+        needs_warehouse=True,
+        key_texts=("Portfolio", "Scenario", "Table", "Chart", "Solver status: OPTIMAL"),
+    ),
+    PageSpec(
+        APP_DIR / "pages" / "03_Org_Scorecards.py",
+        needs_warehouse=True,
+        key_texts=("Org Scorecards", "Filters", "Peer table", "Trend"),
+    ),
+    PageSpec(
+        APP_DIR / "pages" / "04_Action_Levers.py",
+        needs_warehouse=True,
+        key_texts=("Action Levers", "Filters", "Levers", "No action levers for this selection."),
+    ),
 )
 
 
@@ -191,6 +213,7 @@ def page_services(
     services.cfg.security = SimpleNamespace(ui=ui)
     services.cfg.weights = _weights(unconfirmed)
     services.roster = build_roster(ui.roles, USER_REF_KEY)
+    services.cfg.app.reports = SimpleNamespace(top_n=10)  # `cfg.app.reports.top_n` (T09-16)
     return services
 
 
@@ -244,3 +267,28 @@ def install_session(
     mp.setattr(auth, "load_user_ref_key", lambda: USER_REF_KEY)
     mp.setattr(auth, "audit", lambda event, actor, **f: calls.append({"event": event, **f}))
     return calls
+
+
+# --- T09-16: redaction test double -----------------------------------------------------------
+
+REDACTED_TITLE = "redacted title #"
+
+
+def install_redaction_double(mp: pytest.MonkeyPatch) -> list[str]:
+    """Replace ``herness.core.redact.redact_text`` (tests load no redaction key).
+
+    The double returns ``redacted title #<n>`` (never the input) and records every input, so a
+    test can assert a title went through redaction and its raw value is not on screen.
+    """
+    from herness.core import redact  # noqa: PLC0415 - keeps the module import light
+
+    seen: list[str] = []
+
+    def fake(text: str | None) -> str | None:
+        if text is None:
+            return None
+        seen.append(text)
+        return f"{REDACTED_TITLE}{len(seen)}"
+
+    mp.setattr(redact, "redact_text", fake)
+    return seen
