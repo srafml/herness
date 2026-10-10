@@ -2060,6 +2060,8 @@ Every page script is two statements: define `body(ctx: PageContext) -> None` and
 
 Tests: IT09-10, IT09-11, BT09-01. Security notes: none beyond U09-65.
 
+Test note (T09-15): the Home AppTests (IT09-10, IT09-11, FT09-05) run on a real migrated ops store and a real scored warehouse, but replace `status_snapshot` with a fixed result (no running worker); the real snapshot needs a bound chain registry and a worker's GPU state, which impl 08 tests cover.
+
 #### U09-73 app/pages/01_Funding_Ranking.py (viewer)
 
 | Block | Data | Controls and behavior |
