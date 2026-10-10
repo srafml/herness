@@ -5,7 +5,8 @@ the JSONL events of `data/traces/<run_id>.jsonl` as written by `herness.harness.
 (`type` plus flat fields: `verifier_verdict.passed`, `tool_call.ok`, `retry`, `fallback`,
 `repair`, `guard_stop`). `unsupported_number_rate` comes from the `count_unsupported` counts
 stored on each result, never from Verifier events (TH11-12). Threshold rows follow design
-§5.3.6 in table order.
+§5.3.6 in table order; the per-row checks and `ThresholdResult` live in the private sibling
+`herness.eval._metrics_checks` (380-line budget) and are re-exported here.
 """
 
 from __future__ import annotations
