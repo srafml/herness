@@ -1819,6 +1819,7 @@ Every query below is a parameterised `SELECT` over `meta`, `score`, `metrics`, `
 | `portfolio.rows` | 02 | `score.portfolio p LEFT JOIN score.funding f USING (candidate_id)` for `$scenario`: `candidate_id`, `f.title`, `selected`, `order_rank`, `expected_impact_usd`, `f.effort_cost_usd`, `flags`, `p.query_ids` ordered by `order_rank NULLS LAST` | `scenario` | 2000 |
 | `org.metrics` | 03 | distinct `metric` from `score.org` for `$entity_type` | `entity_type` | 200 |
 | `org.scores` | 03 | `score.org` for `$entity_type`, `$metric`, optional org subtree (team via `core.team.org_id`, service via `core.service.org_id`, org via `entity_id`) | `entity_type`, `metric`, `org_id` | default |
+| `org.coverage` | 03 | per (`entity_type`, `entity_id`) of `score.org` for `$entity_type`: `coverage` = sum of weight over rows with non-NULL `z_score` / sum of all scorecard weights (design 04 §5.8 step 7), the metric and weight lists read from the `s_org_metrics` / `s_org_weights` binds recorded in `meta.evidence.params` of the row's `query_ids[1]` (build-time values) | `entity_type` | default |
 | `org.trend` | 03 | `metrics.metric_value` for `$metric`, `$entity_type`, `$entity_id`, `$period` ordered by `period_start DESC LIMIT 8` | `metric`, `entity_type`, `entity_id`, `period` | 8 |
 | `levers.list` | 04 | `score.action_lever` with optional `entity_type`, `entity_id` ordered by `delta_usd DESC` | `entity_type`, `entity_id` | default |
 | `entities.teams`, `entities.services` | 03–07 | `core.team` (`team_id`, `name`, `org_id`), `core.service` (`service_id`, `name`, `org_id`) | — | 5000 |
@@ -2093,13 +2094,15 @@ Tests: IT09-10. Security notes: TH09-11.
 | Block | Data | Controls and behavior |
 |-------|------|-----------------------|
 | Filters | `org.list`, `org.metrics` | Entity type (`team`, `service`, `org`), org subtree, metric |
-| Peer table | `org.scores` | value vs `peer_median`, `z_score`, `sample_size`, `composite`, `rank`, `flags`; row selection |
+| Peer table | `org.scores`, `org.coverage` | coverage column and badge; value vs `peer_median`, `z_score`, `sample_size`, `composite`, `rank`, `flags`; row selection |
 | Trend | `org.trend` (`period = 'month'`) | `st.line_chart` of the last 8 periods |
 | Evidence | row `query_ids` | `evidence(...)` |
 
-Tests: IT09-10. Security notes: none.
+Tests: IT09-10, IT09-29, UT09-111. Security notes: none.
 
 Note (T09-16 ruling): no row selected -> trend and evidence show the top row.
+
+Note (T09-15b, user decision 2026-10-10 1a): the Peer table adds a `coverage` column right after `name` (`org.coverage`, a fraction; blank for services, which have no scorecard weights) and, under the table, a badge for the selected row (`:green-badge[Coverage N%]`, `:orange-badge[...]` below 0.8; the §5.8 null threshold 0.5 is unchanged) with the one-line help text "Scores are normalised by covered metric weight". The badge is plain markdown badge syntax over a number, no raw HTML. `org.coverage` leaves `score.org`, the formula and the ranks unchanged.
 
 #### U09-76 app/pages/04_Action_Levers.py (viewer)
 
@@ -3440,6 +3443,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | UT09-110 | U09-89 | both credential lookups raise `OSError` (then return empty); `getpass.getuser` patched | `cli_actor` | falls back to `getpass.getuser()`; exactly one `cli.identity.fallback` WARNING (field `source`, no user name) across two calls |
 | UT09-111 | U09-65 | unconfirmed weight keys; `get_conn` raises `OSError`; warehouse and non-warehouse page | render (AppTest) | sidebar shows "Build information unavailable" and still the D2 warning; one `app.widget.failed` with `block = "Sidebar"` |
 | UT09-112 | U09-65 | `record_histogram` raises; then succeeds | render (AppTest) | page renders; exactly one `app.widget.metric_failed` WARNING (`page`, `error_type`); none on success |
+| UT09-111 | U09-75 | scored build; recorded `s_org_metrics` / `s_org_weights` hold two metrics (0.6, 0.2); `z_score` set for team T1 on the first only | `org.coverage` for `team` | T1 = 0.6 / 0.8; T2 (no `z_score`) = 0.0; only team rows |
 
 ### 11.2 Property tests (marker `unit`, hypothesis)
 
@@ -3485,6 +3489,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | IT09-26 | U09-82 | admin AppTest | resume, retry, cancel, re-render | spec 08 functions called (`enqueue_resume` for resume); audit lines; files re-rendered |
 | IT09-27 | F09-01 | `draft.json` with `mode: "findings_only"`, no sections or recommendations, three verified findings of the run in the ops fixture | render | HTML and MD carry the `findings_only` banner and a "Verified findings" block with the three claims, their numbers linked to evidence; `numbers_linked == numbers_total` (R-49) |
 | IT09-28 | F09-07 | no live worker; CliRunner as admin and as reviewer; fake `run_inline` | `herness build --inline`; `herness build --no-wait`; `herness report render` untouched | admin: job enqueued then run inline, exit 0; reviewer: exit 11 `PermissionDenied`, no job; `--no-wait` prints the no-worker warning with the fix (R-45) |
+| IT09-29 | U09-75 | scored build over a real migrated ops store; coverage 0 (no `z_score`) and then 1.0 for the top team | AppTest of Org Scorecards | `coverage` column right after `name`; badge `orange` at 0%, `green` at 100%; help text shown; badge text has no HTML |
 
 ### 11.4 Fault tests (`tests/fault`, marker `fault`)
 

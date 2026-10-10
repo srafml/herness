@@ -131,6 +131,21 @@ queries:
       (SELECT c.org_id FROM metrics.org_closure c WHERE c.ancestor_org_id = $org_id))
       ORDER BY s.rank NULLS LAST, s.entity_id
 
+  org.coverage:
+    params:
+      entity_type: {type: str, required: true}
+    sql: >-
+      WITH r AS (
+      SELECT s.entity_type, s.entity_id, s.metric, s.z_score,
+      from_json(json_extract(CAST(e.params AS JSON), '$.bind.s_org_metrics'), '["VARCHAR"]') AS ms,
+      from_json(json_extract(CAST(e.params AS JSON), '$.bind.s_org_weights'), '["DOUBLE"]') AS ws
+      FROM score.org s JOIN meta.evidence e ON e.query_id = s.query_ids[1]
+      WHERE s.entity_type = $entity_type)
+      SELECT entity_type, entity_id,
+      coalesce(sum(ws[list_position(ms, metric)]) FILTER (WHERE z_score IS NOT NULL), 0.0)
+      / any_value(list_sum(ws)) AS coverage
+      FROM r GROUP BY entity_type, entity_id ORDER BY entity_id
+
   org.trend:
     params:
       metric: {type: str, required: true}

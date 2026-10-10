@@ -369,7 +369,7 @@ def test_ut09_58_shipped_file_loads() -> None:
     assert {"build.meta", "funding.ranking_by_wsjf", "evidence.meta", "evidence.meta_v1"} <= set(
         queries
     )
-    assert len(queries) == 26
+    assert len(queries) == 27
     assert queries["org.list"].row_cap == 5000
     assert queries["clusters.members"].row_cap == 20
 

@@ -1538,6 +1538,8 @@ All three SQL templates run as one recorded `SELECT` each (self-contained over p
 | Security notes | none |
 | Tests | UT04-88…UT04-91, PT04-07 |
 
+Note (§5.8 coverage, DE-04-22b): 2026-10-10: formula kept for the pilot, coverage made visible; re-evaluate with pilot data.
+
 #### U04-68 herness.metrics.org.run_org_step
 
 | Field | Content |
