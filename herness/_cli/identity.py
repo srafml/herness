@@ -153,7 +153,7 @@ def guarded[F: Callable[..., Any]](path: str) -> Callable[[F], F]:
     """Run ``check_command_role`` before the handler and pass the result as ``actor``."""
 
     def decorate(handler: F) -> F:
-        signature = inspect.signature(handler)
+        signature = inspect.signature(handler, eval_str=True)  # Typer reads Annotated hints
         params = [p for name, p in signature.parameters.items() if name != "actor"]
 
         @functools.wraps(handler)

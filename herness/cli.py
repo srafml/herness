@@ -225,10 +225,12 @@ _registered = False
 def _register_groups(root: typer.Typer) -> None:
     """U09-84 step 4: each command module registers its group on the root app."""
     # T09-22: cmd_system.register(root)
-    # T09-23: cmd_data.register(root); cmd_review.register(root)
+    from herness._cli import cmd_data, cmd_review  # noqa: PLC0415 - lazy (BT09-07)
+
+    cmd_data.register(root)  # T09-23
+    cmd_review.register(root)  # T09-23
     # T09-24: cmd_queue.register(root); cmd_admin.register(root)
     # T09-25: cmd_chat.register(root)
-    del root
 
 
 def _prescan(args: Sequence[str], name: str) -> str | None:

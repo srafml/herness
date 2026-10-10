@@ -95,6 +95,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/_cli/cmd_system.py` | `init`, `doctor`, `status`, `ui`, `worker`, `gpu` | `register` | L5 | `rich` | 300 |
 | `herness/_cli/doctor.py` | Doctor checks owned here plus spec 10 checks | `CheckResult`, `run_doctor` | L5 | none | 200 |
 | `herness/_cli/cmd_data.py` | `sync`, `build`, `enrich`, `score`, `metrics list`, `pipeline` | `register` | L5 | none | 250 |
+| `herness/_cli/_job_cmds.py` | `--wait/--no-wait` and `--inline` options, the `--inline`/`--no-wait` usage check, start/follow and result printing of a job command; private sibling shared by `cmd_data.py` and `cmd_review.py` (T09-23, budget split) | `Wait`, `Inline`, `current_opts`, `wait_options`, `start_job`, `finish_job` | L5 | none | 90 |
 | `herness/_cli/cmd_review.py` | `report`, `review`, `resume`, `decide` | `register` | L5 | none | 330 |
 | `herness/_cli/cmd_queue.py` | `jobs`, `review-queue`, `memory` | `register` | L5 | none | 300 |
 | `herness/_cli/cmd_admin.py` | `config`, `secrets`, `deploy` (including `install`), `eval`, `distill`, `laya`, `privacy`, `maintenance`; thin wrappers over `herness.admin` (R-07) | `register` | L5 | none | 380 |
