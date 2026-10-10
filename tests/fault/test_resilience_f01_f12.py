@@ -19,12 +19,19 @@ from tests.integration.harness._swarm_run_env import Drv, drv
 from tests.support import _f08_llm as fl
 from tests.support import _f08_sources as fs
 from tests.support import loop_standin as ls
+from tests.support._f08_cases_jobs import (
+    test_ft08_06_kill_after_finding_write_then_resume_no_duplicates,
+    test_ft08_07_claim_then_kill_requeued_by_reaper_within_lease_plus_30s,
+    test_ft08_07_claim_then_kill_requeued_on_restart_and_completed,
+    test_ft08_11_store_busy_writes_retried_no_lost_job_state,
+)
 from tests.support.fake_clock import FakeClock
 from tests.support.fake_keyring import MemoryKeyring
 from tests.support.fake_llm import FakeLLMClient, FakeLLMServer
 from tests.support.fault_env import FaultEnv
 from tests.support.harness_fakes import RecordingTracer
 from tests.support.ops_store import OpsStoreHandle
+from tests.support.worker_env import worker_env
 from tests.unit.harness._blackboard_env import test_redactor
 
 from herness.core import config as c
@@ -34,7 +41,17 @@ from herness.store.ops import get_watermark, select_tasks
 
 pytestmark = pytest.mark.fault
 
-__all__ = ["drv", "test_redactor"]  # fixtures imported for this module
+# Fixtures used here, and the FT08-06/07/11 tests collected from their private sibling
+# module (the ENG 400-line limit splits the suite; they run under this module's marker).
+__all__ = [
+    "drv",
+    "test_ft08_06_kill_after_finding_write_then_resume_no_duplicates",
+    "test_ft08_07_claim_then_kill_requeued_by_reaper_within_lease_plus_30s",
+    "test_ft08_07_claim_then_kill_requeued_on_restart_and_completed",
+    "test_ft08_11_store_busy_writes_retried_no_lost_job_state",
+    "test_redactor",
+    "worker_env",
+]
 
 
 # --- FT08-01 (F1) -------------------------------------------------------------------------
