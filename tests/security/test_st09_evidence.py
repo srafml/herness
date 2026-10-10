@@ -177,3 +177,17 @@ def test_st09_30_real_redactor_with_loaded_key(tmp_path: Path, fake_keyring: Mem
     assert list(frame.columns) == [*SAFE, "comment"]
     assert frame.iloc[0]["comment"].startswith("call [EMAIL_")
     assert frame.iloc[1]["comment"] == "second"
+
+
+def test_st09_30_deep_nesting_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ST09-30 a cell nested deeper than 32 levels is cut to ``null`` below the limit."""
+    from app.common._widgets_evidence import sample_rows  # noqa: PLC0415
+
+    seen = _redaction_double(monkeypatch)
+    cell: object = {"x": RAW_TITLE}
+    for _ in range(40):
+        cell = {"a": cell}
+    rows = sample_rows([{"meta": cell}])
+    assert rows == [{"meta": "redacted #1"}]
+    assert RAW_TITLE not in seen[0]
+    assert seen[0].endswith("null" + "}" * 33)
