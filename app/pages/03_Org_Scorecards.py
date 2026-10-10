@@ -1,8 +1,8 @@
 """Org Scorecards page (impl 09 U09-75; design §5.4): peer scores, a monthly trend, evidence.
 
 A viewer page over the current build; every number comes from a named query (``org.*``).
-``_score_table`` takes an optional extra column: the seam for T09-15b's coverage column beside
-org/team scores (user decision 2026-10-10 1a), not used yet.
+``_score_table`` takes an optional extra column: the coverage column (T09-15b, user decision
+2026-10-10 1a) comes from ``org.coverage``, the covered-weight fraction of design 04 §5.8 step 7.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ NAMES: Final = {"team": ("entities.teams", "team_id"), "service": ("entities.ser
 SHOWN: Final = ("rank", "entity_id", "value", "peer_median", "z_score", "sample_size",
                 "composite", "peer_group", "flags")  # fmt: skip
 TREND_PERIOD: Final = "month"
+COVERAGE_WARN: Final = 0.8  # warning badge below this; the §5.8 null threshold (0.5) is unchanged
+COVERAGE_HELP: Final = "Scores are normalised by covered metric weight (coverage is that share)."
 type Row = Mapping[str, object]
 type ExtraColumn = tuple[str, Callable[[Row], object]]
 
@@ -82,16 +84,35 @@ def _score_table(rows: Sequence[Row], names: Mapping[str, str],
     )
 
 
+def _coverage(entity_type: str) -> dict[str, float | None]:
+    rows = wh.query("org.coverage", entity_type=entity_type).table.to_pylist()
+    return {str(r["entity_id"]): r["coverage"] for r in rows}
+
+
+def _coverage_badge(value: object) -> None:
+    """A coloured badge beside the score (orange below ``COVERAGE_WARN``) and the help line."""
+    if not isinstance(value, float):
+        return
+    colour = "green" if value >= COVERAGE_WARN else "orange"
+    st.markdown(f":{colour}-badge[Coverage {value:.0%}]")
+    st.caption(COVERAGE_HELP)
+
+
 def _peer_table(params: Mapping[str, str | None]) -> Row | None:
     result = wh.query("org.scores", **params)
     rows = cast("list[Row]", result.table.to_pylist())
     if not rows:
         st.caption("No scores match these filters.")
         return None
-    state = _score_table(rows, _names(str(params["entity_type"])))
+    entity_type = str(params["entity_type"])
+    coverage = _coverage(entity_type)
+    state = _score_table(rows, _names(entity_type),
+                         ("coverage", lambda r: coverage.get(str(r["entity_id"]))))  # fmt: skip
     if result.truncated:
         st.caption("Showing the first rows only.")
-    return rows[_selected(state, len(rows))]
+    chosen = rows[_selected(state, len(rows))]
+    _coverage_badge(coverage.get(str(chosen["entity_id"])))
+    return chosen
 
 
 def _trend(row: Row) -> None:

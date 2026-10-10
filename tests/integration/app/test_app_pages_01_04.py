@@ -258,3 +258,31 @@ def test_it09_10_score_table_extra_column(monkeypatch: pytest.MonkeyPatch) -> No
     order = list(frame.proto.column_order)
     assert order[order.index("name") + 1] == "coverage", order
     assert frame.value["coverage"].tolist() == ["80%"]
+
+
+COVERAGE_HELP = "Scores are normalised by covered metric weight"
+
+
+def _coverage_badges(at: AppTest) -> list[str]:
+    return [str(m.value) for m in at.main.markdown if "-badge[Coverage" in str(m.value)]
+
+
+def test_it09_29_org_scorecards_coverage_low(env: SimpleNamespace) -> None:
+    """IT09-29 Org Scorecards: a coverage column, a warning badge below 0.8 and the help text."""
+    at = _run(ORG)
+    frame = next(d for d in at.main.dataframe if "coverage" in d.value.columns)
+    order = list(frame.proto.column_order)
+    assert order[order.index("name") + 1] == "coverage", order
+    assert frame.value["coverage"].tolist()[0] == 0.0  # the planted scores have no z_score
+    assert _coverage_badges(at) == [":orange-badge[Coverage 0%]"]
+    assert any(COVERAGE_HELP in str(c.value) for c in at.main.caption)
+    assert "<" not in "".join(_coverage_badges(at))  # no raw HTML (ST09)
+
+
+def test_it09_29_org_scorecards_coverage_full(env: SimpleNamespace) -> None:
+    """IT09-29 the badge style flips to the neutral style at coverage >= 0.8."""
+    with duckdb.connect(str(env.db)) as con:
+        con.execute("UPDATE score.org SET z_score = 1.0 WHERE entity_id = 'T1'")
+    at = _run(ORG)
+    assert _coverage_badges(at) == [":green-badge[Coverage 100%]"]
+    assert any(COVERAGE_HELP in str(c.value) for c in at.main.caption)
