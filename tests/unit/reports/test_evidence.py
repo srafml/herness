@@ -11,6 +11,7 @@ import duckdb
 import pytest
 from structlog.testing import capture_logs
 from tests.support.ops_store import OpsStoreHandle
+from tests.support.report_env import install_redactor
 
 from herness.core import errors as e
 from herness.core.ids import query_id as compute_query_id
@@ -105,8 +106,11 @@ def test_ut09_22_invalid_query_id_rejected(bad: str) -> None:
 # --- UT09-23 load_evidence_entries (U09-14) -----------------------------------------------------
 
 
-def test_ut09_23_ops_meta_both_none(ops_store: OpsStoreHandle) -> None:
+def test_ut09_23_ops_meta_both_none(
+    ops_store: OpsStoreHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """UT09-23 ops only, meta only, both (ops wins) and none (found=False)."""
+    install_redactor(monkeypatch)  # text sample cells pass the redactor (T09-15d)
     ops_only = _record("SELECT 1", {"a": 1}, row_count=3, sample=[{"n": 1, "m": None}])
     both = _record("SELECT 2", build_id=OTHER_BUILD)
     meta_only, none = "q_1111111111111111", "q_2222222222222222"
@@ -173,8 +177,11 @@ def test_ut09_23_sample_null_invalid_or_empty(
     assert entry.row_count is None
 
 
-def test_ut09_23_sample_rows_and_cell_cut(ops_store: OpsStoreHandle) -> None:
+def test_ut09_23_sample_rows_and_cell_cut(
+    ops_store: OpsStoreHandle, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """UT09-23 only the first sample_rows rows are kept and each cell is cut to 200 chars."""
+    install_redactor(monkeypatch)  # text sample cells pass the redactor (T09-15d)
     con = _warehouse()
     qid = "q_1111111111111111"
     rows = [{"c": "x" * 300, "d": [1, 2]}, {"c": "y", "d": 2.5}, {"c": "z", "d": True}]

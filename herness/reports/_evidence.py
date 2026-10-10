@@ -3,13 +3,14 @@
 Ops ``evidence`` rows win over the build's warehouse ``meta.evidence``; an ops row whose
 ``query_id`` does not recompute from its ``sql``, ``params`` and ``build_id`` is treated as
 tampered (TH05-12), logged and dropped, so the id falls through to the warehouse. Sample
-cells are plain strings here; templates escape them (TH09-23).
+cells pass ``herness.reports._sample_policy`` (TH09-11: raw-text columns dropped or redacted)
+and are plain strings here; templates escape them (TH09-23).
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
@@ -20,13 +21,13 @@ from herness.core import time as clock
 from herness.core.errors import QueryError, ReportContractError, SchemaViolation
 from herness.core.ids import query_id as compute_query_id
 from herness.core.logging import get_logger
+from herness.reports import _sample_policy as sample_policy
 from herness.reports.contract import QUERY_ID_RE
 from herness.store import ops
 
 __all__ = ["EvidenceCollector", "EvidenceEntry", "load_evidence_entries"]
 
 _USED_BY_CAP: Final = 50
-_CELL_MAX: Final = 200
 _RAW_MAX: Final = 500
 _CHUNK: Final = 500
 _HAS_SAMPLE_SQL: Final = (
@@ -118,22 +119,11 @@ def _params(raw: object) -> dict[str, object]:
     return {"_raw": text[:_RAW_MAX]}
 
 
-def _cell(value: object) -> str:
-    return ("" if value is None else str(value))[:_CELL_MAX]
-
-
 def _sample(raw: object, sample_rows: int) -> tuple[list[dict[str, str]] | None, list[str]]:
-    """The first ``sample_rows`` rows as string cells, and the first row's columns."""
-    parsed = raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-        except (ValueError, RecursionError):
-            parsed = None
-    if not isinstance(parsed, list):
+    """The first ``sample_rows`` rows through the sample policy (TH09-11), and their columns."""
+    sample = sample_policy.sample_rows(raw, sample_rows)
+    if sample is None:
         return None, []
-    rows = [row for row in parsed if isinstance(row, Mapping)][: max(sample_rows, 0)]
-    sample = [{str(key): _cell(value) for key, value in row.items()} for row in rows]
     return sample, list(sample[0]) if sample else []
 
 
