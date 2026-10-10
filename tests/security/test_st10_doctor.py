@@ -1,5 +1,7 @@
-"""Security tests for the doctor host rows (impl 10 ST10-17 doctor part, ST10-28, ST10-38,
-ST10-42, ST10-49; TH10-08, TH10-09, TH10-13, TH10-25, TH10-26, TH10-41, TH10-43).
+"""Security tests for the doctor rows (impl 10 ST10-17 doctor part, ST10-28, ST10-38,
+ST10-42, ST10-49; TH10-08, TH10-09, TH10-13, TH10-25, TH10-26, TH10-41, TH10-43) and the
+doctor halves of ST10-34 (``env_file``, TH10-26) and ST10-44 (``firewall_outbound``, TH10-29)
+from the U10-91 GPU rows (T10-28).
 
 Commands answer from recorded outputs through `fake_runner`; `psutil` and the GPU state are
 monkeypatched. The audit attack runs against a real chain written by `herness.core.audit`.
@@ -12,6 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from tests.support.doctor_gpu_env import GpuHost, start_gpu_host
 from tests.support.doctor_host_env import (
     ICACLS_USERS_INHERITED,
     Host,
@@ -20,8 +23,10 @@ from tests.support.doctor_host_env import (
     manage_bde,
     with_paths,
 )
+from tests.support.fake_keyring import MemoryKeyring
 from tests.support.fake_runner import FakeRunner
 
+from herness.admin import doctor_gpu
 from herness.admin import doctor_host as dh
 from herness.core import audit
 from herness.core.config import HernessConfig, init_config, reset_config
@@ -133,3 +138,49 @@ def test_st10_49_backup_drive_protection_off_fails_bitlocker(
     assert row.status == "FAIL"
     assert row.detail == "C: Protection On; D: Protection On; E: Protection Off"
     assert row.fix == "Enable BitLocker"
+
+
+# --- U10-91 rows (T10-28): the doctor halves of ST10-34 and ST10-44 ----------------------------
+
+
+@pytest.fixture
+def gpu_host(
+    tmp_path: Path,
+    fake_keyring: MemoryKeyring,
+    fake_runner: FakeRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> GpuHost:
+    del fake_keyring
+    return start_gpu_host(tmp_path, fake_runner, monkeypatch)
+
+
+def _gpu_row(name: str, cfg: HernessConfig) -> dh.HostCheckResult:
+    (check,) = (c for c in doctor_gpu.GPU_CHECKS if c.__name__ == f"_check_{name}")
+    return check(cfg)
+
+
+def test_st10_34_world_readable_env_file_fails_doctor(gpu_host: GpuHost) -> None:
+    """ST10-34 doctor env_file: a root ``stat`` of mode 644 → FAIL; mode 600 root → PASS."""
+    gpu_host.set("stat root", "644:root\n")
+    row = _gpu_row("env_file", gpu_host.cfg)
+    assert (row.status, row.fix) == ("FAIL", "herness deploy render")
+    assert row.detail == "/opt/herness/docker.env: 644:root (want 600 root)"
+    gpu_host.set("stat root", "600:root\n")
+    assert _gpu_row("env_file", gpu_host.cfg).status == "PASS"
+    (call,) = [c for c in gpu_host.runner.calls if "stat" in c.argv][-1:]
+    assert call.argv[3:5] == ["-u", "root"]
+    assert call.argv[-1] == "/opt/herness/docker.env"
+
+
+def test_st10_44_firewall_allow_fails_doctor_firewall_outbound(gpu_host: GpuHost) -> None:
+    """ST10-44 the Hyper-V firewall fake reports ``Allow`` → doctor firewall_outbound FAIL."""
+    assert _gpu_row("firewall_outbound", gpu_host.cfg).status == "PASS"
+    gpu_host.pull.outbound = "Allow"
+    row = _gpu_row("firewall_outbound", gpu_host.cfg)
+    assert (row.status, row.detail) == ("FAIL", "WSL VM DefaultOutboundAction is not Block")
+    assert row.fix == (
+        "Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'"
+        " -DefaultOutboundAction Block"
+    )
+    assert gpu_host.pull.events[-1] == "get"  # read only: the doctor never sets the firewall
+    assert not any(e.startswith("set:") for e in gpu_host.pull.events)

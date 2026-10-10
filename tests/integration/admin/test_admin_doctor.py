@@ -1,7 +1,8 @@
 """IT10-12: doctor host rows on a non-Windows host (impl 10 F10-09, U10-89).
 
 The platform probe reports a Linux host: the Windows-only rows (`acl_data`, `bitlocker`,
-`clock`, `services`) WARN "not applicable on this host" without running any Windows program
+`clock`, `services` and every U10-91 row that runs `wsl.exe` or PowerShell, T10-28) WARN
+"not applicable on this host" without running any Windows program
 (`fake_runner` has no answers, so any call would fail the test), and every other row
 evaluates against a real config tree, the real `validate`, a real audit chain and real disk.
 """
@@ -17,6 +18,7 @@ import pytest
 from tests.support.doctor_host_env import Host, listen, load_cfg
 from tests.support.fake_runner import FakeRunner
 
+from herness.admin import doctor_gpu
 from herness.admin import doctor_host as dh
 from herness.core import audit
 from herness.core.config import HernessConfig, init_config, reset_config
@@ -25,6 +27,8 @@ from herness.core.errors import EgressBlocked
 pytestmark = pytest.mark.integration
 
 WINDOWS_ONLY = {"acl_data", "bitlocker", "clock", "services"}
+WINDOWS_ONLY |= {c.__name__.removeprefix("_check_") for c in doctor_gpu.GPU_CHECKS}
+WINDOWS_ONLY -= {"model_health"}  # a loopback HTTP GET, no Windows program
 
 
 @pytest.fixture
@@ -60,4 +64,5 @@ def test_it10_12_windows_rows_not_applicable_others_evaluate(
     assert rows["ports_loopback"].status == "PASS"
     assert rows["config_valid"].status in ("PASS", "WARN", "FAIL")
     assert rows["disk_free"].detail.endswith("GiB free")
-    assert len(rows) == len(dh.HOST_CHECKS)
+    assert rows["model_health"].status == "WARN"  # the fake GPU state: no class loaded
+    assert len(rows) == len(dh.HOST_CHECKS) + len(doctor_gpu.GPU_CHECKS)

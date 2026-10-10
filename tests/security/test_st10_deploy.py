@@ -2,7 +2,8 @@
 
 The compose lint below checks the U10-80 invariants (TH10-26, TH10-27, TH10-29) on the
 repository file and on mutated copies. The doctor halves of ST10-34 (``env_file``) and ST10-44
-(``firewall_outbound``) are U10-91 checks and land with T10-28.
+(``firewall_outbound``) are U10-91 checks; they landed with T10-28 in
+``tests/security/test_st10_doctor.py``.
 """
 
 from __future__ import annotations

@@ -26,6 +26,7 @@ from tests.support.doctor_host_env import (
     SCHTASKS_WSL_OK,
     FakeGpuState,
     Host,
+    green_host_rows,
     listen,
     load_cfg,
     manage_bde,
@@ -37,8 +38,8 @@ from tests.support.doctor_host_env import (
 from tests.support.fake_keyring import MemoryKeyring
 from tests.support.fake_runner import FakeRunner
 
+from herness.admin import doctor_gpu, wsl
 from herness.admin import doctor_host as dh
-from herness.admin import wsl
 from herness.core import audit, secrets
 from herness.core.config import HernessConfig, reset_config
 from herness.core.config_view import ConfigIssue
@@ -527,23 +528,9 @@ def test_ut10_71_services_task_scheduler(
 
 
 def _all_green(cfg: HernessConfig, fake_runner: FakeRunner, mp: pytest.MonkeyPatch) -> None:
-    fake_runner.add(["icacls.exe"], ICACLS_DIR_OK)
-    fake_runner.add(["manage-bde.exe"], manage_bde("C:", "Protection On"))
-    _clock(fake_runner, cfg, "0.01s", 0.2)
-    fake_runner.add(["sc.exe"], SC_WORKER_OK)
-    fake_runner.add(["schtasks.exe"], SCHTASKS_WSL_OK)
-    mp.setattr(shutil, "which", lambda name: "C:\\uv.exe")
-    mp.setattr(dh, "sys", SimpleNamespace(version_info=(3, 12, 7), platform="win32"))
-    mp.setattr(shutil, "disk_usage", lambda p: SimpleNamespace(total=0, used=0, free=200 * GIB))
-    mp.setattr(dh, "validate", lambda d, p: [])
-    mp.setattr(secrets, "exists", lambda name: True)
-    mp.setattr(dh.metadata, "entry_points", lambda *, group: [])
-
-    def blocked(address: Any, timeout: Any = None) -> Any:
-        msg = "blocked"
-        raise EgressBlocked(msg, reason="not_allowed")
-
-    mp.setattr(socket, "create_connection", blocked)
+    """Every host row green; the GPU rows (T10-28) are left out of these host-row tests."""
+    green_host_rows(cfg, fake_runner, mp)
+    mp.setattr(doctor_gpu, "GPU_CHECKS", ())
 
 
 def test_ut10_71_doctor_checks_all_pass_in_table_order(
@@ -596,18 +583,24 @@ def test_ut10_71_doctor_checks_error_rows_and_pool(
 def test_ut10_71_doctor_checks_gpu_extension_point(
     env: tuple[HernessConfig, Host], fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """UT10-71 doctor_checks appends the GPU checks (U10-91 seam, empty until T10-28)."""
+    """UT10-71 doctor_checks runs ``doctor_gpu.GPU_CHECKS`` after the host rows (U10-89)."""
     cfg, _ = env
-    assert dh._GPU_CHECKS == ()
     _all_green(cfg, fake_runner, monkeypatch)
 
     def _check_gpu_probe(cfg: HernessConfig) -> dh.HostCheckResult:
         return dh.HostCheckResult("gpu_probe", "PASS", "ok", "")
 
-    monkeypatch.setattr(dh, "_GPU_CHECKS", (_check_gpu_probe,))
+    monkeypatch.setattr(doctor_gpu, "GPU_CHECKS", (_check_gpu_probe,))
     rows = dh.doctor_checks(cfg)
     assert rows[-1].name == "gpu_probe"
     assert len(rows) == len(dh.HOST_CHECKS) + 1
+
+
+def test_ut10_71_gpu_rows_calling_windows_programs_are_windows_only() -> None:
+    """UT10-71 every GPU row but model_health runs wsl.exe/PowerShell: Windows-only (IT10-12)."""
+    names = {c.__name__.removeprefix("_check_") for c in doctor_gpu.GPU_CHECKS}
+    assert names - dh._WINDOWS_ONLY == {"model_health"}
+    assert dh._WINDOWS_ONLY - names == {"acl_data", "bitlocker", "clock", "services"}
 
 
 def test_ut10_71_check_result_is_frozen() -> None:

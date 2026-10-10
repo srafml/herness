@@ -65,10 +65,11 @@ def _set_outbound(action: Literal["Allow", "Block"]) -> wsl.CmdResult:
     return wsl.run_powershell("Set-NetFirewallHyperVVMSetting", params, timeout_s=_PS_TIMEOUT_S)
 
 
-def _outbound_blocked() -> bool:
-    """Read the setting back; only a parsed ``Block`` (name or enum integer) counts."""
+def _outbound_blocked(timeout_s: float = _PS_TIMEOUT_S) -> bool:
+    """Read the setting back; only a parsed ``Block`` (name or enum integer) counts (also the
+    doctor's ``firewall_outbound`` row, T10-28, with a 10 s timeout)."""
     params = {"Name": WSL_VM_CREATOR_ID}
-    result = wsl.run_powershell("Get-NetFirewallHyperVVMSetting", params, timeout_s=_PS_TIMEOUT_S)
+    result = wsl.run_powershell("Get-NetFirewallHyperVVMSetting", params, timeout_s=timeout_s)
     if result.returncode != 0:
         return False
     try:

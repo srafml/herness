@@ -70,8 +70,11 @@ _FIX: Final[dict[str, str]] = {
     "plugins": "Remove unapproved plugins",
     "services": "Register services (design 10 §5.6.4)",
 }
-# Checks that only mean something on the Windows host (IT10-12); T10-28 may extend this.
-_WINDOWS_ONLY: frozenset[str] = frozenset({"acl_data", "bitlocker", "clock", "services"})
+# Checks that only mean something on the Windows host (IT10-12): every WSL/PowerShell row.
+_WINDOWS_ONLY: frozenset[str] = frozenset({"acl_data", "bitlocker", "clock", "services",
+    "wsl_distro", "wsl_systemd_docker", "docker_api_local", "gpu_visible", "gpu_vram",
+    "images_pinned", "wsl_git", "weights_pinned", "firewall_outbound", "firewall_inbound",
+    "env_file"})  # fmt: skip
 
 
 # The spec's ``CheckResult``, renamed: impl 06 owns ``CheckResult`` in core.types (OWN040).
@@ -365,8 +368,6 @@ HOST_CHECKS: Final[tuple[Check, ...]] = (  # the U10-90 table order
     _check_bitlocker, _check_audit_chain, _check_disk_free, _check_clock, _check_ports_loopback,
     _check_ports_expected, _check_socket_guard, _check_plugins, _check_services,
 )  # fmt: skip
-# Extension point for U10-91 GPU_CHECKS (T10-28); empty until that card lands.
-_GPU_CHECKS: tuple[Check, ...] = ()
 
 
 def _run_one(check: Check, cfg: HernessConfig) -> HostCheckResult:
@@ -381,7 +382,9 @@ def _run_one(check: Check, cfg: HernessConfig) -> HostCheckResult:
 
 def doctor_checks(cfg: HernessConfig) -> list[HostCheckResult]:
     """Run ``HOST_CHECKS`` and the GPU checks concurrently; results in table order (U10-89)."""
-    checks = (*HOST_CHECKS, *_GPU_CHECKS)
+    from herness.admin.doctor_gpu import GPU_CHECKS  # noqa: PLC0415 - it imports this module
+
+    checks = (*HOST_CHECKS, *GPU_CHECKS)
     with ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="doctor") as pool:
         futures = [pool.submit(_run_one, check, cfg) for check in checks]
         return [future.result() for future in futures]
