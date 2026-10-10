@@ -103,6 +103,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/_cli/cmd_queue.py` | `jobs`, `review-queue`, `memory` | `register` | L5 | none | 300 |
 | `herness/_cli/cmd_admin.py` | `config`, `secrets`, `deploy` (including `install`), `eval`, `distill`, `laya`, `privacy`, `maintenance`; thin wrappers over `herness.admin` (R-07) | `register` | L5 | none | 380 |
 | `herness/_cli/cmd_chat.py` | Terminal chat | `register` | L5 | `rich` | 300 |
+| `herness/_cli/_chat_turn.py` | Private helper of `cmd_chat.py` (T09-25 split for the line budget): the terminal-safe printer, history, one question turn with the `defer` poll | `Term`, `Answerer`, `Services`, `ask`, `answer`, `history`, `show_row`, `policy`, `PROMPT`, `COMMANDS` | L5 | `rich` | 200 |
 
 Import rules beyond ENG §2.1: `herness/_cli/*` and `herness/cli.py` import `duckdb`, `streamlit`, `jinja2`, `weasyprint`, `torch`, `herness.admin` and any L2–L4 package only inside command functions (lazy), so `herness --help` stays under 1 s (BT09-07). `app/` imports `herness.*` freely (L5) but never `herness._cli` or `herness.admin`. `herness.reports.settings` imports only the standard library, `pydantic`, `herness.core.types` and `herness.core.errors` (settings exception, R-03). `herness.core.types.reports` imports nothing from `herness` except `herness.core.errors` and `herness.core.ids` (ENG §2.1).
 
