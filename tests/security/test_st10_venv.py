@@ -66,6 +66,14 @@ def site(tmp_path: Path, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatc
     return root, running, ReleaseBundle.load(built.root), cfg, fake_runner
 
 
+def _ext_ok(root: Path) -> CmdResult:
+    installed = root.parent / "home" / "excel.duckdb_extension"
+    installed.parent.mkdir(exist_ok=True)
+    installed.write_bytes(EXT_BYTES)
+    row = {"loaded": True, "installed": True, "extension_version": "v1"}
+    return CmdResult(0, json.dumps({**row, "install_path": str(installed)}), "", 0)
+
+
 def _unchanged(root: Path) -> None:
     """``current`` still names the old venv, the partial venv and every temp link are gone,
     and the deploy history records no switch."""
@@ -122,15 +130,44 @@ def test_st10_62_failed_venv_or_uv_step_keeps_current(site: Any, step: str) -> N
     _unchanged(root)
 
 
+def test_st10_62_failed_reverify_keeps_current(site: Any) -> None:
+    """ST10-62 (review round 1) the private copy's wheel changed while the new venv was being
+    built: the re-verify after install refuses, ``current`` is unchanged and the partial venv
+    removed (``deploy.install.venv_removed``, not ``cleanup_failed``)."""
+    root, running, bundle, cfg, runner = site
+    summary = verify_bundle(bundle, cfg)
+    wheel = Path(summary["copy"]) / bundle.wheel.name
+
+    def tamper(argv: list[str]) -> CmdResult:
+        wheel.write_bytes(wheel.read_bytes() + b"swapped")
+        return CmdResult(0, "", "", 0.1)
+
+    runner.add(["uv", "pip", "install"], tamper)
+    runner.add(ext_prefix(root / "venvs" / "1.2.3"), _ext_ok(root))
+    with (
+        structlog.testing.capture_logs() as logs,
+        pytest.raises(FatalError, match=r"^bundle changed after verification$"),
+    ):
+        attest.install_bundle(bundle, summary, venv=running, actor=USER)
+    _unchanged(root)
+    events = [e["event"] for e in logs]
+    assert "deploy.install.venv_removed" in events
+    assert "deploy.install.cleanup_failed" not in events
+
+
 def test_st10_62_rollback_refuses_a_target_outside_venvs(site: Any) -> None:
     """ST10-62 (TH10-40) a deploy-history line whose ``previous`` names a directory outside
     ``<install root>/venvs`` (or one without an interpreter) is never linked as ``current``."""
     root, running, *_ = site
     outside = root.parent / "evil"
     make_venv(outside)
-    for previous in (outside, root / "venvs" / "missing"):
-        pins = {"version": "1.0.0", "venv": str(root / "venvs" / "1.0.0")}
-        pins["previous"] = str(previous)
+    current = str(root / "venvs" / "1.0.0")
+    forged = [
+        {"version": "1.0.0", "venv": current, "previous": str(outside)},
+        {"version": "1.0.0", "venv": current, "previous": str(root / "venvs" / "missing")},
+        {"version": "1.0.0", "previous": current},  # no "venv": ConfigError, not KeyError
+    ]
+    for pins in forged:
         DeployHistory().record(HISTORY_CLASS, pins, "cfg_0", clock.now())
         with pytest.raises(ConfigError, match=r"^no previous venv to roll back to$"):
             rollback_venv(running, actor=USER)

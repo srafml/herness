@@ -44,7 +44,15 @@ def use_install_root(monkeypatch: pytest.MonkeyPatch, root: Path, running: str =
 
 def ext_prefix(venv: Path) -> list[str]:
     """The ``fake_runner`` prefix of U10-112's extension install in ``venv`` (via uv)."""
-    return ["uv", "run", "--no-project", "--offline", "--python", str(venv_python(venv))]
+    return [
+        "uv",
+        "run",
+        "--no-config",
+        "--no-project",
+        "--offline",
+        "--python",
+        str(venv_python(venv)),
+    ]
 
 
 def venv_answer(argv: list[str]) -> CmdResult:

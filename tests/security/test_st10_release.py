@@ -382,13 +382,13 @@ def test_st10_53_install_audited_with_version_and_sha256(tmp_path: Path, env: Fa
     uv_calls = [c for c in env.calls if c.argv[:2] == ["uv", "pip"]]
     assert [(c.argv, c.timeout_s, c.check) for c in uv_calls] == [
         (
-            ["uv", "pip", "sync", "--require-hashes", "--python", python,
+            ["uv", "pip", "sync", "--no-config", "--require-hashes", "--python", python,
              str(private / "requirements.txt")],
             1800,
             True,
         ),
         (
-            ["uv", "pip", "install", "--no-deps", "--python", python,
+            ["uv", "pip", "install", "--no-config", "--no-deps", "--python", python,
              str(private / built.wheel.name)],
             600,
             True,

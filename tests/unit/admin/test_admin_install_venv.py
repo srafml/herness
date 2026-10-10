@@ -179,13 +179,13 @@ def test_ut10_89_venv_creation_and_install_argv(site: Any) -> None:
     assert calls[:3] == [
         ([sys.executable, "-I", "-m", "venv", "--without-pip", str(target)], 300, True),
         (
-            ["uv", "pip", "sync", "--require-hashes", "--python", python,
+            ["uv", "pip", "sync", "--no-config", "--require-hashes", "--python", python,
              str(private / "requirements.txt")],
             1800,
             True,
         ),
         (
-            ["uv", "pip", "install", "--no-deps", "--python", python,
+            ["uv", "pip", "install", "--no-config", "--no-deps", "--python", python,
              str(private / bundle.wheel.name)],
             600,
             True,
@@ -209,7 +209,7 @@ def test_ut10_89_extra_index_only_for_cuda_pin(tmp_path: Path, site: Any, pin: s
     (sync,) = [c.argv for c in runner.calls if c.argv[:3] == ["uv", "pip", "sync"]]
     assert "--require-hashes" in sync
     extra = ["--extra-index-url", "https://download.pytorch.org/whl/cu128"]
-    flagged = sync[6:8] == extra
+    flagged = sync[7:9] == extra
     assert flagged == ("+cu" in pin)
     assert ("--extra-index-url" in sync) == ("+cu" in pin)
     assert cfg.deploy.release.extra_index_url == extra[1]
@@ -284,6 +284,60 @@ def test_ut10_90_failed_rename_restores_previous_marker(
     assert sorted(p.name for p in root.iterdir()) == ["current", "venvs"]
     assert sorted(p.name for p in (root / "venvs").iterdir()) == ["1.0.0"]
     assert DeployHistory().last_promoted(HISTORY_CLASS) == []
+
+
+def test_ut10_90_cleanup_failure_after_switch_keeps_new_venv(
+    site: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT10-90 (review round 1) once ``current`` names the new venv, a failure removing the
+    stepped-aside ``.current-old`` (sharing violation, AV scanner) is only logged: the install
+    succeeds, ``current`` and ``venvs/1.2.3`` survive, and the next install drops the stale link."""
+    root = site[0]
+    rmdir = os.rmdir
+
+    def locked(path: Any) -> None:
+        if Path(path).name == ".current-old":
+            msg = "sharing violation"
+            raise PermissionError(msg)
+        rmdir(path)
+
+    monkeypatch.setattr(_install_venv.os, "rmdir", locked)
+    with structlog.testing.capture_logs() as logs:
+        result = install(site)
+    assert result["restart"] == "required"
+    assert real(root / "current") == real(root / "venvs" / "1.2.3")
+    assert venv_python(root / "venvs" / "1.2.3").is_file()
+    if os.name == "nt":
+        failed = [e["path"] for e in logs if e["event"] == "deploy.install.cleanup_failed"]
+        assert failed == [str(root / ".current-old")]
+        monkeypatch.setattr(_install_venv.os, "rmdir", rmdir)
+        _install_venv._recover(root)
+        assert sorted(p.name for p in root.iterdir()) == ["current", "venvs"]
+    assert DeployHistory().last_promoted(HISTORY_CLASS, 1)[0]["version"] == "1.2.3"
+
+
+def test_ut10_90_history_failure_keeps_switch(site: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT10-90 (review round 1) a deploy-history append failing after the switch is surfaced
+    as FatalError naming the switched venv, logged ``deploy.install.history_failed``, and the
+    switch is not undone (``current`` and the new venv stay)."""
+    root = site[0]
+
+    def busy(*_args: Any) -> None:
+        msg = "deploy lock held"
+        raise StoreBusy(msg)
+
+    monkeypatch.setattr(DeployHistory, "record", busy)
+    with (
+        structlog.testing.capture_logs() as logs,
+        pytest.raises(
+            FatalError,
+            match=r"^current now names venv 1\.2\.3, but no deploy history line was written$",
+        ),
+    ):
+        install(site)
+    assert "deploy.install.history_failed" in [e["event"] for e in logs]
+    assert real(root / "current") == real(root / "venvs" / "1.2.3")
+    assert venv_python(root / "venvs" / "1.2.3").is_file()
 
 
 def test_ut10_90_interrupted_switch_recovered(site: Any) -> None:

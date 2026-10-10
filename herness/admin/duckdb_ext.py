@@ -103,8 +103,8 @@ def install_duckdb_extensions(
     files = check_extensions(bundle, cfg, venv=venv)  # all checked before any subprocess
     versions: dict[str, str] = {}
     for name, (path, pin) in files.items():
-        argv = ["uv", "run", "--no-project", "--offline", "--python", str(venv_python(venv))]
-        argv += ["python", "-I", "-c", EXT_INSTALL_SCRIPT, str(path), name]  # Ruling T10-26c
+        argv = ["uv", "run", "--no-config", "--no-project", "--offline", "--python"]
+        argv += [str(venv_python(venv)), "python", "-I", "-c", EXT_INSTALL_SCRIPT, str(path), name]
         result = run_cmd(argv, timeout_s=120)
         if result.returncode != 0:
             raise _refuse(name, "extension_install", f"duckdb extension install failed: {name}")

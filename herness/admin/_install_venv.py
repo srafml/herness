@@ -1,12 +1,10 @@
 """Blue/green venv install of a verified release, and venv rollback (impl 10 U10-88, U10-112).
 
 Size-forced private sibling of ``herness.admin.attest`` (Ruling T10-26c). ``install_bundle``
-never writes into ``sys.prefix``: on Windows the running CLI's loaded ``.pyd`` files are locked
-(DE-10-26). It builds ``<install root>/venvs/<version>/`` beside the running venv, installs the
-verified private copy there, then repoints ``<install root>/current`` (a directory junction on
-Windows, a symlink elsewhere) and records the switch in the deploy history. The previous venv is
-kept, so ``rollback_venv`` can point ``current`` back at it. Any failure before the repoint
-leaves ``current`` untouched and removes the new venv. The process must restart to run it.
+never writes into ``sys.prefix`` (DE-10-26: loaded ``.pyd`` files are locked on Windows). It
+builds ``<install root>/venvs/<version>/``, installs the verified private copy there, repoints
+``<install root>/current`` (junction on Windows, symlink elsewhere) and records the switch; the
+previous venv is kept for ``rollback_venv``. A failure before the repoint removes the new venv.
 """
 
 from __future__ import annotations
@@ -32,13 +30,7 @@ from herness.core.logging import get_logger
 if TYPE_CHECKING:
     from herness.admin.attest import ReleaseBundle
 
-__all__ = [
-    "HISTORY_CLASS",
-    "build_venv",
-    "install_root",
-    "rollback_venv",
-    "staged_venv",
-]
+__all__ = ["HISTORY_CLASS", "build_venv", "install_root", "rollback_venv", "staged_venv"]
 
 _log = get_logger("admin.deploy")
 HISTORY_CLASS: Final = "herness-venv"  # DeployHistory key of venv switches; not a GPU class
@@ -66,6 +58,14 @@ def _unlink(path: Path) -> None:
         path.unlink()
 
 
+def _tidy(link: Path) -> None:
+    """Best-effort removal of a temporary link after a committed switch: never raises."""
+    try:
+        _unlink(link)
+    except OSError:
+        _log.warning("deploy.install.cleanup_failed", path=str(link))
+
+
 def _link(target: Path, link: Path) -> None:
     """A directory junction on Windows (no privilege needed), a directory symlink elsewhere."""
     if sys.platform == "win32":
@@ -78,7 +78,7 @@ def _link(target: Path, link: Path) -> None:
 
 def install_root(running: Path) -> Path:
     """The directory holding the running venv: ``<root>/current``, ``<root>/venvs/<v>`` and a
-    plain ``<root>/<venv>`` all give ``<root>`` (Ruling T10-26c; wsl's ``_VENVS`` agrees)."""
+    plain ``<root>/<venv>`` all give ``<root>`` (Ruling T10-26c)."""
     if os.path.normcase(venv_python(running)) != os.path.normcase(sys.executable):
         msg = "venv is not the running Herness venv"
         raise ConfigError(msg)
@@ -114,7 +114,8 @@ def staged_venv(running: Path, version: str) -> Path:
 def _switch(root: Path, target: Path) -> Path | None:
     """Point ``root/current`` at ``target``: a link is created beside it, then renamed over it;
     returns the previous target. Windows cannot rename a junction over a junction, so there the
-    old one steps aside first and is restored if the rename fails (``_recover`` after a crash)."""
+    old one steps aside first and is restored if the rename fails (``_recover`` after a crash).
+    Nothing after the committing rename raises (review round 1)."""
     current, new, old = root / "current", root / _NEW, root / _OLD
     if os.path.lexists(current) and not _is_link(current):
         msg = "current is not a link"
@@ -133,24 +134,33 @@ def _switch(root: Path, target: Path) -> Path | None:
             os.rename(old, current)
         _unlink(new)
         raise
-    _unlink(old)
+    _tidy(old)  # committed: a stale .current-old is dropped by the next _recover
     return previous
 
 
 def _remove(target: Path) -> None:
     """Remove a partial venv this install created; a failure is logged, not raised."""
 
+    failures: list[BaseException] = []
+
     def failed(_func: object, _name: str, exc: BaseException) -> None:
         if not isinstance(exc, FileNotFoundError):
-            _log.warning("deploy.install.cleanup_failed", path=str(target))
+            failures.append(exc)
 
     shutil.rmtree(target, onexc=failed)
-    _log.info("deploy.install.venv_removed", path=str(target))
+    event = "deploy.install.cleanup_failed" if failures else "deploy.install.venv_removed"
+    (_log.warning if failures else _log.info)(event, path=str(target))
 
 
 def _record(cfg: HernessConfig, venv: Path, previous: Path | None) -> None:
+    """History line of a committed switch; a failure is surfaced, the switch is kept."""
     pins = {"version": venv.name, "venv": str(venv), "previous": str(previous or "")}
-    DeployHistory().record(HISTORY_CLASS, pins, config_hash(cfg), clock.now())
+    try:
+        DeployHistory().record(HISTORY_CLASS, pins, config_hash(cfg), clock.now())
+    except Exception as exc:
+        _log.error("deploy.install.history_failed", venv=str(venv), error_type=type(exc).__name__)
+        msg = f"current now names venv {venv.name}, but no deploy history line was written"
+        raise FatalError(msg) from exc
     _log.info("deploy.install.switched", venv=str(venv), previous=pins["previous"])
 
 
@@ -164,12 +174,13 @@ def build_venv(
     try:
         venv = [sys.executable, "-I", "-m", "venv", "--without-pip", str(target)]
         wsl.run_cmd(venv, timeout_s=300, check=True)
-        sync = ["uv", "pip", "sync", "--require-hashes", "--python", python]
+        sync = ["uv", "pip", "sync", "--no-config", "--require-hashes", "--python", python]
         if _CUDA_PIN.search(copy.requirements.read_text(encoding="utf-8")):
             sync += ["--extra-index-url", cfg.deploy.release.extra_index_url]
         sync.append(str(copy.requirements))
         wsl.run_cmd(sync, timeout_s=1800, check=True)
-        wheel = ["uv", "pip", "install", "--no-deps", "--python", python, str(copy.wheel)]
+        wheel = ["uv", "pip", "install", "--no-config", "--no-deps", "--python", python]
+        wheel.append(str(copy.wheel))  # bound by the re-hash before and after (no index)
         wsl.run_cmd(wheel, timeout_s=600, check=True)
         versions = install_duckdb_extensions(copy, cfg, venv=target)
         recheck()
@@ -198,7 +209,8 @@ def rollback_venv(running: Path, *, actor: str) -> dict[str, str]:
     current = root / "current"
     newest = next(iter(DeployHistory().last_promoted(HISTORY_CLASS, 1)), {})
     previous = Path(newest.get("previous") or root / "missing")
-    ok = bool(newest) and _is_link(current) and _real(current) == _real(newest["venv"])
+    venv = newest.get("venv")
+    ok = bool(venv) and _is_link(current) and _real(current) == _real(str(venv))
     ok = ok and _real(previous.parent) == _real(root / "venvs")
     if not (ok and venv_python(previous).is_file()):
         raise ConfigError(_NO_ROLLBACK)
