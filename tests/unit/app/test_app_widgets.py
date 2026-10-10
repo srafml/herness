@@ -1,4 +1,6 @@
-"""UT09-73, UT09-74, UT09-84, UT09-96: page wrapper, block, evidence widget, helpers (T09-15)."""
+"""UT09-73, UT09-74, UT09-84, UT09-96, UT09-111, UT09-112: page wrapper, block, evidence, helpers.
+
+T09-15; UT09-111 / UT09-112 cover the parked minors M-R1 / M-R2 (T09-15c)."""
 
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ from tests.support.app_env import (
 from app.common import auth, bootstrap, data, wh, widgets
 from app.common.sanitize import safe_markdown
 from app.common.wh import NoCurrentBuild, QueryResult
+from herness.core import redact
 from herness.core.errors import ConfigError, FatalError, QueryError, StoreBusy
 
 pytestmark = pytest.mark.unit
@@ -441,6 +444,7 @@ def test_ut09_84_ops_meta_and_missing(monkeypatch: pytest.MonkeyPatch) -> None:
         "executed_at": None, "result_sample": json.dumps([{"v": 2.5}]),
     }  # fmt: skip
     calls = _patch_evidence(monkeypatch, ops, _meta_table([meta_row], with_sample=True))
+    monkeypatch.setattr(redact, "redact_text", lambda text: text)  # key loaded (T09-15c)
     at = AppTest.from_function(evidence_script, args=([Q1, Q2, Q1, "bad id", Q3],)).run()
     assert not at.exception
     assert [e.label for e in at.expander] == ["Evidence (3 queries)"]
@@ -451,7 +455,7 @@ def test_ut09_84_ops_meta_and_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     assert [c.language for c in at.code] == ["sql", "sql"]
     frames = [d.value for d in at.dataframe]
     assert list(frames[0].columns) == ["n", "name"]  # raw-text column never shown
-    assert frames[0].iloc[0]["name"] == "x" * 200
+    assert frames[0].iloc[0]["name"] == "x" * 200  # text column redacted, then cut
     assert frames[0].iloc[0]["n"] == "1"  # string cells
     assert frames[1].iloc[0]["v"] == "2.5"
     texts = [t.value for t in at.text]
@@ -579,3 +583,62 @@ def test_ut09_96_query_error_message_sanitised() -> None:
     exc = QueryError("bad [x](http://e.example) <b>")
     what, _fix = widgets.user_message(exc)
     assert "](http" not in safe_markdown(what)
+
+
+# --- T09-15c parked minors (M-R1, M-R2 of the T09-15 review) -----------------------------------
+
+
+@pytest.mark.parametrize("needs_warehouse", [False, True])
+def test_ut09_111_d2_warning_survives_sidebar_read_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, needs_warehouse: bool
+) -> None:
+    """UT09-111 the sidebar's warehouse read fails: the D2 warning still renders (M-R1)."""
+    svc = page_services(tmp_path / "data", unconfirmed=["toil", "change"])
+    install_session(monkeypatch, svc)
+
+    def broken() -> object:
+        msg = "disk gone"
+        raise OSError(msg)
+
+    monkeypatch.setattr(wh, "get_conn", broken)
+    with capture_logs() as logs:
+        at = AppTest.from_function(body_script, args=("ok", needs_warehouse)).run()
+    assert not at.exception
+    assert [c.value for c in at.sidebar.caption] == ["Build information unavailable"]
+    assert [w.value for w in at.sidebar.warning] == [
+        "Dollar weights are placeholders and not yet confirmed: change, toil"
+    ]
+    failed = [e for e in logs if e["event"] == "app.widget.failed"]
+    assert [(e["block"], e["error_type"]) for e in failed] == [("Sidebar", "OSError")]
+
+
+def test_ut09_112_metric_failure_logged_once(
+    services: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-112 a failing page-time metric logs `app.widget.metric_failed` once (M-R2)."""
+    del services
+
+    def broken(*_: object, **__: object) -> None:
+        msg = "metric"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(widgets, "record_histogram", broken)
+    with capture_logs() as logs:
+        at = AppTest.from_function(body_script, args=("ok",)).run()
+    assert not at.exception
+    assert not at.error
+    assert [t.value for t in at.text][-1] == "after page"
+    events = [e for e in logs if e["event"] == "app.widget.metric_failed"]
+    assert events == [{
+        "event": "app.widget.metric_failed", "log_level": "warning", "component": "app.page",
+        "page": "Test Page", "error_type": "ConfigError",
+    }]  # fmt: skip
+
+
+def test_ut09_112_metric_success_logs_nothing(services: SimpleNamespace) -> None:
+    """UT09-112 a recorded metric logs no `app.widget.metric_failed`."""
+    del services
+    with capture_logs() as logs:
+        at = AppTest.from_function(body_script, args=("ok",)).run()
+    assert not at.exception
+    assert not [e for e in logs if e["event"] == "app.widget.metric_failed"]
