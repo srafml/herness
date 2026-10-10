@@ -316,6 +316,8 @@ class Swarm:
         """U06-82 steps 6-7: usage, finished log, metrics, escalation summary, result."""
         await persist_usage(env)
         run = await asyncio.to_thread(get_run, env.run.run_id) or env.run
+        if run.status == "canceled":  # canceled elsewhere mid-step: no task stays running
+            await release_running(env)
         result = await asyncio.to_thread(build_result, run, self._reports)
         cov = result.coverage
         _log.info(

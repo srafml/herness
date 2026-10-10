@@ -221,7 +221,7 @@ def writer_output(run_id: str) -> dict[str, Any]:
 class Agents:
     """Scripted `run_agent` per role; counts calls; modes per analyst team or role."""
 
-    planner: Literal["ok", "fail"] = "ok"
+    planner: Literal["ok", "fail", "block"] = "ok"
     writer: Literal["ok", "fail"] = "ok"
     analyst: dict[str, Mode] = field(default_factory=dict)
     charge: int = 0  # tokens charged to the ledger per analyst call (IT06-03)
@@ -237,6 +237,8 @@ class Agents:
         role = ctx.role
         self.calls[role] = self.calls.get(role, 0) + 1
         if role == "planner":
+            if self.planner == "block":
+                await self._block(hooks)
             return self._planner(task_input)
         if role == "analyst":
             return await self._analyst(ctx, hooks)
@@ -253,6 +255,14 @@ class Agents:
             return result(writer_output(ctx.run_id))
         msg = f"unscripted role {role}"
         raise AssertionError(msg)
+
+    async def _block(self, hooks: Any) -> None:
+        """Run until the hooks' stop callback fires, then stop as spec 05 `after_step` does."""
+        if self.running is not None:
+            self.running.set()
+        while not hooks._stop():  # noqa: ASYNC110 - polls stop like after_step
+            await asyncio.sleep(0.01)
+        raise asyncio.CancelledError
 
     def _planner(self, task_input: Any) -> AgentResult:
         if self.planner == "fail":

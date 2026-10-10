@@ -302,3 +302,22 @@ def test_rf_t06_22_composition_defaults(drv: Drv, monkeypatch: pytest.MonkeyPatc
     built.close()
     with pytest.raises(NotFound):
         deps.vectors.search_tickets([0.0], 1, entity=None, service_id=None)
+
+
+def test_rf_t06_22_cancel_during_planning_releases_planner(drv: Drv) -> None:
+    """U06-81: a cancel while the planner runs leaves no task `running`; the planner task is
+    released with no attempt charged (R-36)."""
+    drv.agents.planner = "block"
+    swarm = drv.swarm()
+
+    async def scenario() -> Any:
+        drv.agents.running = asyncio.Event()
+        start = asyncio.create_task(swarm.start(drv.request()))
+        await drv.agents.running.wait()
+        await swarm.cancel(_only_run())
+        return await start
+
+    res = asyncio.run(scenario())
+    assert res.status == "canceled"
+    planner = next(t for t in select_tasks(res.run_id) if t.role == "planner")
+    assert (planner.status, planner.attempts) == ("pending", 0)
