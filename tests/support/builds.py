@@ -5,7 +5,8 @@ spec 02 pipeline; later calls, sessions and concurrent processes reuse it (T11-1
 
 1. Slot `root = <cache>/<seed>-<scale>-<fingerprint[:12]>`. The fingerprint (SHA-256 over
    `GENERATOR_VERSION`, the params hash, `FIXTURE_REV` and the sorted path/content hashes of
-   `herness/model/sql/*.sql` and `*.jinja`, `config/*.yaml`, `config/profiles/synth.yaml`
+   `herness/model/sql/*.sql` and `*.jinja`, `config/*.yaml`, `config/profiles/synth.yaml`,
+   `tests/fixtures/llm_scripts/build/*.yaml`
    under `repo_root`) keys the slot, so another worktree builds beside it and never clears a
    slot in use; old slots are not pruned. Python code is not fingerprinted: bump
    `FIXTURE_REV` when a change alters how builds are made (a guard test pins the sources).
@@ -54,9 +55,9 @@ from tests.support._build_dirs import clear_build_outputs, private_dir, safe_rmt
 from tests.support._build_stubs import (
     STUB_SECRETS,
     STUBS,
+    LlmFactory,
     StubSet,
     install_laya,
-    llm_factory,
     running_stubs,
     stub_overrides,
     wire_enrichment,
@@ -165,6 +166,7 @@ def _run_build(root: Path, data_root: Path) -> str:
     clear_build_outputs(data_root, GENERATED)  # the generated lake stays
     cfg_dir = _config_dir(root)
     env = {"HERNESS_ENV": "test", "HERNESS_SYNTH_CONFIG": str(root / "synth_mappings.yaml")}
+    namer = LlmFactory()
     with running_stubs(root) as urls, pytest.MonkeyPatch.context() as patch, _test_keyring():
         patch.setattr(_state._holder, "state", ProcessState())  # restored on exit
         for name, value in env.items():
@@ -181,7 +183,7 @@ def _run_build(root: Path, data_root: Path) -> str:
             migrate()
             bind_ops_backend(SqliteResilienceBackend())
             bind_jobs_backend(cast("JobsBackend", SqliteJobsBackend()))
-            register_handler("build_pipeline", make_build_pipeline_handler(llm_factory=llm_factory))
+            register_handler("build_pipeline", make_build_pipeline_handler(llm_factory=namer))
             job_id = enqueue("build_pipeline", {"stages": list(STAGE_ORDER)}, "none")
             try:
                 outcome = run_inline(job_id)
@@ -192,6 +194,7 @@ def _run_build(root: Path, data_root: Path) -> str:
                 msg = f"build did not finish: status {outcome.status}: {_last_error(job_id)}"
                 raise BuildFixtureError(msg)
         finally:
+            namer.close()
             ops.reset_connections()
             herness_config.reset_config()
     return str(outcome.result["build_id"])
