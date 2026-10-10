@@ -68,6 +68,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/reports/rules.py` | Roles, `user_ref`, action→role table, input validators | `Role`, `ROLE_RANK`, `ACTION_ROLES`, `ACTION_TEXT`, `Actor`, `role_for`, `user_ref_for`, `load_user_ref_key`, `require_role`, `UserInputError`, `user_message`, `validate_reason`, `validate_note`, `validate_question`, `validate_correction`, `validate_answer`, `check_id`, `SESSION_ID_RE`, `MESSAGE_ID_RE`, `ITEM_ID_RE`, `REC_ID_RE`, `JOB_ID_RE`, `MEMORY_ID_RE` | L5 | none | 300 |
 | `herness/reports/_os_user.py` | OS user from process credentials (Windows token `GetUserNameW`, POSIX password database of the effective uid; `getpass.getuser()` only as the caller-logged fallback), shared by `herness/_cli/identity.py` and `app/common/auth.py` so `app/` never imports `herness._cli` (lifted from T09-20b by T09-13, controller note) | `credential_user`, `os_user`, `windows_user`, `posix_user` | L5 | none | 80 |
 | `herness/reports/actions.py` | User actions shared by dashboard and CLI (role check, audit, write) | `start_session`, `post_user_message`, `set_feedback`, `propose_correction`, `decide_recommendation`, `decide_review`, `decide_memory`, `job_control`, `resume_run`, `rerender_report`, `require_session_owner` | L5 | none | 390 |
+| `herness/reports/chat_state.py` | Chat turn reducer and chat-hours banners shared by the dashboard and the terminal chat (U09-69, U09-70; moved from `app/common/chat_ui.py` by T09-25, OI-09) | `TurnState`, `apply_event`, `MODE_BANNERS`, `mode_banner`, `BannerKind`, `CAP`, `NEXT_WINDOW` | L5 | none | 120 |
 | `herness/reports/_actions_audit.py` | Private helpers of `actions.py` (T09-12 review I1): `requested`/`failed:<Type>` admin_action lines, `app.action.completed`/`app.action.failed` logs, memory decision refusal mapping | `admin_change`, `failed`, `completed`, `already_finished`, `memory_decide`, `Decided` | L5 | none | 90 |
 | `herness/store/migrations/090_chat.sql` | Unique assistant-reply index on `chat_message` and column `chat_session.summary_through_message_id` (the tables and their other indexes are created by impl 02 migration 005, R-11) | — | L1 | — | 20 |
 | `herness/store/ops/chat.py` | Chat rows (owner 09) | `create_chat_session`, `append_chat_message`, `update_chat_message`, `upsert_assistant_placeholder`, `latest_user_message`, `get_chat_session`, `list_chat_sessions`, `list_chat_messages`, `get_chat_message`, `find_assistant_message`, `count_user_turns`, `set_chat_summary`, `purge_chat`, `ChatSessionRow`, `ChatMessageRow` | L1 | none | 360 |
@@ -85,7 +86,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `app/common/_pages_08_10.py` | Private helpers shared by pages 08–10 (T09-18): role gates mirroring the actions' own `require_role` checks, the action runner (error card next to the form, `after_write`, confirmation and rerun), ops-read rows, plain-text cells, filters, `NumberRef` parsing | `ALL`, `DONE_KEY`, `Row`, `allowed`, `review_action`, `rows`, `cell`, `choose`, `numbers`, `flash`, `act` | L5 | `streamlit` | 120 |
 | `app/common/widgets.py` | Page wrapper, error isolation, evidence widget (implemented in `_widgets_evidence.py` and re-exported here, T09-15c), badges, banners, sidebar | `PageContext`, `page`, `block`, `evidence`, `verification_badge`, `banner_strip`, `sidebar_build`, `user_error` | L5 | `streamlit` | 300 |
 | `app/common/_widgets_evidence.py` | Private helper of `widgets.py` (T09-15c split for the line budget): the evidence widget (U09-67); `result_sample` cell sanitising is delegated to `herness/reports/_sample_policy.py` (TH09-11, T09-15e) and its public names are re-exported by `app.common.widgets` | `evidence`, `sample_rows`, `parse_json`, `ALWAYS_DROPPED`, `REDACTED`, `EVIDENCE_SHOWN`, `CELL_MAX` | L5 | `streamlit`, `pyarrow`, `herness.reports._sample_policy` | 200 |
-| `app/common/chat_ui.py` | Chat turn reducer and Streamlit driver | `TurnState`, `apply_event`, `MODE_BANNERS`, `mode_banner`, `run_turn` | L5 | `streamlit` | 330 |
+| `app/common/chat_ui.py` | Chat Streamlit turn driver; re-exports the reducer and banners of `herness/reports/chat_state.py` (OI-09, T09-25) | `TurnState`, `apply_event`, `MODE_BANNERS`, `mode_banner` (re-exported), `run_turn` | L5 | `streamlit` | 330 |
 | `app/Home.py`, `app/pages/01_Funding_Ranking.py` … `app/pages/11_Chat.py` | Page scripts | `body(ctx)` per page | L5 | `streamlit` | 80–220 each |
 | `herness/cli.py` | Typer root app, entry point, global options, error boundary, worker bootstrap, start-up validation call | `app`, `main`, `GlobalOptions`, `worker_bootstrap`, `run_startup_validation` | L5 | `typer` | 330 |
 | `herness/_cli/__init__.py` | Package marker | none | L5 | — | 5 |
@@ -103,6 +104,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/_cli/cmd_queue.py` | `jobs`, `review-queue`, `memory` | `register` | L5 | none | 300 |
 | `herness/_cli/cmd_admin.py` | `config`, `secrets`, `deploy` (including `install`), `eval`, `distill`, `laya`, `privacy`, `maintenance`; thin wrappers over `herness.admin` (R-07) | `register` | L5 | none | 380 |
 | `herness/_cli/cmd_chat.py` | Terminal chat | `register` | L5 | `rich` | 300 |
+| `herness/_cli/_chat_turn.py` | Private helper of `cmd_chat.py` (T09-25 split for the line budget): the terminal-safe printer, history, one question turn with the `defer` poll | `Term`, `Answerer`, `Services`, `ask`, `answer`, `history`, `show_row`, `policy`, `PROMPT`, `COMMANDS` | L5 | `rich` | 200 |
 
 Import rules beyond ENG §2.1: `herness/_cli/*` and `herness/cli.py` import `duckdb`, `streamlit`, `jinja2`, `weasyprint`, `torch`, `herness.admin` and any L2–L4 package only inside command functions (lazy), so `herness --help` stays under 1 s (BT09-07). `app/` imports `herness.*` freely (L5) but never `herness._cli` or `herness.admin`. `herness.reports.settings` imports only the standard library, `pydantic`, `herness.core.types` and `herness.core.errors` (settings exception, R-03). `herness.core.types.reports` imports nothing from `herness` except `herness.core.errors` and `herness.core.ids` (ENG §2.1).
 
@@ -2701,6 +2703,8 @@ Every `cmd_*` of impl 10 returns a `CommandResult` (U09-105); the handler conver
 | Security notes | TH09-15 (terminal escapes), TH09-10, TH09-12. |
 | Tests | UT09-91, IT09-20, ST09-15 |
 
+Notes (T09-25 review): `chat` calls `check_command_role(opts, "chat")` directly instead of `guarded`, with identical role, audit and refusal semantics, so the `--json` refusal comes before config load. `/evidence` looks up any query id of the ops evidence table after the ownership and id-format checks, as the dashboard evidence widget does, with sample cells through `herness/reports/_sample_policy.py` then U09-100; it is not limited to ids cited in the session (TH09-10 covers session IDOR only).
+
 #### U09-100 herness._cli.term.safe_terminal_text
 
 Signature: `safe_terminal_text(text: str, *, max_chars: int = 20000) -> str`.
@@ -3997,7 +4001,7 @@ Cross-spec rulings are recorded in [`DECISIONS.md`](DECISIONS.md); each item bel
 | OI-06 | Writer of the `recommendation_decision` audit line | Spec 09 (U09-37), as impl 07 U07-82 states | Resolved (impl 07 U07-82; DD-28 for the design text) |
 | OI-07 | `weight_change` payload | Key/value table (DD-17) | Still open |
 | OI-08 | `HernessError` constructor supports `hint` and `details` keywords | Impl 00 attributes; `details` values are strings | Resolved by R-19, R-74 |
-| OI-09 | Whether `app` is an importable package for the CLI | Move `apply_event`/`mode_banner` to `herness/reports/chat_state.py` in T09-25 | Still open |
+| OI-09 | Whether `app` is an importable package for the CLI | Move `apply_event`/`mode_banner` to `herness/reports/chat_state.py` in T09-25 | Resolved (T09-25): default applied; `app` is not importable from `herness` (import-linter contract "herness never imports app or tools"), so `TurnState`, `apply_event`, `MODE_BANNERS` and `mode_banner` moved to `herness/reports/chat_state.py`; `app.common.chat_ui` re-exports them |
 | OI-10 | Model names per role in the Method section are not stored on `run` | Show roles and call counts only | Still open |
 | OI-11 | Build age threshold for doctor WARN | 48 h | Still open |
 

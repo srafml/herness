@@ -241,14 +241,14 @@ def _register_groups(root: typer.Typer) -> None:
     command and group names ``root`` does not have yet are added (no process-wide flag that
     could disagree with the app's lists, T09-23 review).
     """
-    from herness._cli import cmd_data, cmd_review  # noqa: PLC0415 - lazy (BT09-07)
+    from herness._cli import cmd_chat, cmd_data, cmd_review  # noqa: PLC0415 - lazy (BT09-07)
 
     scratch = typer.Typer()
     # T09-22: cmd_system.register(scratch)
     cmd_data.register(scratch)  # T09-23
     cmd_review.register(scratch)  # T09-23
     # T09-24: cmd_queue.register(scratch); cmd_admin.register(scratch)
-    # T09-25: cmd_chat.register(scratch)
+    cmd_chat.register(scratch)  # T09-25
     have = {_entry_name(c) for c in root.registered_commands}
     have |= {_entry_name(g) for g in root.registered_groups}
     root.registered_commands += [
