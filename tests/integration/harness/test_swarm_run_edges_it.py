@@ -21,7 +21,7 @@ from tests.integration.harness._swarm_run_env import Drv, FakeJob
 
 from herness.core import registry
 from herness.core.errors import BudgetExceeded, ConfigError, NotFound, QueryError
-from herness.harness.swarm import _run_env, _run_steps, handler
+from herness.harness.swarm import _run_env, _run_ops, _run_steps, handler
 from herness.harness.swarm.run import Swarm
 from herness.store.ops import get_run, run_write, select_runs, select_tasks, update_run_fields
 
@@ -236,7 +236,7 @@ def test_rf_t06_22_env_gate_wait_metric_and_release(drv: Drv) -> None:
         gate = next(iter(env.gates.values()))
         async with gate:
             pass
-        return await _run_steps.release_running(env)
+        return await _run_ops.release_running(env)
 
     assert asyncio.run(go()) == 1
     pool.shutdown()

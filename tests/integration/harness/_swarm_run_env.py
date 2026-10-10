@@ -155,8 +155,9 @@ class StubPipeline:
     def recommendation_drafts(
         self, draft: ReportDraft, findings: dict[str, Finding]
     ) -> list[RecommendationDraft]:
-        # Spec 07 `RecommendationDraft.target_type` has no `candidate` (a funding item's
-        # target): the stub hands the candidate over as a work item (T06-22 report note).
+        # CARRY-OVER (spec 07 / T06-10): `RecommendationDraft.target_type` has no `candidate`,
+        # a funding item's target, so the real funding pipeline fails at record; the stub hands
+        # the candidate over as a work item until the owner fixes the type or the mapping.
         recs = [r.model_copy(update={"target_type": "work_item"}) for r in draft.recommendations]
         return to_recommendation_drafts(
             draft.model_copy(update={"recommendations": recs}), findings

@@ -21,23 +21,25 @@ from typing import TYPE_CHECKING, Final, cast
 
 from pydantic import ValidationError
 
-from herness.core.errors import BudgetExceeded, ConfigError, HernessError, NotFound, RetryableError
+from herness.core.errors import BudgetExceeded, ConfigError, NotFound, RetryableError
 from herness.core.jobs import cancel as cancel_job
 from herness.core.jobs import recover_run_tasks
 from herness.core.logging import get_logger
 from herness.harness.blackboard import Blackboard
 from herness.harness.swarm._run_env import EnvParts, Stopper, SwarmDeps, build_env
-from herness.harness.swarm._run_steps import (
-    Steps,
+from herness.harness.swarm._run_ops import (
+    NO_WILDCARDS,
     build_result,
     cas,
     exit_large_scope,
     load_draft,
+    mark_no_wildcards,
     persist_usage,
     release_running,
     retire_build,
     review_jobs,
 )
+from herness.harness.swarm._run_steps import Steps
 from herness.harness.swarm.lifecycle import (
     OPEN_STATUSES,
     RunRequest,
@@ -84,10 +86,12 @@ class Swarm:
             from herness.core.config import get_config  # noqa: PLC0415 - default deps only
 
             deps = SwarmDeps.from_config(get_config())
+        if cfg != deps.hcfg.pipelines:  # TH06-13: knobs and config hash from one config
+            msg = "Swarm cfg must be deps.hcfg.pipelines (the config the run hash covers)"
+            raise ConfigError(msg)
         self._cfg, self._llms, self._memory, self._deps = cfg, llms, memory, deps
         self._writer = ThreadPoolExecutor(1, "herness-swarm-writer")  # one writer per Swarm
         self._cancel_flags: dict[str, threading.Event] = {}
-        self._no_wildcards: set[str] = set()
         self._reports = Path(deps.hcfg.paths.data) / "reports"
 
     def close(self) -> None:
@@ -157,8 +161,8 @@ class Swarm:
             retry_dead=retry_dead,
         )  # fmt: skip
         summary = await board.run_on_writer(recover)
-        if retry_dead:
-            self._no_wildcards.add(run_id)
+        if retry_dead:  # kept in `meta` until planning commits, across later drives
+            await mark_no_wildcards(board, run_id, value=True)
         run = await asyncio.to_thread(get_run, run_id) or run
         _log.info(
             "harness.run.resumed", run_id=run_id, status=run.status,
@@ -201,11 +205,19 @@ class Swarm:
             cfg=self._cfg, llms=self._llms, memory=self._memory, deps=self._deps,
             writer=self._writer,
         )  # fmt: skip
-        no_wild = force and run.run_id in self._no_wildcards
-        env, reader = await asyncio.to_thread(
-            functools.partial(build_env, parts, run, job, force=force, stop=stop,
-                              no_wildcards=no_wild)
-        )  # fmt: skip
+        no_wild = run.meta.get(NO_WILDCARDS) is True
+        try:
+            env, reader = await asyncio.to_thread(
+                functools.partial(build_env, parts, run, job, force=force or no_wild, stop=stop,
+                                  no_wildcards=no_wild)
+            )  # fmt: skip
+        except RetryableError:
+            raise
+        except Exception as err:  # U06-82 step 8 also for the setup (review M5)
+            if await cas(self._board(), run.run_id, run.status, "failed", OPEN_STATUSES,
+                         self._deps.clock()):  # fmt: skip
+                _log.error("harness.run.failed", run_id=run.run_id, error_type=type(err).__name__)
+            raise
         caps = CapTracker(
             self._cfg.swarm.max_inflight_children_per_parent,
             self._cfg.swarm.max_inflight_per_entity,
@@ -219,7 +231,6 @@ class Swarm:
             await exit_large_scope(env)
             env.tracer.close()
             self._cancel_flags.pop(run.run_id, None)
-            self._no_wildcards.discard(run.run_id)
 
     async def _loop(self, steps: Steps, stop: Stopper) -> RunResult:
         """Read the status, run its step, repeat (U06-82 steps 2-4 and 8)."""
@@ -256,7 +267,7 @@ class Swarm:
                 env.bb, env.run.run_id, max_task_attempts=self._cfg.swarm.max_task_attempts,
                 now=env.clock(),
             )  # fmt: skip
-        except HernessError as err:
+        except Exception as err:  # HernessError and bugs alike (e.g. ValidationError): no stuck run
             await self._fail(env, status, type(err).__name__)
             raise
 
