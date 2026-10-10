@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,11 +20,12 @@ from herness.core.errors import ConfigError
 from herness.core.jobs import status_snapshot
 from herness.reports.rules import UserInputError
 from herness.store.ops import ui_reads
-from herness.store.ops.shared import get_review_item
+from herness.store.ops.shared import create_review_item, get_review_item
 
 pytestmark = pytest.mark.unit
 
 RUN_ID = "run_" + "0" * 25 + "A"
+NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
@@ -225,3 +227,17 @@ def test_ut09_78_ops_read_unknown_name(ops_root: OpsStoreHandle, name: str) -> N
     """UT09-78 a name outside the allowlist (chat reads included) -> ConfigError."""
     with pytest.raises(ConfigError, match="not an allowlisted ops read"):
         data.ops_read(name)
+
+
+def test_ut09_78_review_items_survive_the_cache(ops_root: OpsStoreHandle) -> None:
+    """UT09-78 cached review items keep their payload (impl 02 hands out read-only mappings,
+    which ``st.cache_data`` cannot pickle; T09-18)."""
+    del ops_root
+    payload = {"key": "usd_per_hour", "new": 120}
+    item_id = create_review_item("weight_change", payload, now=NOW)
+    for _ in range(2):  # a miss, then a hit
+        found: Any = data.ops_read("list_review_items", kind="weight_change", status="pending")
+        assert [(i.item_id, dict(i.payload)) for i in found] == [(item_id, payload)]
+    single: Any = data.ops_read("get_review_item", item_id=item_id)
+    assert dict(single.payload) == payload
+    assert data.ops_read("list_review_items", kind="memory_write") == []

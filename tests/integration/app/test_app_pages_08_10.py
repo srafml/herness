@@ -32,9 +32,10 @@ from tests.support.app_env import (
 )
 from tests.support.fake_memory import FakeMemoryStore
 from tests.support.ops_store import OpsStoreHandle
+from tests.unit.harness.memory._lifecycle_env import make_lifecycle, review_of, row_of, seed_item
 
 from app.common import wh
-from herness.core.errors import StoreBusy
+from herness.core.errors import PermissionDenied, StoreBusy
 from herness.core.ids import new_ulid
 from herness.core.resilience import ProcessState
 from herness.reports import _actions_audit, actions, rules
@@ -233,3 +234,187 @@ def test_ft09_01_decision_store_busy_keeps_form(env: SimpleNamespace) -> None:
     assert any("Reason must be 10 to 1000 characters." in e.value for e in at.error)
     assert at.text_area(key=f"rec_reason_{REC_A}").value == "too short"
     assert [c[0] for c in env.memory.calls] == ["decide"]  # only the busy attempt
+
+
+# --- Review Queue (U09-81) -----------------------------------------------------------------------
+
+NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+CONTENT = "Churn **means** customers <script>alert(1)</script> [docs](http://evil.example)"
+RECORD = "servicenow:incident:INC0001"
+CONFLICT = "mem_" + new_ulid()
+
+
+def _item(kind: str, payload: dict[str, object]) -> str:
+    return shared.create_review_item(kind, payload, now=NOW)  # type: ignore[arg-type]
+
+
+def _label(question: str = "root_cause") -> str:
+    return _item("label_check", {
+        "record_id": RECORD, "content_hash": "h1", "question": question,
+        "question_set_version": QSV, "answer": "code", "probability": 0.55,
+        "decider": "ensemble", "decider_version": "v1",
+    })  # fmt: skip
+
+
+def _mapping(value: str = "Payments") -> str:
+    return _item("mapping_suggestion", {"field": "assignment_group", "value": value,
+                                        "target": "T1"})  # fmt: skip
+
+
+def _weight() -> str:
+    return _item("weight_change", {"key": "usd_per_incident_hour", "old": 100, "new": 120})
+
+
+def _press(at: AppTest, item_id: str, button: str, note: str | None = None) -> AppTest:
+    if note is not None:
+        at.text_area(key=f"review_note_{item_id}").input(note)
+    return at.button(key=f"review_{button}_{item_id}").click().run()
+
+
+def _buttons(at: AppTest) -> set[str]:
+    return {str(b.key) for b in at.button}
+
+
+def test_it09_10_review_queue_items_by_kind(env: SimpleNamespace) -> None:
+    """IT09-10 Review Queue: a tab per kind with counts; each kind's payload rendering."""
+    del env
+    _item("memory_write", {"memory_id": "mem_" + new_ulid(), "content": CONTENT,
+                           "flags": ["instruction_like", "conflict"],
+                           "conflicts_with": [CONFLICT]})  # fmt: skip
+    known, unknown = _label(), _label("not_in_config")
+    _mapping()
+    _weight()
+    at = _run(QUEUE)
+    assert [t.label for t in at.tabs] == [
+        "Memory writes (1)", "Label checks (2)", "Mapping suggestions (1)", "Weight changes (1)",
+    ]  # fmt: skip
+    content = next(str(m.value) for m in at.main.markdown if "Churn" in str(m.value))
+    assert "<script>" not in content
+    assert "evil.example" not in content
+    shown = _texts(at)
+    assert "Flag: instruction_like" in shown
+    assert "Flag: conflict" in shown
+    assert f"Conflicts with: {CONFLICT}" in shown
+    assert "Record text unavailable" in shown  # no promoted build
+    assert at.selectbox(key=f"review_answer_{known}").options == ["capacity", "code"]
+    assert at.text_input(key=f"review_answer_{unknown}").max_chars == 200
+    frames = "\n".join(d.value.to_string() for d in at.main.dataframe)
+    assert "assignment_group" in frames
+    assert "0.55" in frames
+    assert {"key": "usd_per_incident_hour", "new": 120, "old": 100} in _json(at)  # OI-07
+
+
+def test_it09_21_decide_every_kind_via_page(
+    env: SimpleNamespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT09-21 page: memory_write → MemoryStore.approve/reject, review item decided in impl 07's
+    transaction (R-33); other kinds → impl 02 decide_review_item + review_decision audit."""
+    life = make_lifecycle(tmp_path, monkeypatch, real_audit=True)  # keeps the env's audit spy
+    calls: list[tuple[str, str, str, str | None]] = []
+
+    def approve(memory_id: str, user_ref: str, note: str | None = None) -> None:
+        calls.append(("approve", memory_id, user_ref, note))
+        life.lifecycle.approve(memory_id, user_ref, note)
+
+    def reject(memory_id: str, user_ref: str, note: str) -> None:
+        calls.append(("reject", memory_id, user_ref, note))
+        life.lifecycle.reject(memory_id, user_ref, note)
+
+    env.services.memory = SimpleNamespace(approve=approve, reject=reject)
+    kept, dropped = seed_item(), seed_item(content="churn means something else")
+    kept_item = row_of(kept)["data"]["review_item_id"]
+    dropped_item = row_of(dropped)["data"]["review_item_id"]
+    label, mapping, refused, weight = _label(), _mapping(), _mapping("Billing"), _weight()
+    env.login(ADMIN)
+    me = ref(ADMIN)
+    at = _run(QUEUE)
+    at = _press(at, kept_item, "approve", "Looks right")
+    at = _press(at, dropped_item, "reject", "Duplicate of an existing glossary entry")
+    at.selectbox(key=f"review_answer_{label}").set_value("capacity")
+    at = _press(at, label, "approve")
+    at = _press(at, mapping, "approve")
+    at = _press(at, refused, "reject", "Wrong team")
+    at = _press(at, weight, "approve")
+    assert not at.exception
+    assert not at.error, [e.value for e in at.error]
+    assert calls == [
+        ("approve", kept, me, "Looks right"),
+        ("reject", dropped, me, "Duplicate of an existing glossary entry"),
+    ]
+    assert (row_of(kept)["status"], row_of(dropped)["status"]) == ("active", "rejected")
+    for item_id, status in ((kept_item, "approved"), (dropped_item, "rejected"),
+                            (label, "approved"), (mapping, "approved"), (refused, "rejected"),
+                            (weight, "approved")):  # fmt: skip
+        item = review_of(item_id)
+        assert (item.status, item.decided_by) == (status, me), item_id
+    assert review_of(label).note == json.dumps({"answer": "capacity"}, separators=(",", ":"))
+    decided = {(a["item_id"], a["status"]) for a in _events(env, "review_decision")}
+    assert decided == {(kept_item, "approved"), (dropped_item, "rejected"),
+                       (label, "approved"), (mapping, "approved"), (refused, "rejected"),
+                       (weight, "approved")}  # fmt: skip
+    assert [t.label for t in at.tabs] == [
+        "Memory writes (0)", "Label checks (0)", "Mapping suggestions (0)", "Weight changes (0)",
+    ]  # fmt: skip
+
+
+def test_it09_21_reject_needs_a_note(env: SimpleNamespace) -> None:
+    """IT09-21 page: Reject without a note → error card next to the form; item stays pending."""
+    mapping = _mapping()
+    at = _press(_run(QUEUE), mapping, "reject")
+    assert any("A note is required to reject." in e.value for e in at.error)
+    assert shared.get_review_item(mapping).status == "pending"
+    assert _events(env, "review_decision") == []
+
+
+def test_st09_09_reviewer_cannot_approve_weight_change(env: SimpleNamespace) -> None:
+    """ST09-09 a reviewer sees no weight_change buttons and a direct approval is refused."""
+    weight, mapping = _weight(), _mapping()
+    at = _run(QUEUE)
+    assert {f"review_approve_{mapping}", f"review_reject_{mapping}"} <= _buttons(at)
+    assert not any(weight in key for key in _buttons(at))
+    reviewer = rules.Actor(ref(REVIEWER), "reviewer", "dashboard", display=REVIEWER)
+    with pytest.raises(PermissionDenied):
+        actions.decide_review(reviewer, item_id=weight, approve=True, memory=env.memory, now=NOW)
+    assert shared.get_review_item(weight).status == "pending"
+    assert _events(env, "auth")[-1] == {
+        "event": "auth", "actor": ref(REVIEWER), "user_ref": ref(REVIEWER), "role": "reviewer",
+        "result": "denied",
+    }  # fmt: skip
+    assert _events(env, "review_decision") == []
+    env.login(ADMIN)
+    assert f"review_approve_{weight}" in _buttons(_run(QUEUE))  # admins see them
+
+
+def test_ft09_01_locked_ops_store_keeps_review_form(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FT09-01 ops DB locked by another connection: approving retries per sqlite_write, then an
+    error card; the note is kept and the same submit works once the lock is gone."""
+    monkeypatch.setattr(core, "_BUSY_TIMEOUT_MS", 20)
+    core.reset_connections(path=env.db)
+    attempts: list[str] = []
+    real = actions.decide_review_item
+
+    def counted(item_id: str, status: str, **kw: Any) -> object:
+        attempts.append(status)
+        return real(item_id, status, **kw)
+
+    monkeypatch.setattr(actions, "decide_review_item", counted)
+    mapping = _mapping()
+    at = _run(QUEUE)
+    blocker = sqlite3.connect(env.db, isolation_level=None)
+    blocker.execute("BEGIN EXCLUSIVE")
+    try:
+        at = _press(at, mapping, "approve", "Matches the CMDB")
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+    assert not at.exception
+    assert any("Ops store is locked." in e.value for e in at.error), [e.value for e in at.error]
+    assert attempts == ["approved"] * 6  # the sqlite_write policy's attempts
+    assert at.text_area(key=f"review_note_{mapping}").value == "Matches the CMDB"
+    assert shared.get_review_item(mapping).status == "pending"
+    at = at.button(key=f"review_approve_{mapping}").click().run()
+    assert not at.error, [e.value for e in at.error]
+    item = shared.get_review_item(mapping)
+    assert (item.status, item.note) == ("approved", "Matches the CMDB")

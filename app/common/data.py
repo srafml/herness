@@ -11,7 +11,7 @@ from __future__ import annotations
 import functools
 import json
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Final, cast
 
@@ -22,7 +22,7 @@ from herness.core.jobs import status_snapshot
 from herness.reports.contract import RUN_ID_RE
 from herness.reports.rules import UserInputError
 from herness.store.ops import ui_reads
-from herness.store.ops.shared import get_review_item, list_review_items
+from herness.store.ops.shared import ReviewItem, get_review_item, list_review_items
 
 if TYPE_CHECKING:
     from app.common.bootstrap import AppServices
@@ -68,9 +68,19 @@ def _services() -> AppServices:
     return get_services()
 
 
+def _picklable(value: object) -> object:
+    """``ReviewItem`` payloads as dicts: impl 02's read-only mapping cannot be pickled by
+    ``st.cache_data`` (T09-18); every cache hit unpickles a fresh copy, so nothing is shared."""
+    if isinstance(value, ReviewItem):
+        return replace(value, payload=dict(value.payload))
+    if isinstance(value, list):
+        return [_picklable(item) for item in value]
+    return value
+
+
 def _call(fn_name: str, params: dict[str, Any]) -> object:
     """The cached body: key ``(fn_name, params)`` only."""
-    return OPS_READS[fn_name](**params)
+    return _picklable(OPS_READS[fn_name](**params))
 
 
 @functools.cache

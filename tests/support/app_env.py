@@ -213,6 +213,11 @@ APP_PAGES: tuple[PageSpec, ...] = (
         needs_warehouse=False,
         key_texts=("Recommendations", "Filters", "List", "No recommendations match the filters."),
     ),
+    PageSpec(
+        APP_DIR / "pages" / "09_Review_Queue.py",
+        needs_warehouse=False,
+        key_texts=("Review Queue", "No pending items."),
+    ),
 )
 
 
