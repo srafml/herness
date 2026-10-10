@@ -1,5 +1,5 @@
 """Fault tests for impl 10 security paths (FT10-01 T10-05, FT10-05 T10-06, FT10-07 T10-11,
-FT10-08 T10-16, FT10-02 T10-30, FT10-04 T10-20)."""
+FT10-08 T10-16, FT10-02 T10-30, FT10-04 T10-20, FT10-06 and FT10-09 T10-24)."""
 
 from __future__ import annotations
 
@@ -16,11 +16,13 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
+import structlog
 from keyring.errors import KeyringError
 from tests.support.config_tree import write_full_config
 from tests.support.egress_harness import API, audit_fields, make_guard
 from tests.support.egress_harness import load as load_egress
 from tests.support.fake_keyring import MemoryKeyring
+from tests.support.fake_runner import FakeRunner
 from tests.support.maintenance_env import FakeCtx as MaintCtx
 from tests.support.maintenance_env import (  # noqa: F401 - fixture import
     MaintEnv,
@@ -28,6 +30,7 @@ from tests.support.maintenance_env import (  # noqa: F401 - fixture import
     maint_env,
     plant,
 )
+from tests.support.pull_host import ACTOR, WSL, start_pull_host
 from tests.support.rekey_env import (
     NEW_KEY,
     OLD_ID,
@@ -38,8 +41,9 @@ from tests.support.rekey_env import (
     write_labels,
 )
 
+from herness._cli._exit_codes import exit_code_for
 from herness.admin import _maintenance_purge as purge_mod
-from herness.admin import maintenance
+from herness.admin import deploy, deploy_pull, maintenance
 from herness.admin import rekey as rekey_module
 from herness.admin.rekey import run_rekey
 from herness.core import _redact_pool as redact_pool
@@ -410,3 +414,51 @@ def test_ft10_04_purge_os_error_is_typed_and_vanished_file_is_gone(
         purge_mod.run_purge(maint_env.cfg, MaintCtx().as_ctx(), now=clock.now())
     assert str(caught.value) == "purge failed: reports/run_old"
     assert run.is_dir()
+
+
+def test_ft10_06_block_fails_twice_critical_and_manual_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring: MemoryKeyring,
+    fake_runner: FakeRunner,
+) -> None:
+    """FT10-06 setting ``Block`` fails twice: CRITICAL log; ``FatalError`` naming the command."""
+    host = start_pull_host(tmp_path, fake_runner, monkeypatch)
+    host.set_block_fails = 2
+    with (
+        structlog.testing.capture_logs() as logs,
+        pytest.raises(FatalError) as caught,
+        deploy_pull.firewall_window(actor=ACTOR),
+    ):
+        pass
+    assert str(caught.value) == (
+        "firewall window could not be closed; run the Block command manually"
+    )
+    assert caught.value.hint == (
+        "Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' "
+        "-DefaultOutboundAction Block"
+    )
+    assert host.events == ["set:Allow", "set:Block", "get", "set:Block", "get"]
+    [critical] = [line for line in logs if line["log_level"] == "critical"]
+    assert critical["event"] == "deploy.firewall.restore_failed"
+    assert "deploy.firewall.window_closed" not in [line["event"] for line in logs]
+
+
+def test_ft10_09_weight_download_fails_firewall_restored_exit_1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring: MemoryKeyring,
+    fake_runner: FakeRunner,
+) -> None:
+    """FT10-09 the weight download exits non-zero: firewall ``Block``, nothing rendered, exit 1."""
+    host = start_pull_host(tmp_path, fake_runner, monkeypatch)
+    host.runner.add([*WSL, "docker", "run"], "", returncode=1)
+    with pytest.raises(FatalError, match="weight download failed: reasoning") as caught:
+        deploy_pull.run_pull(host.cfg, allow_download=True, actor=ACTOR)
+    assert host.outbound == "Block"
+    assert host.events[-2:] == ["set:Block", "get"]
+    assert not (Path(host.cfg.paths.data) / "deploy" / "rendered.json").exists()
+    assert all(deploy.SCRIPT not in argv for argv in host.runner.argvs)
+    assert exit_code_for(caught.value) == 1
+    targets = [f["target"] for f in audit_fields(Path(host.cfg.paths.logs), "admin_action")]
+    assert targets == ["download_window"]  # no ``complete``

@@ -17,8 +17,9 @@ from typing import Final
 import httpx
 
 from herness.core.redact import Redactor
+from herness.core.settings import PIN_CLASSES, DeployConfig
 
-__all__ = ["MAX_SCAN_CHARS", "host_reason", "rescan"]
+__all__ = ["MAX_SCAN_CHARS", "host_reason", "pinned_registries", "registry_host", "rescan"]
 
 MAX_SCAN_CHARS: Final = 1_000_000
 # U+200B-U+200D, U+2060, U+FEFF (spec) plus soft hyphen, Mongolian vowel separator and the
@@ -42,6 +43,17 @@ def host_reason(url: httpx.URL, allowed: frozenset[str]) -> str | None:
     except ValueError:
         return None if url.host.lower() in allowed else "host_not_allowed"
     return "ip_literal"
+
+
+def registry_host(ref: str) -> str:
+    """Registry of an image ref: its first path segment with ``.`` or ``:``, else Docker Hub."""
+    first, slash, _rest = ref.partition("/")
+    return first.lower() if slash and ("." in first or ":" in first) else "registry-1.docker.io"
+
+
+def pinned_registries(deploy: DeployConfig) -> frozenset[str]:
+    """Registry hosts of the pinned ``deploy.*.image`` refs (step 3 in a download window)."""
+    return frozenset(registry_host(getattr(deploy, name).image) for name in PIN_CLASSES)
 
 
 class _Pairs(list[tuple[str, object]]):
