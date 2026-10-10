@@ -3,13 +3,16 @@
 Pages write only through ``herness.reports.actions``. ``allowed`` applies the same action table
 as the action's own ``require_role``, so a control is shown exactly to the roles the action
 accepts (TH09-07). ``act`` shows a refused or failed action with ``user_error`` next to its
-form, whose keyed widgets keep their values (FT09-01); a success clears the ops cache
-(``after_write``) and reruns the page with a one-line confirmation.
+form, whose keyed widgets keep their values (FT09-01); a refusal because the item is gone or
+already decided also clears the ops cache, so the next rerun drops the stale item. A success
+clears the ops cache (``after_write``) and the form's keys (no second submit of the same
+values), then reruns the page with a one-line confirmation.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, cast
 
@@ -18,10 +21,10 @@ from pydantic import ValidationError
 
 from app.common import data
 from app.common.widgets import CELL_MAX, user_error
-from herness.core.errors import HernessError
+from herness.core.errors import HernessError, NotFound
 from herness.core.logging import get_logger
 from herness.core.types import NumberRef
-from herness.reports.rules import ACTION_ROLES, ROLE_RANK, Actor
+from herness.reports.rules import ACTION_ROLES, ROLE_RANK, Actor, UserInputError
 
 ALL: Final = "All"
 DONE_KEY: Final = "herness_action_done"
@@ -29,6 +32,8 @@ _REVIEW_ACTIONS: Final = {
     "weight_change": "review_decide_weight_change",
     "memory_write": "memory_decide",
 }
+# The U09-38 / U09-101 refusals for an item another session decided first.
+_STALE_RE: Final = re.compile(r"(was already \w+|is no longer pending|is not pending)\.$")
 type Row = Mapping[str, object]
 
 _log = get_logger("app.page")
@@ -86,13 +91,27 @@ def flash() -> None:
         st.success(str(text))
 
 
-def act[T](label: str, call: Callable[[], T], done: Callable[[T], str]) -> None:
-    """Run one action: refusal or failure → error card here; success → clear cache, rerun."""
+def _stale(exc: HernessError) -> bool:
+    """True when the target is gone or was already decided (the cached list is out of date)."""
+    if isinstance(exc, NotFound):
+        return True
+    return isinstance(exc, UserInputError) and _STALE_RE.search(exc.message) is not None
+
+
+def act[T](
+    label: str, call: Callable[[], T], done: Callable[[T], str], *, reset: Sequence[str] = ()
+) -> None:
+    """Run one action: refusal or failure → error card here (stale target: cache cleared);
+    success → clear cache and the ``reset`` widget keys, rerun."""
     try:
         result = call()
     except HernessError as exc:
+        if _stale(exc):
+            data.after_write()
         user_error(exc, title=f"{label} failed")
         return
     data.after_write()
+    for key in reset:
+        st.session_state.pop(key, None)
     st.session_state[DONE_KEY] = done(result)
     st.rerun()

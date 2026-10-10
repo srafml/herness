@@ -605,3 +605,55 @@ def test_st09_07_viewer_sees_no_actions_and_direct_calls_are_refused(
     assert core.read_one("SELECT count(*) AS n FROM decision_log WHERE rec_id = ?",
                          (REC_A,))["n"] == 0  # fmt: skip
     assert not (env.data_root / "reports" / RUN_LIVE).exists()
+
+
+# --- Review round 1 (M3 stale items, M4 form reset) -----------------------------------------------
+
+
+def test_it09_22_form_reset_after_decision(env: SimpleNamespace) -> None:
+    """IT09-22 after a recorded decision the form is reset, so a second submit without new
+    input adds no second decision (decision_log is append-only)."""
+    _seed_recs()
+    at = _run(RECS)
+    at.radio(key=f"rec_decision_{REC_A}").set_value("Reject")
+    at.text_area(key=f"rec_reason_{REC_A}").input(REASON)
+    at = at.button(key=f"rec_submit_{REC_A}").click().run()
+    assert not at.error, [e.value for e in at.error]
+    assert at.radio(key=f"rec_decision_{REC_A}").value == "Accept"
+    assert at.text_area(key=f"rec_reason_{REC_A}").value in {"", None}
+    assert at.date_input(key=f"rec_effective_{REC_A}").value is None
+    at = at.button(key=f"rec_submit_{REC_A}").click().run()
+    assert any("Reason must be 10 to 1000 characters." in e.value for e in at.error)
+    assert [c[0] for c in env.memory.calls] == ["decide"]
+    assert len(_events(env, "recommendation_decision")) == 1
+
+
+def test_it09_21_stale_item_dropped_after_refusal(env: SimpleNamespace) -> None:
+    """IT09-21 an item decided elsewhere after the page cached it: the refusal clears the ops
+    cache, so the next rerun no longer lists the item."""
+    mapping, other = _mapping(), _mapping("Billing")
+    at = _run(QUEUE)
+    shared.decide_review_item(mapping, "approved", decided_by=ref(ADMIN), note=None, now=NOW)
+    at = _press(at, mapping, "approve", "Looks right")
+    assert any(f"Item {mapping} was already approved." in e.value for e in at.error)
+    at = at.run()
+    assert not at.error, [e.value for e in at.error]
+    assert "Mapping suggestions (1)" in [t.label for t in at.tabs]
+    assert f"review_approve_{mapping}" not in _buttons(at)
+    assert f"review_approve_{other}" in _buttons(at)
+
+
+def test_it09_22_missing_recommendation_dropped_after_refusal(env: SimpleNamespace) -> None:
+    """IT09-22 a recommendation gone after the page cached it: NotFound clears the ops cache,
+    so the next rerun no longer lists it."""
+    del env
+    _seed_recs()
+    at = _run(RECS)
+    _write("DELETE FROM recommendation WHERE rec_id = ?", (REC_A,))
+    at.text_area(key=f"rec_reason_{REC_A}").input(REASON)
+    at = at.button(key=f"rec_submit_{REC_A}").click().run()
+    assert any(f"recommendation {REC_A} not found" in e.value for e in at.error)
+    at = at.run()
+    assert not at.error, [e.value for e in at.error]
+    assert f"rec_submit_{REC_A}" not in _buttons(at)
+    assert f"rec_submit_{REC_B}" in _buttons(at)

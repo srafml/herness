@@ -115,6 +115,7 @@ def _form(ctx: PageContext, item: ReviewItem, answers: Sequence[str] | None) -> 
             memory=ctx.services.memory, now=clock.now(),
         ),
         lambda status: f"Item {item_id} {status}.",
+        reset=(f"review_answer_{item_id}", f"review_note_{item_id}"),
     )  # fmt: skip
 
 

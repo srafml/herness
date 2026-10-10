@@ -92,6 +92,7 @@ def _decide(ctx: PageContext, rec_id: str) -> None:
             effective_at=effective, memory=ctx.services.memory,
         ),
         lambda _: f"Decision recorded for {rec_id}.",
+        reset=(f"rec_decision_{rec_id}", f"rec_reason_{rec_id}", f"rec_effective_{rec_id}"),
     )  # fmt: skip
 
 
