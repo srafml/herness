@@ -132,7 +132,7 @@ class FakeChatService:
             return None
         msg = latest_user_message(session_id)
         assert msg is not None, "FakeChatService(write_rows=True) needs a user row"
-        row = upsert_assistant_placeholder(session_id, reply_to=msg["message_id"], now=NOW)
+        row = upsert_assistant_placeholder(session_id, reply_to=msg["message_id"])
         assert row is not None
         if row["message_id"] not in self.written:
             self.written.append(row["message_id"])

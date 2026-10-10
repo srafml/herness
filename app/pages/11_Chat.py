@@ -39,7 +39,7 @@ SAVED: Final = "Saved as pending. A reviewer must approve it before it affects a
 FAILED: Final = "This answer could not be produced."
 ANSWERING: Final = "Answering…"
 ENTITY_TYPES: Final = ("", "service", "team", "org", "work_item", "cluster")
-TEXT_MAX: Final = 1000
+LIMIT: Final = "At most 1000 characters."  # enforced by the action: rejected, never cut
 _log = get_logger("app.chat")
 
 
@@ -83,7 +83,7 @@ def _numbers(row: ChatMessageRow) -> list[NumberRef]:
 def _feedback(ctx: PageContext, message_id: str) -> None:
     with st.form(f"fb-{message_id}", border=False):
         thumbs = st.feedback("thumbs", key=f"fb-thumbs-{message_id}")
-        note = st.text_input("Note (optional)", max_chars=TEXT_MAX, key=f"fb-note-{message_id}")
+        note = st.text_input("Note (optional)", help=LIMIT, key=f"fb-note-{message_id}")
         if not st.form_submit_button("Send feedback"):
             return
     if thumbs is None:
@@ -99,7 +99,7 @@ def _feedback(ctx: PageContext, message_id: str) -> None:
 def _correction(ctx: PageContext, session_id: str, reply_to: str, message_id: str) -> None:
     """The "Correct a fact" form (R-33: ``session_id`` and ``source_message_id``)."""
     with st.expander("Correct a fact"), st.form(f"fix-{message_id}"):
-        statement = st.text_area("Statement", max_chars=TEXT_MAX, key=f"fix-text-{message_id}")
+        statement = st.text_area("Statement", help=LIMIT, key=f"fix-text-{message_id}")
         kind = st.selectbox("Entity type (optional)", ENTITY_TYPES, key=f"fix-type-{message_id}")
         entity_id = st.text_input("Entity id (optional)", key=f"fix-id-{message_id}").strip()
         if not st.form_submit_button("Save correction"):
