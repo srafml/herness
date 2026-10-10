@@ -7,7 +7,7 @@ from collections.abc import Iterator
 
 import pytest
 import typer
-from tests.support.cli_env import CliEnv
+from tests.support.cli_env import CliEnv, preserved_app
 
 from herness import cli
 from herness._cli import identity
@@ -34,13 +34,13 @@ def _probe(path: str, ran: list[str]) -> typer.models.CommandFunctionType:
 def guarded_app(cli_env: CliEnv) -> Iterator[list[str]]:
     """Register guarded probes for an admin, a viewer and a denied-allowed path."""
     ran: list[str] = []
-    saved = list(cli.app.registered_commands)
-    for path in ("build", "sync", "status", "doctor"):
-        cli.app.command(path)(guarded(path)(_probe(path, ran)))
-    try:
+    with preserved_app():
+        if not cli._registered:  # real groups first, so the probes below replace them
+            cli._register_groups(cli.app)
+            cli._registered = True
+        for path in ("build", "sync", "status", "doctor"):
+            cli.app.command(path)(guarded(path)(_probe(path, ran)))
         yield ran
-    finally:
-        cli.app.registered_commands[:] = saved
 
 
 def _run(args: list[str]) -> int:
@@ -78,7 +78,6 @@ def test_st09_24_json_stdout_is_one_object(
     cli_env: CliEnv, capfd: pytest.CaptureFixture[str]
 ) -> None:
     """ST09-24 a --json command that logs warnings writes exactly one JSON object to stdout."""
-    saved = list(cli.app.registered_commands)
     log = get_logger("cli")
 
     def noisy(ctx: typer.Context) -> int:
@@ -88,12 +87,10 @@ def test_st09_24_json_stdout_is_one_object(
         result = CliResult(command="status", data={"n": 1}, warnings=["slow"], human=None)
         return emit(opts, result)
 
-    cli.app.command("noisy")(noisy)
-    try:
+    with preserved_app():
+        cli.app.command("noisy")(noisy)
         cfg_dir = str(cli_env.write_config())
         assert _run(["--config-dir", cfg_dir, "--json", "--verbose", "noisy"]) == 0
-    finally:
-        cli.app.registered_commands[:] = saved
     out, err = capfd.readouterr()
     lines = out.splitlines()
     assert len(lines) == 1

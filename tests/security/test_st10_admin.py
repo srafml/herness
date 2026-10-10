@@ -16,7 +16,7 @@ from typing import Annotated, cast
 
 import pytest
 import typer
-from tests.support.cli_env import CliEnv
+from tests.support.cli_env import CliEnv, preserved_app
 from tests.support.fake_keyring import MemoryKeyring
 
 from herness import cli
@@ -72,17 +72,14 @@ def admin_app(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> Iterator[list
     del cli_env
     monkeypatch.setattr(identity, "_is_elevated", lambda: True)
     ran: list[str] = []
-    saved = list(cli.app.registered_groups)
     secrets_group, privacy, deploy = (typer.Typer(name=n) for n in ("secrets", "privacy", "deploy"))
     secrets_group.command("set")(guarded("secrets set")(_secrets_set))
     privacy.command("delete")(guarded("privacy delete")(_probe("privacy delete", ran)))
     deploy.command("up")(guarded("deploy up")(_class_probe("deploy up", ran)))
-    for group in (secrets_group, privacy, deploy):
-        cli.app.add_typer(group)
-    try:
+    with preserved_app():
+        for group in (secrets_group, privacy, deploy):
+            cli.app.add_typer(group)
         yield ran
-    finally:
-        cli.app.registered_groups[:] = saved
 
 
 def _run(args: list[str]) -> int:

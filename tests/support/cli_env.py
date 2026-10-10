@@ -11,6 +11,7 @@ bound ports after the test.
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -54,6 +55,27 @@ class CliEnv:
         text = path.read_text(encoding="utf-8").replace("security:\n", "security:\n" + roles, 1)
         path.write_text(text, encoding="utf-8")
         return cfg
+
+
+@contextmanager
+def preserved_app() -> Iterator[None]:
+    """Restore the root app's commands, groups and group-registration flag on exit.
+
+    For tests that add probe commands: ``main`` registers the command groups once per
+    process (``cli._registered``), so restoring only ``registered_commands`` after a ``main``
+    that registered them would leave the flag set and the groups gone (T09-23).
+    """
+    from herness import cli  # noqa: PLC0415 - the CLI module loads on first use
+
+    commands = list(cli.app.registered_commands)
+    groups = list(cli.app.registered_groups)
+    registered = cli._registered
+    try:
+        yield
+    finally:
+        cli.app.registered_commands[:] = commands
+        cli.app.registered_groups[:] = groups
+        cli._registered = registered
 
 
 @pytest.fixture

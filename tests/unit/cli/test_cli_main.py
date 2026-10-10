@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import typer
 from structlog.testing import capture_logs
-from tests.support.cli_env import CliEnv
+from tests.support.cli_env import CliEnv, preserved_app
 
 from herness import cli
 from herness.core import config_validate as cv
@@ -36,11 +36,8 @@ def probe(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str
         real(cfg)  # type: ignore[arg-type]
 
     monkeypatch.setattr(cli, "install_socket_guard", guard)
-    saved = list(cli.app.registered_commands)
-    try:
+    with preserved_app():
         yield events
-    finally:
-        cli.app.registered_commands[:] = saved
 
 
 def _command(handler: Handler, name: str = "probe") -> None:

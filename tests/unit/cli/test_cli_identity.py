@@ -18,6 +18,7 @@ import typer.main
 from structlog.testing import capture_logs
 from tests.support.cli_env import CliEnv
 
+from herness import cli
 from herness._cli import identity as ident
 from herness.cli import GlobalOptions, app
 from herness.core import errors as e
@@ -86,10 +87,15 @@ def test_ut09_66_command_roles_match_fixture_table() -> None:
 def test_ut09_66_every_registered_command_has_a_role() -> None:
     """UT09-66 every registered Typer command path is in COMMAND_ROLES and in the table.
 
-    No command group is registered before T09-22..T09-25, so this is vacuous for now.
+    T09-23 registers the data and review groups; T09-22, T09-24 and T09-25 add theirs.
     """
+    if not cli._registered:  # the groups register on the first `main` of the process
+        cli._register_groups(app)
+        cli._registered = True
     table = _table()
-    for path in _registered(typer.main.get_command(app)):
+    paths = set(_registered(typer.main.get_command(app)))
+    assert {"sync", "metrics list", "report funding", "report render", "decide"} <= paths
+    for path in paths:
         assert path in ident.COMMAND_ROLES, path
         assert path in table, path
 
