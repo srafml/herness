@@ -615,8 +615,8 @@ def test_rf_t06_13_package_reexports_lazily() -> None:
 
     assert pkg.RunRequest is lifecycle.RunRequest
     assert pkg.RunResult is lifecycle.RunResult
-    with pytest.raises(AttributeError):
-        _ = pkg.Swarm  # type: ignore[attr-defined]
+    with pytest.raises(AttributeError):  # `Swarm` joined with T06-22; unknown names still fail
+        _ = pkg.NotExported  # type: ignore[attr-defined]
 
 
 def test_ut06_92_tuples_are_walked_and_kept() -> None:
