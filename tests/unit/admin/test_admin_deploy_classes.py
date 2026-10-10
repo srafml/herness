@@ -475,11 +475,17 @@ def test_ut10_65_kept_revision_missing_from_listing_removes_no_blob(env: Env) ->
     """UT10-65 a kept revision absent from the snapshot listing: no blob of the repo goes."""
     seeded = _seed_history(env)
     repo = seeded["repo"]
-    env.host.snapshot_dirs[repo].remove(env.cfg.deploy.reasoning.revision)  # current not listed
-    counts = deploy.prune(env.cfg, actor=ACTOR)
+    current = env.cfg.deploy.reasoning.revision
+    env.host.snapshot_dirs[repo].remove(current)  # the current revision is not listed
+    with structlog.testing.capture_logs() as logs:
+        counts = deploy.prune(env.cfg, actor=ACTOR)
     assert counts["snapshots"] == 2  # unkept revisions may still go
     assert counts["blobs"] == 0
     assert not any(p.startswith(f"{repo}/blobs/") for p in env.host.removed)
+    skipped = [x for x in logs if x["event"] == "deploy.prune.blobs_skipped"]
+    assert [(x["reason"], x["repo"], x["revisions"]) for x in skipped] == [
+        ("kept_revision_missing", repo, [current])
+    ]
 
 
 def test_ut10_65_failed_blob_or_gguf_listing_removes_nothing(env: Env) -> None:
@@ -515,11 +521,19 @@ def test_ut10_65_prune_skips_invalid_history_and_listing_failure(env: Env) -> No
     path.write_text(json.dumps(line) + "\n", encoding="utf-8")
     env.host.runner.add(["wsl.exe", "-d", "herness", "--exec", "docker", "image", "ls"],
                         returncode=1)  # fmt: skip
-    counts = deploy.prune(env.cfg, actor=ACTOR)
+    with structlog.testing.capture_logs() as logs:
+        counts = deploy.prune(env.cfg, actor=ACTOR)
     assert counts["images"] == 0
-    listed = [a for a in env.host.runner.argvs if a[4:7] == ["docker", "image", "ls"]]
+    calls = [c for c in env.host.runner.calls if c.argv[4:7] == ["docker", "image", "ls"]]
+    listed = [c.argv for c in calls]
     assert all("../x" not in a for a in listed)
     assert listed[0][7:10] == ["--digests", "--format", "{{.Digest}}"]
+    assert {c.timeout_s for c in calls} == {60}  # a hung docker daemon cannot stall prune
+    failed = [x for x in logs if x["event"] == "deploy.prune.list_failed"]
+    repos = sorted({a[-1] for a in listed})
+    assert [(x["kind"], x["repo"], x["returncode"]) for x in failed] == [
+        ("images", r, 1) for r in repos
+    ]
 
 
 # --- UT10-65 rollback_class ------------------------------------------------------------------

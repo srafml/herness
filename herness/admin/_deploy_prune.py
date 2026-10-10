@@ -31,6 +31,7 @@ _PINS: Final[dict[str, re.Pattern[str]]] = {  # the U10-07 deploy-time pin shape
     "gguf": re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.gguf"),
     "sha256": re.compile(r"[0-9a-f]{64}"),
 }
+_LS_TIMEOUT_S: Final = 60  # a hung docker daemon must not stall prune
 _RM_TIMEOUT_S: Final = 600
 _log = get_logger("admin.deploy")
 
@@ -90,9 +91,10 @@ def _images(cfg: HernessConfig, kept_refs: set[str]) -> list[str]:
     for repo in sorted({ref.partition("@")[0] for ref in kept_refs}):
         # ``{{json .}}`` fails the U10-77 pattern (no space allowed): one digest per line
         argv = ["docker", "image", "ls", "--digests", "--format", "{{.Digest}}", repo]
-        done = pv.run(cfg, argv)
+        done = pv.run(cfg, argv, timeout_s=_LS_TIMEOUT_S)
         if done.returncode != 0:
-            _log.warning("deploy.prune.list_failed", kind="images")
+            rc = done.returncode
+            _log.warning("deploy.prune.list_failed", kind="images", repo=repo, returncode=rc)
             continue
         for digest in done.stdout.split():
             ref = f"{repo}@{digest}"
@@ -113,8 +115,9 @@ def _model(cfg: HernessConfig, repo: str, kept: set[str], todo: PrunePlan) -> No
             todo.snapshots.append(path)
         else:
             remaining.append(path)
-    if not kept <= {posixpath.basename(p) for p in remaining}:  # a kept revision unseen
-        _log.warning("deploy.prune.blobs_skipped", reason="kept_revision_missing")
+    if missing := sorted(kept - {posixpath.basename(p) for p in remaining}):
+        reason = "kept_revision_missing"
+        _log.warning("deploy.prune.blobs_skipped", reason=reason, repo=repo, revisions=missing)
         return
     linked: set[str] = set()
     for snapshot in remaining:
