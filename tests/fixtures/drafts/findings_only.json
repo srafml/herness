@@ -1,0 +1,64 @@
+{
+  "schema_version": "1",
+  "mode": "findings_only",
+  "run_id": "run_01J9ZQ4Y8M6V3K2N1P0R5T7W9X",
+  "kind": "funding_review",
+  "depth": "standard",
+  "profile": "synth",
+  "build_id": "b_tiny_1",
+  "title": "Funding review",
+  "sections": [
+    {
+      "id": "executive_summary",
+      "title": "Verified findings",
+      "paragraphs": [
+        {
+          "text": "Epic PAY-12 targets [[n1]] incidents on its service",
+          "numbers": [
+            {"id": "n1", "value": 14, "unit": "count", "query_id": "q_0123456789abcdef", "column": "incident_count", "row_key": null}
+          ],
+          "finding_ids": ["fnd_01J9ZQ4Y8M6V3K2N1P0R5T7W9A"]
+        },
+        {
+          "text": "Epic OPS-7 targets [[n1]] incidents on its service",
+          "numbers": [
+            {"id": "n1", "value": 9, "unit": "count", "query_id": "q_fedcba9876543210", "column": "incident_count", "row_key": null}
+          ],
+          "finding_ids": ["fnd_01J9ZQ4Y8M6V3K2N1P0R5T7W9B"]
+        }
+      ]
+    }
+  ],
+  "recommendations": [],
+  "ranked_entities": [],
+  "caveats": ["The report writer did not finish; only verified findings are listed."],
+  "prior_outcomes_commentary": null,
+  "portfolio_custom": [],
+  "banners": ["partial_run"],
+  "flags": {"partial_coverage": [], "notes": []},
+  "contested": [],
+  "removed": [],
+  "coverage": {
+    "planned_tasks": 4,
+    "done_tasks": 3,
+    "dead_tasks": 1,
+    "must_cover_total": 0,
+    "must_cover_done": 0,
+    "verified_findings": 2,
+    "rejected_findings": 0,
+    "publishable": false
+  },
+  "dead_tasks": [
+    {"task_id": "task_01J9ZQ4Y8M6V3K2N1P0R5T7W9C", "role": "writer", "objective": "Write the funding review.", "last_error": "ModelUnavailable"}
+  ],
+  "query_ids": ["q_0123456789abcdef", "q_fedcba9876543210"],
+  "verification": {
+    "build_id": "b_tiny_1",
+    "passed": true,
+    "items": [],
+    "n_numbers": 0,
+    "n_failed": 0,
+    "verified_at": "2026-10-01T12:00:00Z",
+    "duration_ms": 0
+  }
+}
