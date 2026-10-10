@@ -2168,6 +2168,8 @@ Markers per design 11 §4.1. Property tests use Hypothesis profiles `commit`/`ni
 | FT04-04 | Solver wall limit 1 s on a 5k-candidate instance | `FEASIBLE` or flags `no_solution_found`/`wall_clock_limit`; no exception |
 | FT04-05 | `enrich.cluster_member` missing | `materialize_facts` raises `SchemaViolation` |
 
+T04-23c note (2026-10-10): FT04-03 went red on 97f51a7 (`TemplateSyntaxError on zz_broken_metric`) from 98671df (T04-23, w40-s04b), when `config/metrics.yaml` moved to the `davg`/`dsum` macros (U04-35). The fixture planted its failure with `sql.replace("avg(", ...)`, which now matched inside `{{ davg(...) }}` and broke the Jinja syntax before the run-time DuckDB error; the loader and the fail-closed path were fine. The fixture now plants the cast in front of the `{{ davg(` call. FT04-03 is in-process and hermetic (about 4 s and 7 s), so it moved to `tests/integration/metrics/test_metrics_scoring_rollback.py` (`integration` marker; one category per file) and merge-gate suite (a) `(unit or integration) and not slow` runs it; the suite expression is unchanged.
+
 ### 11.5 Security tests (`unit` unless noted)
 
 | ID | Threat | Attack and assertion |

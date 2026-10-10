@@ -8,7 +8,8 @@ through the file-backed checkpoint, fully rewrites the killed step, and every ta
 clean run.
 FT04-02: the build file held open by a writer in another process: `open_for_build` (impl 02;
 it opens the connection `run_scoring` is given) raises StoreBusy.
-FT04-03: a metric template raising a DuckDB error rolls the whole metrics step back.
+FT04-03 (a metric template raising a DuckDB error rolls the metrics step back) lives in
+`tests/integration/metrics/test_metrics_scoring_rollback.py` so merge-gate suite (a) runs it.
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ from typing import Any
 
 import duckdb
 import pytest
-from tests.support.build_harness import FakeJobContext
 from tests.support.metrics_scoring import (
     CFG_HASH,
     patches,
@@ -33,10 +33,10 @@ from tests.support.metrics_scoring import (
 from tests.support.metrics_tiny import BUILD_ID
 from tests.support.scoring_kill import BLOCKED_LINE, RESULT_PREFIX
 
-from herness.core.errors import SchemaViolation, StoreBusy
-from herness.metrics import _scoring_checks, scoring
+from herness.core.errors import StoreBusy
+from herness.metrics import _scoring_checks
 from herness.metrics.catalog import MetricCatalog
-from herness.metrics.scoring import STEPS, run_scoring
+from herness.metrics.scoring import STEPS
 from herness.model.settings import BuildSettings
 from herness.store import _warehouse_rw
 from herness.store.layout import DataLayout
@@ -255,56 +255,3 @@ def test_ft04_02_locked_warehouse_is_store_busy(tmp_path: Path) -> None:
         holder.communicate(timeout=CHILD_TIMEOUT_S)
     con = _warehouse_rw.open_for_build(BUILD_ID, create=False, cfg=cfg, layout=layout)
     con.close()
-
-
-def _broken_catalog() -> MetricCatalog:
-    """The small catalog plus `zz_broken_metric` (sorted last, so rows of the other metrics are
-    appended first): `mttr_hours` whose value raises at run time."""
-    base = small_catalog()
-    mttr = next(m for m in base.config.metrics if m.name == "mttr_hours")
-    broken = mttr.model_copy(
-        update={
-            "name": "zz_broken_metric",
-            "enabled": True,
-            "sql": mttr.sql.replace("avg(", "CAST('planted failure' AS INTEGER) + avg(", 1),
-        }
-    )
-    assert broken.sql != mttr.sql
-    metrics = [*base.config.metrics, broken]
-    return MetricCatalog(base.config.model_copy(update={"metrics": metrics}))
-
-
-@pytest.mark.parametrize("earlier_run", [False, True])
-def test_ft04_03_metric_template_error_rolls_back(
-    monkeypatch: pytest.MonkeyPatch, earlier_run: bool
-) -> None:
-    """FT04-03 a metric template raising a DuckDB error: SchemaViolation, the metrics step is
-    rolled back (no partial `metric_value`, no evidence of it, an earlier table unchanged), the
-    step is not checkpointed and the build stays `building` (not promoted)."""
-    _apply(monkeypatch, small_catalog())
-    con = tiny_with_facts()
-    try:
-        if earlier_run:
-            run_scoring(BUILD_ID, steps=["metrics"], con=con)
-        before = {
-            name: sorted(repr(r) for r in con.execute(sql).fetchall())
-            for name, sql in _SNAPSHOT_SQL[:4]
-            if earlier_run or name != "metric_value"
-        }
-        monkeypatch.setattr(scoring, "catalog_from_config", lambda _cfg=None: _broken_catalog())
-        ctx = FakeJobContext()
-        with pytest.raises(
-            SchemaViolation, match=r"^metric zz_broken_metric grain \w+ period week failed: "
-        ):
-            run_scoring(BUILD_ID, con=con, ctx=ctx)
-        after = {
-            name: sorted(repr(r) for r in con.execute(sql).fetchall())
-            for name, sql in _SNAPSHOT_SQL[:4]
-            if earlier_run or name != "metric_value"
-        }
-        assert after == before
-        tables = _scoring_checks.existing_tables(con)
-        assert ("metrics.metric_value" in tables) is earlier_run
-        assert ctx.saved_states == []
-    finally:
-        con.close()
