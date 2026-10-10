@@ -4,7 +4,8 @@ manifest (TH09-11; T09-15d).
 The report evidence appendix applies the dashboard's sample policy
 (``herness.reports._sample_policy``): ``title``, ``summary``, ``description``, ``notes`` and the
 FORBIDDEN_TEXT_COLUMNS are always dropped; every other text column passes ``redact_text`` (the
-fixed-key test redactor of ``report_env``); numeric, boolean, date/time and id cells are shown.
+fixed-key test redactor of ``report_env``), numbers included (a phone or account number stored
+as a JSON number is masked); boolean, date/time and id cells are shown.
 """
 
 from __future__ import annotations
@@ -28,7 +29,8 @@ SAMPLE = [
     {"n": 3, "amount": "12.50", "ok": True, "day": "2026-01-02", "run": RUN,
      "title": RAW_TITLE, " Summary ": RAW_TITLE, "description": RAW_TITLE, "NOTES": RAW_TITLE,
      "short_description": RAW_TITLE, "close_notes": RAW_TITLE, "root_cause_text": RAW_TITLE,
-     "comment": f"call {PII}", "meta": {"k": "v", "Title": RAW_TITLE}},
+     "comment": f"call {PII}", "meta": {"k": "v", "Title": RAW_TITLE},
+     "phone": 2025550123, "acct_f": 2025550123.0},
 ]  # fmt: skip
 
 
@@ -57,6 +59,7 @@ def test_st09_31_raw_sample_text_never_in_report(report_env: ReportEnv, run_id: 
         assert RAW_TITLE not in text
         assert "PAY-1" not in text
         assert "example.com" not in text
+        assert "2025550123" not in text  # numbers pass redaction too (T09-15d ruling)
     for text in (html, md):
         # the sample is rendered and its free text redacted (MD escapes ``[``, ``_``, ``]``)
         assert re.search(r"call \\?\[EMAIL\\?_[0-9a-f]+\\?\]", text)

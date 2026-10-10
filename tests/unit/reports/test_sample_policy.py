@@ -2,8 +2,11 @@
 
 The case table copies ST09-30's inputs and expected keep/drop/redact decisions
 (``tests/security/test_st09_evidence.py`` of T09-15c) so the report appendix and the dashboard
-evidence widget cannot drift. Follow-up after batch 48: ``app/common/_widgets_evidence.py``
-imports this policy; until then this table is the parity check.
+evidence widget cannot drift. Rows marked ``POST_RULING`` intentionally diverge from the
+T09-15c dashboard (bc903cf): under the T09-15d controller ruling numeric cells (ints, floats,
+decimal-shaped strings) pass ``redact_text`` instead of being shown verbatim, and are dropped
+without a key. Post-ruling; dashboard must follow: ``app/common/_widgets_evidence.py`` imports
+this policy (follow-up after batch 48); until then this table is the parity check.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import json
 from typing import Final
 
 import pytest
+from tests.support.report_env import install_redactor
 
 from herness.core import redact
 from herness.core.errors import ConfigError
@@ -24,26 +28,41 @@ PII: Final = "zq7-planted.pii@example.com"
 RAW_TITLE: Final = f"PAY-1 refund for {PII}"
 RUN: Final = "run_01J8ZZZZZZZZZZZZZZZZZZZZZZ"
 ACCT: Final = "12345678901234567890123456"
-SAFE: Final[dict[str, object]] = {
-    "n": 3, "amount": "12.50", "ok": True, "opened_at": "2026-01-02T03:04:05.000000Z",
-    "day": "2026-01-02", "query_id": Q1, "run": RUN, "blank": None,
+PHONE: Final = 2025550123  # a phone stored as a JSON number
+ACCT_F: Final = 2025550123.0  # an account-like value stored as a JSON float
+VERBATIM: Final[dict[str, object]] = {
+    "ok": True, "opened_at": "2026-01-02T03:04:05.000000Z", "day": "2026-01-02",
+    "query_id": Q1, "run": RUN, "blank": None,
 }  # fmt: skip
+SAFE: Final[dict[str, object]] = {"n": 3, "amount": "12.50", **VERBATIM}
 ALWAYS: Final = ("title", "summary", "description", "notes", "short_description", "close_notes")
 NESTED: Final = {"k": "v", "Title": RAW_TITLE, "deep": [{"notes": RAW_TITLE}]}
+POST_RULING: Final = "post-ruling; dashboard must follow"
+SAME: Final = "same as T09-15c dashboard"
 
-# (case, stored rows, expected columns with a key, values passed to redact_text in order)
-CASES: Final[list[tuple[str, list[dict[str, object]], list[str], list[str]]]] = [
+# (case, stored rows, columns with a key, values passed to redact_text in order,
+#  columns without a key, parity note)
+type Case = tuple[str, list[dict[str, object]], list[str], list[str], list[str], str]
+CASES: Final[list[Case]] = [
     ("with_key", [
         {**SAFE, **dict.fromkeys(ALWAYS, RAW_TITLE), "comment": f"call {PII}"},
         {"n": 4, "comment": "second"},
         {"n": 5, "comment": None},
-    ], [*SAFE, "comment"], [f"call {PII}", "second"]),
+    ], [*SAFE, "comment"], ["3", "4", "5", "12.50", f"call {PII}", "second"],
+     list(VERBATIM), POST_RULING),  # n, amount now redacted / dropped without a key
     ("digit_strings", [{"n": 1, "acct": ACCT, "ref": "acct_" + ACCT, "run": RUN}],
-     ["n", "acct", "ref", "run"], [ACCT, "acct_" + ACCT]),
+     ["n", "acct", "ref", "run"], ["1", ACCT, "acct_" + ACCT], ["run"], POST_RULING),
     ("name_variants_nested", [
         {" title": RAW_TITLE, "Title ": RAW_TITLE, "NOTES": RAW_TITLE, "n": 1, "meta": NESTED},
-    ], ["n", "meta"], [json.dumps({"k": "v", "deep": [{}]})]),
+    ], ["n", "meta"], ["1", json.dumps({"k": "v", "deep": [{}]})], [], POST_RULING),
+    ("text_only", [{"comment": f"call {PII}", "run": RUN, "title": RAW_TITLE}],
+     ["comment", "run"], [f"call {PII}"], ["run"], SAME),
+    ("numeric_pii", [{"phone": PHONE, "acct_f": ACCT_F, "dec": "555.0123", "at": "12:34:56",
+                      "flag": False}],
+     ["phone", "acct_f", "dec", "at", "flag"], ["2025550123", "2025550123.0", "555.0123"],
+     ["at", "flag"], POST_RULING),
 ]  # fmt: skip
+IDS: Final = [c[0] for c in CASES]
 
 
 def _double(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -59,40 +78,31 @@ def _double(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return seen
 
 
-@pytest.mark.parametrize(("case", "rows", "columns", "redacted"), CASES, ids=[c[0] for c in CASES])
-def test_ut09_113_parity_with_key(
-    monkeypatch: pytest.MonkeyPatch,
-    case: str,
-    rows: list[dict[str, object]],
-    columns: list[str],
-    redacted: list[str],
-) -> None:
-    """UT09-113 ST09-30 cases with a key: always-drop columns gone, only text redacted."""
+@pytest.mark.parametrize("entry", CASES, ids=IDS)
+def test_ut09_113_parity_with_key(monkeypatch: pytest.MonkeyPatch, entry: Case) -> None:
+    """UT09-113 cases with a key: always-drop columns gone, only non-verbatim cells redacted."""
+    case, rows, columns, redacted, _keyless, _note = entry
     seen = _double(monkeypatch)
     out = policy.sample_rows(json.dumps(rows))
     assert out is not None
     assert [list(row) for row in out] == [columns] * len(rows)
-    assert seen == redacted  # dropped and typed columns never reach redact_text
+    assert seen == redacted  # dropped and verbatim columns never reach redact_text
     text = json.dumps(out)
-    assert PII not in text
-    assert RAW_TITLE not in text
-    assert ACCT not in text
+    for planted in (PII, RAW_TITLE, ACCT, str(PHONE), "555.0123"):
+        assert planted not in text
     if case == "with_key":
-        assert [row["comment"] for row in out] == ["redacted #1", "[redacted]", ""]
-        assert (out[0]["run"], out[0]["ok"], out[0]["n"]) == (RUN, "True", "3")
+        assert [row["comment"] for row in out] == ["redacted #5", "[redacted]", ""]
+        assert [row["n"] for row in out] == ["redacted #1", "redacted #2", "redacted #3"]
+        assert (out[0]["run"], out[0]["ok"], out[0]["blank"]) == (RUN, "True", "")
         assert out[0]["opened_at"] == SAFE["opened_at"]
-        assert out[0]["blank"] == ""
+    if case == "numeric_pii":
+        assert (out[0]["at"], out[0]["flag"]) == ("12:34:56", "False")
 
 
-@pytest.mark.parametrize(("case", "rows", "columns", "redacted"), CASES, ids=[c[0] for c in CASES])
-def test_ut09_113_parity_without_key(
-    monkeypatch: pytest.MonkeyPatch,
-    case: str,
-    rows: list[dict[str, object]],
-    columns: list[str],
-    redacted: list[str],
-) -> None:
-    """UT09-113 ST09-30 cases without a key: every text column dropped, typed ones kept."""
+@pytest.mark.parametrize("entry", CASES, ids=IDS)
+def test_ut09_113_parity_without_key(monkeypatch: pytest.MonkeyPatch, entry: Case) -> None:
+    """UT09-113 cases without a key: every non-verbatim column dropped, verbatim ones kept."""
+    _case, rows, _columns, redacted, keyless, _note = entry
 
     def no_key() -> object:
         msg = "redact.hmac_key is not set"
@@ -101,12 +111,27 @@ def test_ut09_113_parity_without_key(
     monkeypatch.setattr(redact, "get_redactor", no_key)
     out = policy.sample_rows(rows)
     assert out is not None
-    kept = [c for c in columns if c not in {"comment", "acct", "ref", "meta"}]
-    assert [list(row) for row in out] == [kept] * len(rows)
-    assert "second" not in json.dumps(out)
-    assert all(text not in json.dumps(out) for text in redacted)
-    if case == "with_key":
-        assert [row["n"] for row in out] == ["3", "4", "5"]
+    assert [list(row) for row in out] == [keyless] * len(rows)
+    text = json.dumps(out)
+    assert all(value not in text for value in redacted if len(value) > 4)  # not "3" in dates
+
+
+def test_ut09_113_real_redactor_numbers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT09-113 the impl 10 detectors mask phone-shaped numbers, keep counts and decimals."""
+    install_redactor(monkeypatch)
+    rows = [{"phone": PHONE, "acct_f": ACCT_F, "n": 42, "small": 7, "amount": "1200.50",
+             "rate": 0.75, "neg": -0.5}]  # fmt: skip
+    (out,) = policy.sample_rows(rows) or [{}]
+    assert out["phone"].startswith("[PHONE_")
+    assert out["acct_f"].startswith("[PHONE_")
+    assert str(PHONE) not in json.dumps(out)
+    assert (out["n"], out["small"], out["amount"], out["rate"], out["neg"]) == (
+        "42",
+        "7",
+        "1200.50",
+        "0.75",
+        "-0.5",
+    )
 
 
 def test_ut09_113_deep_nesting_cut(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,9 +148,9 @@ def test_ut09_113_deep_nesting_cut(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_ut09_113_limit_cut_before_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT09-113 ``limit`` keeps the first rows before classification and redaction."""
     seen = _double(monkeypatch)
-    rows = [{"n": 1, "c": "a"}, {"n": 2, "c": "b"}, {"n": "free text", "c": "c"}]
-    assert policy.sample_rows(rows, 2) == [{"n": "1", "c": "redacted #1"},
-                                           {"n": "2", "c": "redacted #2"}]  # fmt: skip
+    rows = [{"d": "2026-01-01", "c": "a"}, {"d": "2026-01-02", "c": "b"}, {"d": "text", "c": "c"}]
+    assert policy.sample_rows(rows, 2) == [{"d": "2026-01-01", "c": "redacted #1"},
+                                           {"d": "2026-01-02", "c": "redacted #2"}]  # fmt: skip
     assert seen == ["a", "b"]
     assert policy.sample_rows(rows, 0) == []
 

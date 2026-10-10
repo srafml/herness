@@ -2,16 +2,20 @@
 
 No raw text from a stored sample reaches a rendered surface: ``title``, ``summary``,
 ``description``, ``notes`` and the FORBIDDEN_TEXT_COLUMNS are always dropped (names compared
-stripped and case-folded); every other column whose values are not all numeric, boolean,
-date/time or ids is passed through ``redact_text`` with the loaded key (``[redacted]`` when it
-fails closed), or dropped when no key is loaded. A nested dict/list cell is redacted as JSON
-text after its always-dropped keys are removed at any depth. Decimal-shaped strings
-(``555.1234``) count as numeric; a digit-only string (phone, account number) counts as text.
-Cells are plain strings cut to 200 chars; templates escape them (TH09-23).
+stripped and case-folded). Only verbatim-safe values are shown as stored: ``None``, booleans,
+dates, timestamps, times, query ids, (prefixed) ULIDs with at least one letter and build ids.
+Every other column, including numeric ones (Python ints and floats and decimal-shaped strings
+such as ``555.0123``, so a phone or account number stored as a JSON number is masked), is
+passed cell by cell through ``redact_text`` on the value's string form with the loaded key
+(``[redacted]`` when it fails closed), or dropped when no key is loaded. The impl 10
+detectors leave counts, small ints and decimals unchanged. A nested dict/list cell is
+redacted as JSON text after its always-dropped keys are removed at any depth. Cells are
+plain strings cut to 200 chars; templates escape them (TH09-23).
 
-The rule mirrors T09-15c's ``app/common/_widgets_evidence.py`` exactly (parity test
-UT09-113). Follow-up (after batch 48): ``app/common/_widgets_evidence.py`` should import
-``sample_rows``/``parse_json``/``ALWAYS_DROPPED`` from here instead of its own copy.
+The rule extends T09-15c's ``app/common/_widgets_evidence.py`` (parity test UT09-113) with the
+controller's numeric ruling (T09-15d): numbers no longer bypass redaction. Follow-up (after
+batch 48): ``app/common/_widgets_evidence.py`` must import ``sample_rows``/``parse_json``/
+``ALWAYS_DROPPED`` from here instead of its own copy and so adopt the numeric rule.
 ``FORBIDDEN_TEXT_COLUMNS`` repeats ``app.common.wh.FORBIDDEN_TEXT_COLUMNS`` (L5 reports may not
 import ``app``); the parity test asserts the two sets are equal.
 """
@@ -37,12 +41,12 @@ FORBIDDEN_TEXT_COLUMNS: Final = frozenset(
 ALWAYS_DROPPED: Final = frozenset(
     {"title", "summary", "description", "notes", *FORBIDDEN_TEXT_COLUMNS}
 )
-# Typed text as the evidence encoder writes it (impl 04 U04-02): decimals with a fraction,
-# non-finite floats, dates, timestamps, times, query ids, (prefixed) ULIDs with at least one
-# letter and build ids. A digit-only string (phone, account number) counts as text.
-_TYPED_RE: Final = re.compile(
-    r"[-+]?\d+\.\d+|-?inf|nan"
-    r"|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?"
+# Verbatim-safe text as the evidence encoder writes it (impl 04 U04-02): dates, timestamps,
+# times (``HH:MM:SS``: six digits, below any phone or account length), query ids, (prefixed)
+# ULIDs with at least one letter and build ids. Decimal-shaped and digit-only strings are
+# redacted like numbers (T09-15d ruling).
+_VERBATIM_RE: Final = re.compile(
+    r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?"
     r"|\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?"
     r"|q_[0-9a-f]{16}|(?:[a-z]{1,16}_)?(?=[0-9]*[A-HJKMNP-TV-Z])[0-7][0-9A-HJKMNP-TV-Z]{25}"
     r"|\d{8}-\d{6}-[0-9A-HJKMNP-TV-Z]{6}",
@@ -61,10 +65,11 @@ def parse_json(raw: object) -> object:
     return raw
 
 
-def _typed(value: object) -> bool:
-    if value is None or isinstance(value, bool | int | float):
+def _verbatim(value: object) -> bool:
+    """True for ``None``, booleans and verbatim-safe strings; never for an int or float."""
+    if value is None or isinstance(value, bool):  # bool before any int check (bool is an int)
         return True
-    return isinstance(value, str) and _TYPED_RE.fullmatch(value) is not None
+    return isinstance(value, str) and _VERBATIM_RE.fullmatch(value) is not None
 
 
 def _dropped(name: str) -> bool:
@@ -107,7 +112,7 @@ def sample_rows(raw: object, limit: int | None = None) -> list[dict[str, str]] |
     rows = [{str(k): v for k, v in row.items()} for row in parsed if isinstance(row, Mapping)]
     rows = rows if limit is None else rows[: max(limit, 0)]
     names = [n for n in dict.fromkeys(k for row in rows for k in row) if not _dropped(n)]
-    text = [n for n in names if not all(_typed(row.get(n)) for row in rows)]
+    text = [n for n in names if not all(_verbatim(row.get(n)) for row in rows)]
     try:
         cells = {n: [_redacted(row.get(n)) for row in rows] for n in text}
     except HernessError:  # no redaction key loaded (ConfigError): every text column is dropped
