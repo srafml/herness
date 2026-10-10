@@ -3,8 +3,9 @@
 Pages write only through ``herness.reports.actions``. ``allowed`` applies the same action table
 as the action's own ``require_role``, so a control is shown exactly to the roles the action
 accepts (TH09-07). ``act`` shows a refused or failed action with ``user_error`` next to its
-form, whose keyed widgets keep their values (FT09-01); a refusal because the item is gone or
-already decided also clears the ops cache, so the next rerun drops the stale item. A success
+form, whose keyed widgets keep their values (FT09-01); a ``NotFound`` or ``UserInputError``
+refusal also clears the ops cache (widget state is untouched), so an item that is gone or
+already decided drops out on the next rerun and a pending one is re-read. A success
 clears the ops cache (``after_write``) and the form's keys (no second submit of the same
 values), then reruns the page with a one-line confirmation.
 """
@@ -12,7 +13,6 @@ values), then reruns the page with a one-line confirmation.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, cast
 
@@ -32,8 +32,6 @@ _REVIEW_ACTIONS: Final = {
     "weight_change": "review_decide_weight_change",
     "memory_write": "memory_decide",
 }
-# The U09-38 / U09-101 refusals for an item another session decided first.
-_STALE_RE: Final = re.compile(r"(was already \w+|is no longer pending|is not pending)\.$")
 type Row = Mapping[str, object]
 
 _log = get_logger("app.page")
@@ -91,22 +89,16 @@ def flash() -> None:
         st.success(str(text))
 
 
-def _stale(exc: HernessError) -> bool:
-    """True when the target is gone or was already decided (the cached list is out of date)."""
-    if isinstance(exc, NotFound):
-        return True
-    return isinstance(exc, UserInputError) and _STALE_RE.search(exc.message) is not None
-
-
 def act[T](
     label: str, call: Callable[[], T], done: Callable[[T], str], *, reset: Sequence[str] = ()
 ) -> None:
-    """Run one action: refusal or failure → error card here (stale target: cache cleared);
-    success → clear cache and the ``reset`` widget keys, rerun."""
+    """Run one action: refusal or failure → error card here (``NotFound`` / ``UserInputError``:
+    ops cache cleared, never on ``PermissionDenied`` or ``StoreBusy``); success → clear cache
+    and the ``reset`` widget keys, rerun."""
     try:
         result = call()
     except HernessError as exc:
-        if _stale(exc):
+        if isinstance(exc, NotFound | UserInputError):  # maybe stale: re-read, form kept
             data.after_write()
         user_error(exc, title=f"{label} failed")
         return
