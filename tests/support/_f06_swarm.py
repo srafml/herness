@@ -136,12 +136,11 @@ def _post(team: str) -> dict[str, Any]:
 
 @dataclass
 class TaskScripts:
-    """Script books per task execution; counts executions and model calls per task."""
+    """Script books per task execution; counts the executions (books built) per task."""
 
     spawn_from: str | None = None  # dedup key of the analyst that requests one subtask
     skeptic_note: str = ""  # check note of every Skeptic verdict (planted text, ST06-06)
     executions: Counter[str] = field(default_factory=Counter)
-    calls: Counter[str] = field(default_factory=Counter)
     _books: dict[tuple[str, int], ScriptBook] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -150,7 +149,6 @@ class TaskScripts:
         assert row is not None, task_id
         key = (task_id, row.attempts)
         with self._lock:
-            self.calls[task_id] += 1
             found = self._books.get(key)
             if found is None:
                 script = {"turns": self._turns(row.spec), "source": f"f06:{row.role}"}
