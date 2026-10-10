@@ -58,30 +58,45 @@ def _scaled(env: ReportEnv) -> int:
     return 5 + EXTRA
 
 
-def test_bt09_05_render_300_evidence(report_env: ReportEnv,
+@pytest.fixture
+def scaled_env(report_env: ReportEnv) -> tuple[ReportEnv, int]:
+    """``report_env`` with the funding draft scaled to 300 evidence entries (module doc)."""
+    return report_env, _scaled(report_env)
+
+
+def test_bt09_05_render_300_evidence(scaled_env: tuple[ReportEnv, int],
                                      bench_recorder: BenchRecorder) -> None:  # fmt: skip
     """BT09-05 ``render_run`` HTML + MD with 300 evidence entries < 30 s (median)."""
-    expected = _scaled(report_env)
-    report_env.render(FUND_RUN)  # warm-up
+    env, expected = scaled_env
+    env.render(FUND_RUN)  # warm-up
     times: list[float] = []
     for _ in range(REPEATS):
         start = time.perf_counter()
-        manifest = report_env.render(FUND_RUN)
+        manifest = env.render(FUND_RUN)
         times.append(time.perf_counter() - start)
     assert manifest.evidence_entries == expected
     assert manifest.numbers_linked == manifest.numbers_total
     rec = record_median(bench_recorder, RENDER, times)
     assert rec.passed, rec
-    size_mb = len(report_env.out(FUND_RUN, "report.html")) / (1024 * 1024)
+
+
+def test_bt09_06_report_html_size(scaled_env: tuple[ReportEnv, int],
+                                  bench_recorder: BenchRecorder) -> None:  # fmt: skip
+    """BT09-06 ``report.html`` of the 300-evidence render is < 5 MB."""
+    env, expected = scaled_env
+    manifest = env.render(FUND_RUN)
+    assert manifest.evidence_entries == expected
+    size_mb = len(env.out(FUND_RUN, "report.html")) / (1024 * 1024)
     sys.stderr.write(f"BT09-06 report_html_mb {size_mb:.4f} MB (target < 5)\n")
     size = record_value(bench_recorder, SIZE, size_mb)
     assert size.passed, size
 
 
-def test_bt09_05_pdf_extra(report_env: ReportEnv, bench_recorder: BenchRecorder) -> None:
+def test_bt09_05_pdf_extra(scaled_env: tuple[ReportEnv, int],
+                          bench_recorder: BenchRecorder) -> None:  # fmt: skip
     """BT09-05 the PDF adds < 30 s (median); needs WeasyPrint (optional ``pdf`` extra)."""
     pytest.importorskip("weasyprint")
-    _scaled(report_env)
+    report_env = scaled_env[0]
     base: list[float] = []
     with_pdf: list[float] = []
     for _ in range(REPEATS):

@@ -466,8 +466,8 @@ def test_it09_19_pdf_real_engine(report_env: ReportEnv) -> None:
     assert manifest.files["report.pdf"] == hashlib.sha256(pdf).hexdigest()
 
 
-def test_it09_02_metrics_recorded(report_env: ReportEnv) -> None:
-    """IT09-02 (observability) a render records the three render metrics (R-12)."""
+def test_cv_t09_11_metrics_recorded(report_env: ReportEnv) -> None:
+    """CV-T09-11 (observability, §8.2) a render records the render metrics (R-12)."""
     report_env.render(FUND_RUN, strict=False)
     with pytest.raises(NotFound):
         report_env.render("run_01JA0000000000000000000009")

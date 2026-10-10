@@ -136,7 +136,8 @@ def _write_outputs(out_dir: Path, files: Mapping[str, bytes],
                    manifest: ReportManifest) -> ReportManifest:  # fmt: skip
     """Write every file in sorted order, then ``manifest.json`` with their hashes (U09-25).
 
-    ``ReportManifest`` admits only the three report file names (U09-01)."""
+    ``ReportManifest`` admits only the three report file names (U09-01). A ``report.*`` left by
+    an earlier render with other formats is deleted, so the manifest covers every artefact."""
     tmps: list[Path] = []
     name = "manifest.json"
     try:
@@ -340,8 +341,8 @@ def render_run(run_id: str, formats: Sequence[Format], out_dir: Path | None = No
     start = clock.monotonic()
     try:
         manifest = _render(run_id, formats, out_dir, strict, at, top_n)
-    except err.HernessError as exc:
-        code = exc.details.get("code", "")
+    except Exception as exc:  # any failure is logged and counted, then re-raised unchanged
+        code = exc.details.get("code", "") if isinstance(exc, err.HernessError) else ""
         _log.error("reports.render.failed", run_id=run_id if RUN_ID_RE.fullmatch(run_id) else "",
                    error_type=type(exc).__name__, code=code)  # fmt: skip
         result = "contract_error" if isinstance(exc, err.ReportContractError) else "error"

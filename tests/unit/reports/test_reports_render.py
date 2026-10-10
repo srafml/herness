@@ -21,6 +21,7 @@ from typing import Any, Final
 
 import jinja2
 import pytest
+import structlog
 
 from herness.core import config
 from herness.core.errors import (
@@ -358,8 +359,34 @@ def test_ut09_33_metrics_failure_is_logged(ops_store: object,
         raise StoreBusy("ops busy")  # noqa: EM101 - test stand-in
 
     monkeypatch.setattr(render, "record_metric_samples", busy)
-    with pytest.raises(NotFound):
+    with structlog.testing.capture_logs() as logs, pytest.raises(NotFound):
         render.render_run(RUN_ID, ["html"], now=NOW)
+    events = {e["event"]: e for e in logs}
+    assert events["reports.render.metrics_failed"]["error_type"] == "StoreBusy"
+    assert events["reports.render.metrics_failed"]["log_level"] == "warning"
+    assert events["reports.render.failed"]["error_type"] == "NotFound"
+
+
+def test_ut09_33_unexpected_error_logged_and_counted(
+    ops_store: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT09-33 a non-Herness error is logged and counted as ``error``, then re-raised as is."""
+    samples: list[object] = []
+
+    def boom(_run_id: str) -> None:
+        msg = "driver failure"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(render.ops, "get_run", boom)
+    monkeypatch.setattr(render, "record_metric_samples", samples.extend)
+    with structlog.testing.capture_logs() as logs, pytest.raises(RuntimeError, match="driver"):
+        render.render_run(RUN_ID, ["html"], now=NOW)
+    failed = [e for e in logs if e["event"] == "reports.render.failed"]
+    assert len(failed) == 1
+    assert failed[0]["error_type"] == "RuntimeError"
+    assert failed[0]["log_level"] == "error"
+    assert (failed[0]["run_id"], failed[0]["code"]) == (RUN_ID, "")
+    assert [s.labels for s in samples] == [{"result": "error"}]  # type: ignore[attr-defined]
 
 
 def test_ut09_33_build_deleted_between_check_and_open(monkeypatch: pytest.MonkeyPatch) -> None:
