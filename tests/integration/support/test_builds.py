@@ -52,7 +52,9 @@ _INCIDENT_TS = ("opened_at", "acknowledged_at", "resolved_at", "closed_at")
 _CHANGE_TS = ("opened_at", "planned_start", "planned_end", "actual_start", "actual_end")
 # FIXTURE_REV -> base32 SHA-256 of builds.py + _build_cache.py (LF). A change to either file
 # fails this pin: bump FIXTURE_REV when the change alters how builds are made, then re-pin.
-_SOURCE_PIN = {1: "bj4padh5mpy5sqac7alwdnxm7nhjlxv2dgriuhwqj4viljx3sdxa"}
+_SOURCE_PIN = {
+    1: "im5jfsdi6ctzw7qjiuqgc6cjtjmx2qw73h4sz4v4sb5strar5y5a",  # pragma: allowlist secret
+}
 
 
 def _build_jobs(data_root: Path) -> list[tuple[str, str]]:

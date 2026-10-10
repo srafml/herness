@@ -256,7 +256,10 @@ def _last_error(job_id: str) -> object:
 
 def build_root(base: Path, seed: int, scale: Scale, *, repo_root: Path) -> Path:
     """`<base>/<seed>-<scale>-<fingerprint[:12]>`: one immutable slot per fingerprint."""
-    print_ = cache.fingerprint(repo_root, cache.default_params_hash(scale))
+    return _slot(base, seed, scale, cache.fingerprint(repo_root, cache.default_params_hash(scale)))
+
+
+def _slot(base: Path, seed: int, scale: Scale, print_: str) -> Path:
     return base / f"{seed}-{scale}-{print_[:12]}"
 
 
@@ -267,7 +270,7 @@ def ensure_build(
     base = private_dir(cache_dir or default_cache_dir())
     phash = cache.default_params_hash(scale)
     print_ = cache.fingerprint(repo_root, phash)
-    root = private_dir(build_root(base, seed, scale, repo_root=repo_root))
+    root = private_dir(_slot(base, seed, scale, print_))  # == build_root(...), hashed once
     data_root = root / "data"
     with cache.build_lock(root):
         if not cache.marker_current(root, phash):
