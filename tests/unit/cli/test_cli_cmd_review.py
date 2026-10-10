@@ -216,12 +216,22 @@ def test_ut09_88_review_both_in_order_first_failure_code(
     assert [r["status"] for r in _json(capsys)["data"]["jobs"]] == ["queued", "queued"]
     jobs.outcomes = [
         wait.FollowOutcome(_row(result={"run_id": RUN}), 0, RUN, False, False, ()),
-        wait.FollowOutcome(_row("failed", last_error={"class": "SchemaViolation"}), 5, None,
+        wait.FollowOutcome(_row("failed", last_error={"class": "SchemaViolation",
+                                                      "message": "dq blocked"}), 5, None,
                            False, False, ()),
     ]  # fmt: skip
     assert _main(["--json", "review"]) == 5
-    rows = _json(capsys)["data"]["jobs"]
-    assert [r["status"] for r in rows] == ["done", "failed"]
+    envelope = _json(capsys)
+    assert [r["status"] for r in envelope["data"]["jobs"]] == ["done", "failed"]
+    error = envelope["error"]
+    assert (error["type"], error["exit_code"], error["message"]) == (
+        "SchemaViolation", 5, "dq blocked")  # fmt: skip
+    assert error["details"] == {"job_id": JOB[:-1] + "4"}
+    partial = wait.FollowOutcome(_row(result={"run_id": RUN}), 6, RUN, False, True, ("p",))
+    jobs.outcomes = [partial, wait.FollowOutcome(_row("canceled"), 1, None, False, False, ())]
+    assert _main(["--json", "review"]) == 6
+    envelope = _json(capsys)
+    assert (envelope["error"], envelope["warnings"]) == (None, ["p"])
 
 
 def test_ut09_88_resume_goes_through_resume_run(

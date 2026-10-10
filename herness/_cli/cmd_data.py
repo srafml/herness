@@ -23,7 +23,7 @@ from herness._cli._job_cmds import (
     wait_options,
 )
 from herness._cli.identity import guarded
-from herness._cli.output import CliResult, _table_printer, emit
+from herness._cli.output import CliResult, emit, table_printer
 from herness._cli.wait import submit_job
 from herness.core import time as clock
 from herness.core.errors import NotFound
@@ -87,7 +87,7 @@ def _inspect(opts: GlobalOptions, source: str, *, check: bool) -> int:
         rows = factory.build_connector(source, cfg).discover_fields()  # type: ignore[attr-defined]
         key = "fields"
     data: dict[str, object] = {key: [dataclasses.asdict(row) for row in rows]}
-    return emit(opts, CliResult(opts.command, data, [], _table_printer(data)))
+    return emit(opts, CliResult(opts.command, data, [], table_printer(data)))
 
 
 @guarded("sync")
@@ -165,7 +165,7 @@ def _scenario(opts: GlobalOptions, text: str) -> int:
     data = cast("dict[str, object]", result.model_dump(mode="json"))
     shown = {k: data[k] for k in ("scenario", "solver_status", "selected", "total_effort_usd",
                                   "total_expected_impact_usd")}  # fmt: skip
-    return emit(opts, CliResult(opts.command, data, [], _table_printer(shown)))
+    return emit(opts, CliResult(opts.command, data, [], table_printer(shown)))
 
 
 @guarded("score")
@@ -210,7 +210,7 @@ def metrics_list(*, actor: Actor) -> int:
     opts.config()
     rows = load_catalog(Path(opts.config_dir) / "metrics.yaml").describe()
     data: dict[str, object] = {"metrics": rows}
-    return emit(opts, CliResult(opts.command, data, [], _table_printer(data)))
+    return emit(opts, CliResult(opts.command, data, [], table_printer(data)))
 
 
 def register(root: typer.Typer) -> None:

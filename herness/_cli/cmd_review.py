@@ -19,9 +19,9 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, cast
 import typer
 from pydantic import ValidationError
 
-from herness._cli._job_cmds import Inline, Wait, current_opts, finish_job, start_job, wait_options
+from herness._cli import _job_cmds as jc
 from herness._cli.identity import guarded
-from herness._cli.output import CliResult, _markup, emit
+from herness._cli.output import CliResult, emit, markup
 from herness._cli.wait import submit_job
 from herness.core.errors import NotFound, ReportContractError
 from herness.reports.rules import REC_ID_RE, Actor, UserInputError, check_id
@@ -94,9 +94,9 @@ class _Render:
 
 def _paths_printer(run_id: str, paths: Sequence[Path]) -> Callable[[Console], None]:
     def show(console: Console) -> None:
-        console.print(f"Report for run {_markup(run_id)}:")
+        console.print(f"Report for run {markup(run_id)}:")
         for path in paths:
-            console.print(f"  {_markup(str(path))}")
+            console.print(f"  {markup(str(path))}")
 
     return show
 
@@ -133,7 +133,7 @@ def _after_review(opts: GlobalOptions, actor: Actor, outcome: FollowOutcome,
 
     run_id = outcome.run_id
     if outcome.job.status != "done" or outcome.detached or run_id is None:
-        return finish_job(opts, outcome)
+        return jc.finish_job(opts, outcome)
     _run_id_checked(run_id)
     if render.differs(opts.config().app.reports):
         manifest = rerender_report(actor, run_id=run_id, formats=render.formats,
@@ -153,12 +153,12 @@ def _review_report(  # noqa: PLR0913 - the U09-96 option set
 ) -> int:  # fmt: skip
     from herness._cli.payloads import parse_budget_usd, review_request  # noqa: PLC0415
 
-    opts = current_opts()
-    wait_options(wait=wait, inline=inline)
+    opts = jc.current_opts()
+    jc.wait_options(wait=wait, inline=inline)
     payload = review_request(kind, depth, [parse_budget_usd(b) for b in budget or ()])
     job_id = submit_job(opts, kind="review", payload=payload, gpu_class="reasoning",
                         inline=inline)  # fmt: skip
-    outcome = start_job(opts, actor, job_id, wait=wait, inline=inline)
+    outcome = jc.start_job(opts, actor, job_id, wait=wait, inline=inline)
     if isinstance(outcome, CliResult):  # --no-wait
         outcome.warnings += [_RENDER_ONLY] if render.given else []
         return emit(opts, outcome)
@@ -174,7 +174,7 @@ def _report_command(kind: _Kind, path: str) -> Callable[..., int]:
         top_n: Annotated[int | None, _Opt("--top-n", min=1, max=100, help="Top N rows.")] = None,
         fmt: Fmt = None, out: Out = None, no_strict: NoStrict = False,
         open_: Annotated[bool, _Opt("--open", help="Open the HTML report.")] = False,
-        wait: Wait = True, inline: Inline = False, actor: Actor,
+        wait: jc.Wait = True, inline: jc.Inline = False, actor: Actor,
     ) -> int:  # fmt: skip
         render = _Render(top_n, _formats(fmt), out, no_strict, open_)
         return _review_report(kind, actor, depth, budget, render, wait=wait, inline=inline)
@@ -192,7 +192,7 @@ def report_render(
     from herness.reports.actions import rerender_report  # noqa: PLC0415 - lazy (BT09-07)
     from herness.store import ops  # noqa: PLC0415
 
-    opts = current_opts()
+    opts = jc.current_opts()
     _run_id_checked(run_id)
     manifest = rerender_report(actor, run_id=run_id, formats=_formats(fmt), out_dir=out,
                                strict=not no_strict)  # fmt: skip
@@ -221,16 +221,16 @@ def review(
     *, kind: Annotated[str, _Opt("--kind", help="funding, org or both.")] = "both",
     depth: DepthOpt = "standard",
     at: Annotated[str | None, _Opt("--at", help="Start time, ISO-8601 with offset.")] = None,
-    wait: Wait = True, inline: Inline = False, actor: Actor,
+    wait: jc.Wait = True, inline: jc.Inline = False, actor: Actor,
 ) -> int:  # fmt: skip
     """Enqueue review jobs (spec 06, 08); waits for them in order unless --no-wait."""
     from herness._cli.payloads import review_request  # noqa: PLC0415 - lazy (BT09-07)
 
-    opts = current_opts()
+    opts = jc.current_opts()
     if kind not in _KINDS:
         msg = "--kind takes funding, org or both"
         raise UserInputError(msg, hint="Run `herness review --help`.")
-    wait_options(wait=wait, inline=inline)
+    jc.wait_options(wait=wait, inline=inline)
     if at is not None and inline:
         msg = "--at and --inline cannot be used together"
         raise UserInputError(msg, hint="Drop one of the two options.")
@@ -240,9 +240,9 @@ def review(
            for k in _KINDS[kind]]  # fmt: skip
     rows: list[dict[str, object]] = []
     warnings: list[str] = []
-    code = 0
+    first: FollowOutcome | None = None  # the first job that did not end plain done
     for job_id in ids:
-        outcome = start_job(opts, actor, job_id, wait=wait, inline=inline)
+        outcome = jc.start_job(opts, actor, job_id, wait=wait, inline=inline)
         if isinstance(outcome, CliResult):
             rows.append(outcome.data or {})
             continue
@@ -250,15 +250,17 @@ def review(
         rows.append({"job_id": job.job_id, "status": job.status, "run_id": outcome.run_id,
                      "partial": outcome.partial})  # fmt: skip
         warnings += outcome.warnings
-        code = code or outcome.exit_code
-    data: dict[str, object] = {"jobs": rows}
-    return emit(opts, CliResult(opts.command, data, warnings, _jobs_printer(rows), code))
+        first = first or (outcome if outcome.exit_code else None)
+    code = 0 if first is None else first.exit_code
+    result = CliResult(opts.command, {"jobs": rows}, warnings, _jobs_printer(rows), code)
+    failed = None if first is None else jc.job_error(opts, first, result)
+    return emit(opts, result) if failed is None else failed
 
 
 def _jobs_printer(rows: list[dict[str, object]]) -> Callable[[Console], None]:
     def show(console: Console) -> None:
         for row in rows:
-            console.print(" ".join(f"{k}={_markup(str(v))}" for k, v in row.items()))
+            console.print(" ".join(f"{k}={markup(str(v))}" for k, v in row.items()))
 
     return show
 
@@ -268,16 +270,16 @@ def resume(
     run_id: Annotated[str, _Arg(help="Run id.")], *,
     retry_dead: Annotated[bool, _Opt("--retry-dead", help="Retry dead tasks.")] = False,
     force: Annotated[bool, _Opt("--force", help="Resume a finished run.")] = False,
-    wait: Wait = True, inline: Inline = False, actor: Actor,
+    wait: jc.Wait = True, inline: jc.Inline = False, actor: Actor,
 ) -> int:  # fmt: skip
     """Resume an unfinished run (spec 08)."""
     from herness.reports.actions import resume_run  # noqa: PLC0415 - lazy (BT09-07)
 
-    opts = current_opts()
-    wait_options(wait=wait, inline=inline)
+    opts = jc.current_opts()
+    jc.wait_options(wait=wait, inline=inline)
     _run_id_checked(run_id)
     job_id = resume_run(actor, run_id=run_id, retry_dead=retry_dead, force=force)
-    return finish_job(opts, start_job(opts, actor, job_id, wait=wait, inline=inline))
+    return jc.finish_job(opts, jc.start_job(opts, actor, job_id, wait=wait, inline=inline))
 
 
 def _effective(text: str | None) -> datetime.date | None:
@@ -300,7 +302,7 @@ def decide(
     from herness.harness import memory  # noqa: PLC0415 - lazy (BT09-07)
     from herness.reports.actions import decide_recommendation  # noqa: PLC0415
 
-    opts = current_opts()
+    opts = jc.current_opts()
     check_id(REC_ID_RE, rec_id, "recommendation")
     if decision not in _DECISIONS:
         msg = "decision must be accepted, rejected or deferred"

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Final, cast
 import typer
 from typer._click.globals import get_current_context
 
-from herness._cli.output import CliResult, _table_printer, _write_json, emit
+from herness._cli.output import CliResult, emit, emit_job_error, table_printer
 from herness._cli.wait import follow_job, run_job_inline
 from herness.core import jobs
 from herness.reports.rules import UserInputError
@@ -22,12 +22,15 @@ if TYPE_CHECKING:
     from herness.cli import GlobalOptions
     from herness.reports.rules import Actor
 
-__all__ = ["Inline", "Wait", "current_opts", "finish_job", "start_job", "wait_options"]
+__all__ = [
+    "Inline", "Wait", "current_opts", "finish_job", "job_error", "start_job", "wait_options",
+]  # fmt: skip
 
 _Opt = typer.Option
 Wait = Annotated[bool, _Opt("--wait/--no-wait", help="Follow the job until it ends.")]
 Inline = Annotated[bool, _Opt("--inline", help="Run the job in this process (admin).")]
 _FAILED_FIX: Final = "See `herness jobs list` and the worker log for the job."
+_CANCELED: Final = "Job `{job_id}` was canceled."
 
 
 def current_opts() -> GlobalOptions:
@@ -44,7 +47,7 @@ def wait_options(*, wait: bool, inline: bool) -> None:
 
 def _queued(opts: GlobalOptions, job_id: str) -> CliResult:
     data: dict[str, object] = {"job_id": job_id, "status": jobs.get(job_id).status}
-    return CliResult(opts.command, data, [], _table_printer(data))
+    return CliResult(opts.command, data, [], table_printer(data))
 
 
 def start_job(
@@ -58,23 +61,30 @@ def start_job(
     return follow_job(opts, job_id, poll_s=opts.config().app.cli.poll_interval_s)
 
 
+def job_error(opts: GlobalOptions, outcome: FollowOutcome, result: CliResult) -> int | None:
+    """The error of a failed (``last_error``) or canceled job (U09-91), printed with
+    ``result``'s data; None when the job did not fail or get canceled."""
+    job = outcome.job
+    if job.status == "failed":
+        error = job.last_error or {}
+        kind, text = error.get("class"), error.get("message")
+    elif job.status == "canceled":
+        kind, text = "JobStateError", _CANCELED.format(job_id=job.job_id)
+    else:
+        return None
+    kind, text = kind if isinstance(kind, str) else "UnknownError", text or ""
+    return emit_job_error(opts, kind, outcome.exit_code, message=str(text), hint=_FAILED_FIX,
+                          details={"job_id": job.job_id}, result=result)  # fmt: skip
+
+
 def finish_job(opts: GlobalOptions, outcome: FollowOutcome | CliResult) -> int:
-    """Print a job command's result; a failed job's JSON error comes from ``last_error``."""
+    """Print a job command's result; a failed or canceled job carries its error (U09-91)."""
     if isinstance(outcome, CliResult):
         return emit(opts, outcome)
     job = outcome.job
-    if job.status == "failed" and opts.json:
-        error = job.last_error or {}
-        kind, text = error.get("class"), error.get("message")
-        _write_json({"ok": False, "command": opts.command, "data": None, "warnings": [],
-                     "error": {"type": kind if isinstance(kind, str) else "UnknownError",
-                               "exit_code": outcome.exit_code,
-                               "message": text if isinstance(text, str) else "",
-                               "hint": _FAILED_FIX, "details": {"job_id": job.job_id}}},
-                    opts.command)  # fmt: skip
-        return outcome.exit_code
     data: dict[str, object] = {"job_id": job.job_id, "status": job.status,
                                "run_id": outcome.run_id, "partial": outcome.partial}  # fmt: skip
-    warnings = list(outcome.warnings)
-    return emit(opts, CliResult(opts.command, data, warnings, _table_printer(data),
-                                outcome.exit_code))  # fmt: skip
+    result = CliResult(opts.command, data, list(outcome.warnings), table_printer(data),
+                       outcome.exit_code)  # fmt: skip
+    code = job_error(opts, outcome, result)
+    return emit(opts, result) if code is None else code

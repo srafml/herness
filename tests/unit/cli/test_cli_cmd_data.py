@@ -227,6 +227,25 @@ def test_ut09_87_wait_follows_and_reports_failure(
                                      "run_id": "run_x", "partial": False}  # fmt: skip
 
 
+def test_ut09_87_canceled_job_json_carries_error(
+    admin: Submitted, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """UT09-87 a canceled job in --json mode: exit 1 with an error object (U09-91), the job
+    data kept; human mode prints the job lines and exits 1."""
+    outcome = wait.FollowOutcome(_row("canceled"), 1, None, False, False, ())
+    monkeypatch.setattr(_job_cmds, "follow_job", lambda *a, **k: outcome)
+    assert _main(["--json", "build"]) == 1
+    envelope = _json(capsys)
+    assert envelope["ok"] is False
+    assert envelope["error"] == {
+        "type": "JobStateError", "exit_code": 1, "message": f"Job `{JOB}` was canceled.",
+        "hint": "See `herness jobs list` and the worker log for the job.",
+        "details": {"job_id": JOB}}  # fmt: skip
+    assert envelope["data"]["status"] == "canceled"
+    assert _main(["build"]) == 1
+    assert "status: canceled" in capsys.readouterr().out
+
+
 def test_ut09_87_sync_check_mapping_and_discover_fields_enqueue_nothing(
     admin: Submitted, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
