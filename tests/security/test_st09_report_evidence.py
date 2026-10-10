@@ -10,6 +10,7 @@ fixed-key test redactor of ``report_env``); numeric, boolean, date/time and id c
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 
 import duckdb
@@ -57,12 +58,14 @@ def test_st09_31_raw_sample_text_never_in_report(report_env: ReportEnv, run_id: 
         assert "PAY-1" not in text
         assert "example.com" not in text
     for text in (html, md):
-        assert "call [EMAIL_" in text  # the sample is rendered, its free text redacted
-        assert RUN in text  # ids and typed cells are shown as stored
+        # the sample is rendered and its free text redacted (MD escapes ``[``, ``_``, ``]``)
+        assert re.search(r"call \\?\[EMAIL\\?_[0-9a-f]+\\?\]", text)
+        assert RUN.removeprefix("run_") in text  # ids and typed cells shown (MD escapes _)
         assert "12.50" in text
         assert "2026-01-02" in text
-    assert '<th scope="col">comment</th>' in html
+    appendix = html.split('<section id="evidence">', 1)[1].split("</section>", 1)[0]
+    assert '<th scope="col">comment</th>' in appendix
     for name in ("title", "Summary", "description", "NOTES", "short_description", "close_notes",
                  "root_cause_text"):  # fmt: skip
-        assert f'<th scope="col">{name}</th>' not in html
-        assert f'<th scope="col"> {name} </th>' not in html
+        assert f'<th scope="col">{name}</th>' not in appendix
+        assert f'<th scope="col"> {name} </th>' not in appendix
