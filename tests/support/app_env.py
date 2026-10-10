@@ -2,14 +2,16 @@
 
 ``fake_services`` stands in for ``app.common.bootstrap.get_services`` (only ``cfg.security.ui``
 and ``roster`` are read by ``current_actor``); ``actor_script`` is an AppTest script that shows
-the session actor as ``role|user_ref|display``.
+the session actor as ``role|user_ref|display``. T09-14 adds ``wh_services`` (the fields the
+warehouse and ops-cache modules read), ``wh_script`` and ``plant_scored_build``.
 """
 
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.common.auth import build_roster
@@ -65,3 +67,69 @@ def actor_script() -> None:
 
     actor = current_actor()
     st.text(f"{actor.role}|{actor.user_ref}|{actor.display}")
+
+
+# --- T09-14: warehouse access, named queries, ops caches -------------------------------------
+
+QUERIES_FILE = Path(__file__).resolve().parents[2] / "app" / "common" / "queries.sql.yaml"
+
+
+def wh_services(
+    data_dir: Path,
+    *,
+    queries: Mapping[str, object] | None = None,
+    recheck_s: int = 60,
+    page_row_limit: int = 5000,
+) -> SimpleNamespace:
+    """The ``AppServices`` fields ``app.common.wh`` and ``app.common.data`` read."""
+    ttl = SimpleNamespace(warehouse=3600, ops=10)
+    app = SimpleNamespace(
+        current_recheck_s=recheck_s, page_row_limit=page_row_limit, cache_ttl_s=ttl
+    )
+    cfg = SimpleNamespace(paths=SimpleNamespace(data=data_dir), app=SimpleNamespace(app=app))
+    return SimpleNamespace(cfg=cfg, queries=dict(queries or {}))
+
+
+def wh_script() -> None:
+    """AppTest script: show the build id ``get_conn`` returns."""
+    import streamlit as st  # noqa: PLC0415 - AppTest runs this function's body as a script
+
+    from app.common.wh import get_conn  # noqa: PLC0415
+
+    build_id, _conn = get_conn()
+    st.text(build_id)
+
+
+def plant_scored_build(warehouse_dir: Path) -> str:
+    """Write the scored ``metrics_tiny`` build as ``wh-<id>.duckdb`` and point CURRENT at it.
+
+    Spec 11's ``tiny_build`` is not in the tree: this reuses the impl 04 pattern
+    (``metrics_tiny`` + real facts + real ``run_scoring`` on the small catalog, then
+    ``save_as_file``), so every schema the named queries read (meta, core, enrich, metrics,
+    score) exists with real column shapes. Returns the build id.
+    """
+    import pytest  # noqa: PLC0415 - only the planting helpers need it
+    from tests.support.metrics_scoring import (  # noqa: PLC0415
+        patches,
+        save_as_file,
+        small_catalog,
+        tiny_with_facts,
+    )
+    from tests.support.metrics_tiny import BUILD_ID  # noqa: PLC0415
+
+    from herness.metrics.scoring import run_scoring  # noqa: PLC0415
+    from herness.store._warehouse_rw import write_current  # noqa: PLC0415
+    from herness.store.layout import DataLayout  # noqa: PLC0415
+
+    warehouse_dir.mkdir(parents=True, exist_ok=True)
+    with pytest.MonkeyPatch.context() as mp:
+        for obj, name, value in patches(small_catalog()):
+            mp.setattr(obj, name, value)
+        con = tiny_with_facts()
+        try:
+            run_scoring(BUILD_ID, con=con)
+            save_as_file(con, warehouse_dir / f"wh-{BUILD_ID}.duckdb")
+        finally:
+            con.close()
+    write_current(BUILD_ID, layout=DataLayout.from_root(warehouse_dir.parent))
+    return BUILD_ID

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Final, cast
 import streamlit as st
 
 from app.common.auth import Roster, build_roster
+from app.common.wh import NamedQuery, check_forbidden_columns, load_named_queries
 from herness.core import time as clock
 from herness.core.config import init_config
 from herness.core.config_sources import load_bootstrap
@@ -36,12 +37,13 @@ if TYPE_CHECKING:
     from herness.harness.memory import MemoryStore
     from herness.harness.pipelines.chat import ChatService
 
-__all__ = ["AppServices", "get_services"]
+__all__ = ["AppServices", "get_services", "load_queries"]
 
 _GUARD_LOCK: Final = threading.Lock()  # ENG §2.3 exception: the guard is installed once
 _guard_installed: list[bool] = []
 # `herness ui` launch variables; impl 10's HERNESS_* env layer would read them as config keys.
 _LAUNCH_VARS: Final = frozenset({"HERNESS_CONFIG_DIR", "HERNESS_DATA_DIR", "HERNESS_SET_OVERRIDES"})
+QUERIES_FILE: Final = Path(__file__).with_name("queries.sql.yaml")
 
 
 @dataclass(frozen=True)
@@ -52,8 +54,7 @@ class AppServices:
     memory: MemoryStore
     chat: ChatService
     roster: Roster
-    # T09-14: dict[str, app.common.wh.NamedQuery] once wh.py exists (U09-53 step 10).
-    queries: dict[str, object]
+    queries: dict[str, NamedQuery]
     started_at: datetime
 
 
@@ -67,6 +68,15 @@ def _overrides(raw: str) -> list[str]:
         msg = "HERNESS_SET_OVERRIDES must be a JSON list of strings"
         raise ConfigError(msg, hint="Start the dashboard with `herness ui`.")
     return value
+
+
+def load_queries(path: Path, *, page_row_limit: int) -> dict[str, NamedQuery]:
+    """U09-53 step 10: load the named queries, then the raw-text guard (TH09-11)."""
+    queries = load_named_queries(path, page_row_limit=page_row_limit)
+    if violations := check_forbidden_columns(queries):
+        msg = f"named query {violations[0].split(':', 1)[0]} reads raw ticket text"
+        raise ConfigError(msg)
+    return queries
 
 
 def _install_guard_once(profile: ProfileName | None, config_dir: Path) -> None:
@@ -100,7 +110,7 @@ def build_services() -> AppServices:
     memory = get_memory_store()
     chat = ChatService(cfg.pipelines, LLMRegistry(cfg.models, profile=cfg.profile), memory)
     roster = build_roster(cfg.security.ui.roles, load_user_ref_key())
-    queries: dict[str, object] = {}  # T09-14: load_named_queries + check_forbidden_columns
+    queries = load_queries(QUERIES_FILE, page_row_limit=cfg.app.app.page_row_limit)
     return AppServices(cfg, memory, chat, roster, queries, clock.now())
 
 

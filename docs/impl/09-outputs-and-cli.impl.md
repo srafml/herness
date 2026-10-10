@@ -76,6 +76,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `app/common/auth.py` | Identity resolution from OS user or trusted header; display names | `Identity`, `resolve_identity`, `current_actor`, `Roster`, `build_roster`, `display_name` | L5 | `streamlit` | 200 |
 | `app/common/sanitize.py` | Markdown sanitising of model text | `safe_markdown`, `escape_markdown_chunk`, `render_answer_markdown`, `render_marked_markdown` | L5 | none | 180 |
 | `app/common/wh.py` | Read-only warehouse access and named queries | `NoCurrentBuild`, `current_build_id`, `get_conn`, `NamedQuery`, `load_named_queries`, `check_forbidden_columns`, `query`, `FORBIDDEN_TEXT_COLUMNS` | L5 | `streamlit`, `duckdb`, `yaml` | 260 |
+| `app/common/_wh_queries.py` | Private helper of `wh.py` (T09-14 split for the line budget): named-query file loader, strict parameter checks and the raw-text guard (U09-61); its public names are re-exported by `app.common.wh` | `ParamSpec`, `NamedQuery`, `PARAM_CHECKS`, `load_named_queries`, `check_forbidden_columns`, `FORBIDDEN_TEXT_COLUMNS` | L5 | `yaml`, `sqlglot`, `pydantic` | 200 |
 | `app/common/queries.sql.yaml` | Named SQL queries | see U09-63 | data | — | 400 |
 | `app/common/data.py` | Cached ops reads, cache invalidation, trace pages | `ops_read`, `after_write`, `TracePage`, `read_trace_page` | L5 | `streamlit` | 220 |
 | `app/common/widgets.py` | Page wrapper, error isolation, evidence widget, badges, banners, sidebar | `PageContext`, `page`, `block`, `evidence`, `verification_badge`, `banner_strip`, `sidebar_build`, `user_error` | L5 | `streamlit` | 300 |
@@ -1747,7 +1748,7 @@ Signature: `escape_markdown_chunk(text: str) -> str`.
 | Errors | `NoCurrentBuild`; open failure (file retired between check and open) → `NoCurrentBuild` after one re-read of `CURRENT`. |
 | Concurrency | Pool lock guards the dict; queries use `conn.cursor()` per call so sessions never share a cursor. |
 | Complexity and limits | Recheck interval `current_recheck_s` (60 s); grace 300 s (constant `STALE_CONN_GRACE_S`). |
-| Security notes | Read-only, external access off (TH09-13 defence in depth). |
+| Security notes | Read-only, external access off (TH09-13 defence in depth). Implementation note (T09-14): `open_readonly` (T02-09) already runs both SETs and locks the configuration, so step 3 is verify-then-set: read both settings, run the SETs only when they are not in force, re-read; any failure closes the connection and raises `ConfigError("warehouse <id> could not be hardened")` (fail closed). The open-failure re-read is a forced recheck: it updates `wh_checked_at` and toasts/logs a switch like step 2. |
 | Tests | UT09-57, IT09-17 |
 
 #### U09-61 app.common.wh.NamedQuery, load_named_queries, check_forbidden_columns
@@ -1771,7 +1772,7 @@ Signature: `escape_markdown_chunk(text: str) -> str`.
 | Errors | Any validation failure → `ConfigError("named query <name>: <reason>")`. |
 | Concurrency | Pure after the read. |
 | Complexity and limits | ≤ 200 queries. |
-| Security notes | TH09-11 (ASVS V14), TH09-13. |
+| Security notes | TH09-11 (ASVS V14), TH09-13. Implementation notes (T09-14): the name regex also allows a `_v<n>` variant suffix (`^[a-z_]+\.[a-z_]+(?:_v\d+)?$`, for `evidence.meta_v1` of U09-63). The guard compares schema, table, alias, qualifier and column names case-insensitively (DuckDB identifiers are case-insensitive); a column whose name equals a `core` alias or table name in scope (whole-row reference such as `i` or `to_json(i)`), a projected `*`, `t.*` and `COLUMNS(...)` over a scope with a `core` table are violations `"<query>: core.<table>.*"`. Parameter defaults are checked against their declared type at load (`ConfigError`). Fail-closed posture (T09-14 review round 2): qualifiers and unqualified columns resolve against the `core` sources of the column's own scope and every enclosing scope (LATERAL, scalar and `EXISTS` subqueries); a qualified column is a whole-row read only when its qualifier is a `core` alias/table; positional references (`#n`), PIVOT/UNPIVOT, any FROM/JOIN/LATERAL source that is not a schema-qualified table, CTE or subquery, and calls to `query`, `query_table`, `read_*`, `glob`, `sniff_*`, `parquet_*`, `iceberg_*` anywhere are violations. Round 3: a column list on any table, subquery or CTE alias (`i(a, b)`) is a violation, and any bare `*` other than `count(*)` (including `* LIKE`, `* SIMILAR TO`) in a scope with its own `core` tables is a star read. |
 | Tests | UT09-58, UT09-59, ST09-12 |
 
 #### U09-62 app.common.wh.query
