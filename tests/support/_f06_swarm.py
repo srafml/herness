@@ -42,14 +42,16 @@ from herness.harness import warehouse_tools as wt
 from herness.harness.memory import MemoryStore
 from herness.harness.memory.settings import MemoryConfig
 from herness.harness.memory.store import Embedder
-from herness.harness.swarm import challenge, planner, scheduler, writer
+from herness.harness.swarm import _run_env, challenge, planner, scheduler, writer
 from herness.harness.swarm import run as run_mod
+from herness.harness.swarm.routing import default_tools
 from herness.store.ops import core, get_task, query_findings, record_evidence, select_tasks
 
 __all__ = [
     "PointLog",
     "SimulatedKill",
     "TaskScripts",
+    "allow_spawn",
     "draft_view",
     "expect_kill",
     "finding_view",
@@ -62,6 +64,7 @@ __all__ = [
     "use_real_agents",
 ]
 
+_MEMORY_TOOLS: Final = ("propose_memory", "recall_memory")
 REPEAT: Final = 5  # agent runs per task execution: best-of plans, judge and skeptic samples
 SPAWN_ARGS: Final = {
     "objective": "Follow up the incident load of team t2.", "specialty": "ops",
@@ -229,7 +232,9 @@ def use_real_agents(
         mp.setattr(module, "run_agent", loop.run_agent)
     mp.setattr(tools_mod._Process, "registry", tools_mod.ToolRegistry())
     wt.register_warehouse_tools()
-    tools_mod.tool_registry().register(SyncTool("recall_memory"), owner="07")
+    registry_ = tools_mod.tool_registry()
+    for name in _MEMORY_TOOLS:  # spec 07 tools: never called by the scripts
+        registry_.register(SyncTool(name), owner="07")
     registry = drv.llms if llms is None else llms
     clients: dict[str, TaskClient] = {}
 
@@ -240,6 +245,27 @@ def use_real_agents(
 
     mp.setattr(registry, "client", client)
     return scripts
+
+
+def allow_spawn(drv: e.Drv, mp: pytest.MonkeyPatch) -> str:
+    """Give the first planned t1 analyst task the default analyst tools (the stub pipeline's
+    tasks carry `post_finding` only), so it may spawn a child whose tools are no wider
+    (U06-101, TH06-02); returns that task's dedup key."""
+
+    class Spawning(e.StubPipeline):
+        def deterministic_tasks(self, ctx: Any) -> list[TaskSpec]:
+            tasks = super().deterministic_tasks(ctx)
+            tools = default_tools("analyst", "general", ctx.depth, child_depth=0, knobs=ctx.knobs)
+            return [tasks[0].model_copy(update={"tools": tools}), *tasks[1:]]
+
+    shape = drv.pipeline
+    mp.setattr(
+        _run_env, "get_pipeline",
+        lambda kind, reader, window_end: Spawning(
+            kind, shape["t1"], shape["t2"], t2_must=shape["t2_must"]
+        ),
+    )  # fmt: skip
+    return e.det_spec("run_" + "0" * 26, "t1", 0, must=True).dedup_key
 
 
 # --- fault point probe -------------------------------------------------------------------------
