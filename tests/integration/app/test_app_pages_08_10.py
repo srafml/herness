@@ -418,3 +418,190 @@ def test_ft09_01_locked_ops_store_keeps_review_form(
     assert not at.error, [e.value for e in at.error]
     item = shared.get_review_item(mapping)
     assert (item.status, item.note) == ("approved", "Matches the CMDB")
+
+
+# --- Runs & Traces (U09-82) ----------------------------------------------------------------------
+
+RUN_LIVE = "run_" + new_ulid()
+FAILED_JOB, QUEUED_JOB = "job_" + new_ulid(), "job_" + new_ulid()
+PAYLOAD_TEXT = "sampled prompt text"
+
+
+def _seed_run(data_root: Path) -> None:
+    """A running review run with a dead task, findings, an event, two jobs and a trace file."""
+    _write(
+        "INSERT INTO run (run_id, kind, depth, profile, config_hash, status, started_at,"
+        " token_usage, cost_usd) VALUES (?,?,?,?,?,?,?,?,?)",
+        (RUN_LIVE, "funding_review", "standard", "local", "c", "running", STAMP,
+         json.dumps({"input": 100, "output": 20}), "0.05"),
+    )  # fmt: skip
+    _write(
+        "INSERT INTO task (task_id, run_id, role, spec, status, attempts, last_error, created_at,"
+        " updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("tsk_dead", RUN_LIVE, "analyst", '{"objective": "Rank W1"}', "dead", 3,
+         "QueryError: query timed out", STAMP, STAMP),
+        ("tsk_done", RUN_LIVE, "writer", '{"objective": "Write"}', "done", 1, None, STAMP, STAMP),
+    )  # fmt: skip
+    _write(
+        "INSERT INTO finding (finding_id, run_id, task_id, author_role, claim, numbers, status,"
+        " created_at) VALUES (?,?,?,?,?,?,?,?)",
+        ("fnd_1", RUN_LIVE, "tsk_done", "analyst", "c1", "[]", "verified", STAMP),
+        ("fnd_2", RUN_LIVE, "tsk_done", "analyst", "c2", "[]", "rejected", STAMP),
+    )
+    _write(
+        "INSERT INTO resilience_event (event_id, ts, kind, component, target, run_id)"
+        " VALUES (?,?,?,?,?,?)",
+        ("evt_1", STAMP, "breaker_open", "llm", "reasoning", RUN_LIVE),
+    )
+    error = json.dumps({"class": "ModelUnavailable", "message": "hidden error text"})
+    _write(
+        "INSERT INTO job (job_id, kind, gpu_class, status, priority, payload, last_error,"
+        " attempts, max_attempts, scheduled_for, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (FAILED_JOB, "review", "none", "failed", 50, json.dumps({"run_id": RUN_LIVE}), error,
+         3, 3, STAMP, STAMP),
+        (QUEUED_JOB, "review", "none", "queued", 50, json.dumps({"run_id": RUN_LIVE}), None,
+         0, 3, STAMP, STAMP),
+    )  # fmt: skip
+    traces = data_root / "traces"
+    traces.mkdir(parents=True, exist_ok=True)
+    events = [
+        {"type": "llm_call", "run_id": RUN_LIVE, "model": "m1", "payload": PAYLOAD_TEXT},
+        {"type": "tool_call", "run_id": RUN_LIVE, "tool": "sql", "args": {"q": PAYLOAD_TEXT}},
+    ]
+    lines = "\n".join(json.dumps(e) for e in events) + "\n"
+    (traces / f"{RUN_LIVE}.jsonl").write_text(lines, encoding="utf-8")
+
+
+def _job_rows() -> list[tuple[object, ...]]:
+    return [tuple(r) for r in core.read_all("SELECT job_id, status FROM job ORDER BY job_id")]
+
+
+def _frames(at: AppTest) -> str:
+    return "\n".join(d.value.to_string() for d in at.main.dataframe)
+
+
+def _trace(at: AppTest) -> list[dict[str, Any]]:
+    found = [j for j in _json(at) if isinstance(j, list)]
+    assert len(found) == 1, found
+    return found[0]  # type: ignore[no-any-return]
+
+
+def test_it09_10_runs_detail_and_trace(env: SimpleNamespace) -> None:
+    """IT09-10 Runs & Traces: run row, tasks with the dead one highlighted, findings, events,
+    jobs, trace events without payloads (admins only see them); no actions for a reviewer."""
+    _seed_run(env.data_root)
+    at = _run(RUNS)
+    assert at.selectbox(key="runs_run").value == RUN_LIVE
+    frames = _frames(at)
+    for text in ("funding_review", "120", "0.05", "tsk_dead", "query timed out", "verified",
+                 "breaker_open", FAILED_JOB, "ModelUnavailable"):  # fmt: skip
+        assert text in frames, text
+    assert "hidden error text" not in frames
+    assert "Dead tasks: tsk_dead" in [w.value for w in at.main.warning]
+    assert [e["type"] for e in _trace(at)] == ["llm_call", "tool_call"]
+    assert PAYLOAD_TEXT not in json.dumps(_trace(at))
+    assert not at.button
+    at.selectbox(key="trace_type").set_value("tool_call").run()
+    assert [e["tool"] for e in _trace(at)] == ["sql"]
+    env.login(ADMIN)
+    at = _run(RUNS)
+    assert PAYLOAD_TEXT in json.dumps(_trace(at))  # include_payload for admins
+    assert {"resume_submit", f"job_retry_{FAILED_JOB}", f"job_cancel_{QUEUED_JOB}",
+            "report_rerender"} <= _buttons(at)  # fmt: skip
+
+
+def test_it09_26_admin_resume_retry_cancel_rerender(
+    env: SimpleNamespace, report_env: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT09-26 admin: resume (enqueue_resume), retry, cancel, re-render via the page; spec 08
+    functions called; admin_action audit lines; report files re-rendered."""
+    from tests.support.report_env import FUND_RUN  # noqa: PLC0415 - the report_env seed run
+
+    from herness.core import jobs  # noqa: PLC0415 - spied below
+
+    _seed_run(env.data_root)
+    called: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+    for name in ("enqueue_resume", "retry", "cancel"):
+        real = getattr(jobs, name)
+
+        def spy(*a: Any, _name: str = name, _real: Any = real, **kw: Any) -> Any:
+            called.append((_name, a, kw))
+            return _real(*a, **kw)
+
+        monkeypatch.setattr(jobs, name, spy)
+    env.login(ADMIN)
+    at = _run(RUNS)
+    at.selectbox(key="runs_run").set_value(RUN_LIVE).run()
+    at.checkbox(key="resume_retry_dead").check()
+    at = at.button(key="resume_submit").click().run()
+    assert not at.error, [e.value for e in at.error]
+    resumed = next(c for c in called if c[0] == "enqueue_resume")
+    assert resumed[1:] == ((RUN_LIVE,), {"force": False, "retry_dead": True})
+    resume_job = core.read_one("SELECT job_id, payload FROM job WHERE idem_key = ?",
+                               (f"resume:{RUN_LIVE}",))  # fmt: skip
+    assert resume_job is not None
+    assert f"Resume queued as job {resume_job['job_id']}." in [s.value for s in at.success]
+    at = at.button(key=f"job_retry_{FAILED_JOB}").click().run()
+    at = at.button(key=f"job_cancel_{QUEUED_JOB}").click().run()
+    assert not at.error, [e.value for e in at.error]
+    status = {r["job_id"]: r["status"] for r in core.read_all("SELECT job_id, status FROM job")}
+    assert (status[FAILED_JOB], status[QUEUED_JOB]) == ("queued", "canceled")
+    assert [c[0] for c in called] == ["enqueue_resume", "retry", "cancel"]
+    at.selectbox(key="runs_run").set_value(FUND_RUN).run()
+    at = at.button(key="report_rerender").click().run()
+    assert not at.error, [e.value for e in at.error]
+    out = report_env.reports_root / FUND_RUN
+    assert (out / "report.html").is_file()
+    assert (out / "report.md").is_file()
+    assert any("report.html" in s.value for s in at.success)
+    lines = [(a["action"], a["target"], a["detail"]) for a in _events(env, "admin_action")]
+    assert lines == [
+        ("run_resume", RUN_LIVE, "requested"), ("job_retry", FAILED_JOB, "requested"),
+        ("job_cancel", QUEUED_JOB, "requested"), ("report_render", FUND_RUN, "requested"),
+    ]  # fmt: skip
+    assert {a["actor"] for a in _events(env, "admin_action")} == {ref(ADMIN)}
+
+
+# --- Viewer gating (ST09-07) ---------------------------------------------------------------------
+
+
+def test_st09_07_viewer_sees_no_actions_and_direct_calls_are_refused(
+    env: SimpleNamespace,
+) -> None:
+    """ST09-07 a viewer gets no action controls on pages 08 - 10; calling each write action
+    directly raises PermissionDenied, changes no row and writes an ``auth`` denied line."""
+    _seed_recs()
+    _seed_run(env.data_root)
+    memory_item = _item("memory_write", {"memory_id": "mem_" + new_ulid(), "content": "c"})
+    items = (memory_item, _label(), _mapping(), _weight())
+    env.login(VIEWER)
+    for path in (RECS, QUEUE, RUNS):
+        at = _run(path)
+        assert not at.button, (path.name, _buttons(at))
+        assert not at.text_area
+    viewer = rules.Actor(ref(VIEWER), "viewer", "dashboard", display=VIEWER)
+    jobs_before = _job_rows()
+    before = len(env.audits)
+    calls: list[Any] = [
+        lambda: actions.decide_recommendation(viewer, rec_id=REC_A, decision="accepted",
+                                              reason=REASON, memory=env.memory),
+        *(lambda i=i: actions.decide_review(viewer, item_id=i, approve=True, note="ok",
+                                            answer="code", memory=env.memory, now=NOW)
+          for i in items),
+        lambda: actions.job_control(viewer, job_id=QUEUED_JOB, op="cancel"),
+        lambda: actions.job_control(viewer, job_id=FAILED_JOB, op="retry"),
+        lambda: actions.resume_run(viewer, run_id=RUN_LIVE),
+        lambda: actions.rerender_report(viewer, run_id=RUN_LIVE),
+    ]  # fmt: skip
+    for call in calls:
+        with pytest.raises(PermissionDenied):
+            call()
+    denied = {"event": "auth", "actor": ref(VIEWER), "user_ref": ref(VIEWER), "role": "viewer",
+              "result": "denied"}  # fmt: skip
+    assert env.audits[before:] == [denied] * len(calls)
+    assert env.memory.calls == []
+    assert _job_rows() == jobs_before
+    assert {shared.get_review_item(i).status for i in items} == {"pending"}
+    assert core.read_one("SELECT count(*) AS n FROM decision_log WHERE rec_id = ?",
+                         (REC_A,))["n"] == 0  # fmt: skip
+    assert not (env.data_root / "reports" / RUN_LIVE).exists()
