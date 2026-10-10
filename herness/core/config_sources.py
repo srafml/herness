@@ -1,6 +1,4 @@
-"""Safe YAML, config layer sources, ``--set`` parsing and bootstrap (U10-15 … U10-21).
-
-Sources emit plain YAML types; strict models convert lists to tuples themselves."""
+"""Safe YAML, config layer sources (plain YAML types), ``--set`` parsing, bootstrap (U10-15..21)."""
 
 from __future__ import annotations
 
@@ -34,7 +32,9 @@ _MAX_PATTERNS_BYTES, _MAX_DOTENV_BYTES, _MAX_DEPTH, _MAX_KEY_CHARS = 1_048_576, 
 _MAX_OVERRIDES, _MAX_SEGMENTS, _MAX_VALUE_CHARS, _MAX_ENV_VARS = 100, 12, 4096, 500  # U10-18/19
 _SEGMENT: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _DOTENV_LINE: Final = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)=[ \t]*(?:"(.*)"|(.*?))[ \t]*')
-_ENV_SKIP: Final = {"HERNESS_" + n for n in ["PROFILE", "ENV", "SYNTH_CONFIG", "FAULTS", "WORKER"]}
+_SKIP_RESERVED: Final = "PROFILE ENV SYNTH_CONFIG FAULTS WORKER CONFIG_DIR DATA_DIR SET_OVERRIDES"
+_SKIP_BENCH: Final = "BENCH_FULL BENCH_UNIT_SUITE BENCH_GATE BENCH_DIR"  # harness-internal, R-78
+_ENV_SKIP: Final = {"HERNESS_" + n for n in f"{_SKIP_RESERVED} {_SKIP_BENCH}".split()}
 
 
 def _fail(msg: str) -> NoReturn:

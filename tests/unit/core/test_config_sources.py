@@ -385,6 +385,38 @@ def test_rf_env_layer_and_skips(cfg: Path) -> None:
     assert got.profile == "local"
 
 
+_INTERNAL_NAMES = (
+    "HERNESS_CONFIG_DIR",
+    "HERNESS_DATA_DIR",
+    "HERNESS_SET_OVERRIDES",
+    "HERNESS_BENCH_FULL",
+    "HERNESS_BENCH_UNIT_SUITE",
+    "HERNESS_BENCH_GATE",
+    "HERNESS_BENCH_DIR",
+)
+
+
+@pytest.mark.parametrize("name", _INTERNAL_NAMES)
+def test_ut10_86_harness_internal_names_are_skipped(cfg: Path, name: str) -> None:
+    """UT10-86 each harness-internal HERNESS_* name is skipped: no ConfigError, no change."""
+    baseline = load(cfg).model_dump()
+    assert load(cfg, env={name: "x"}).model_dump() == baseline
+    assert load(cfg, env={name.lower(): "x"}).model_dump() == baseline
+
+
+def test_ut10_86_unknown_harness_name_still_rejected(cfg: Path) -> None:
+    """UT10-86 only the listed names are skipped; another HERNESS_* name is still a config key."""
+    with pytest.raises(Exception, match="bench_other"):
+        load(cfg, env={"HERNESS_BENCH_OTHER": "1"})
+
+
+def test_th10_02_ut10_87_internal_names_never_reach_fields(cfg: Path) -> None:
+    """UT10-87 (TH10-02) skipped names add no HernessConfig field and no value."""
+    got = load(cfg, env=dict.fromkeys(_INTERNAL_NAMES, "SENTINEL"))
+    assert "SENTINEL" not in json.dumps(got.model_dump(), default=str)
+    assert set(got.model_dump()) == set(load(cfg).model_dump())
+
+
 def test_rf_init_overrides_env(cfg: Path) -> None:
     """RF init (CLI) beats env, env beats files."""
     env = {"HERNESS_LOGGING__LEVEL": "WARNING"}

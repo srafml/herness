@@ -3,8 +3,8 @@
 Bench tests measure with `tests.support.bench_stats` and record through the session fixture
 `bench_recorder` (`record_median`, `record_value`). At session end, when any record exists,
 the fixture writes `<bench dir>/<YYYYMMDD-HHMMSS>-<git sha>.json`; the bench dir is
-`<rootdir>/data/bench/` (gitignored) unless env `HERNESS_BENCH_DIR` names another (all
-`HERNESS_BENCH_*` variables move into the config at configure, see `bench_flag`). With
+`<rootdir>/data/bench/` (gitignored) unless env `HERNESS_BENCH_DIR` names another (the
+`HERNESS_BENCH_*` variables are skipped by the impl 10 env layer, R-78). With
 `HERNESS_BENCH_GATE=1` the file is a gate file, compared with the newest earlier one; a
 regression beyond `thresholds.bench_regression_max` fails the session (exit code 1).
 """
@@ -32,8 +32,6 @@ from herness.eval.settings import load_eval_config
 _REPO: Final = Path(__file__).resolve().parents[2]
 _GIT = "git"
 SCHEMA: Final = 1
-BENCH_ENV: Final = tuple(f"HERNESS_BENCH_{n}" for n in ("GATE", "DIR", "FULL", "UNIT_SUITE"))
-_FLAGS: Final = pytest.StashKey[dict[str, str]]()
 
 type Better = Literal["lower", "higher"]
 
@@ -191,15 +189,10 @@ def max_regression(repo_root: Path = _REPO) -> float:
     return load_eval_config(raw).thresholds.bench_regression_max
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    """Move the `HERNESS_BENCH_*` variables from `os.environ` into the config: impl 10 reads
-    every other `HERNESS_*` variable as a config override and rejects unknown keys."""
-    config.stash[_FLAGS] = {n: os.environ.pop(n) for n in BENCH_ENV if n in os.environ}
-
-
 def bench_flag(config: pytest.Config, name: str) -> str | None:
-    """The value `name` (e.g. `HERNESS_BENCH_FULL`) had when the session started."""
-    return config.stash.get(_FLAGS, {}).get(name)
+    """The value of the `HERNESS_BENCH_*` variable `name`, or None when unset."""
+    del config
+    return os.environ.get(name)
 
 
 def _newest_earlier_gate(out_dir: Path, written: Path) -> dict[str, Any] | None:

@@ -124,6 +124,7 @@ Each implementation spec replaces every `X:<NN>/<symbol>` with `T<NN>-<nn> (<sym
 | R-76 | The `models.yaml` sections `deciders` (impl 03 `herness.enrich.settings`) and `models`/`roles` (impl 05 `herness.harness.llm.settings`) are sibling sections, composed by the impl 10 root config like R-69. |
 | R-77 | Privacy deletion of findings: impl 06 owns the `finding` table, so it owns the store op `scrub_record_from_findings(record_id, *, conn)`. Impl 10's privacy deletion calls it and does not define it. `scrub_record_from_evidence` stays with impl 05 (U05-75). Resolves impl 10 D10-27. |
 | R-72 | Settings models hold secret references as strings that match the `secret:` pattern. They are resolved later by `herness.core.secrets`, which settings modules never import. |
+| R-78 | The impl 10 env layer (U10-17 `_ENV_SKIP`) skips the harness-internal variables `HERNESS_CONFIG_DIR`, `HERNESS_DATA_DIR`, `HERNESS_SET_OVERRIDES` (`herness ui` launch, impl 09), `HERNESS_BENCH_FULL`, `HERNESS_BENCH_UNIT_SUITE`, `HERNESS_BENCH_GATE` and `HERNESS_BENCH_DIR` (benchmark switches, impl 11): they never map to a config field and never raise. Callers read them straight from the environment, so the app bootstrap (T09-13) and `tests/support/bench.py` (T11-18) no longer filter or move them. User decision 2026-10-09 item 5a; T10-12b. |
 
 ## 9. Design spec changes pending
 

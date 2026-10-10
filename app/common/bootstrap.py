@@ -41,8 +41,6 @@ __all__ = ["AppServices", "get_services", "load_queries"]
 
 _GUARD_LOCK: Final = threading.Lock()  # ENG §2.3 exception: the guard is installed once
 _guard_installed: list[bool] = []
-# `herness ui` launch variables; impl 10's HERNESS_* env layer would read them as config keys.
-_LAUNCH_VARS: Final = frozenset({"HERNESS_CONFIG_DIR", "HERNESS_DATA_DIR", "HERNESS_SET_OVERRIDES"})
 QUERIES_FILE: Final = Path(__file__).with_name("queries.sql.yaml")
 
 
@@ -95,8 +93,7 @@ def build_services() -> AppServices:
     if data_dir := env.get("HERNESS_DATA_DIR"):
         overrides.append(f"paths.data={Path(data_dir).as_posix()}")
     _install_guard_once(profile, config_dir)
-    config_env = {k: v for k, v in env.items() if k.upper() not in _LAUNCH_VARS}
-    cfg = init_config(profile, overrides, config_dir, config_env)  # + the get_config cache
+    cfg = init_config(profile, overrides, config_dir, dict(env))  # + the get_config cache
     configure_logging(
         cfg.logging.level, log_dir=cfg.paths.logs, scrubber=scrub_secrets, stderr=True
     )
