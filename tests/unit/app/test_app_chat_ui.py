@@ -374,3 +374,21 @@ def test_ut09_98_correction_after_final_reduces_and_renders(
     answer = [m.value for m in at.markdown if "Team One" in str(m.value)]
     assert answer == ["Team One had 42\\."]
     assert all("correction" not in str(m.value).lower() for m in at.markdown)
+
+
+def test_ut09_97_cache_clear_failure_never_masks_the_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT09-97 ``after_write`` failing in ``finally``: logged by type; the turn still completes."""
+    store, chat = Store(), FakeChatService([all_kinds()])
+    store.install(monkeypatch)
+
+    def broken() -> None:
+        msg = "cache unavailable"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(chat_ui, "after_write", broken)
+    with capture_logs() as logs:
+        at = _run(_ctx(chat), "q")
+    assert "after rerun" in _texts(at)
+    events = [e["event"] for e in logs]
+    assert "app.chat.cache_clear_failed" in events
+    assert "app.chat.turn_completed" in events

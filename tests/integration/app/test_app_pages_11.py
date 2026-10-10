@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 import streamlit as st
+from structlog.testing import capture_logs
 from tests.support.app_env import install_session
 from tests.support.chat_page_env import (
     ask,
@@ -100,6 +101,16 @@ def test_it09_12_turn_outcome_escalation_and_correction_notice(env: SimpleNamesp
     assert MEMORY_ID not in "\n".join(texts(at, "markdown", "caption", "info", "text"))
 
 
+def test_it09_12_browser_state_cannot_choose_the_mode(env: SimpleNamespace) -> None:
+    """IT09-12 (R-38) the mode comes only from ``chat_policy``: session keys cannot force cloud."""
+    env.services.chat.scripts = [all_kinds()]
+    at, _session_id = open_chat()
+    for key in ("chat_mode", "mode", "cloud"):
+        at.session_state[key] = "cloud"
+    ask(at, QUESTION)
+    assert [call[3] for call in env.services.chat.calls] == ["live"]
+
+
 def test_it09_12_feedback_changes_only_feedback_columns(env: SimpleNamespace) -> None:
     """IT09-12 thumbs down with a note: only ``feedback`` and the redacted note change."""
     env.services.chat.scripts = [all_kinds()]
@@ -179,3 +190,19 @@ def test_it09_13_fragment_reload_shows_answer(
     assert "Answered later." in texts(at, "markdown")
     assert ":orange-badge[Partially verified]" in texts(at, "markdown")
     assert not [w for w in texts(at, "warning") if w.startswith(DEFER_PREFIX)]
+
+
+def test_it09_12_bad_number_ref_skipped_and_feedback_needs_thumbs(env: SimpleNamespace) -> None:
+    """IT09-12 a bad ``meta.numbers`` entry is skipped with a WARNING; feedback needs thumbs."""
+    env.services.chat.scripts = [all_kinds()]
+    at, session_id = open_chat()
+    ask(at, QUESTION)
+    (reply,) = env.services.chat.written
+    update_chat_message(reply, meta={"numbers": [{"id": "bad"}]})
+    with capture_logs() as logs:
+        check(at.run())
+    warned = [e for e in logs if e["event"] == "app.chat.bad_number_ref"]
+    assert [e["message_id"] for e in warned] == [reply]
+    click(at, "Send feedback")
+    assert "Choose thumbs up or down first." in texts(at, "warning")
+    assert _row(session_id, reply)["feedback"] is None

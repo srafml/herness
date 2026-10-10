@@ -100,7 +100,8 @@ def _correction(ctx: PageContext, session_id: str, reply_to: str, message_id: st
     """The "Correct a fact" form (R-33: ``session_id`` and ``source_message_id``)."""
     with st.expander("Correct a fact"), st.form(f"fix-{message_id}"):
         statement = st.text_area("Statement", help=LIMIT, key=f"fix-text-{message_id}")
-        kind = st.selectbox("Entity type (optional)", ENTITY_TYPES, key=f"fix-type-{message_id}")
+        kind = st.selectbox("Entity type (optional)", ENTITY_TYPES, key=f"fix-type-{message_id}",
+                            format_func=lambda value: value or "none")  # fmt: skip
         entity_id = st.text_input("Entity id (optional)", key=f"fix-id-{message_id}").strip()
         if not st.form_submit_button("Save correction"):
             return
