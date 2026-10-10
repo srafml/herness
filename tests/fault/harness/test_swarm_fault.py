@@ -149,8 +149,9 @@ def test_ft06_02_kill_in_phase_resume_reaches_done_without_duplicates(
     `writing` (the Writer's `task_complete` write, after `draft.json`) and `recording`
     (`swarm_record_done`, after the recommendations are written); the rule's `nth` is counted
     on a clean run of the same request. Resume reaches `done` with no duplicate task, finding
-    or recommendation (real `MemoryStore`), compared with the clean run."""
-    f6.use_real_agents(drv, monkeypatch)
+    or recommendation (real `MemoryStore`), compared with the clean run; no task done at the
+    kill is executed again and a task the kill left `running` is charged one more attempt."""
+    scripts = f6.use_real_agents(drv, monkeypatch)
     f6.install_kill(monkeypatch)
     memory = f6.real_memory(drv, tmp_path)
     fault_env([])
@@ -166,11 +167,17 @@ def test_ft06_02_kill_in_phase_resume_reaches_done_without_duplicates(
     assert _status(run_id) == phase
     recs_before = len(run_recommendations(run_id))
     assert recs_before == (1 if phase == "recording" else 0)
+    done = {t.task_id for t in select_tasks(run_id, statuses={"done"})}
+    running = {t.task_id for t in select_tasks(run_id, statuses={"running"})}
+    assert len(running) == (0 if phase == "recording" else 1)
 
     fault_env([])
     res = asyncio.run(_swarm(drv, memory).resume(run_id))
     assert res.status == "done"
     assert f6.task_view(run_id) == f6.task_view(clean.run_id)
+    assert {scripts.executions[t] for t in done} <= {0, 1}  # 0: the Verifier calls no model
+    attempts = {t.task_id: t.attempts for t in select_tasks(run_id)}
+    assert {t: n for t, n in attempts.items() if n != 1} == dict.fromkeys(running, 2)
     assert f6.finding_view(run_id) == f6.finding_view(clean.run_id)
     recs = run_recommendations(run_id)
     assert [(r["kind"], r["target_type"], r["target_id"]) for r in recs] == [
