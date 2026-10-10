@@ -3,9 +3,12 @@
 Run: pytest -m "integration and slow" tests/bench.
 """
 
+import datetime
 import json
 import socket
+import sqlite3
 import sys
+import threading
 import time as _time
 from pathlib import Path
 from typing import Any
@@ -14,6 +17,7 @@ import pytest
 from tests.support.bench_stats import REPEATS, report
 from tests.support.config_tree import write_full_config
 from tests.support.egress_harness import fixed_redactor
+from tests.support.maintenance_env import FakeCtx, MaintEnv, maint_env  # noqa: F401 - fixture
 from tests.support.redact_quality import (
     build_directory,
     dotenv_config,
@@ -22,6 +26,7 @@ from tests.support.redact_quality import (
     write_corpus,
 )
 
+from herness.admin.maintenance import run_backup
 from herness.core import config as _core_config
 from herness.core import egress_socket as es
 from herness.core._egress_scan import rescan
@@ -224,3 +229,72 @@ def test_bt10_04_bulk_redaction_6m_rows(tmp_path: Path, monkeypatch: pytest.Monk
         assert elapsed < 300
     finally:
         _core_config.reset_config()
+
+
+BT08_BLOB_BYTES = 262_144
+BT08_TARGET_BYTES = 1 << 30  # the full "1 GB ops store" of design 10 §8, not scaled down
+BT08_WRITERS = 2
+
+
+def _grow_ops_store(db: Path, target_bytes: int) -> None:
+    """Pad the migrated ops store with incompressible blobs up to ``target_bytes``."""
+    rows = target_bytes // BT08_BLOB_BYTES
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE bench_pad (b BLOB)")
+        conn.execute(
+            "WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < ?)"
+            " INSERT INTO bench_pad SELECT randomblob(?) FROM r",
+            (rows, BT08_BLOB_BYTES),
+        )
+        conn.execute("CREATE TABLE bench_writes (n INTEGER, pad TEXT)")
+    with sqlite3.connect(db) as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
+def _bench_writer(db: Path, stop: threading.Event, written: list[int]) -> None:
+    conn = sqlite3.connect(db, timeout=30)
+    try:
+        while not stop.is_set():
+            conn.execute("INSERT INTO bench_writes VALUES (?, ?)", (len(written), "w" * 256))
+            conn.commit()
+            written.append(1)
+            stop.wait(0.005)
+    finally:
+        conn.close()
+
+
+@pytest.mark.timeout(1800)
+def test_bt10_08_nightly_ops_backup_1gb(maint_env: MaintEnv) -> None:  # noqa: F811
+    """BT10-08 nightly ops backup of a 1 GB ops store while writer threads commit: < 2 min.
+
+    The store is the real migrated ops store padded with 1 GiB of incompressible blobs; two
+    writer threads commit a row every ~5 ms throughout each of the three timed runs.
+    """
+    db = maint_env.data / "ops.sqlite"
+    _grow_ops_store(db, BT08_TARGET_BYTES)
+    size = db.stat().st_size
+    assert size >= BT08_TARGET_BYTES
+    now = datetime.datetime(2026, 9, 24, 1, 30, tzinfo=datetime.UTC)
+    stop, written = threading.Event(), []
+    threads = [
+        threading.Thread(target=_bench_writer, args=(db, stop, written), daemon=True)
+        for _ in range(BT08_WRITERS)
+    ]
+    for thread in threads:
+        thread.start()
+    walls: list[float] = []
+    try:
+        for _ in range(REPEATS):
+            started = _time.perf_counter()
+            run_backup(maint_env.cfg, FakeCtx().as_ctx(), now=now)
+            walls.append(_time.perf_counter() - started)
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join(timeout=30)
+    copy = maint_env.target / "ops" / "ops-2026-09-24.sqlite"
+    sys.stderr.write(f"BT10-08 ops_bytes={size} writes_during={len(written)}\n")
+    assert copy.stat().st_size >= BT08_TARGET_BYTES
+    assert len(written) > 0
+    assert report("BT10-08", "wall", walls, "s", "< 120 s") < 120
+    assert max(walls) < 120

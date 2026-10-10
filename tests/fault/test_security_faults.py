@@ -1,5 +1,5 @@
 """Fault tests for impl 10 security paths (FT10-01 T10-05, FT10-05 T10-06, FT10-07 T10-11,
-FT10-08 T10-16, FT10-02 T10-30)."""
+FT10-08 T10-16, FT10-02 T10-30, FT10-04 T10-20)."""
 
 from __future__ import annotations
 
@@ -21,6 +21,13 @@ from tests.support.config_tree import write_full_config
 from tests.support.egress_harness import API, audit_fields, make_guard
 from tests.support.egress_harness import load as load_egress
 from tests.support.fake_keyring import MemoryKeyring
+from tests.support.maintenance_env import FakeCtx as MaintCtx
+from tests.support.maintenance_env import (  # noqa: F401 - fixture import
+    MaintEnv,
+    admin_actions,
+    maint_env,
+    plant,
+)
 from tests.support.rekey_env import (
     NEW_KEY,
     OLD_ID,
@@ -31,12 +38,15 @@ from tests.support.rekey_env import (
     write_labels,
 )
 
+from herness.admin import _maintenance_purge as purge_mod
+from herness.admin import maintenance
 from herness.admin import rekey as rekey_module
 from herness.admin.rekey import run_rekey
 from herness.core import _redact_pool as redact_pool
 from herness.core import audit as a
 from herness.core import config as c
 from herness.core import redact, secrets
+from herness.core import time as clock
 from herness.core.errors import ConfigError, EgressBlocked, FatalError, RetryableError, StoreBusy
 from herness.core.jobs.ports import JobContext
 from herness.core.logging import configure_logging, reset_logging
@@ -313,3 +323,90 @@ def test_ft10_02_killed_after_swap_rerun_finishes(
     actions = [cast("dict[str, object]", ln["fields"]).get("action") for ln in env.audit_lines()]
     assert "redact_rekey" in actions
     assert not [p for p in env.labels.rglob("*") if p.name.startswith(".")]  # nothing staged
+
+
+# --- FT10-04 (T10-20): backup copy corrupted before integrity_check -------------------------
+
+
+def test_ft10_04_corrupt_copy_fails_without_partial_copy(
+    maint_env: MaintEnv,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FT10-04 the copy is corrupted between backup() and integrity_check: the temp file is
+    deleted, FatalError("backup integrity_check failed") is raised, no ops-<date>.sqlite."""
+    real_backup = maintenance._backup_ops
+
+    def corrupting(source: Path, temp: Path) -> None:
+        real_backup(source, temp)
+        size = temp.stat().st_size
+        with temp.open("r+b") as fh:  # keep the 100-byte header, smash every page after it
+            fh.seek(100)
+            fh.write(b"\xa5" * (size - 100))
+
+    monkeypatch.setattr(maintenance, "_backup_ops", corrupting)
+    now = datetime.datetime(2026, 9, 24, 1, 30, tzinfo=datetime.UTC)
+    plant(maint_env.data / "reports" / "run_1" / "manifest.json")
+    with pytest.raises(FatalError) as caught:
+        maintenance.run_backup(maint_env.cfg, MaintCtx().as_ctx(), now=now)
+    assert type(caught.value) is FatalError
+    assert str(caught.value) == "backup integrity_check failed"
+    ops = maint_env.target / "ops"
+    assert sorted(p.name for p in ops.iterdir()) == []  # no temp, no ops-2026-09-24.sqlite
+    assert not (maint_env.target / "reports").exists()  # the job stops before the mirrors
+    assert admin_actions(maint_env.logs, "backup") == []
+
+
+def test_ft10_04_copy_os_error_names_relative_path(maint_env: MaintEnv) -> None:  # noqa: F811
+    """FT10-04 an OSError while mirroring becomes FatalError("backup copy failed: <relative
+    path>"); the ops copy already made stays valid."""
+    now = datetime.datetime(2026, 9, 24, 1, 30, tzinfo=datetime.UTC)
+    plant(maint_env.data / "reports" / "run_1" / "manifest.json")
+    plant(maint_env.target / "reports", body=b"a file where a directory must go")
+    with pytest.raises(FatalError) as caught:
+        maintenance.run_backup(maint_env.cfg, MaintCtx().as_ctx(), now=now)
+    assert str(caught.value) == "backup copy failed: reports/run_1/manifest.json"
+    assert (maint_env.target / "ops" / "ops-2026-09-24.sqlite").is_file()
+
+
+def test_ft10_04_listing_os_error_is_typed(
+    maint_env: MaintEnv,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FT10-04 an OSError while listing a mirrored tree becomes FatalError("backup copy
+    failed: <relative path>") naming the target subdirectory only."""
+    real_listing = maintenance._listing
+
+    def failing(root: Path, globs: tuple[str, ...]) -> list[Path]:
+        if root.name == "reports":
+            raise PermissionError(errno.EACCES, "denied", str(root))
+        return real_listing(root, globs)
+
+    monkeypatch.setattr(maintenance, "_listing", failing)
+    now = datetime.datetime(2026, 9, 24, 1, 30, tzinfo=datetime.UTC)
+    with pytest.raises(FatalError) as caught:
+        maintenance.run_backup(maint_env.cfg, MaintCtx().as_ctx(), now=now)
+    assert str(caught.value) == "backup copy failed: reports"
+    assert str(maint_env.data) not in str(caught.value)
+
+
+def test_ft10_04_purge_os_error_is_typed_and_vanished_file_is_gone(
+    maint_env: MaintEnv,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FT10-04 purge: a path that vanished before its delete counts nothing and does not
+    fail; any other OSError becomes FatalError("purge failed: <relative path>")."""
+    deleter = purge_mod._Deleter(maint_env.data, MaintCtx().as_ctx(), dry_run=False)
+    deleter.delete(maint_env.data / "traces" / "gone.jsonl", "traces")
+    assert deleter.counts["traces"] == 0
+    assert deleter.counts["skipped_in_use"] == 0
+    old = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
+    run = plant(maint_env.data / "reports" / "run_old" / "manifest.json", mtime=old).parent
+
+    def broken(path: object, *args: object, **kwargs: object) -> None:
+        raise OSError(errno.EIO, "I/O error", str(path))
+
+    monkeypatch.setattr(purge_mod.shutil, "rmtree", broken)
+    with pytest.raises(FatalError) as caught:
+        purge_mod.run_purge(maint_env.cfg, MaintCtx().as_ctx(), now=clock.now())
+    assert str(caught.value) == "purge failed: reports/run_old"
+    assert run.is_dir()
