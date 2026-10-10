@@ -16,7 +16,7 @@ without a key, when it is identifier-shaped (``[A-Za-z_][A-Za-z0-9_ .-]{0,63}``)
 four digits in total; any other column is dropped (T09-15d review I1).
 
 Extends T09-15c's ``app/common/_widgets_evidence.py`` (parity test UT09-113) with the T09-15d
-numeric and column-name rules; that widget must import this module (follow-up, batch 48).
+numeric and column-name rules; that widget imports this module (T09-15e).
 ``FORBIDDEN_TEXT_COLUMNS`` repeats ``app.common.wh``'s set (L5 may not import ``app``).
 """
 
