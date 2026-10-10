@@ -11,11 +11,15 @@ catalog's `dsum` / `davg` macros (U04-35) order the input by value, so the token
 
 import datetime
 from collections.abc import Iterator, Sequence
+from decimal import Decimal
 from types import SimpleNamespace
 
 import duckdb
 import pytest
 from freezegun import freeze_time
+from tests.support.metrics_funding import item as funding_item
+from tests.support.metrics_funding import step_context
+from tests.support.metrics_funding import warehouse as funding_warehouse
 from tests.support.metrics_tiny import (
     BUILD_ID,
     build_metrics_tiny,
@@ -28,6 +32,7 @@ from herness.metrics import compute
 from herness.metrics._encode import encode_cell
 from herness.metrics.compute import MetricResult, compute_metric
 from herness.metrics.facts import materialize_facts
+from herness.metrics.funding import run_funding_step
 
 pytestmark = pytest.mark.unit
 
@@ -116,3 +121,43 @@ def test_ut04_123_halfway_sum_token_stable_across_aggregation_orders(
     assert one.value == two.value == one.numerator / sum(COUNTS)
     assert first.query_id == second.query_id
     assert first.result_hash == second.result_hash
+
+
+# Remaining story points of the three stories under one epic. The doubles add to
+# 0.00027499999999999996 front to back and 0.000275 back to front; funding effort is
+# points x 100 USD/h x 6 h/point cast to DECIMAL(18, 2), and that product sits on a cent
+# rounding halfway point, so the one-ulp difference moves the stored effort by a cent.
+POINTS = (0.000025, 0.000075, 0.000175)
+
+
+def _effort(order: Sequence[int]) -> object:
+    """`effort_cost_usd` of an epic with no estimate whose stories are inserted in `order`."""
+    stories = [
+        funding_item(f"S{i}", f"PAY-{i + 2}", kind="story", parent="PAY-1", points=POINTS[i])
+        for i in order
+    ]
+    con = funding_warehouse(
+        {"core.work_item": [funding_item("E", "PAY-1", service="S1"), *stories]}
+    )
+    try:
+        con.execute("SET threads = 1")
+        run_funding_step(con, step_context())
+        row = con.execute(
+            "SELECT effort_cost_usd FROM score.funding WHERE candidate_id = 'E'"
+        ).fetchone()
+    finally:
+        con.close()
+    assert row is not None
+    return row[0]
+
+
+def test_ut04_123_funding_effort_points_sum_stable_across_row_orders() -> None:
+    """UT04-123 the `funding_score` remaining-points sum (`dsum`) gives one `effort_cost_usd`
+    (0.16) whatever the story row order and run. The DOUBLE sums of the same points differ in
+    the last ulp by addition order, and the plain `sum` ends up as 0.16 or 0.17 from run to
+    run, so the check repeats every order four times."""
+    forward = (POINTS[0] + POINTS[1]) + POINTS[2]
+    backward = (POINTS[2] + POINTS[1]) + POINTS[0]
+    assert forward != backward
+    efforts = {_effort(order) for order in ((0, 1, 2), (0, 2, 1), (2, 1, 0)) * 4}
+    assert efforts == {Decimal("0.16")}

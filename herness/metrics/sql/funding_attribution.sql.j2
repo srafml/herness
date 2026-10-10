@@ -19,13 +19,16 @@ SELECT {{ candidate }} AS candidate_id, {{ record }} AS record_id, {{ kind }} AS
     (b) per record only rows at its minimum tier;
     (c) leaf-most: drop candidate P of a record when a remaining candidate C of the same
         record is a candidate descendant of P;
-    (d) share = w / sum(w) per record, pain = share * usd (DOUBLE). -#}
+    (d) share = w / sum(w) per record, pain = share * usd (DOUBLE). The per-record total
+        is list_sum over the record's weights sorted by value, so it adds in a fixed order
+        (T04-23b); an ordered window aggregate over the whole partition costs O(n) per row. -#}
 {%- macro allocate(names) -%}
 (SELECT c.candidate_id, c.record_id, c.record_kind, c.tier, c.weight,
-        c.weight / sum(c.weight) OVER (PARTITION BY c.record_kind, c.record_id) AS share,
-        c.weight / sum(c.weight) OVER (PARTITION BY c.record_kind, c.record_id) * r.usd AS pain,
-        c.quality
+        c.weight / c.total AS share, c.weight / c.total * r.usd AS pain, c.quality
  FROM (
+  SELECT q.*, list_sum(list_sort(list(q.weight) OVER (PARTITION BY q.record_kind, q.record_id)))
+         AS total
+  FROM (
     SELECT b.*
     FROM (
         SELECT a.*, list(a.candidate_id) OVER (PARTITION BY a.record_kind, a.record_id) AS peers
@@ -45,6 +48,7 @@ SELECT {{ candidate }} AS candidate_id, {{ record }} AS record_id, {{ kind }} AS
     WHERE NOT EXISTS (
         SELECT 1 FROM cand_desc d
         WHERE d.parent_id = b.candidate_id AND list_contains(b.peers, d.child_id))
+  ) q
  ) c
  JOIN rec_cost r ON r.record_kind = c.record_kind AND r.record_id = c.record_id)
 {%- endmacro -%}
@@ -167,7 +171,7 @@ t3 AS (
 ),
 pass1 AS {{ allocate(['t1', 't2c', 't2r', 't3']) }},
 cf_linked AS (
-    SELECT i.cluster_id, sum(a.pain) AS linked
+    SELECT i.cluster_id, {{ dsum('a.pain') }} AS linked
     FROM pass1 a
     JOIN inc i ON i.record_id = a.record_id
     WHERE a.record_kind = 'incident' AND a.tier <= 2

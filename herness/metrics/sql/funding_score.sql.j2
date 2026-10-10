@@ -71,9 +71,9 @@ r AS (
 agg AS (
     SELECT c.candidate_id,
            coalesce(sum(r.pain_usd), 0) AS pain_dec,
-           coalesce(sum(r.pain), 0) AS pain,
-           coalesce(sum(r.pain * r.quality), 0) AS pq,
-           coalesce(sum(r.share) FILTER (WHERE r.record_kind = 'incident'), 0) AS n_share
+           coalesce({{ dsum('r.pain') }}, 0) AS pain,
+           coalesce({{ dsum('r.pain * r.quality') }}, 0) AS pq,
+           coalesce({{ dsum('r.share') }} FILTER (WHERE r.record_kind = 'incident'), 0) AS n_share
     FROM cand c
     LEFT JOIN r ON r.k = c.candidate_id
     GROUP BY c.candidate_id
@@ -88,7 +88,7 @@ port AS (
 ),
 {#- Remaining points of the subtree (ancestor-or-self pairs); NULL when none is non-NULL. -#}
 pts AS (
-    SELECT wc.ancestor_record_id AS k, sum(w.story_points) AS points
+    SELECT wc.ancestor_record_id AS k, {{ dsum('w.story_points') }} AS points
     FROM metrics.work_item_closure wc
     JOIN core.work_item w ON w.record_id = wc.record_id
     WHERE w.status_category <> 'done' AND wc.ancestor_record_id IN (SELECT candidate_id FROM cand)
@@ -132,7 +132,7 @@ rec_ts AS (
     FROM metrics.change_fact chf
 ),
 weekly AS (
-    SELECT x.k, x.t, sum(x.pain) AS v
+    SELECT x.k, x.t, {{ dsum('x.pain') }} AS v
     FROM (
         SELECT r.k, r.pain,
                CAST(date_diff('day', w0.start_date,
