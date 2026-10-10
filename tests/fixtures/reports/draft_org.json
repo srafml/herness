@@ -1,0 +1,168 @@
+{
+  "schema_version": "1",
+  "mode": "full",
+  "run_id": "run_01JA0000000000000000000002",
+  "kind": "org_review",
+  "depth": "standard",
+  "profile": "local",
+  "build_id": "20260926-100000-000001",
+  "title": "Org review of incident response",
+  "sections": [
+    {
+      "id": "executive_summary",
+      "title": "Executive summary",
+      "paragraphs": [
+        {
+          "text": "Team mean time to repair is [[n1]] hours against a peer median of [[n2]].",
+          "numbers": [
+            {
+              "id": "n1",
+              "value": 4.5,
+              "unit": "hours",
+              "query_id": "q_5a0d200c82be173f",
+              "column": "n",
+              "row_key": {
+                "team": "t1"
+              }
+            },
+            {
+              "id": "n2",
+              "value": 3,
+              "unit": "hours",
+              "query_id": "q_5a0d200c82be173f",
+              "column": "n",
+              "row_key": {
+                "team": "t1"
+              }
+            }
+          ],
+          "finding_ids": [
+            "fnd_01JA0000000000000000000012"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "org_scorecards",
+      "title": "Org scorecards",
+      "paragraphs": [
+        {
+          "text": "Payments trails its peers on repair time.",
+          "numbers": [],
+          "finding_ids": []
+        }
+      ]
+    },
+    {
+      "id": "actions",
+      "title": "Recommended actions",
+      "paragraphs": [
+        {
+          "text": "Pair on-call engineers with the platform team.",
+          "numbers": [],
+          "finding_ids": []
+        }
+      ]
+    }
+  ],
+  "recommendations": [
+    {
+      "rank": 1,
+      "rec_id": "rec_01JA0000000000000000000023",
+      "kind": "org_action",
+      "target_type": "team",
+      "target_id": "t2",
+      "headline": "Coach the on-call rotation",
+      "summary": "Repair time is [[n1]] hours.",
+      "numbers": [
+        {
+          "id": "n1",
+          "value": 4.5,
+          "unit": "hours",
+          "query_id": "q_5a0d200c82be173f",
+          "column": "n",
+          "row_key": {
+            "team": "t1"
+          }
+        }
+      ],
+      "expected_metric": "mttr",
+      "expected_delta_ref": "n1",
+      "expected_usd_ref": null,
+      "confidence_ref": null,
+      "effort_usd_ref": null,
+      "action_levers": [],
+      "finding_ids": [
+        "fnd_01JA0000000000000000000012"
+      ],
+      "query_ids": [
+        "q_5a0d200c82be173f"
+      ]
+    }
+  ],
+  "ranked_entities": [
+    {
+      "rank": 1,
+      "entity_type": "team",
+      "entity_id": "t1"
+    },
+    {
+      "rank": 2,
+      "entity_type": "team",
+      "entity_id": "t2"
+    }
+  ],
+  "caveats": [
+    "One analyst task did not finish."
+  ],
+  "prior_outcomes_commentary": null,
+  "portfolio_custom": [],
+  "banners": [
+    "hybrid_fallback"
+  ],
+  "flags": {
+    "notes": [
+      "Scores use the peer median."
+    ]
+  },
+  "contested": [
+    "fnd_01JA0000000000000000000012"
+  ],
+  "removed": [
+    {
+      "where": "sections[3]",
+      "reason": "uncited numbers"
+    }
+  ],
+  "coverage": {
+    "planned_tasks": 4,
+    "done_tasks": 3,
+    "dead_tasks": 1,
+    "must_cover_total": 2,
+    "must_cover_done": 1,
+    "verified_findings": 1,
+    "rejected_findings": 1,
+    "publishable": false
+  },
+  "dead_tasks": [
+    {
+      "task_id": "tsk_9",
+      "role": "analyst",
+      "objective": "size the backlog",
+      "last_error": "Jane Doe timed out\nsecond line"
+    }
+  ],
+  "query_ids": [
+    "q_5a0d200c82be173f",
+    "q_fa5f7083d72030b7"
+  ],
+  "verification": {
+    "build_id": "20260926-100000-000001",
+    "passed": true,
+    "items": [],
+    "n_numbers": 0,
+    "n_failed": 0,
+    "verified_at": "2026-09-26T11:00:00Z",
+    "duration_ms": 0
+  }
+}

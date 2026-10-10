@@ -1,0 +1,257 @@
+{
+  "schema_version": "1",
+  "mode": "full",
+  "run_id": "run_01JA0000000000000000000001",
+  "kind": "funding_review",
+  "depth": "standard",
+  "profile": "local",
+  "build_id": "20260926-100000-000001",
+  "title": "Funding review for the platform portfolio",
+  "sections": [
+    {
+      "id": "executive_summary",
+      "title": "Executive summary",
+      "paragraphs": [
+        {
+          "text": "Incidents for team Payments reached [[n1]] this quarter; the cache rewrite costs [[n2]].",
+          "numbers": [
+            {
+              "id": "n1",
+              "value": 42,
+              "unit": "count",
+              "query_id": "q_13310206480f64e6",
+              "column": "n",
+              "row_key": {
+                "team": "t1"
+              }
+            },
+            {
+              "id": "n2",
+              "value": "1200.50",
+              "unit": "usd",
+              "query_id": "q_819b680380edd148",
+              "column": "n",
+              "row_key": {
+                "team": "t1"
+              }
+            }
+          ],
+          "finding_ids": [
+            "fnd_01JA0000000000000000000011"
+          ]
+        },
+        {
+          "text": "Failed changes stayed at [[n1]].",
+          "numbers": [
+            {
+              "id": "n1",
+              "value": 7,
+              "unit": "count",
+              "query_id": "q_8cc4f05711c1f705",
+              "column": "n",
+              "row_key": {
+                "team": "t1"
+              }
+            }
+          ],
+          "finding_ids": [
+            "fnd_01JA0000000000000000000011"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "recommendations",
+      "title": "Recommendations",
+      "paragraphs": [
+        {
+          "text": "Two candidates lead the ranking; both are worth funding.",
+          "numbers": [],
+          "finding_ids": []
+        }
+      ]
+    },
+    {
+      "id": "portfolio",
+      "title": "Portfolio",
+      "paragraphs": [
+        {
+          "text": "The base scenario selects the cache rewrite first.",
+          "numbers": [],
+          "finding_ids": []
+        }
+      ]
+    },
+    {
+      "id": "risks_and_caveats",
+      "title": "Data quality and caveats",
+      "paragraphs": [
+        {
+          "text": "Service mapping is incomplete for some incidents.",
+          "numbers": [],
+          "finding_ids": []
+        }
+      ]
+    },
+    {
+      "id": "method",
+      "title": "Method",
+      "paragraphs": [
+        {
+          "text": "Analysts queried the warehouse; the verifier checked every number.",
+          "numbers": [],
+          "finding_ids": []
+        }
+      ]
+    }
+  ],
+  "recommendations": [
+    {
+      "rank": 1,
+      "rec_id": "rec_01JA0000000000000000000021",
+      "kind": "fund",
+      "target_type": "epic",
+      "target_id": "epic-1",
+      "headline": "Fund the cache rewrite",
+      "summary": "It removes [[n1]] incidents for an effort of [[n2]].",
+      "numbers": [
+        {
+          "id": "n1",
+          "value": 42,
+          "unit": "count",
+          "query_id": "q_13310206480f64e6",
+          "column": "n",
+          "row_key": {
+            "team": "t1"
+          }
+        },
+        {
+          "id": "n2",
+          "value": "1200.50",
+          "unit": "usd",
+          "query_id": "q_819b680380edd148",
+          "column": "n",
+          "row_key": {
+            "team": "t1"
+          }
+        }
+      ],
+      "expected_metric": null,
+      "expected_delta_ref": null,
+      "expected_usd_ref": null,
+      "confidence_ref": null,
+      "effort_usd_ref": "n2",
+      "action_levers": [
+        {
+          "entity_type": "team",
+          "entity_id": "t1",
+          "metric": "mttr",
+          "delta_usd_ref": "n2"
+        }
+      ],
+      "finding_ids": [
+        "fnd_01JA0000000000000000000011"
+      ],
+      "query_ids": [
+        "q_13310206480f64e6",
+        "q_819b680380edd148"
+      ]
+    },
+    {
+      "rank": 2,
+      "rec_id": "rec_01JA0000000000000000000022",
+      "kind": "fund",
+      "target_type": "epic",
+      "target_id": "epic-2",
+      "headline": "Fund the queue retry work",
+      "summary": "Failed changes would drop below [[n1]].",
+      "numbers": [
+        {
+          "id": "n1",
+          "value": 7,
+          "unit": "count",
+          "query_id": "q_8cc4f05711c1f705",
+          "column": "n",
+          "row_key": {
+            "team": "t1"
+          }
+        }
+      ],
+      "expected_metric": null,
+      "expected_delta_ref": null,
+      "expected_usd_ref": null,
+      "confidence_ref": null,
+      "effort_usd_ref": null,
+      "action_levers": [],
+      "finding_ids": [
+        "fnd_01JA0000000000000000000011"
+      ],
+      "query_ids": [
+        "q_8cc4f05711c1f705"
+      ]
+    }
+  ],
+  "ranked_entities": [
+    {
+      "rank": 1,
+      "entity_type": "candidate",
+      "entity_id": "epic-1"
+    },
+    {
+      "rank": 2,
+      "entity_type": "candidate",
+      "entity_id": "epic-2"
+    }
+  ],
+  "caveats": [
+    "Effort estimates are placeholders until finance confirms them."
+  ],
+  "prior_outcomes_commentary": {
+    "text": "The prior cache work paid off: incidents fell to [[n1]].",
+    "numbers": [
+      {
+        "id": "n1",
+        "value": 42,
+        "unit": "count",
+        "query_id": "q_13310206480f64e6",
+        "column": "n",
+        "row_key": {
+          "team": "t1"
+        }
+      }
+    ],
+    "finding_ids": [
+      "fnd_01JA0000000000000000000011"
+    ]
+  },
+  "portfolio_custom": [],
+  "banners": [],
+  "flags": {},
+  "contested": [],
+  "removed": [],
+  "coverage": {
+    "planned_tasks": 3,
+    "done_tasks": 3,
+    "dead_tasks": 0,
+    "must_cover_total": 2,
+    "must_cover_done": 2,
+    "verified_findings": 1,
+    "rejected_findings": 0,
+    "publishable": true
+  },
+  "dead_tasks": [],
+  "query_ids": [
+    "q_13310206480f64e6",
+    "q_819b680380edd148",
+    "q_8cc4f05711c1f705"
+  ],
+  "verification": {
+    "build_id": "20260926-100000-000001",
+    "passed": true,
+    "items": [],
+    "n_numbers": 0,
+    "n_failed": 0,
+    "verified_at": "2026-09-26T11:00:00Z",
+    "duration_ms": 0
+  }
+}

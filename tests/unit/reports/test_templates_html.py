@@ -1,10 +1,9 @@
 """Tests for the HTML report templates (impl 09 U09-28, T09-09).
 
-``render.py`` (T09-11) does not exist yet, so the environment below is built exactly per the
-U09-23 postconditions and a local wrapper converts ``jinja2.TemplateError`` to
-``SchemaViolation`` as U09-24 does. The context ``r`` is built from real ``ReportData`` slot
-objects and evidence entries; every ``list[Segment]`` becomes ``segments_to_html`` Markup and
-every chart string Markup, as U09-24 hands them to the templates.
+Templates render through ``render._render_template`` on ``render.build_environment`` (U09-23,
+T09-11), which converts ``jinja2.TemplateError`` to ``SchemaViolation``. The context ``r`` is
+built from real ``ReportData`` slot objects and evidence entries; every ``list[Segment]``
+becomes ``segments_to_html`` Markup and every chart string Markup, as U09-24 hands them over.
 """
 
 from __future__ import annotations
@@ -16,14 +15,13 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Final
 
-import jinja2
 import markupsafe
 import pytest
 
 from herness.core.errors import SchemaViolation
 from herness.core.types import Coverage, NumberRef
 from herness.reports import _data as d
-from herness.reports import charts
+from herness.reports import charts, render
 from herness.reports._data_slots import (
     FUNDING_COLUMNS,
     Cell,
@@ -33,11 +31,10 @@ from herness.reports._data_slots import (
     TextBlock,
 )
 from herness.reports._evidence import EvidenceEntry
-from herness.reports._markup import Segment, md_escape, segment_text, segments_to_html
+from herness.reports._markup import Segment, segment_text, segments_to_html
 
 pytestmark = pytest.mark.unit
 
-REPORT_CSP: Final = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
 Q1: Final = "q_0123456789abcdef"
 Q2: Final = "q_fedcba9876543210"
 Q3: Final = "q_00000000000000aa"
@@ -47,31 +44,9 @@ TEMPLATES: Final = ("funding_review.html.j2", "org_review.html.j2")
 _DIR: Final = Path(str(resources.files("herness.reports") / "templates"))
 
 
-def _env() -> jinja2.Environment:
-    """U09-23 postconditions, verbatim."""
-    env = jinja2.Environment(
-        loader=jinja2.PackageLoader("herness.reports", "templates"),
-        autoescape=jinja2.select_autoescape(
-            enabled_extensions=("html.j2",), default_for_string=False, default=False
-        ),
-        undefined=jinja2.StrictUndefined,
-        trim_blocks=True,
-        lstrip_blocks=True,
-        keep_trailing_newline=True,
-        auto_reload=False,
-    )
-    env.filters["md"] = md_escape
-    env.globals.update(REPORT_CSP=REPORT_CSP, TEMPLATE_VERSION="1")
-    return env
-
-
 def _render(name: str, r: dict[str, Any]) -> str:
-    """U09-24's conversion: any template error → SchemaViolation naming the template."""
-    try:
-        return _env().get_template(name).render(r=r)
-    except jinja2.TemplateError as exc:
-        msg = f"report template error: {name}"
-        raise SchemaViolation(msg) from exc
+    """U09-24's renderer on U09-23's environment: a template error is a SchemaViolation."""
+    return render._render_template(name, r)
 
 
 def _ref(ref_id: str, value: object, unit: str, qid: str) -> NumberRef:
