@@ -37,7 +37,7 @@ FROM (
   SELECT record_kind, record_id
   FROM score.funding_attribution
   GROUP BY record_kind, record_id
-  HAVING sum(share) > 1 + 1e-9
+  HAVING {{ dsum('share') }} > 1 + 1e-9
 ) r
 -- @check score_share_range
 SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
@@ -68,11 +68,11 @@ WITH rec_cost AS (
 ),
 annual AS (
   SELECT
-    CAST(coalesce((SELECT sum(a.share * r.usd)
+    CAST(coalesce((SELECT {{ dsum('a.share * r.usd') }}
                    FROM score.funding_attribution a
                    JOIN rec_cost r ON r.record_kind = a.record_kind AND r.record_id = a.record_id),
                   0) * 365 / {{ observed_days() }} AS DOUBLE) AS attributed,
-    CAST(coalesce((SELECT sum(usd) FROM rec_cost), 0) * 365 / {{ observed_days() }} AS DOUBLE)
+    CAST(coalesce((SELECT {{ dsum('usd') }} FROM rec_cost), 0) * 365 / {{ observed_days() }} AS DOUBLE)
       AS total
 )
 SELECT attributed - total AS value,
