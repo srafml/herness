@@ -8,6 +8,7 @@ Spec 11's ``tiny_build`` is not on this base: the scored ``metrics_tiny`` build 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -76,16 +77,25 @@ def env(
     return SimpleNamespace(data_root=ops_store.data_root, services=services)
 
 
+STUB_PAGE = PageSpec(
+    Path(__file__).resolve().parents[2] / "support" / "app_pages" / "stub_warehouse_page.py",
+    needs_warehouse=True,
+    key_texts=("Stub warehouse page",),
+)
+IT_PAGES = (*APP_PAGES, STUB_PAGE)  # the stub exercises the warehouse branch of IT09-11
+
+
 def _values(at: AppTest) -> list[str]:
+    """Values of the main area only (the sidebar carries the build caption)."""
     kinds = ("title", "subheader", "markdown", "caption", "text", "info", "warning", "success")
-    return [str(e.value) for kind in kinds for e in getattr(at, kind)]
+    return [str(e.value) for kind in kinds for e in getattr(at.main, kind)]
 
 
 def _frames(at: AppTest) -> str:
     return "\n".join(d.value.to_string() for d in at.dataframe)
 
 
-@pytest.mark.parametrize("spec", APP_PAGES, ids=lambda s: s.path.name)
+@pytest.mark.parametrize("spec", IT_PAGES, ids=lambda s: s.path.name)
 def test_it09_10_page_renders_on_scored_build(env: SimpleNamespace, spec: PageSpec) -> None:
     """IT09-10 each page over a scored build: no exception, no error card, key elements."""
     build = plant_scored_build(env.data_root / "warehouse")
@@ -112,7 +122,7 @@ def test_it09_10_page_renders_on_scored_build(env: SimpleNamespace, spec: PageSp
         assert "Breaker not closed: servicenow" in shown
 
 
-@pytest.mark.parametrize("spec", APP_PAGES, ids=lambda s: s.path.name)
+@pytest.mark.parametrize("spec", IT_PAGES, ids=lambda s: s.path.name)
 def test_it09_11_no_current_build(env: SimpleNamespace, spec: PageSpec) -> None:
     """IT09-11 no CURRENT: warehouse pages show only the empty-state line; Overview still runs."""
     del env
@@ -124,7 +134,8 @@ def test_it09_11_no_current_build(env: SimpleNamespace, spec: PageSpec) -> None:
     if spec.needs_warehouse:
         assert [i.value for i in at.info] == [NO_BUILD_TEXT]
         assert _values(at) == [NO_BUILD_TEXT]
-        assert not at.dataframe
+        assert not at.main.dataframe
+        assert not at.main.expander
     else:
         shown = _values(at)
         for key in spec.key_texts:
