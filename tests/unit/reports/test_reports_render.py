@@ -360,3 +360,27 @@ def test_ut09_33_metrics_failure_is_logged(ops_store: object,
     monkeypatch.setattr(render, "record_metric_samples", busy)
     with pytest.raises(NotFound):
         render.render_run(RUN_ID, ["html"], now=NOW)
+
+
+def test_ut09_33_build_deleted_between_check_and_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT09-33 a build removed after the existence check is still ``build_retired``."""
+
+    def gone(build_id: str) -> object:
+        raise NotFound(f"warehouse build {build_id} not found")  # noqa: EM102 - stand-in
+
+    monkeypatch.setattr(render.warehouse, "build_exists", lambda _build_id: True)
+    monkeypatch.setattr(render.warehouse, "open_readonly", gone)
+    with pytest.raises(ReportContractError, match="deleted by retention") as info:
+        render._open_build("20260926-100000-000001")
+    assert info.value.details["code"] == "build_retired"
+    assert isinstance(info.value.__cause__, NotFound)
+
+
+def test_ut09_80_package_exports() -> None:
+    """UT09-80 ``herness.reports`` exports ``render_run`` (lazily) and ``ReportManifest``."""
+    import herness.reports as package  # noqa: PLC0415
+
+    assert package.render_run is render.render_run
+    assert package.ReportManifest is ReportManifest
+    with pytest.raises(AttributeError):
+        _ = package.no_such_name  # type: ignore[attr-defined]

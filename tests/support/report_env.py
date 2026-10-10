@@ -48,10 +48,12 @@ __all__ = [
     "NOW",
     "OPS_EVIDENCE",
     "ORG_RUN",
+    "REPO",
     "WH_EVIDENCE",
     "Evidence",
     "ReportEnv",
     "fixture_draft",
+    "insert_evidence",
     "install_redactor",
     "number",
     "prepare_warehouse",
@@ -269,11 +271,16 @@ def _recommendations() -> None:
     )  # fmt: skip
 
 
-def seed_ops(evidence: Sequence[Evidence] = OPS_EVIDENCE) -> None:
+def seed_ops() -> None:
     """The runs, tasks, findings, recommendations and evidence rows the fixture drafts cite."""
     _runs()
     _findings()
     _recommendations()
+    insert_evidence(OPS_EVIDENCE)
+
+
+def insert_evidence(evidence: Sequence[Evidence]) -> None:
+    """Ops ``evidence`` rows of ``FUND_RUN`` on ``BUILD_ID`` (trusted: ids recompute)."""
     _write(
         "INSERT INTO evidence (query_id, run_id, build_id, sql, result_hash, params,"
         " result_sample, row_count, duration_ms, executed_at) VALUES (?,?,?,?,?,?,?,?,?,?)",

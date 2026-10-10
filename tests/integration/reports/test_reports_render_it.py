@@ -500,3 +500,14 @@ def test_it09_02_evidence_not_found_warning(report_env: ReportEnv) -> None:
     assert manifest.numbers_linked < manifest.numbers_total
     html = report_env.out(FUND_RUN, "report.html").decode()
     assert "Evidence not found for this query in the ops store or the build." in html
+
+
+def test_st09_01_markdown_images_become_alt_text(report_env: ReportEnv) -> None:
+    """ST09-01 (MD, U09-18) a Markdown image in model text renders as its alt text only."""
+    draft = fixture_draft("funding")
+    draft["sections"][1]["paragraphs"][0]["text"] = "See ![the chart](http://evil.example/x) now."
+    report_env.write_draft(draft)
+    report_env.render(FUND_RUN)
+    md = report_env.out(FUND_RUN, "report.md").decode()
+    assert "See the chart now." in md
+    assert "evil.example" not in md
