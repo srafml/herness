@@ -45,7 +45,9 @@ USAGE: Final = {
     "/quit": "/quit", "/sessions": "/sessions", "/retry": "/retry",
     "/evidence": "/evidence q_<16 hex>", "/correct": "/correct <text>",
 }  # fmt: skip
-_QUERY_ID: Final = re.compile(r"^q_[0-9a-f]{16}$")  # QUERY_ID_RE of herness.reports.contract
+# The pattern of herness.reports.contract.QUERY_ID_RE (and herness.core.types.harness.evidence);
+# copied because importing contract loads the ops store on every `herness` start (BT09-07).
+_QUERY_ID: Final = re.compile(r"^q_[0-9a-f]{16}$")
 
 
 def build_services(cfg: "HernessConfig") -> Services:
@@ -186,7 +188,7 @@ def chat(
         msg = "Use --new or --session, not both."
         raise UserInputError(msg)
     actor = cast("Actor", check_command_role(opts, "chat"))  # viewer; ui_user_ref_key needed
-    con = Console(file=sys.stdout, highlight=False, soft_wrap=True)
+    con = Console(file=sys.stdout, highlight=False, emoji=False, soft_wrap=True)
     session_id = _session(actor, session, new=new)
     term = Term(con, actor, opts.config(), session_id, build_services)
     turn.history(term)

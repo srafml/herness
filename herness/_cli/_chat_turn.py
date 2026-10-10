@@ -174,12 +174,13 @@ def answer(term: Term, question: str) -> None:
         term.say(RETRY)
     elif mode == "defer":
         _wait(term)
-    elif state.done:
-        row = _reply(term.session_id)
-        if row is None or row["status"] != "done":
-            term.say(FAILED, "red")
-        else:
-            show_row(term, row, state.removed_claims)
+    elif not state.done:  # the stream ended with neither `final` nor `error`
+        term.say(FAILED, "red")
+        term.say(RETRY)
+    elif (row := _reply(term.session_id)) is None or row["status"] != "done":
+        term.say(FAILED, "red")
+    else:
+        show_row(term, row, state.removed_claims)
     if state.escalated is not None:
         run_id = state.escalated[0]
         term.say(f"Escalated to run `{run_id}`; the summary will appear in this chat later.")

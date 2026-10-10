@@ -2702,6 +2702,8 @@ Every `cmd_*` of impl 10 returns a `CommandResult` (U09-105); the handler conver
 | Security notes | TH09-15 (terminal escapes), TH09-10, TH09-12. |
 | Tests | UT09-91, IT09-20, ST09-15 |
 
+Notes (T09-25 review): `chat` calls `check_command_role(opts, "chat")` directly instead of `guarded`, with identical role, audit and refusal semantics, so the `--json` refusal comes before config load. `/evidence` looks up any query id of the ops evidence table after the ownership and id-format checks, as the dashboard evidence widget does, with sample cells through `herness/reports/_sample_policy.py` then U09-100; it is not limited to ids cited in the session (TH09-10 covers session IDOR only).
+
 #### U09-100 herness._cli.term.safe_terminal_text
 
 Signature: `safe_terminal_text(text: str, *, max_chars: int = 20000) -> str`.

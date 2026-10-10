@@ -23,7 +23,7 @@ pytestmark = pytest.mark.unit
 
 OSC52 = "\x1b]52;c;cm0gLXJmIH4=\x07"
 CLEAR = "\x1b[2J"
-EVIL = f"{OSC52}Team One had 42 incidents.{CLEAR}\x9b31m[bold]x[/bold]"
+EVIL = f"{OSC52}Team One had 42 incidents.{CLEAR}\x9b31m[bold]x[/bold] :warning:"
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
@@ -56,6 +56,7 @@ def test_st09_15_answer_escapes_removed(env: ChatCli) -> None:
     _clean(result.stdout)
     assert "Team One had 42 incidents." in result.stdout
     assert "[bold]x[/bold]" in result.stdout  # markup printed literally, never applied
+    assert ":warning:" in result.stdout  # emoji codes printed literally (Console emoji=False)
     history = env.run("chat", lines=("/quit",))  # the stored row, printed as history
     _clean(history.stdout)
     assert "Team One had 42 incidents." in history.stdout

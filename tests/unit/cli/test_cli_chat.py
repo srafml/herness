@@ -412,3 +412,12 @@ def test_ut09_91_policy_reads_the_server_side_chat_policy(
     monkeypatch.setattr(chat_policy, "chat_next_live_at", lambda at: at)
     assert _chat_turn.policy(now) == ("defer", now)
     assert _chat_turn.policy(now) == ("live", None)
+
+
+def test_ut09_91_stream_ending_without_final_or_error(env: ChatCli) -> None:
+    """UT09-91 a live stream that ends with neither ``final`` nor ``error``: failure and /retry."""
+    env.chat.write_rows = False
+    env.chat.scripts = [[ModeEvent(mode="live", message="m")]]
+    out = _ok(env.run("chat", "--new", lines=(QUESTION, "/quit")))
+    assert "This answer could not be produced." in out
+    assert "Type /retry to try again." in out
