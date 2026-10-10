@@ -51,10 +51,13 @@ pytestmark = pytest.mark.integration
 
 _INCIDENT_TS = ("opened_at", "acknowledged_at", "resolved_at", "closed_at")
 _CHANGE_TS = ("opened_at", "planned_start", "planned_end", "actual_start", "actual_end")
-# FIXTURE_REV -> base32 SHA-256 of builds.py + _build_cache.py (LF). A change to either file
-# fails this pin: bump FIXTURE_REV when the change alters how builds are made, then re-pin.
+# FIXTURE_REV -> base32 SHA-256 of builds.py + _build_cache.py (+ _build_stubs.py from rev 2;
+# LF). A change to them fails this pin: bump FIXTURE_REV when the change alters how builds
+# are made, then re-pin.
 _SOURCE_PIN = {
     1: "ucacjh275w565zygyagr2olgvsptypywf4tarh2tseqlz3gbuk6a",  # pragma: allowlist secret
+    2: "wbh7wqagj6sfzjegwotrkfnpkfz2qmgihxrdox7inaul46ce7g6a",  # pragma: allowlist secret
+    3: "2myfarsiyywn76y55s7yn3rbudet7hsfjkiadns2opaigbjaedcq",  # pragma: allowlist secret
 }
 
 
@@ -278,11 +281,14 @@ def test_it11_11_fingerprint_follows_generator_params_and_files(
 
 
 def test_it11_11_fixture_rev_is_pinned_to_the_build_sources() -> None:
-    """IT11-11 (cv) `FIXTURE_REV` convention: the pinned hash of `builds.py` and
-    `_build_cache.py` must match, so a change to how builds are made is a deliberate re-pin
+    """IT11-11 (cv) `FIXTURE_REV` convention: the pinned hash of `builds.py`,
+    `_build_cache.py` and `_build_stubs.py` must match, so a change to how builds are made is
+    a deliberate re-pin
     (and a `FIXTURE_REV` bump when cached builds must not be reused)."""
     support = REPO / "tests" / "support"
-    data = b"".join((support / n).read_bytes() for n in ("builds.py", "_build_cache.py"))
+    data = b"".join(
+        (support / n).read_bytes() for n in ("builds.py", "_build_cache.py", "_build_stubs.py")
+    )
     digest = hashlib.sha256(data.replace(b"\r\n", b"\n")).digest()
     pin = base64.b32encode(digest).decode("ascii").lower().rstrip("=")
     assert _SOURCE_PIN.get(FIXTURE_REV) == pin, f"FIXTURE_REV {FIXTURE_REV}: re-pin to {pin}"

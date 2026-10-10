@@ -43,7 +43,7 @@ from tools.synth._manifest import MARKER
 from tools.synth.params import SOURCES, load_params, params_hash
 
 FINGERPRINT: Final = ".fixture_build.json"
-FIXTURE_REV: Final = 1  # bump when `builds` changes how a build is made
+FIXTURE_REV: Final = 3  # bump when `builds` changes how a build is made (3: stub script book)
 LOCK_WAIT_S: Final = 30 * 60.0
 LOCK_POLL_S: Final = 1.0
 EMPTY_LOCK_STALE_S: Final = 60.0
@@ -222,6 +222,7 @@ def fingerprint(repo_root: Path, phash: str) -> str:
         *repo_root.glob("herness/model/sql/*.jinja"),
     ]
     files += [*repo_root.glob("config/*.yaml"), repo_root / "config" / "profiles" / "synth.yaml"]
+    files += repo_root.glob("tests/fixtures/llm_scripts/build/*.yaml")  # the stub LLM's book
     entries = sorted(
         f"{p.relative_to(repo_root).as_posix()} {hashlib.sha256(p.read_bytes()).hexdigest()}"
         for p in files
