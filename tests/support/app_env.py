@@ -207,6 +207,12 @@ APP_PAGES: tuple[PageSpec, ...] = (
         needs_warehouse=True,
         key_texts=("Delivery Health", "Filters", "Metrics"),
     ),
+    # T09-18: pages 08 - 10 (no warehouse needed; texts as rendered over the seeded ops store)
+    PageSpec(
+        APP_DIR / "pages" / "08_Recommendations.py",
+        needs_warehouse=False,
+        key_texts=("Recommendations", "Filters", "List", "No recommendations match the filters."),
+    ),
 )
 
 
