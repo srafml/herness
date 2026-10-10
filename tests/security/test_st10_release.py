@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 import structlog
 from tests.support.fake_runner import FakeRunner
+from tests.support.fake_venv import ext_prefix, use_install_root, venv_answer
 from tests.support.release_bundle import (
     EXT_BYTES,
     REPO,
@@ -48,7 +49,11 @@ from herness.core.ids import CROCKFORD_ALPHABET
 pytestmark = pytest.mark.unit
 
 USER = "0f" * 16  # an audit actor: 32 hex characters
-VENV = Path(sys.prefix)  # the running Herness venv; uv and the interpreter are faked
+
+
+def _venv() -> Path:
+    """The running Herness venv: under ``env``, a fake ``<tmp>/inst/.venv`` (T10-26c)."""
+    return Path(sys.prefix)
 
 
 def gh_answer(argv: list[str]) -> CmdResult:
@@ -58,8 +63,10 @@ def gh_answer(argv: list[str]) -> CmdResult:
 
 @pytest.fixture
 def env(tmp_path: Path, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch) -> FakeRunner:
-    """``gh`` via ``fake_gh``; ``uv`` succeeds; the venv interpreter reports ``excel`` loaded."""
-    venv = VENV
+    """``gh`` via ``fake_gh``; ``uv`` succeeds; the venv interpreter reports ``excel`` loaded.
+    T10-26c: the running venv is a fake ``<tmp>/inst/.venv`` (never the real ``.venv``), and
+    ``python -m venv`` plus the new ``<tmp>/inst/venvs/1.2.3`` interpreter are faked too."""
+    venv = use_install_root(monkeypatch, tmp_path / "inst")
     installed = tmp_path / "home" / "excel.duckdb_extension"
     installed.parent.mkdir()
     installed.write_bytes(EXT_BYTES)
@@ -67,7 +74,9 @@ def env(tmp_path: Path, fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
     row["install_path"] = str(installed)
     fake_runner.add(["gh", "attestation", "verify"], gh_answer)
     fake_runner.add(["uv", "pip"], CmdResult(0, "", "", 0.1))
-    fake_runner.add([str(venv_python(venv))], CmdResult(0, json.dumps(row), "", 0.1))
+    fake_runner.add([sys.executable, "-I", "-m", "venv"], venv_answer)
+    for python in (venv_python(venv), venv_python(tmp_path / "inst" / "venvs" / "1.2.3")):
+        fake_runner.add(ext_prefix(python.parent.parent), CmdResult(0, json.dumps(row), "", 0.1))
     monkeypatch.setattr(commands_deploy, "_venv_dir", lambda: venv)
     monkeypatch.setattr(attest, "worker_alive", lambda: False)
     return fake_runner
@@ -341,13 +350,17 @@ def test_st10_53_install_audited_with_version_and_sha256(tmp_path: Path, env: Fa
     built = build_bundle(tmp_path / "bundle")
     cfg = init_release_config(tmp_path, ext_sha256=built.ext_sha256)
     result = cmd_deploy_install(built.root, cfg=cfg, actor=USER)
+    new_venv = tmp_path / "inst" / "venvs" / "1.2.3"
     assert result.ok
     assert result.exit_code == 0
     assert result.data == {
         "version": "1.2.3",
         "wheel_sha256": built.wheel_sha256,
         "duckdb_extensions": "excel=v1.5.5",
-    }
+        "venv": str(new_venv),
+        "previous": "",
+        "restart": "required",
+    }  # T10-26c: a plain running venv has no previous venv to roll back to
     (log,) = cfg.paths.logs.glob("audit-*.jsonl")
     (line,) = [json.loads(raw) for raw in log.read_text(encoding="utf-8").splitlines()]
     assert line["event"] == "admin_action"
@@ -361,27 +374,27 @@ def test_st10_53_install_audited_with_version_and_sha256(tmp_path: Path, env: Fa
         p.name for p in built.root.iterdir()
     )
     # T10-26b: uv and DuckDB read verify_bundle's private copy, removed once installed.
-    (private,) = {Path(argv[-1]).parent for argv in env.argvs() if argv[0] == "uv"}
+    (private,) = {Path(argv[-1]).parent for argv in env.argvs() if argv[:2] == ["uv", "pip"]}
     assert private.parent == cfg.paths.data / ".release"
     assert private.name.startswith(".verify-")
     assert not private.exists()
-    python = str(venv_python(VENV))
-    uv_calls = [c for c in env.calls if c.argv[0] == "uv"]
+    python = str(venv_python(new_venv))
+    uv_calls = [c for c in env.calls if c.argv[:2] == ["uv", "pip"]]
     assert [(c.argv, c.timeout_s, c.check) for c in uv_calls] == [
         (
-            ["uv", "pip", "sync", "--require-hashes", "--python", python,
+            ["uv", "pip", "sync", "--no-config", "--require-hashes", "--python", python,
              str(private / "requirements.txt")],
             1800,
             True,
         ),
         (
-            ["uv", "pip", "install", "--no-deps", "--python", python,
+            ["uv", "pip", "install", "--no-config", "--no-deps", "--python", python,
              str(private / built.wheel.name)],
             600,
             True,
         ),
     ]  # fmt: skip
-    assert env.argvs()[-1][4] == str(private / "duckdb" / "excel.duckdb_extension")
+    assert env.argvs()[-1][-2] == str(private / "duckdb" / "excel.duckdb_extension")
 
 
 def test_st10_53_keeps_two_newest_release_dirs(tmp_path: Path, env: FakeRunner) -> None:
@@ -434,7 +447,7 @@ def test_st10_60_altered_extension_refused_before_install(tmp_path: Path, env: F
     _nothing_installed(env, tmp_path)
     env.calls.clear()
     with structlog.testing.capture_logs() as logs, pytest.raises(FatalError, match="excel"):
-        install_duckdb_extensions(ReleaseBundle.load(built.root), cfg, venv=VENV)
+        install_duckdb_extensions(ReleaseBundle.load(built.root), cfg, venv=_venv())
     assert env.calls == []
     refused = [e for e in logs if e["event"] == "deploy.install.refused"]
     assert [e["reason"] for e in refused] == ["extension_hash"]
@@ -551,7 +564,7 @@ def test_st10_60_extension_pin_checked_before_audit_and_venv_change(
     bundle = ReleaseBundle.load(built.root)
     summary = verify_bundle(bundle, cfg)
     with pytest.raises((FatalError, ConfigError), match="excel"):
-        attest.install_bundle(bundle, summary, venv=VENV, actor=USER)
+        attest.install_bundle(bundle, summary, venv=_venv(), actor=USER)
     _nothing_installed(env, tmp_path)
     assert list(cfg.paths.logs.glob("audit-*.jsonl")) == []
 
@@ -650,7 +663,7 @@ def test_st10_24_requirements_swapped_after_verify_refused(
     target = private / (built.wheel.name if rel == "wheel" else rel)
     target.write_bytes(target.read_bytes() + b"\n# swapped\n")
     with pytest.raises(FatalError, match=r"^bundle changed after verification$"):
-        attest.install_bundle(bundle, summary, venv=VENV, actor=USER)
+        attest.install_bundle(bundle, summary, venv=_venv(), actor=USER)
     assert [argv for argv in env.argvs() if argv[0] != "gh"] == []
     assert list(cfg.paths.logs.glob("audit-*.jsonl")) == []
     assert not private.exists()
@@ -695,7 +708,7 @@ def test_st10_61_swap_after_verify_installs_the_verified_copy(
         return CmdResult(0, "", "", 0.1)
 
     env.add(["uv", "pip"], uv)
-    installed = attest.install_bundle(bundle, summary, venv=VENV, actor=USER)
+    installed = attest.install_bundle(bundle, summary, venv=_venv(), actor=USER)
     assert installed["wheel_sha256"] == built.wheel_sha256
     assert used == {n: original[n] for n in names[1:]}
     archive = tmp_path / ".release" / "1.2.3"
@@ -743,19 +756,19 @@ def test_st10_61_private_copy_removed_on_failure(tmp_path: Path, env: FakeRunner
     summary = verify_bundle(bundle, cfg)
     env.add(["uv", "pip", "sync"], CmdResult(1, "", "boom", 0.1))
     with pytest.raises(FatalError, match=r"^uv failed: exit 1$"):
-        attest.install_bundle(bundle, summary, venv=VENV, actor=USER)
+        attest.install_bundle(bundle, summary, venv=_venv(), actor=USER)
     assert _private_dirs(cfg) == []
     for forged in (str(built.root), str(cfg.paths.data / ".release"), None):
         with pytest.raises(FatalError, match=r"^bundle changed after verification$"):
-            attest.install_bundle(bundle, {**summary, "copy": forged}, venv=VENV, actor=USER)
+            attest.install_bundle(bundle, {**summary, "copy": forged}, venv=_venv(), actor=USER)
     assert ReleaseBundle.load(built.root).version == "1.2.3"  # nothing deleted
     assert (cfg.paths.data / ".release").is_dir()
     other = dataclasses.replace(bundle, version="9.9.9")
     with pytest.raises(FatalError, match=r"^bundle changed after verification$"):
-        attest.install_bundle(other, verify_bundle(bundle, cfg), venv=VENV, actor=USER)
+        attest.install_bundle(other, verify_bundle(bundle, cfg), venv=_venv(), actor=USER)
     assert _private_dirs(cfg) == []
     env.table.pop()
-    assert attest.install_bundle(bundle, verify_bundle(bundle, cfg), venv=VENV, actor=USER)
+    assert attest.install_bundle(bundle, verify_bundle(bundle, cfg), venv=_venv(), actor=USER)
     assert _private_dirs(cfg) == []
 
 

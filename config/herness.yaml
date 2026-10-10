@@ -110,4 +110,5 @@ deploy:
     repo: null
     signer_workflow: null                        # must be <owner>/<repo>/.github/workflows/release.yml
     trusted_root_sha256: null                    # SHA-256 of the release trusted_root.jsonl
+    extra_index_url: https://download.pytorch.org/whl/cu128  # torch +cu pins only (impl 00 O-05)
     licence_exceptions: []

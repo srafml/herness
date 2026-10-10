@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -24,8 +23,8 @@ __all__ = ["EXT_INSTALL_SCRIPT", "check_extensions", "install_duckdb_extensions"
 
 _log = get_logger("admin.deploy")
 
-# Run as ``python -I -c EXT_INSTALL_SCRIPT <path> <name>``. ``NO_PROXY=*`` is set here, before
-# ``duckdb`` loads, because U10-76 ``run_cmd`` takes no ``env`` (T10-26 deviation).
+# Run as ``uv run ... --python <venv python> python -I -c EXT_INSTALL_SCRIPT <path> <name>``;
+# ``NO_PROXY=*`` is set before ``duckdb`` loads: ``run_cmd`` takes no ``env`` (T10-26).
 EXT_INSTALL_SCRIPT: Final = """\
 import json, os, re, sys
 os.environ["NO_PROXY"] = "*"
@@ -67,7 +66,7 @@ def _refuse(name: str, reason: str, message: str) -> FatalError:
 def check_extensions(
     bundle: ReleaseBundle, cfg: HernessConfig, *, venv: Path
 ) -> dict[str, tuple[Path, str]]:
-    """U10-112 pins, files and hashes, and ``venv`` is the running venv; before any change."""
+    """U10-112 pins, files and hashes, and ``venv`` has an interpreter; before any change."""
     pins = cfg.deploy.release.duckdb_extensions
     if "excel" not in pins:
         msg = "deploy.release.duckdb_extensions.excel is not pinned"
@@ -81,8 +80,8 @@ def check_extensions(
         if _sha256(path) != pin:
             raise _refuse(name, "extension_hash", f"duckdb extension hash mismatch: {name}")
         files[name] = (path, pin)
-    if os.path.normcase(venv_python(venv)) != os.path.normcase(sys.executable):
-        msg = "venv is not the running Herness venv"
+    if not venv_python(venv).is_file():
+        msg = "venv is not a Herness venv"
         raise ConfigError(msg)
     return files
 
@@ -104,7 +103,8 @@ def install_duckdb_extensions(
     files = check_extensions(bundle, cfg, venv=venv)  # all checked before any subprocess
     versions: dict[str, str] = {}
     for name, (path, pin) in files.items():
-        argv = [str(venv_python(venv)), "-I", "-c", EXT_INSTALL_SCRIPT, str(path), name]
+        argv = ["uv", "run", "--no-config", "--no-project", "--offline", "--python"]
+        argv += [str(venv_python(venv)), "python", "-I", "-c", EXT_INSTALL_SCRIPT, str(path), name]
         result = run_cmd(argv, timeout_s=120)
         if result.returncode != 0:
             raise _refuse(name, "extension_install", f"duckdb extension install failed: {name}")
