@@ -28,6 +28,7 @@ from tests.support._build_cache import BuildFixtureError
 __all__ = ["clear_build_outputs", "private_dir", "safe_rmtree"]
 
 _POSIX = hasattr(os, "getuid")
+_lstat = os.lstat  # module seam: the foreign-owner test patches this, not `os.lstat`
 
 
 def _linked(path: Path) -> bool:
@@ -52,25 +53,30 @@ def _check_chain(path: Path) -> None:
     """Every existing ancestor of `path` (lexical, then resolved), root first."""
     for anc in reversed(path.absolute().parents):
         with contextlib.suppress(FileNotFoundError):
-            info = os.lstat(anc)
+            info = _lstat(anc)
             if stat.S_ISLNK(info.st_mode) or anc.is_junction():
                 if sys.platform == "win32" or info.st_uid not in {0, os.getuid()}:
                     _refuse("symlink or junction in the parent chain", anc)
-                continue  # a trusted link: its target is checked with the resolved chain
+                # POSIX only (Windows refused above): the target gets the resolved-chain check
+                continue
             _check_owner_mode(anc, info)
     if _POSIX:
         for anc in reversed(path.resolve().parents):
             with contextlib.suppress(FileNotFoundError):
-                _check_owner_mode(anc, os.lstat(anc))
+                _check_owner_mode(anc, _lstat(anc))
 
 
-def _mkdir(path: Path) -> None:
-    """Create `path` (0o700) without following a link; refuse a link or a non-directory."""
+def _mkdir(path: Path, *, leaf: bool = False) -> None:
+    """Create `path` (0o700) without following a link; refuse a link or a non-directory, and
+    re-check an intermediate component's owner and mode after creating (or finding) it, so a
+    directory another user created in the race window is refused (the leaf: `private_dir`)."""
     with contextlib.suppress(FileExistsError):
         os.mkdir(path, 0o700)
-    info = os.lstat(path)
+    info = _lstat(path)
     if _linked(path) or not stat.S_ISDIR(info.st_mode):
         _refuse("symlink, junction or not a directory", path)
+    if not leaf:
+        _check_owner_mode(path, info)
 
 
 def private_dir(path: Path) -> Path:
@@ -81,8 +87,8 @@ def private_dir(path: Path) -> Path:
     for anc in reversed(path.parents):
         if not anc.exists():
             _mkdir(anc)
-    _mkdir(path)
-    info = os.lstat(path)
+    _mkdir(path, leaf=True)
+    info = _lstat(path)
     if _POSIX:
         if info.st_uid != os.getuid():
             _refuse("owned by another user", path)

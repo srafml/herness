@@ -31,7 +31,7 @@ from typing import Any
 
 import duckdb
 import pytest
-from tests.support import _build_cache
+from tests.support import _build_cache, _build_dirs
 from tests.support._build_cache import FIXTURE_REV, build_lock, fingerprint, holder_json
 from tests.support.builds import (
     REPO,
@@ -394,10 +394,38 @@ def test_it11_11_writable_or_foreign_ancestor_is_refused(
         private_dir(parent / "cache")
     parent.chmod(0o1777)
     assert private_dir(parent / "cache").is_dir()
-    uid = parent.stat().st_uid
-    monkeypatch.setattr(os, "getuid", lambda: uid + 1)
-    with pytest.raises(BuildFixtureError, match="another user"):
+    _foreign(monkeypatch, parent)  # only `parent` itself reports another (non-root) owner
+    with pytest.raises(BuildFixtureError, match="another user") as info:
         private_dir(parent / "other")
+    assert str(info.value).endswith(str(parent))
+
+
+def _foreign(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
+    """`_build_dirs._lstat` reports `target` as owned by another, non-root uid."""
+    real = _build_dirs._lstat
+
+    def lstat(path: object) -> os.stat_result:
+        info = real(path)  # type: ignore[arg-type]
+        if Path(str(path)) != target:
+            return info
+        fields = list(info)
+        fields[4] = os.getuid() + 1  # st_uid
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(_build_dirs, "_lstat", lstat)
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX owners (Windows: none)")
+def test_it11_11_parent_created_by_another_user_in_the_race_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT11-11 (cv) a missing parent that turns out (after the chain check) to be another
+    user's directory is refused before the leaf is created inside it."""
+    _foreign(monkeypatch, tmp_path / "a")
+    with pytest.raises(BuildFixtureError, match="another user") as info:
+        private_dir(tmp_path / "a" / "cache")
+    assert str(info.value).endswith(str(tmp_path / "a"))
+    assert not (tmp_path / "a" / "cache").exists()
 
 
 def test_it11_11_default_cache_dir_passes_the_chain_check() -> None:
