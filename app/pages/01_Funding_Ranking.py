@@ -18,6 +18,7 @@ from app.common import data, wh
 from app.common.sanitize import render_marked_markdown
 from app.common.widgets import PageContext, block, evidence, page
 from herness.core import redact
+from herness.core.logging import get_logger
 from herness.core.types import NumberRef
 
 ALL: Final = "All"
@@ -31,6 +32,7 @@ SHOWN: Final = ("rank", "candidate_id", "candidate_type", "title", "priority", "
 ATTRIBUTION: Final = ("tier", "record_id", "record_kind", "weight", "share", "pain_usd",
                       "quality")  # fmt: skip
 type Row = Mapping[str, object]
+_log = get_logger("app.page")
 
 
 def _title(raw: object) -> str:
@@ -43,14 +45,16 @@ def _ids(raw: object) -> list[str]:
     return [str(q) for q in raw] if isinstance(raw, list | tuple) else []
 
 
-def _numbers(raw: object) -> list[NumberRef]:
-    """The stored ``numbers`` list as ``NumberRef`` values; malformed items are skipped."""
+def _numbers(raw: object, source: str) -> list[NumberRef]:
+    """The stored ``numbers`` list as ``NumberRef`` values; malformed items are skipped and logged
+    (DEBUG, position and error count only: the item may hold model text)."""
     refs: list[NumberRef] = []
-    for item in raw if isinstance(raw, list) else ():
+    for index, item in enumerate(raw if isinstance(raw, list) else ()):
         try:
             refs.append(NumberRef.model_validate(item))
-        except ValidationError:
-            continue
+        except ValidationError as exc:
+            _log.debug("app.funding.number_dropped", source=source, index=index,
+                       errors=exc.error_count())  # fmt: skip
     return refs
 
 
@@ -119,7 +123,9 @@ def _recommendations(candidate_id: str) -> None:
     if not recs:
         st.caption("No recommendations for this candidate.")
     for rec in recs:
-        st.markdown(render_marked_markdown(str(rec["summary"]), _numbers(rec["numbers"])))
+        st.markdown(
+            render_marked_markdown(str(rec["summary"]), _numbers(rec["numbers"], "recommendation"))
+        )
 
 
 def _findings(candidate_id: str) -> None:
@@ -130,7 +136,9 @@ def _findings(candidate_id: str) -> None:
     if not findings:
         st.caption("No verified findings for this candidate.")
     for finding in findings:
-        st.markdown(render_marked_markdown(str(finding["claim"]), _numbers(finding["numbers"])))
+        st.markdown(
+            render_marked_markdown(str(finding["claim"]), _numbers(finding["numbers"], "finding"))
+        )
 
 
 def _detail(row: Row) -> None:

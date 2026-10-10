@@ -2072,6 +2072,8 @@ Test note (T09-15): the Home AppTests (IT09-10, IT09-11, FT09-05) run on a real 
 
 Tests: IT09-10, UT09-79, BT09-01. Security notes: TH09-11 (titles redacted), TH09-02.
 
+Note (T09-16 ruling): no row selected -> detail and evidence show the top row.
+
 #### U09-74 app/pages/02_Portfolio.py (viewer)
 
 | Block | Data | Controls and behavior |
@@ -2094,6 +2096,8 @@ Tests: IT09-10. Security notes: TH09-11.
 
 Tests: IT09-10. Security notes: none.
 
+Note (T09-16 ruling): no row selected -> trend and evidence show the top row.
+
 #### U09-76 app/pages/04_Action_Levers.py (viewer)
 
 | Block | Data | Controls and behavior |
@@ -2103,6 +2107,8 @@ Tests: IT09-10. Security notes: none.
 | Evidence | row `query_ids` | `evidence(...)` |
 
 Tests: IT09-10. Security notes: none.
+
+Note (T09-16 ruling): no row selected -> evidence shows the top row.
 
 #### U09-77 app/pages/05_Clusters.py (viewer)
 
