@@ -39,6 +39,7 @@ from herness.model.build import run_build_pipeline
 from herness.store import ops, warehouse
 from herness.store.layout import DataLayout
 from herness.store.ops.migrate import migrate
+from tools.synth import GENERATOR_VERSION
 
 REPO: Final = Path(__file__).resolve().parents[2]
 FULL_STAGES: Final = ["build", "enrich", "score", "dq", "promote"]
@@ -200,12 +201,17 @@ CLOCK_DEPENDENT: Final = "future_timestamp:"
 def golden_counts(built: SynthBuild) -> dict[str, Any]:
     """`core.*` row counts and the clock-independent `meta.dq_result` rows (as stored)."""
     dq = {k: v for k, v in built.dq.items() if not k.startswith(CLOCK_DEPENDENT)}
-    return {"core": {t: d["rows"] for t, d in built.digests.items()}, "dq": dq}
+    return {
+        "generator_version": GENERATOR_VERSION,
+        "core": {t: d["rows"] for t, d in built.digests.items()},
+        "dq": dq,
+    }
 
 
 def golden_core(built: SynthBuild) -> dict[str, Any]:
-    """Per core table: the data columns, the row count and the digest of the sorted rows."""
-    return dict(built.digests)
+    """`generator_version` plus, per core table, the data columns, the row count and the
+    digest of the sorted rows."""
+    return {"generator_version": GENERATOR_VERSION, **built.digests}
 
 
 def _dump(path: Path, value: object) -> None:

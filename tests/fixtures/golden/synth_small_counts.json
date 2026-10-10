@@ -9,15 +9,15 @@
   "core.service": 400,
   "core.service_map": 1188,
   "core.team": 162,
-  "core.work_item": 3998,
-  "core.work_item_link": 473,
-  "core.work_item_transition": 8840
+  "core.work_item": 3994,
+  "core.work_item_link": 495,
+  "core.work_item_transition": 8816
  },
  "dq": {
   "cast_fail:stg.jira_issue.created_at": {
    "details": {
     "failed": 0,
-    "non_null": 3998
+    "non_null": 3994
    },
    "passed": true,
    "severity": "warn",
@@ -35,7 +35,7 @@
   "cast_fail:stg.jira_issue.resolved_at": {
    "details": {
     "failed": 0,
-    "non_null": 3938
+    "non_null": 3941
    },
    "passed": true,
    "severity": "warn",
@@ -44,7 +44,7 @@
   "cast_fail:stg.jira_issue.status_category": {
    "details": {
     "failed": 0,
-    "non_null": 3998
+    "non_null": 3994
    },
    "passed": true,
    "severity": "warn",
@@ -53,7 +53,7 @@
   "cast_fail:stg.jira_issue.story_points": {
    "details": {
     "failed": 0,
-    "non_null": 2164
+    "non_null": 2163
    },
    "passed": true,
    "severity": "warn",
@@ -62,7 +62,7 @@
   "cast_fail:stg.jira_issue.type": {
    "details": {
     "failed": 0,
-    "non_null": 3998
+    "non_null": 3994
    },
    "passed": true,
    "severity": "warn",
@@ -510,7 +510,7 @@
   },
   "row_count_drop:core.work_item": {
    "details": {
-    "cur": 3998,
+    "cur": 3994,
     "no_previous_build": true,
     "prev": 0
    },
@@ -520,7 +520,7 @@
   },
   "row_count_drop:core.work_item_link": {
    "details": {
-    "cur": 473,
+    "cur": 495,
     "no_previous_build": true,
     "prev": 0
    },
@@ -530,7 +530,7 @@
   },
   "row_count_drop:core.work_item_transition": {
    "details": {
-    "cur": 8840,
+    "cur": 8816,
     "no_previous_build": true,
     "prev": 0
    },
@@ -541,11 +541,12 @@
   "work_item_service_null": {
    "details": {
     "null_rows": 969,
-    "rows": 3998
+    "rows": 3994
    },
    "passed": true,
    "severity": "warn",
-   "value": 0.2423711855927964
+   "value": 0.24261392088132197
   }
- }
+ },
+ "generator_version": "2.1.0"
 }
