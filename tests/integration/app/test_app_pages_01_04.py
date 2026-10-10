@@ -182,3 +182,28 @@ def test_it09_10_org_scorecards_peer_and_trend(env: SimpleNamespace) -> None:
     assert any(c.endswith("last 8 months") for c in captions), captions
     assert len(at.get("vega_lite_chart")) == 1
     assert any(e.label.startswith("Evidence (") for e in at.main.expander)
+
+
+def test_it09_10_action_levers_rationale(env: SimpleNamespace) -> None:
+    """IT09-10 Action Levers: ranked by ``delta_usd``, rationale filled, entity filter applies."""
+    with duckdb.connect(str(env.db)) as con:  # the planted build has no levers
+        con.execute(
+            "INSERT INTO score.action_lever VALUES"
+            " ('team', 'T1', 'mtta_minutes', 'peer_median', 40, 20, 5000.00,"
+            " 'Bring {team} to the peer median; {unknown} stays', '{\"team\": \"Payments\"}',"
+            " false, ['q_afddb944dd00fa12']),"
+            " ('service', 'S1', 'mtta_minutes', 'peer_median', 30, 20, 9000.00,"
+            " 'Service lever', '{}', true, ['q_afddb944dd00fa12'])"
+        )
+    at = _run(LEVERS)
+    frames = _page_frames(at)
+    assert "Bring Payments to the peer median; {unknown} stays" in frames
+    assert frames.index("S1") < frames.index("T1")  # delta_usd descending
+    assert "Unconfirmed weights" in frames
+    assert any(e.label.startswith("Evidence (") for e in at.main.expander)
+    at = next(s for s in at.selectbox if s.label == "Entity type").set_value("team").run()
+    assert not at.exception
+    assert not at.error, [e.value for e in at.error]
+    frames = _page_frames(at)
+    assert "T1" in frames
+    assert "S1" not in frames
