@@ -4,7 +4,8 @@
 Build L2 provenance of the wheel, ``requirements.txt`` and each DuckDB extension, and the
 attested CycloneDX SBOM equals the loose SBOM, matches the pinned requirements and carries
 only allowlisted licences. Only then is the bundle copied to ``.release/<version>/``, audited
-and installed into the Herness venv (TH10-36, TH10-37, TH10-40, TH10-44).
+and installed into the Herness venv (TH10-36, TH10-37, TH10-40, TH10-44). Every check and the
+install read a private copy made before the first hash, never the download dir (T10-26b).
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, NoReturn
 
+from herness.admin._attest_copy import copy_files, private_dir, private_dir_of, remove_private
 from herness.admin.duckdb_ext import check_extensions, install_duckdb_extensions, venv_python
 from herness.admin.wsl import run_cmd
 from herness.core import config as _config
@@ -136,6 +138,14 @@ class ReleaseBundle:
         )
 
 
+def _files(bundle: ReleaseBundle) -> dict[str, Path]:
+    """Every bundle file by its bundle-relative POSIX path."""
+    paths = [bundle.wheel, bundle.requirements, bundle.sbom, bundle.trusted_root]
+    paths += [bundle.sbom_bundle, *bundle.provenance_bundles.values()]
+    paths += bundle.duckdb_extensions.values()
+    return {p.relative_to(bundle.root).as_posix(): p for p in paths}
+
+
 def _sha256(path: Path) -> str:
     with path.open("rb") as fh:
         return hashlib.file_digest(fh, "sha256").hexdigest()
@@ -176,15 +186,19 @@ def _check_provenance(rel: str, stdout: str, digest: str) -> None:
         _refuse("provenance", rel, f"attestation verification failed: {rel}")
 
 
-def _attested_sbom(bundle: ReleaseBundle, stdout: str) -> dict[str, Any]:
-    """The verified SBOM predicate; it must equal the loose ``sbom.cdx.json`` (U10-87 step 2)."""
+def _attested_sbom(bundle: ReleaseBundle, stdout: str, wheel_sha256: str) -> dict[str, Any]:
+    """The verified SBOM predicate, attested for this wheel; it must equal the loose
+    ``sbom.cdx.json`` (U10-87 step 3; the subject check is T10-26b defence in depth)."""
     try:
         statement = json.loads(stdout)[0]["verificationResult"]["statement"]
         predicate = statement["predicate"]
+        named = any(s["digest"]["sha256"] == wheel_sha256 for s in statement["subject"])
         loose = json.loads(bundle.sbom.read_text(encoding="utf-8"))
         same = canonical_json(loose) == canonical_json(predicate)
     except (ValueError, LookupError, TypeError, SchemaViolation, OSError):
         _refuse("sbom_attestation", "sbom.cdx.json", "sbom attestation unreadable")
+    if not named:
+        _refuse("sbom_attestation", "sbom.cdx.json", "sbom attestation does not name the wheel")
     if not (same and statement.get("predicateType") == _CDX and isinstance(predicate, dict)):
         _refuse("sbom_mismatch", "sbom.cdx.json", "sbom does not match its attestation")
     return predicate
@@ -236,7 +250,7 @@ def _licences(component: dict[str, Any]) -> list[str]:
 
 
 def _check_licences(components: list[dict[str, Any]], exceptions: Iterable[str]) -> int:
-    """Every component's licences are allowlisted, or it is a listed exception (step 4)."""
+    """Every component's licences are allowlisted, or it is a listed exception (U10-87 step 5)."""
     excepted = {_norm(e) for e in exceptions}
     bad = sorted(
         str(c.get("name"))
@@ -250,52 +264,57 @@ def _check_licences(components: list[dict[str, Any]], exceptions: Iterable[str])
 
 
 def verify_bundle(bundle: ReleaseBundle, cfg: HernessConfig) -> dict[str, Any]:
-    """Verify provenance, the attested SBOM, components and licences (U10-87; TH10-36/37)."""
+    """Verify provenance, the attested SBOM, components and licences (U10-87; TH10-36/37).
+    Ruling T10-26b: hashes, pin and ``gh`` read only a private copy (``summary["copy"]``)."""
     release = cfg.deploy.release
     if not (release.repo and release.signer_workflow and release.trusted_root_sha256):
         msg = "deploy.release is not configured"
         raise ConfigError(msg)
+    private = private_dir(cfg.paths.data)
+    try:
+        copy_files(_files(bundle), bundle.root, private, _MAX_BYTES)
+        return _verify(ReleaseBundle.load(private), release)
+    except BaseException:
+        remove_private(private)
+        raise
+
+
+def _verify(copy: ReleaseBundle, release: ReleaseDeploy) -> dict[str, Any]:
     # Ruling T10-26 r2: the bundled trust root must match its file-only pin before any gh call.
-    if _sha256(bundle.trusted_root) != release.trusted_root_sha256:
+    if _sha256(copy.trusted_root) != release.trusted_root_sha256:
         _refuse("trusted_root", "trusted_root.jsonl", _ROOT_REFUSED)
-    files = [bundle.wheel, bundle.requirements, *bundle.duckdb_extensions.values()]
-    subjects = {f.relative_to(bundle.root).as_posix(): _sha256(f) for f in files}  # hashed first
+    files = [copy.wheel, copy.requirements, *copy.duckdb_extensions.values()]
+    subjects = {f.relative_to(copy.root).as_posix(): _sha256(f) for f in files}  # hashed first
+    sbom_sha256 = _sha256(copy.sbom)
     for rel, digest in subjects.items():
-        _check_provenance(rel, _gh_verify(bundle, release, bundle.root / rel, _SLSA), digest)
-    sbom = _attested_sbom(bundle, _gh_verify(bundle, release, bundle.wheel, _CDX))
+        _check_provenance(rel, _gh_verify(copy, release, copy.root / rel, _SLSA), digest)
+    digest = subjects[copy.wheel.name]
+    sbom = _attested_sbom(copy, _gh_verify(copy, release, copy.wheel, _CDX), digest)
     components = sbom.get("components") or []
     if not isinstance(components, list) or not all(isinstance(c, dict) for c in components):
         _refuse("components", "sbom.cdx.json", "sbom components unreadable")
-    count = _check_components(components, _requirements(bundle.requirements))
+    count = _check_components(components, _requirements(copy.requirements))
     licences = _check_licences(components, release.licence_exceptions)
-    digest = subjects[bundle.wheel.name]
-    _log.info("deploy.install.verified", version=bundle.version, wheel_sha256=digest)
+    _log.info("deploy.install.verified", version=copy.version, wheel_sha256=digest)
     return {
-        "version": bundle.version,
+        "version": copy.version,
         "wheel_sha256": digest,
         "subjects": subjects,
+        "sbom_sha256": sbom_sha256,
+        "copy": str(copy.root),
         "components": count,
         "licences_checked": licences,
     }
 
 
-def _copy_bundle(bundle: ReleaseBundle, dest: Path) -> ReleaseBundle:
-    """Copy every bundle file into ``dest`` (atomic per file) and load the copy."""
-    sources = [
-        p
-        for p in bundle.root.rglob("*")
-        if p.is_file()
-        and not p.is_symlink()
-        and not any(part.startswith(".") for part in p.relative_to(bundle.root).parts)
-    ]  # what ``load`` sees: no hidden part, no link
-    for source in sources:
-        target = dest / source.relative_to(bundle.root)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(f".{target.name}.tmp")
-        shutil.copyfile(source, tmp)
-        os.replace(tmp, target)
-    os.utime(dest)
-    return ReleaseBundle.load(dest)
+def _check_unchanged(root: Path, wheel: str, summary: dict[str, Any]) -> None:
+    """Re-hash the wheel, every provenance subject and the SBOM under ``root`` (U10-88)."""
+    verified = {**summary["subjects"], "sbom.cdx.json": summary["sbom_sha256"]}
+    if verified.get(wheel) != summary["wheel_sha256"] or any(
+        _sha256(root / rel) != sha for rel, sha in verified.items()
+    ):
+        msg = "bundle changed after verification"
+        raise FatalError(msg)
 
 
 def _prune(releases: Path) -> None:
@@ -313,36 +332,47 @@ def _repo_root() -> Path:
 def install_bundle(
     bundle: ReleaseBundle, summary: dict[str, Any], *, venv: Path, actor: str
 ) -> dict[str, str]:
-    """Install a verified release into the Herness venv (U10-88; the only target install path)."""
-    digest = str(summary["wheel_sha256"])
-    if _sha256(bundle.wheel) != digest:
-        msg = "bundle changed after verification"
-        raise FatalError(msg)
+    """Install a verified release into the Herness venv (U10-88; the only target install path).
+    Ruling T10-26b: only from ``summary["copy"]``, removed on success or failure."""
+    cfg = get_config()
+    private = private_dir_of(summary.get("copy"), cfg.paths.data)
+    try:
+        copy = ReleaseBundle.load(private)
+        if copy.version != bundle.version:
+            msg = "bundle changed after verification"
+            raise FatalError(msg)
+        return _install(copy, summary, cfg, venv=venv, actor=actor)
+    finally:
+        remove_private(private)
+
+
+def _install(
+    copy: ReleaseBundle, summary: dict[str, Any], cfg: HernessConfig, *, venv: Path, actor: str
+) -> dict[str, str]:
+    _check_unchanged(copy.root, copy.wheel.name, summary)
     if worker_alive():
         msg = "stop the worker before installing"
         raise StoreBusy(msg)
-    cfg = get_config()
-    check_extensions(bundle, cfg, venv=venv)  # U10-112 pins before the audit and any venv change
+    check_extensions(copy, cfg, venv=venv)  # U10-112 pins before the audit and any venv change
     releases = _repo_root() / ".release"
-    copied = _copy_bundle(bundle, releases / bundle.version)
-    verified: dict[str, str] = summary["subjects"]
-    if _sha256(copied.wheel) != digest or any(
-        _sha256(copied.root / rel) != sha for rel, sha in verified.items()
-    ):
-        msg = "bundle changed after verification"
-        raise FatalError(msg)
+    archive = releases / copy.version  # kept for rollback; the install reads the private copy
+    archive.mkdir(parents=True, exist_ok=True)
+    copy_files(_files(copy), copy.root, archive, _MAX_BYTES)
+    os.utime(archive)
+    _check_unchanged(archive, copy.wheel.name, summary)
     _prune(releases)
+    digest = str(summary["wheel_sha256"])
     pins = cfg.deploy.release.duckdb_extensions
     detail = [f"sha256:{digest}", *(f"ext:{n}={pins[n]}" for n in sorted(pins))]
-    audit("admin_action", actor, action="deploy_install", target=bundle.version, detail=detail)
+    audit("admin_action", actor, action="deploy_install", target=copy.version, detail=detail)
     python = str(venv_python(venv))
-    sync = ["uv", "pip", "sync", "--require-hashes", "--python", python, str(copied.requirements)]
+    sync = ["uv", "pip", "sync", "--require-hashes", "--python", python, str(copy.requirements)]
     run_cmd(sync, timeout_s=1800, check=True)
-    wheel = ["uv", "pip", "install", "--no-deps", "--python", python, str(copied.wheel)]
+    wheel = ["uv", "pip", "install", "--no-deps", "--python", python, str(copy.wheel)]
     run_cmd(wheel, timeout_s=600, check=True)
-    versions = install_duckdb_extensions(copied, cfg, venv=venv)
+    versions = install_duckdb_extensions(copy, cfg, venv=venv)
     return {
-        "version": bundle.version,
+        "version": copy.version,
         "wheel_sha256": digest,
         "duckdb_extensions": ",".join(f"{n}={v}" for n, v in sorted(versions.items())),
     }
