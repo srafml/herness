@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final, NoReturn, cast
 
 import typer
+import typer.main
 from typer._click.exceptions import UsageError
+from typer.models import CommandInfo, TyperInfo
 
 from herness._cli.identity import cli_actor
 from herness._cli.output import EXIT_CODES, emit_error, exit_code_for
@@ -220,6 +222,18 @@ def _root(  # noqa: PLR0913 - one parameter per global option (U09-85)
 # --- U09-84 entry point --------------------------------------------------------------------------
 
 
+def _entry_name(entry: CommandInfo | TyperInfo) -> str | None:
+    """The name Typer gives a registered command or group: the explicit one, else the
+    group app's own name, else the command callback's name (``typer.main``)."""
+    if isinstance(entry.name, str):
+        return entry.name
+    if isinstance(entry, TyperInfo):
+        info = entry.typer_instance.info if entry.typer_instance is not None else None
+        return info.name if info is not None and isinstance(info.name, str) else None
+    callback = entry.callback
+    return None if callback is None else typer.main.get_command_name(callback.__name__)
+
+
 def _register_groups(root: typer.Typer) -> None:
     """U09-84 step 4: each command module registers its group on the root app.
 
@@ -235,9 +249,12 @@ def _register_groups(root: typer.Typer) -> None:
     cmd_review.register(scratch)  # T09-23
     # T09-24: cmd_queue.register(scratch); cmd_admin.register(scratch)
     # T09-25: cmd_chat.register(scratch)
-    have = {c.name for c in root.registered_commands} | {g.name for g in root.registered_groups}
-    root.registered_commands += [c for c in scratch.registered_commands if c.name not in have]
-    root.registered_groups += [g for g in scratch.registered_groups if g.name not in have]
+    have = {_entry_name(c) for c in root.registered_commands}
+    have |= {_entry_name(g) for g in root.registered_groups}
+    root.registered_commands += [
+        c for c in scratch.registered_commands if _entry_name(c) not in have
+    ]
+    root.registered_groups += [g for g in scratch.registered_groups if _entry_name(g) not in have]
 
 
 def _prescan(args: Sequence[str], name: str) -> str | None:
