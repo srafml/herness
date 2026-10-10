@@ -193,9 +193,10 @@ def test_ut10_85_runner_allows_only_the_running_venv_interpreter(
 def test_ut10_85_other_venv_refused_before_subprocess(
     tmp_path: Path, setup: tuple[ReleaseBundle, Path, str], fake_runner: FakeRunner
 ) -> None:
-    """UT10-85 a venv other than the running Herness venv → ConfigError, no subprocess."""
+    """UT10-85 a venv other than the running Herness venv (or a T10-26c staged venv under its
+    install root) → ConfigError, no subprocess."""
     bundle, _, pin = setup
     cfg = init_release_config(tmp_path, ext_sha256=pin)
-    with pytest.raises(ConfigError, match=r"^venv is not the running Herness venv$"):
+    with pytest.raises(ConfigError, match=r"^venv is not a Herness venv$"):
         install_duckdb_extensions(bundle, cfg, venv=tmp_path / "other-venv")
     assert fake_runner.calls == []

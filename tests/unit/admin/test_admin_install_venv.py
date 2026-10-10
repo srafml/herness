@@ -256,12 +256,14 @@ def test_ut10_90_marker_created_beside_then_renamed(
     monkeypatch.setattr(_install_venv.os, "rename", spy(rename, "rename"))
     monkeypatch.setattr(_install_venv.os, "replace", spy(replace, "replace"))
     install(site)
-    moves = [(s, d) for _, s, d in seen]
-    assert (".current-new", "current") in moves
+    marker = [m for m in seen if "current" in m[1] + m[2]]  # not the bundle copies' renames
     if os.name == "nt":  # a junction cannot be renamed over a junction: step it aside first
-        assert moves == [("current", ".current-old"), (".current-new", "current")]
+        assert marker == [
+            ("rename", "current", ".current-old"),
+            ("rename", ".current-new", "current"),
+        ]
     else:
-        assert seen == [("replace", ".current-new", "current")]
+        assert marker == [("replace", ".current-new", "current")]
     assert real(root / "current") == real(root / "venvs" / "1.2.3")
     assert sorted(p.name for p in root.iterdir()) == ["current", "venvs"]
 

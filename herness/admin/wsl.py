@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final, Literal
 
 from pydantic import TypeAdapter, ValidationError
@@ -41,7 +42,16 @@ ALLOWED_COMMANDS: Final = frozenset(
         "docker",
     }
 )
-_VENV_PY: Final = os.path.normcase(sys.executable)  # U10-112: the running Herness venv only
+_VENV_PY: Final = os.path.normcase(sys.executable)  # U10-112: the running Herness venv
+# Ruling T10-26c: plus the blue/green venvs <install root>/venvs/<version>/ U10-88 builds, where
+# <install root> holds the running venv (<root>/current, <root>/venvs/<v> or <root>/<venv>).
+_PREFIX: Final = Path(sys.prefix)
+_VENVS: Final = os.path.normcase(
+    (_PREFIX.parent.parent if os.path.normcase(_PREFIX.parent.name) == "venvs" else _PREFIX.parent)
+    / "venvs"
+)
+_LAYOUT: Final = ("scripts", "python.exe") if os.name == "nt" else ("bin", "python")
+_VERSION: Final = re.compile(r"\d+\.\d+\.\d+[a-z0-9.+-]*")  # the U10-86 wheel version
 MAX_TIMEOUT_S: Final = 7200
 MAX_OUTPUT_BYTES: Final = 16 * 1024 * 1024
 _WSL_ARG: Final = re.compile(r"[A-Za-z0-9._:/@=+,%{}-]{1,512}")
@@ -70,6 +80,20 @@ def _decode(data: bytes | None, encoding: str) -> str:
     return (data or b"")[:MAX_OUTPUT_BYTES].decode(encoding, errors="replace")
 
 
+def admits(argv0: str) -> bool:
+    """U10-76 allowlist: a listed program, the running venv's interpreter, or exactly the
+    interpreter of a blue/green venv ``<install root>/venvs/<version>/`` (Ruling T10-26c)."""
+    if argv0 in ALLOWED_COMMANDS or os.path.normcase(argv0) == _VENV_PY:
+        return True
+    path = Path(os.path.normcase(argv0))
+    return (
+        len(path.parts) > len(_LAYOUT) + 1
+        and path.parts[-2:] == _LAYOUT
+        and str(path.parents[2]) == _VENVS
+        and _VERSION.fullmatch(path.parents[1].name) is not None
+    )
+
+
 def run_cmd(
     argv: Sequence[str],
     *,
@@ -79,7 +103,7 @@ def run_cmd(
     check: bool = False,
 ) -> CmdResult:
     """Run one allowlisted program with no shell (U10-76); output is capped at 16 MiB."""
-    if not argv or (argv[0] not in ALLOWED_COMMANDS and os.path.normcase(str(argv[0])) != _VENV_PY):
+    if not argv or not admits(str(argv[0])):
         msg = f"command not allowed: {argv[0] if argv else ''}"
         raise ConfigError(msg)
     elements: Sequence[object] = argv

@@ -1,10 +1,13 @@
 """IT10-14: ``herness deploy install`` end to end into a temporary venv (impl 10 F10-07).
 
-Real ``uv`` (offline, from the local cache) syncs a hashed ``requirements.txt`` and installs a
-fixture wheel into a ``uv venv`` under ``tmp_path``; ``gh`` is a fake program on ``PATH`` that
-runs ``fake_gh`` and returns recorded JSON. Only the venv interpreter's DuckDB step is answered
-by ``fake_runner`` (the fixture extension is not a signed DuckDB build; the real ``excel`` load
-is the card's recorded acceptance check). Nothing touches the network or the dev ``.venv``.
+A ``uv venv`` under ``tmp_path`` plays the running Herness venv; the install builds the new
+blue/green venv ``tmp_path/venvs/1.2.3`` with the real ``python -m venv`` and points the
+``tmp_path/current`` junction (symlink on POSIX) at it (Ruling T10-26c). Real ``uv`` (offline,
+from the local cache) syncs a hashed ``requirements.txt`` and installs a fixture wheel there;
+``gh`` is a fake program on ``PATH`` that runs ``fake_gh`` and returns recorded JSON. Only the
+new venv interpreter's DuckDB step is answered by ``fake_runner`` (the fixture extension is not
+a signed DuckDB build; the real ``excel`` load is the card's recorded acceptance check).
+Nothing touches the network or the dev ``.venv``.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from pathlib import Path
 
 import pytest
 from tests.support.fake_runner import FakeRunner
+from tests.support.fake_venv import use_install_root
 from tests.support.release_bundle import (
     EXT_BYTES,
     BundleSpec,
@@ -71,11 +75,13 @@ def test_it10_14_deploy_install_into_temp_venv(
     row = {"loaded": True, "installed": True, "extension_version": "v1.5.5"}
     row["install_path"] = str(installed_ext)
     fake_runner.passthrough = True
-    fake_runner.add([str(venv_python(venv))], CmdResult(0, json.dumps(row), "", 0.1))
+    new_venv = tmp_path / "venvs" / "1.2.3"
+    fake_runner.add([str(venv_python(new_venv))], CmdResult(0, json.dumps(row), "", 0.1))
     monkeypatch.setattr(commands_deploy, "_venv_dir", lambda: venv)
-    # The temp venv plays the running Herness venv for U10-112's check (its interpreter call
-    # is answered by fake_runner, so wsl's allowlist is not reached for it).
-    monkeypatch.setattr(sys, "executable", str(venv_python(venv)))
+    # The temp venv plays the running Herness venv (sys.prefix, sys.executable and the wsl
+    # allowlist): its real interpreter runs ``-m venv``; the new interpreter's DuckDB call is
+    # answered by fake_runner.
+    use_install_root(monkeypatch, tmp_path, "venv")
     monkeypatch.setattr(attest, "worker_alive", lambda: False)
 
     result = cmd_deploy_install(built.root, cfg=cfg, actor=USER)
@@ -85,8 +91,13 @@ def test_it10_14_deploy_install_into_temp_venv(
         "version": "1.2.3",
         "wheel_sha256": built.wheel_sha256,
         "duckdb_extensions": "excel=v1.5.5",
+        "venv": str(new_venv),
+        "previous": "",
+        "restart": "required",
     }
-    site = next(venv.glob("**/site-packages"))
+    assert os.path.realpath(tmp_path / "current") == os.path.realpath(new_venv)
+    assert not any(venv.glob("**/herness-1.2.3.dist-info"))  # the running venv is untouched
+    site = next(new_venv.glob("**/site-packages"))
     assert (site / "herness-1.2.3.dist-info").is_dir()
     assert (site / "herness_bundle_probe.py").is_file()
     assert any(site.glob("six-*.dist-info"))

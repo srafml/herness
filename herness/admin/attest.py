@@ -4,8 +4,8 @@
 Build L2 provenance of the wheel, ``requirements.txt`` and each DuckDB extension, and the
 attested CycloneDX SBOM equals the loose SBOM, matches the pinned requirements and carries
 only allowlisted licences. Only then is the bundle copied to ``.release/<version>/``, audited
-and installed into the Herness venv (TH10-36, TH10-37, TH10-40, TH10-44). Every check and the
-install read a private copy made before the first hash, never the download dir (T10-26b).
+and installed into a new blue/green venv (T10-26c; TH10-36, TH10-37, TH10-40, TH10-44). Every
+check and the install read a private copy made before the first hash, never the download dir.
 """
 
 from __future__ import annotations
@@ -17,11 +17,13 @@ import re
 import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Final, NoReturn
 
 from herness.admin._attest_copy import copy_files, private_dir, private_dir_of, remove_private
-from herness.admin.duckdb_ext import check_extensions, install_duckdb_extensions, venv_python
+from herness.admin._install_venv import build_venv, staged_venv
+from herness.admin.duckdb_ext import check_extensions
 from herness.admin.wsl import run_cmd
 from herness.core import config as _config
 from herness.core.audit import audit
@@ -353,6 +355,7 @@ def _install(
     if worker_alive():
         msg = "stop the worker before installing"
         raise StoreBusy(msg)
+    target = staged_venv(venv, copy.version)  # Ruling T10-26c: never into sys.prefix
     check_extensions(copy, cfg, venv=venv)  # U10-112 pins before the audit and any venv change
     releases = _repo_root() / ".release"
     archive = releases / copy.version  # kept for rollback; the install reads the private copy
@@ -365,14 +368,6 @@ def _install(
     pins = cfg.deploy.release.duckdb_extensions
     detail = [f"sha256:{digest}", *(f"ext:{n}={pins[n]}" for n in sorted(pins))]
     audit("admin_action", actor, action="deploy_install", target=copy.version, detail=detail)
-    python = str(venv_python(venv))
-    sync = ["uv", "pip", "sync", "--require-hashes", "--python", python, str(copy.requirements)]
-    run_cmd(sync, timeout_s=1800, check=True)
-    wheel = ["uv", "pip", "install", "--no-deps", "--python", python, str(copy.wheel)]
-    run_cmd(wheel, timeout_s=600, check=True)
-    versions = install_duckdb_extensions(copy, cfg, venv=venv)
-    return {
-        "version": copy.version,
-        "wheel_sha256": digest,
-        "duckdb_extensions": ",".join(f"{n}={v}" for n, v in sorted(versions.items())),
-    }
+    recheck = partial(_check_unchanged, copy.root, copy.wheel.name, summary)
+    installed = build_venv(copy, cfg, target, recheck)  # then repoints <install root>/current
+    return {"version": copy.version, "wheel_sha256": digest, **installed}

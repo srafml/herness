@@ -8,11 +8,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-from herness.admin.wsl import run_cmd
+from herness.admin.wsl import admits, run_cmd
 from herness.core.errors import ConfigError, FatalError
 from herness.core.logging import get_logger
 
@@ -67,7 +66,7 @@ def _refuse(name: str, reason: str, message: str) -> FatalError:
 def check_extensions(
     bundle: ReleaseBundle, cfg: HernessConfig, *, venv: Path
 ) -> dict[str, tuple[Path, str]]:
-    """U10-112 pins, files and hashes, and ``venv`` is the running venv; before any change."""
+    """U10-112 pins, files and hashes; ``venv`` is the running or a staged venv (T10-26c)."""
     pins = cfg.deploy.release.duckdb_extensions
     if "excel" not in pins:
         msg = "deploy.release.duckdb_extensions.excel is not pinned"
@@ -81,8 +80,8 @@ def check_extensions(
         if _sha256(path) != pin:
             raise _refuse(name, "extension_hash", f"duckdb extension hash mismatch: {name}")
         files[name] = (path, pin)
-    if os.path.normcase(venv_python(venv)) != os.path.normcase(sys.executable):
-        msg = "venv is not the running Herness venv"
+    if not admits(str(venv_python(venv))):
+        msg = "venv is not a Herness venv"
         raise ConfigError(msg)
     return files
 
