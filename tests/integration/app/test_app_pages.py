@@ -2,7 +2,8 @@
 
 Parametrised over ``tests.support.app_env.APP_PAGES``; T09-16 - T09-19 append their pages.
 Spec 11's ``tiny_build`` is not on this base: the scored ``metrics_tiny`` build planted by
-``plant_scored_build`` stands in (T09-14 carry-over).
+``plant_scored_build`` stands in (T09-14 carry-over). Tests load no redaction key, so the
+fixture installs ``install_redaction_double`` (T09-16: titles pass ``redact_text``).
 """
 
 from __future__ import annotations
