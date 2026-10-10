@@ -1,14 +1,14 @@
 {
   "seed": 42,
   "scale": "tiny",
-  "generator_version": "2.0.0",
+  "generator_version": "2.1.0",
   "params_hash": "sha256:b55e288fa65f7aab4325b465df14bf21baf1504c87cfb4516df183e4c6fac7fb",
   "start": "2026-06-03",
   "end": "2026-08-31",
   "question_set_version": "qs-2026-10-01.1",
   "dataset_root": "data",
   "row_counts": {
-    "jira/issue": 166,
+    "jira/issue": 168,
     "monitoring/event": 432,
     "monitoring/metric_daily": 7272,
     "servicenow/change_request": 331,
@@ -26,8 +26,8 @@
     "future_ts": 0,
     "resolved_before_opened": 0,
     "missing_service": 114,
-    "duplicate_rows": 90,
-    "later_versions": 86,
+    "duplicate_rows": 91,
+    "later_versions": 87,
     "tombstones": 5,
     "unknown_enum": 3
   },

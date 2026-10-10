@@ -128,6 +128,30 @@ def test_ut11_14_planners_are_registered_after_the_ops_planners(
             assert plant_range(cat, planner, key)[1] == n
 
 
+@pytest.mark.parametrize(
+    ("scale", "total"),
+    [("full", round(0.003 * 5_000_000)), ("small", round(10 * 1096 / 30))],
+)
+def test_ut11_14_t2c_size_scales_with_preset_incidents(
+    cat: Catalog, scale: str, total: int
+) -> None:
+    """UT11-14 T2c books max(10 per 30 days, round(0.003 x preset.incidents)) (T04-22b): at
+    `full` the share wins so the cluster's pain keeps pace with the background; at `small`
+    (and `tiny`) the 10-per-30-days floor is unchanged."""
+    full_span = load_params(
+        scale,
+        start=date(2023, 9, 1),
+        end=_END,
+        sources=("servicenow",),
+        dirty="none",
+        fetch_mode="initial",
+        params_file=None,
+    )
+    counts = planned_counts_t2c(cat, full_span)
+    assert sum(counts.values()) == total
+    assert {k[:2] for k in counts} == {("servicenow", "incident")}
+
+
 def test_ut11_14_t2_cluster_size_priorities_impact_and_family(
     cat: Catalog, params: SynthParams, bank: TemplateBank
 ) -> None:

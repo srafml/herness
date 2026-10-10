@@ -43,6 +43,7 @@ E2_LINKS: Final = 20  # cluster incidents named in E2 remotelinks
 _T2_SHARE: Final = 0.03  # of preset.incidents
 _T2_P2_PERCENT: Final = 40  # remaining P3
 _T2C_PER_30_DAYS: Final = 10
+_T2C_SHARE: Final = 0.003  # of preset.incidents; wins over the floor only at `full` (T04-22b)
 _T2C_P2_PERCENT: Final = 60  # remaining P3
 _E2_OFFSET: Final = timedelta(days=30)  # epics in the Jira shard of start + 30 days
 _P2, _P3 = 2, 3
@@ -69,7 +70,8 @@ def _t2_total(params: SynthParams) -> int:
 
 
 def _t2c_total(params: SynthParams) -> int:
-    return round(_T2C_PER_30_DAYS * ((params.end - params.start).days + 1) / 30)
+    floor = round(_T2C_PER_30_DAYS * ((params.end - params.start).days + 1) / 30)
+    return max(floor, round(_T2C_SHARE * params.preset.incidents))
 
 
 def _split(params: SynthParams, total: int) -> list[tuple[date, int, int]]:
@@ -99,7 +101,8 @@ def planned_counts_t2(cat: Catalog, params: SynthParams) -> dict[MonthKey, int]:
 
 
 def planned_counts_t2c(cat: Catalog, params: SynthParams) -> dict[MonthKey, int]:
-    """round(10 x span days / 30) S2c cluster incidents split across months by days."""
+    """max(round(10 x span days / 30), round(0.003 x preset.incidents)) S2c cluster
+    incidents split across months by days."""
     return _incident_counts(params, _t2c_total(params))
 
 
