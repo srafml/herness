@@ -194,6 +194,44 @@ def page_services(
     return services
 
 
+RUN_ID = "run_01J0000000000000000000000A"
+FAILED_JOB_ID = "job_01J0000000000000000000000B"
+HIDDEN_ERROR_TEXT = "SECRET ticket text in an error message"
+
+
+def seed_home_ops() -> None:
+    """One run, one failed job (``last_error`` with a message) and one open breaker."""
+    import json  # noqa: PLC0415
+    import sqlite3  # noqa: PLC0415
+    from datetime import timedelta  # noqa: PLC0415
+
+    from herness.core import time as clock  # noqa: PLC0415
+    from herness.store.ops import core  # noqa: PLC0415
+
+    now = clock.now()
+    at = clock.format_utc(now - timedelta(hours=1))
+    error = json.dumps({"class": "QueryError", "message": HIDDEN_ERROR_TEXT})
+
+    def fn(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "INSERT INTO run (run_id, kind, depth, profile, config_hash, status, started_at,"
+            " finished_at, token_usage, cost_usd) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (RUN_ID, "funding_review", "fast", "p", "c", "done", at, at, '{"input": 3}', "1.25"),
+        )
+        conn.execute(
+            "INSERT INTO job (job_id, kind, gpu_class, status, priority, payload, last_error,"
+            " attempts, max_attempts, scheduled_for, created_at, finished_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (FAILED_JOB_ID, "review", "none", "failed", 50, "{}", error, 3, 3, at, at, at),
+        )
+        conn.execute(
+            "INSERT INTO source_health (source, state, updated_at) VALUES (?,?,?)",
+            ("servicenow", "open", at),
+        )
+
+    core.run_write(fn, op="test_seed")
+
+
 def install_session(
     mp: pytest.MonkeyPatch, services: SimpleNamespace, *, user: str = "alice"
 ) -> list[dict[str, object]]:

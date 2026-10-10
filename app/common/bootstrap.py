@@ -27,6 +27,7 @@ from herness.core.config_sources import load_bootstrap
 from herness.core.egress_socket import install_socket_guard
 from herness.core.errors import ConfigError
 from herness.core.logging import configure_logging
+from herness.core.resilience import bind_chain_registry
 from herness.core.secrets import scrub_secrets
 from herness.reports.rules import load_user_ref_key
 from herness.store.ops.resilience import bind_core_backends
@@ -105,7 +106,9 @@ def build_services() -> AppServices:
 
     run_startup_validation(cfg, config_dir=config_dir)  # R-71; an error issue -> ConfigError
     memory = get_memory_store()
-    chat = ChatService(cfg.pipelines, LLMRegistry(cfg.models, profile=cfg.profile), memory)
+    llms = LLMRegistry(cfg.models, profile=cfg.profile)
+    bind_chain_registry(llms)  # R-04 port; the Overview's status_snapshot reads chat_policy
+    chat = ChatService(cfg.pipelines, llms, memory)
     roster = build_roster(cfg.security.ui.roles, load_user_ref_key())
     queries = load_queries(QUERIES_FILE, page_row_limit=cfg.app.app.page_row_limit)
     return AppServices(cfg, memory, chat, roster, queries, clock.now())

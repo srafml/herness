@@ -163,6 +163,8 @@ ignore = ["TRY003"]
 "herness/core/types/__init__.py" = ["A005"]
 "herness/core/egress.py" = ["TID251"]
 "herness/core/egress_clients.py" = ["TID251"]
+"app/Home.py" = ["N999"]  # Streamlit page script names (impl 09 §2)
+"app/pages/*.py" = ["N999"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
