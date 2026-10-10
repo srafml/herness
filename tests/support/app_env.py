@@ -192,6 +192,21 @@ APP_PAGES: tuple[PageSpec, ...] = (
         needs_warehouse=True,
         key_texts=("Action Levers", "Filters", "Levers", "No action levers for this selection."),
     ),
+    PageSpec(
+        APP_DIR / "pages" / "05_Clusters.py",
+        needs_warehouse=True,
+        key_texts=("Clusters", "Filters", "Cluster list", "Cluster detail"),
+    ),
+    PageSpec(
+        APP_DIR / "pages" / "06_Change_Health.py",
+        needs_warehouse=True,
+        key_texts=("Change Health", "Filters", "Metrics", "Change-caused incidents"),
+    ),
+    PageSpec(
+        APP_DIR / "pages" / "07_Delivery_Health.py",
+        needs_warehouse=True,
+        key_texts=("Delivery Health", "Filters", "Metrics"),
+    ),
 )
 
 
