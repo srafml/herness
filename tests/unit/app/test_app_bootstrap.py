@@ -29,6 +29,9 @@ def boot(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(bootstrap, "_guard_installed", [])
     monkeypatch.setattr(bootstrap, "install_socket_guard", lambda _b: events.append("guard"))
     monkeypatch.setattr(bootstrap, "bind_core_backends", lambda: events.append("bind"))
+    monkeypatch.setattr(  # T09-15: the composition root binds the chain registry port
+        bootstrap, "bind_chain_registry", lambda r: events.append(f"chains:{r[0]}")
+    )
 
     def hook(cfg: object, *, offline: bool) -> list[ConfigIssue]:
         del cfg, offline
@@ -53,7 +56,7 @@ def boot(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_ut09_77_builds_services_in_order(boot: list[str]) -> None:
     """UT09-77 guard, then ports bound before the start-up hook; services wired from config."""
     services = bootstrap.build_services()
-    assert boot == ["guard", "bind", "hook"]
+    assert boot == ["guard", "bind", "hook", "chains:llms"]
     assert services.cfg.logging.level == "DEBUG"  # HERNESS_SET_OVERRIDES applied
     assert services.cfg.paths.data.name == "data"
     assert services.memory.name == "memory"  # type: ignore[attr-defined]
@@ -116,4 +119,4 @@ def test_ut09_77_defaults_without_environment(
         monkeypatch.delenv(name)
     services = bootstrap.build_services()  # cli_env's working directory holds the tree
     assert services.cfg.logging.level == "INFO"
-    assert boot == ["guard", "bind", "hook"]
+    assert boot == ["guard", "bind", "hook", "chains:llms"]

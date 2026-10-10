@@ -3,7 +3,8 @@
 ``fake_services`` stands in for ``app.common.bootstrap.get_services`` (only ``cfg.security.ui``
 and ``roster`` are read by ``current_actor``); ``actor_script`` is an AppTest script that shows
 the session actor as ``role|user_ref|display``. T09-14 adds ``wh_services`` (the fields the
-warehouse and ops-cache modules read), ``wh_script`` and ``plant_scored_build``.
+warehouse and ops-cache modules read), ``wh_script`` and ``plant_scored_build``. T09-15 adds
+the page list ``APP_PAGES``, ``page_services`` and ``install_session``.
 """
 
 from __future__ import annotations
@@ -11,8 +12,11 @@ from __future__ import annotations
 import sys
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from app.common.auth import build_roster
 from herness.core.settings import ExposeConfig, RolesConfig, UiConfig
@@ -108,7 +112,6 @@ def plant_scored_build(warehouse_dir: Path) -> str:
     ``save_as_file``), so every schema the named queries read (meta, core, enrich, metrics,
     score) exists with real column shapes. Returns the build id.
     """
-    import pytest  # noqa: PLC0415 - only the planting helpers need it
     from tests.support.metrics_scoring import (  # noqa: PLC0415
         patches,
         save_as_file,
@@ -133,3 +136,111 @@ def plant_scored_build(warehouse_dir: Path) -> str:
             con.close()
     write_current(BUILD_ID, layout=DataLayout.from_root(warehouse_dir.parent))
     return BUILD_ID
+
+
+# --- T09-15: page wrapper, widgets, page list ---------------------------------------------------
+
+APP_DIR = Path(__file__).resolve().parents[2] / "app"
+NO_BUILD_TEXT = "No promoted build yet. Run `herness pipeline`."
+
+
+@dataclass(frozen=True)
+class PageSpec:
+    """One dashboard page script for the page-list tests (ST09-08, IT09-10, IT09-11).
+
+    ``key_texts`` must appear on the page rendered over a scored build (IT09-10). T09-16 -
+    T09-19 append their pages to ``APP_PAGES``.
+    """
+
+    path: Path
+    needs_warehouse: bool
+    key_texts: tuple[str, ...]
+
+
+APP_PAGES: tuple[PageSpec, ...] = (
+    PageSpec(
+        APP_DIR / "Home.py",
+        needs_warehouse=False,
+        key_texts=("Builds", "Data quality", "Runs", "Jobs", "Workers", "Sources"),
+    ),
+)
+
+
+def _weights(unconfirmed: Sequence[str]) -> SimpleNamespace:
+    blocks = {key: {"unconfirmed": True} for key in unconfirmed}
+    return SimpleNamespace(model_dump=lambda: dict(blocks))
+
+
+def page_services(
+    data_dir: Path,
+    *,
+    ui: UiConfig | None = None,
+    unconfirmed: Sequence[str] = (),
+    queries: Mapping[str, object] | None = None,
+) -> SimpleNamespace:
+    """The ``AppServices`` fields the page wrapper, auth, warehouse and ops cache read.
+
+    ``queries`` defaults to the shipped ``queries.sql.yaml``.
+    """
+    from app.common.wh import load_named_queries  # noqa: PLC0415 - keeps the module import light
+
+    if queries is None:
+        queries = load_named_queries(QUERIES_FILE, page_row_limit=5000)
+    ui = ui or ui_config(reviewers=["alice"])
+    services = wh_services(data_dir, queries=queries)
+    services.cfg.security = SimpleNamespace(ui=ui)
+    services.cfg.weights = _weights(unconfirmed)
+    services.roster = build_roster(ui.roles, USER_REF_KEY)
+    return services
+
+
+RUN_ID = "run_01J0000000000000000000000A"
+FAILED_JOB_ID = "job_01J0000000000000000000000B"
+HIDDEN_ERROR_TEXT = "SECRET ticket text in an error message"
+
+
+def seed_home_ops() -> None:
+    """One run, one failed job (``last_error`` with a message) and one open breaker."""
+    import json  # noqa: PLC0415
+    import sqlite3  # noqa: PLC0415
+    from datetime import timedelta  # noqa: PLC0415
+
+    from herness.core import time as clock  # noqa: PLC0415
+    from herness.store.ops import core  # noqa: PLC0415
+
+    now = clock.now()
+    at = clock.format_utc(now - timedelta(hours=1))
+    error = json.dumps({"class": "QueryError", "message": HIDDEN_ERROR_TEXT})
+
+    def fn(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "INSERT INTO run (run_id, kind, depth, profile, config_hash, status, started_at,"
+            " finished_at, token_usage, cost_usd) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (RUN_ID, "funding_review", "fast", "p", "c", "done", at, at, '{"input": 3}', "1.25"),
+        )
+        conn.execute(
+            "INSERT INTO job (job_id, kind, gpu_class, status, priority, payload, last_error,"
+            " attempts, max_attempts, scheduled_for, created_at, finished_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (FAILED_JOB_ID, "review", "none", "failed", 50, "{}", error, 3, 3, at, at, at),
+        )
+        conn.execute(
+            "INSERT INTO source_health (source, state, updated_at) VALUES (?,?,?)",
+            ("servicenow", "open", at),
+        )
+
+    core.run_write(fn, op="test_seed")
+
+
+def install_session(
+    mp: pytest.MonkeyPatch, services: SimpleNamespace, *, user: str = "alice"
+) -> list[dict[str, object]]:
+    """Patch ``get_services``, the OS user, the user-ref key and ``audit``; return audit calls."""
+    from app.common import auth, bootstrap  # noqa: PLC0415 - keeps the module import light
+
+    calls: list[dict[str, object]] = []
+    mp.setattr(bootstrap, "get_services", lambda: services)
+    mp.setattr(auth, "_process_user", lambda **_: user)
+    mp.setattr(auth, "load_user_ref_key", lambda: USER_REF_KEY)
+    mp.setattr(auth, "audit", lambda event, actor, **f: calls.append({"event": event, **f}))
+    return calls
