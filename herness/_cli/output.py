@@ -32,8 +32,8 @@ if TYPE_CHECKING:
     from herness.cli import GlobalOptions
 
 __all__ = [
-    "EXIT_CODES", "CliResult", "CommandResult", "emit", "emit_error", "exit_code_for",
-    "exit_code_for_class_name", "json_default",
+    "EXIT_CODES", "CliResult", "CommandResult", "emit", "emit_error", "emit_job_error",
+    "exit_code_for", "exit_code_for_class_name", "json_default", "markup", "table_printer",
 ]  # fmt: skip
 
 _USAGE_FIX: Final = "Run `herness --help`."
@@ -54,7 +54,7 @@ def _clean(text: str) -> str:
     return text if len(text) <= _MAX_CHARS else text[: _MAX_CHARS - 1] + "…"
 
 
-def _markup(text: str) -> str:
+def markup(text: str) -> str:
     """Clean text escaped for ``rich`` markup (U09-100 step 4)."""
     return escape(_clean(text))
 
@@ -73,11 +73,11 @@ class CliResult:
     exit_code: int = 0
 
 
-def _table_printer(data: dict[str, object] | None) -> Callable[[Console], None]:
+def table_printer(data: dict[str, object] | None) -> Callable[[Console], None]:
     def show(console: Console) -> None:
         for key, value in (data or {}).items():
             text = value if isinstance(value, str) else json.dumps(value, default=json_default)
-            console.print(f"{_markup(str(key))}: {_markup(text)}")
+            console.print(f"{markup(str(key))}: {markup(text)}")
 
     return show
 
@@ -97,7 +97,7 @@ class CommandResult:
         if not allowed or self.ok != (self.exit_code == 0):
             msg = f"command {path} returned exit code {self.exit_code}"
             raise e.SchemaViolation(msg)
-        human = _table_printer(self.data)
+        human = table_printer(self.data)
         return CliResult(path, self.data, list(self.warnings), human, self.exit_code)
 
 
@@ -162,20 +162,37 @@ def _describe(exc: BaseException) -> tuple[str, str, str, dict[str, str]]:
     return "InternalError", what, fix, {}
 
 
+def _write_error(command: str, error: dict[str, object], data: dict[str, object] | None,
+                 warnings: list[str]) -> None:  # fmt: skip
+    body = None if data is None else {"schema": "cli/1", **data}
+    envelope: dict[str, object] = {"ok": False, "command": command, "data": body,
+                                   "warnings": warnings, "error": error}  # fmt: skip
+    _write_json(envelope, command)
+
+
+def emit_job_error(  # noqa: PLR0913 - the U09-86 error fields of a job that did not finish
+    opts: GlobalOptions, kind: str, code: int, *, message: str, hint: str,
+    details: dict[str, str], result: CliResult | None = None,
+) -> int:  # fmt: skip
+    """A failed or canceled job (no exception object, U09-91): the JSON error envelope with
+    ``result``'s data and warnings; in human mode ``result`` is printed (the `Error:` line was
+    written while following). Returns ``code``."""
+    if not opts.json:
+        return code if result is None else emit(opts, result)
+    error: dict[str, object] = {"type": kind, "exit_code": code, "message": message,
+                                "hint": hint, "details": details}  # fmt: skip
+    data, warnings = (None, []) if result is None else (result.data, list(result.warnings))
+    _write_error(opts.command, error, data, warnings)
+    return code
+
+
 def emit_error(opts: GlobalOptions, command: str, exc: BaseException) -> int:
     """Print ``exc`` as the JSON error envelope or `Error:`/`Fix:` lines; return the code."""
     code = exit_code_for(exc)
     kind, what, fix, details = _describe(exc)
     if opts.json:
         error = {"type": kind, "exit_code": code, "message": what, "hint": fix, "details": details}
-        envelope: dict[str, object] = {
-            "ok": False,
-            "command": command,
-            "data": None,
-            "warnings": [],
-            "error": error,
-        }
-        _write_json(envelope, command)
+        _write_error(command, error, None, [])
         return code
     sys.stderr.write(f"Error: {_clean(what)}\nFix: {_clean(fix)}\n")
     if opts.verbose:

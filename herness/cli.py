@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final, NoReturn, cast
 
 import typer
+import typer.main
 from typer._click.exceptions import UsageError
+from typer.models import CommandInfo, TyperInfo
 
 from herness._cli.identity import cli_actor
 from herness._cli.output import EXIT_CODES, emit_error, exit_code_for
@@ -219,16 +221,40 @@ def _root(  # noqa: PLR0913 - one parameter per global option (U09-85)
 
 # --- U09-84 entry point --------------------------------------------------------------------------
 
-_registered = False
+
+def _entry_name(entry: CommandInfo | TyperInfo) -> str | None:
+    """The name Typer gives a registered command or group: the explicit one, else the
+    group app's own name, else the command callback's name (``typer.main``)."""
+    if isinstance(entry.name, str):
+        return entry.name
+    if isinstance(entry, TyperInfo):
+        info = entry.typer_instance.info if entry.typer_instance is not None else None
+        return info.name if info is not None and isinstance(info.name, str) else None
+    callback = entry.callback
+    return None if callback is None else typer.main.get_command_name(callback.__name__)
 
 
 def _register_groups(root: typer.Typer) -> None:
-    """U09-84 step 4: each command module registers its group on the root app."""
-    # T09-22: cmd_system.register(root)
-    # T09-23: cmd_data.register(root); cmd_review.register(root)
-    # T09-24: cmd_queue.register(root); cmd_admin.register(root)
-    # T09-25: cmd_chat.register(root)
-    del root
+    """U09-84 step 4: each command module registers its group on the root app.
+
+    Idempotent, run on every ``main``: the modules register on a scratch app and only the
+    command and group names ``root`` does not have yet are added (no process-wide flag that
+    could disagree with the app's lists, T09-23 review).
+    """
+    from herness._cli import cmd_data, cmd_review  # noqa: PLC0415 - lazy (BT09-07)
+
+    scratch = typer.Typer()
+    # T09-22: cmd_system.register(scratch)
+    cmd_data.register(scratch)  # T09-23
+    cmd_review.register(scratch)  # T09-23
+    # T09-24: cmd_queue.register(scratch); cmd_admin.register(scratch)
+    # T09-25: cmd_chat.register(scratch)
+    have = {_entry_name(c) for c in root.registered_commands}
+    have |= {_entry_name(g) for g in root.registered_groups}
+    root.registered_commands += [
+        c for c in scratch.registered_commands if _entry_name(c) not in have
+    ]
+    root.registered_groups += [g for g in scratch.registered_groups if _entry_name(g) not in have]
 
 
 def _prescan(args: Sequence[str], name: str) -> str | None:
@@ -249,14 +275,11 @@ def _bootstrap(config_dir: Path, profile: str | None) -> BootstrapConfig:
 
 
 def _run(opts: GlobalOptions, args: list[str]) -> int:
-    global _registered  # noqa: PLW0603 - command groups are registered once per process
     try:
         configure_logging("DEBUG" if opts.verbose else "INFO", stderr=True)  # stdout stays clean
         config_dir = Path(_prescan(args, "--config-dir") or "config")
         install_socket_guard(_bootstrap(config_dir, _prescan(args, "--profile")))
-        if not _registered:
-            _register_groups(app)
-            _registered = True
+        _register_groups(app)
         result = app(args=args, standalone_mode=False, obj=opts)
         return result if isinstance(result, int) else 0
     except (UsageError, UserInputError) as exc:

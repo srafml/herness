@@ -16,8 +16,9 @@ import pytest
 import typer
 import typer.main
 from structlog.testing import capture_logs
-from tests.support.cli_env import CliEnv
+from tests.support.cli_env import CliEnv, preserved_app
 
+from herness import cli
 from herness._cli import identity as ident
 from herness.cli import GlobalOptions, app
 from herness.core import errors as e
@@ -86,12 +87,44 @@ def test_ut09_66_command_roles_match_fixture_table() -> None:
 def test_ut09_66_every_registered_command_has_a_role() -> None:
     """UT09-66 every registered Typer command path is in COMMAND_ROLES and in the table.
 
-    No command group is registered before T09-22..T09-25, so this is vacuous for now.
+    T09-23 registers the data and review groups; T09-22, T09-24 and T09-25 add theirs.
     """
+    cli._register_groups(app)  # idempotent; `main` runs it before every command
     table = _table()
-    for path in _registered(typer.main.get_command(app)):
+    paths = set(_registered(typer.main.get_command(app)))
+    assert {"sync", "metrics list", "report funding", "report render", "decide"} <= paths
+    for path in paths:
         assert path in ident.COMMAND_ROLES, path
         assert path in table, path
+
+
+def test_ut09_66_register_groups_is_idempotent() -> None:
+    """UT09-66 `_register_groups` twice on the root app adds no command and no group."""
+    with preserved_app():
+        cli._register_groups(app)
+        counts = (len(app.registered_commands), len(app.registered_groups))
+        cli._register_groups(app)
+        assert (len(app.registered_commands), len(app.registered_groups)) == counts
+
+
+def test_ut09_66_register_groups_respects_unnamed_entries() -> None:
+    """UT09-66 a group added without `name=` (placeholder, named by its app) and a command
+    named from its callback block the real `report` group and `sync` command: no duplicate."""
+    root = typer.Typer()
+    probe = typer.Typer(name="report")
+    root.add_typer(probe)
+
+    def sync() -> None:
+        """Probe."""
+
+    root.command()(sync)
+    for _ in range(2):
+        cli._register_groups(root)
+        groups = [g for g in root.registered_groups if cli._entry_name(g) == "report"]
+        commands = [c for c in root.registered_commands if cli._entry_name(c) == "sync"]
+        assert [g.typer_instance for g in groups] == [probe]
+        assert [c.callback for c in commands] == [sync]
+    assert cli._entry_name(root.registered_groups[-1]) == "metrics"
 
 
 def test_ut09_66_paths_parser() -> None:
