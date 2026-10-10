@@ -4,7 +4,7 @@ Size-forced private sibling of ``herness.admin.deploy_pull`` (T10-24 review roun
 keeps the public API. In full mode every linked blob is checked over its whole content against
 its name: SHA-256 for LFS blobs, the git blob id for the others (review round 3 ruling). Everything
 here is fail-closed: a missing or garbled ``stat``, ``find``, ``sha256sum`` or ``git hash-object``
-line is a failure status, never ok (TH10-30, TH10-34, TH10-35).
+line is a failure status, never ok (TH10-30, TH10-34, TH10-35); ``LIMIT`` caps ``run`` (T10-28).
 """
 
 from __future__ import annotations
@@ -13,20 +13,25 @@ import os
 import posixpath
 import re
 from collections.abc import Sequence
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Final
 
 from herness.admin import wsl
+from herness.core import time as clock
 from herness.core.config import HernessConfig
 from herness.core.ids import canonical_json
 
-__all__ = ["check_files", "check_snapshot", "hf_repo", "run", "snapshot_links", "write_manifest"]
+__all__ = ["LIMIT", "check_files", "check_snapshot", "hf_repo", "run", "snapshot_links"]
+__all__ += ["write_manifest"]
 
 BATCH: Final = 100  # paths per ``stat`` / ``sha256sum`` / ``git hash-object`` call
 _LFS_BLOB: Final = re.compile(r"[0-9a-f]{64}")  # LFS blob: named by its content SHA-256
 _GIT_BLOB: Final = re.compile(r"[0-9a-f]{40}")  # non-LFS blob: named by its git blob id (SHA-1)
 _BLOB_TARGET: Final = re.compile(r"(?:\.\./)+blobs/(?:[0-9a-f]{40}|[0-9a-f]{64})")  # HF links
 _SHA_LINE: Final = re.compile(r"([0-9a-f]{64}) [ *](.+)")
+# (per-call cap s, monotonic deadline) of the doctor's weights_pinned row; past it, exit 124
+LIMIT: ContextVar[tuple[float, float] | None] = ContextVar("pull_verify_limit", default=None)
 
 
 def hf_repo(cfg: HernessConfig, gpu_class: str) -> tuple[str, str, str]:
@@ -38,6 +43,10 @@ def hf_repo(cfg: HernessConfig, gpu_class: str) -> tuple[str, str, str]:
 
 def run(cfg: HernessConfig, argv: Sequence[str], timeout_s: float = 600) -> wsl.CmdResult:
     """One program in the deploy distro, through ``herness.admin.wsl`` (no shell)."""
+    if (limit := LIMIT.get()) is not None:
+        timeout_s = min(timeout_s, limit[0], limit[1] - clock.monotonic())
+        if timeout_s <= 0:  # the check's deadline has passed: a timeout, fail closed
+            return wsl.CmdResult(124, "", "time limit", 0.0)
     return wsl.run_wsl(cfg.deploy.wsl_distro, argv, timeout_s=timeout_s)
 
 

@@ -257,6 +257,7 @@ markers = [
     "fault: HERNESS_ENV=test, fault plans, subprocess kills",
     "eval: golden or classifier evaluation",
     "gpu: needs vLLM, OpenJev or Laya on CUDA",
+    "deploy: needs the deployed target PC (WSL, Docker, GPU, firewall); opt-in, skipped elsewhere",
     "slow: over 30 s per test, or small or full scale",
 ]
 asyncio_mode = "strict"

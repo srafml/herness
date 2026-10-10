@@ -7,6 +7,8 @@ Nothing here touches the real host: commands go through `fake_runner`, and `psut
 from __future__ import annotations
 
 import datetime
+import shutil
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,10 +17,13 @@ from typing import Any
 import psutil
 import pytest
 from tests.support.config_tree import write_full_config
+from tests.support.fake_runner import FakeRunner
 
-from herness.admin import doctor_host
+from herness.admin import doctor_gpu, doctor_host
+from herness.core import secrets
 from herness.core import time as clock
 from herness.core.config import HernessConfig, load_config
+from herness.core.errors import EgressBlocked
 
 NOW = datetime.datetime(2026, 9, 24, 12, 0, tzinfo=datetime.UTC)
 
@@ -167,5 +172,30 @@ class Host:
         mp.setattr(psutil, "net_connections", lambda kind="inet": list(self.conns))
         mp.setattr(psutil, "Process", self.processes)
         mp.setattr(doctor_host, "gpu_state", lambda: self.gpu)
+        mp.setattr(doctor_gpu, "gpu_state", lambda: self.gpu)
         mp.setattr(clock, "now", lambda: NOW)
         mp.setenv("SYSTEMDRIVE", "C:")
+
+
+def green_host_rows(cfg: HernessConfig, runner: FakeRunner, mp: pytest.MonkeyPatch) -> None:
+    """Outputs and probes under which every ``HOST_CHECKS`` row PASSes (with ``Host``)."""
+    runner.add(["icacls.exe"], ICACLS_DIR_OK)
+    runner.add(["manage-bde.exe"], manage_bde("C:", "Protection On"))
+    runner.add(["w32tm.exe", "/query", "/status"], w32tm("0.01s"))
+    date = ["wsl.exe", "-d", cfg.deploy.wsl_distro, "--exec", "date", "+%s.%N"]
+    runner.add(date, f"{NOW.timestamp() + 0.2:.9f}\n")
+    runner.add(["sc.exe"], SC_WORKER_OK)
+    runner.add(["schtasks.exe"], SCHTASKS_WSL_OK)
+    mp.setattr(shutil, "which", lambda name: "C:\\uv.exe")
+    mp.setattr(doctor_host, "sys", SimpleNamespace(version_info=(3, 12, 7), platform="win32"))
+    free = SimpleNamespace(total=0, used=0, free=200 * 1024**3)
+    mp.setattr(shutil, "disk_usage", lambda p: free)
+    mp.setattr(doctor_host, "validate", lambda d, p: [])
+    mp.setattr(secrets, "exists", lambda name: True)
+    mp.setattr(doctor_host.metadata, "entry_points", lambda *, group: [])
+
+    def blocked(address: Any, timeout: Any = None) -> Any:
+        msg = "blocked"
+        raise EgressBlocked(msg, reason="not_allowed")
+
+    mp.setattr(socket, "create_connection", blocked)

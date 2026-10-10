@@ -148,6 +148,6 @@ def test_ut00_57_tool_tables() -> None:
     existing = {name for name in ("herness", "app", "tools") if (ROOT / name).is_dir()}
     assert set(mypy["files"]) == existing
     pytest_cfg = tool["pytest"]["ini_options"]
-    assert len(pytest_cfg["markers"]) == 6
+    assert len(pytest_cfg["markers"]) == 7  # + deploy (impl 10 BT10-07, T10-28)
     assert "--strict-markers" in pytest_cfg["addopts"]
     assert tool["coverage"]["run"]["branch"] is True

@@ -1,10 +1,12 @@
-"""Config and egress benchmarks (impl 10 BT10-01/02/05/06).
+"""Config, egress, backup and doctor benchmarks (impl 10 BT10-01/02/05/06/07/08).
 
-Run: pytest -m "integration and slow" tests/bench.
+Run: pytest -m "integration and slow" tests/bench. The real-host half of BT10-07 also
+carries the opt-in marker ``deploy`` and runs only on the target PC (``HERNESS_GPU_BENCH=1``).
 """
 
 import datetime
 import json
+import os
 import socket
 import sqlite3
 import sys
@@ -15,8 +17,12 @@ from typing import Any
 
 import pytest
 from tests.support.bench_stats import REPEATS, report
-from tests.support.config_tree import write_full_config
+from tests.support.config_tree import REPO, write_full_config
+from tests.support.doctor_gpu_env import start_gpu_host
+from tests.support.doctor_host_env import Host, green_host_rows
 from tests.support.egress_harness import fixed_redactor
+from tests.support.fake_keyring import MemoryKeyring
+from tests.support.fake_runner import FakeRunner
 from tests.support.maintenance_env import FakeCtx, MaintEnv, maint_env  # noqa: F401 - fixture
 from tests.support.redact_quality import (
     build_directory,
@@ -26,6 +32,8 @@ from tests.support.redact_quality import (
     write_corpus,
 )
 
+from herness.admin.doctor_gpu import GPU_CHECKS
+from herness.admin.doctor_host import HOST_CHECKS, doctor_checks
 from herness.admin.maintenance import run_backup
 from herness.core import config as _core_config
 from herness.core import egress_socket as es
@@ -298,3 +306,59 @@ def test_bt10_08_nightly_ops_backup_1gb(maint_env: MaintEnv) -> None:  # noqa: F
     assert len(written) > 0
     assert report("BT10-08", "wall", walls, "s", "< 120 s") < 120
     assert max(walls) < 120
+
+
+# --- BT10-07 doctor (T10-28) ----------------------------------------------------------------
+
+TARGET_PC_ENV = "HERNESS_GPU_BENCH"  # the real containers run here (as BT08-06 to BT08-08)
+DOCTOR_BUDGET_S = 60.0
+
+
+def test_bt10_07_doctor_fake_runner_under_60s(
+    tmp_path: Path,
+    fake_keyring: MemoryKeyring,
+    fake_runner: FakeRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BT10-07 companion: all doctor rows over fake_runner, reasoning loaded: < 60 s, <= 10 s/call.
+
+    The real-host run is ``test_bt10_07_doctor_on_target_pc_under_60s`` (marker ``deploy``).
+    """
+    del fake_keyring
+    gpu = start_gpu_host(tmp_path, fake_runner, monkeypatch)
+    gpu.cfg.paths.data.mkdir(parents=True, exist_ok=True)
+    gpu.cfg.paths.logs.mkdir(parents=True, exist_ok=True)
+    Host(monkeypatch, gpu=gpu.gpu).install(tmp_path / "config")
+    green_host_rows(gpu.cfg, fake_runner, monkeypatch)
+    walls: list[float] = []
+    for _ in range(REPEATS):
+        fake_runner.calls.clear()
+        started = _time.perf_counter()
+        rows = doctor_checks(gpu.cfg)
+        walls.append(_time.perf_counter() - started)
+        assert {r.name: (r.status, r.detail) for r in rows if r.status != "PASS"} == {}
+        assert len(rows) == len(HOST_CHECKS) + len(GPU_CHECKS)
+    assert fake_runner.calls
+    assert max(call.timeout_s for call in fake_runner.calls) <= 10.0
+    assert {timeout for *_, timeout in gpu.requests} == {10.0}
+    assert report("BT10-07", "fake doctor wall", walls, "s", "< 60 s") < DOCTOR_BUDGET_S
+
+
+@pytest.mark.deploy
+@pytest.mark.skipif(
+    os.environ.get(TARGET_PC_ENV) != "1",
+    reason=f"needs the deployed target PC with the reasoning class loaded (set {TARGET_PC_ENV}=1)",
+)
+def test_bt10_07_doctor_on_target_pc_under_60s() -> None:
+    """BT10-07 doctor rows on the target PC, reasoning class loaded: < 60 s."""
+    cfg = _core_config.init_config(config_dir=REPO / "config", env={})
+    try:
+        started = _time.perf_counter()
+        rows = {r.name: r for r in doctor_checks(cfg)}
+        seconds = _time.perf_counter() - started
+    finally:
+        _core_config.reset_config()
+    sys.stderr.write(f"BT10-07 doctor {seconds:.1f} s (target < 60 s)\n")
+    assert rows["model_health"].status == "PASS"
+    assert rows["model_health"].detail.startswith("reasoning: ")
+    assert seconds < DOCTOR_BUDGET_S

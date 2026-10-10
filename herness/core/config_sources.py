@@ -33,8 +33,8 @@ _MAX_OVERRIDES, _MAX_SEGMENTS, _MAX_VALUE_CHARS, _MAX_ENV_VARS = 100, 12, 4096, 
 _SEGMENT: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _DOTENV_LINE: Final = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)=[ \t]*(?:"(.*)"|(.*?))[ \t]*')
 _SKIP_RESERVED: Final = "PROFILE ENV SYNTH_CONFIG FAULTS WORKER CONFIG_DIR DATA_DIR SET_OVERRIDES"
-_SKIP_BENCH: Final = "BENCH_FULL BENCH_UNIT_SUITE BENCH_GATE BENCH_DIR"  # harness-internal, R-78
-_ENV_SKIP: Final = {"HERNESS_" + n for n in f"{_SKIP_RESERVED} {_SKIP_BENCH}".split()}
+_SKIP_BENCH: Final = "BENCH_FULL BENCH_UNIT_SUITE BENCH_GATE BENCH_DIR GPU_BENCH SYNTH_FULL_ROOT"
+_ENV_SKIP: Final = {"HERNESS_" + n for n in f"{_SKIP_RESERVED} {_SKIP_BENCH}".split()}  # R-78
 
 
 def _fail(msg: str) -> NoReturn:
