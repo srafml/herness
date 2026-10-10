@@ -1,12 +1,8 @@
 """Planning and removal steps of ``herness deploy prune`` (impl 10 U10-85 steps 2-4).
 
-Size-forced private sibling of ``herness.admin.deploy`` (T10-25), which keeps the public API.
-The whole plan is built before anything is removed, so the loaded-class check sees every item.
-Only recognisable items are candidates (a ``sha256:`` digest, a 40-hex snapshot revision, a
-40/64-hex blob, a pin-shaped ``*.gguf`` name); everything else is left alone. Every path to
-remove must be a direct child of the directory that was listed, under ``model_root``, or the
-run stops with ``FatalError`` before any removal (TH10-46). Programs run through
-``herness.admin.wsl`` as argument lists; nothing is ever downloaded here.
+Size-forced private sibling of ``herness.admin.deploy`` (T10-25). The plan is built before any
+removal. Fail closed (TH10-46): a failed listing removes nothing there; only recognisable names
+are candidates; every path must be a direct child of the listed directory under ``model_root``.
 """
 
 from __future__ import annotations
@@ -35,7 +31,6 @@ _PINS: Final[dict[str, re.Pattern[str]]] = {  # the U10-07 deploy-time pin shape
     "gguf": re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.gguf"),
     "sha256": re.compile(r"[0-9a-f]{64}"),
 }
-_LS_TIMEOUT_S: Final = 60
 _RM_TIMEOUT_S: Final = 600
 _log = get_logger("admin.deploy")
 
@@ -74,12 +69,13 @@ def under_root(cfg: HernessConfig, path: str) -> str:
     return path
 
 
-def _children(cfg: HernessConfig, directory: str, kind: str) -> list[str]:
-    """Direct children of ``directory`` of find type ``kind``; a missing directory has none."""
+def _children(cfg: HernessConfig, directory: str, kind: str) -> list[str] | None:
+    """Direct children of type ``kind``; None when the listing failed (remove nothing)."""
     argv = ["find", directory, "-mindepth", "1", "-maxdepth", "1", "-type", kind, "-print0"]
     done = pv.run(cfg, argv)
     if done.returncode != 0:
-        return []
+        _log.warning("deploy.prune.list_failed", kind=kind, returncode=done.returncode)
+        return None
     paths = [p for p in done.stdout.split("\0") if p]
     for path in paths:
         if posixpath.dirname(under_root(cfg, path)) != directory:
@@ -94,7 +90,7 @@ def _images(cfg: HernessConfig, kept_refs: set[str]) -> list[str]:
     for repo in sorted({ref.partition("@")[0] for ref in kept_refs}):
         # ``{{json .}}`` fails the U10-77 pattern (no space allowed): one digest per line
         argv = ["docker", "image", "ls", "--digests", "--format", "{{.Digest}}", repo]
-        done = pv.run(cfg, argv, timeout_s=_LS_TIMEOUT_S)
+        done = pv.run(cfg, argv)
         if done.returncode != 0:
             _log.warning("deploy.prune.list_failed", kind="images")
             continue
@@ -106,14 +102,20 @@ def _images(cfg: HernessConfig, kept_refs: set[str]) -> list[str]:
 
 
 def _model(cfg: HernessConfig, repo: str, kept: set[str], todo: PrunePlan) -> None:
-    """Step 3: snapshots not kept, then blobs no remaining snapshot links to."""
+    """Step 3: snapshots not kept, then blobs no remaining snapshot links to (fail closed)."""
+    snapshots = _children(cfg, f"{repo}/snapshots", "d")
+    if snapshots is None:
+        return
     remaining: list[str] = []
-    for path in _children(cfg, f"{repo}/snapshots", "d"):
+    for path in snapshots:
         name = posixpath.basename(path)
         if _REVISION.fullmatch(name) and name not in kept:
             todo.snapshots.append(path)
         else:
             remaining.append(path)
+    if not kept <= {posixpath.basename(p) for p in remaining}:  # a kept revision unseen
+        _log.warning("deploy.prune.blobs_skipped", reason="kept_revision_missing")
+        return
     linked: set[str] = set()
     for snapshot in remaining:
         links = pv.snapshot_links(cfg, snapshot, repo)
@@ -121,7 +123,7 @@ def _model(cfg: HernessConfig, repo: str, kept: set[str], todo: PrunePlan) -> No
             _log.warning("deploy.prune.blobs_skipped", reason=links.partition(":")[0])
             return
         linked |= set(links.values())
-    for path in _children(cfg, f"{repo}/blobs", "f"):
+    for path in _children(cfg, f"{repo}/blobs", "f") or []:
         if _BLOB.fullmatch(posixpath.basename(path)) and path not in linked:
             todo.blobs.append(path)
 
@@ -138,7 +140,7 @@ def plan(
     for model in sorted(kept_revisions):
         _model(cfg, repo_of(cfg, model), kept_revisions[model], todo)
     keep = set(kept_gguf)
-    for path in _children(cfg, f"{cfg.deploy.model_root}/gguf", "f"):
+    for path in _children(cfg, f"{cfg.deploy.model_root}/gguf", "f") or []:
         name = posixpath.basename(path)
         if _PINS["gguf"].fullmatch(name) and name not in keep:
             todo.gguf.append(path)
@@ -150,12 +152,19 @@ def execute(cfg: HernessConfig, todo: PrunePlan) -> dict[str, int]:
     counts = {"images": 0, "snapshots": 0, "blobs": 0, "gguf": 0, "failed": 0}
     for ref in todo.images:
         done = pv.run(cfg, ["docker", "image", "rm", ref], timeout_s=_RM_TIMEOUT_S)
-        counts["images" if done.returncode == 0 else "failed"] += 1
+        _count(counts, "images", ref, done.returncode)
     for kind, paths in (("snapshots", todo.snapshots), ("blobs", todo.blobs), ("gguf", todo.gguf)):
         for path in paths:
             argv = ["rm", "-rf", "--", under_root(cfg, path)]
             done = wsl.run_wsl(cfg.deploy.wsl_distro, argv, user="root", timeout_s=_RM_TIMEOUT_S)
-            counts[kind if done.returncode == 0 else "failed"] += 1
-    if counts["failed"]:
-        _log.warning("deploy.prune.remove_failed", failed=counts["failed"])
+            _count(counts, kind, path, done.returncode)
     return counts
+
+
+def _count(counts: dict[str, int], kind: str, item: str, returncode: int) -> None:
+    """One removal outcome; each failure is logged with its kind, item and exit code."""
+    if returncode == 0:
+        counts[kind] += 1
+        return
+    counts["failed"] += 1
+    _log.warning("deploy.prune.remove_failed", kind=kind, item=item, returncode=returncode)

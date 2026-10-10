@@ -19,7 +19,7 @@ from herness.admin import wsl
 from herness.core import egress
 from herness.core import time as clock
 from herness.core.config import HernessConfig
-from herness.core.errors import ConfigError, ModelUnavailable, StoreBusy
+from herness.core.errors import ConfigError, EgressBlocked, ModelUnavailable, StoreBusy
 from herness.core.jobs import GpuLock
 from herness.core.secrets import resolve
 
@@ -66,16 +66,17 @@ def _healthy(svc: ServiceSettings, bearer: SecretStr | None) -> bool:
         factory = egress.loopback_http_client  # module attribute, resolved per call (R-06)
         with factory(svc.url, timeout_s=_HEALTH_TIMEOUT_S, bearer=bearer) as client:
             status = int(client.get(svc.health.path).status_code)
-    except Exception:  # noqa: BLE001 - any failure reads as not yet healthy
+    except (EgressBlocked, ConfigError):  # a guard refusal is a real error, not "starting"
+        raise
+    except Exception:  # noqa: BLE001 - a transport failure reads as not yet healthy
         return False
     return 200 <= status < 300  # noqa: PLR2004 - the 2xx range
 
 
-def _await_healthy(name: str, svc: ServiceSettings) -> None:
-    """Poll the service's health URL every 5 s until healthy or its ``start_timeout_s``."""
+def _await_healthy(name: str, svc: ServiceSettings, deadline: float) -> None:
+    """Poll the service's health URL every 5 s until healthy or the class deadline."""
     ref = svc.health.bearer_secret or (_OPENJEV_KEY if name == "openjev" else None)
     bearer = resolve(ref) if ref else None
-    deadline = clock.monotonic() + svc.start_timeout_s
     while not _healthy(svc, bearer):
         if clock.monotonic() >= deadline:
             msg = f"{name} not healthy within start_timeout_s"
@@ -91,8 +92,10 @@ def up_compose(cfg: HernessConfig, gpu_class: str) -> None:
         for other in (c for c in gpu.classes if c != gpu_class):
             compose(gpu, ["--profile", other, "stop"], gpu.stop_timeout_s)
         compose(gpu, ["--profile", gpu_class, "up", "-d", *services], _UP_TIMEOUT_S)
+        start_s = max(svc.start_timeout_s for svc in services.values())
+        deadline = clock.monotonic() + start_s  # one start_timeout_s for the whole class
         for name, svc in services.items():
-            _await_healthy(name, svc)
+            _await_healthy(name, svc, deadline)
 
 
 def image_on_disk(cfg: HernessConfig, ref: str) -> bool:

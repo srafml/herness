@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import structlog
 from tests.support.deploy_host import (
     GGUF_DIR,
     DeployHost,
@@ -29,7 +30,14 @@ from tests.support.pull_host import ACTOR, repo_dir
 
 from herness.admin import _deploy_prune, commands_deploy, deploy
 from herness.core import config as c
-from herness.core.errors import ConfigError, FatalError, ModelUnavailable, StoreBusy
+from herness.core import egress
+from herness.core.errors import (
+    ConfigError,
+    EgressBlocked,
+    FatalError,
+    ModelUnavailable,
+    StoreBusy,
+)
 from herness.core.jobs.gpu_lock import GpuLock
 
 pytestmark = pytest.mark.unit
@@ -228,6 +236,22 @@ def test_ut10_64_health_exception_reads_unhealthy(rendered: Env) -> None:
         deploy.class_up(env.cfg, "reasoning", actor=ACTOR, now=deploy.clock.now())
 
 
+@pytest.mark.parametrize("error", [EgressBlocked, ConfigError], ids=["egress", "config"])
+def test_ut10_64_health_guard_errors_propagate(
+    rendered: Env, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
+) -> None:
+    """UT10-64 ``EgressBlocked`` / ``ConfigError`` from the loopback client are not swallowed."""
+
+    def refuse(*_a: Any, **_k: Any) -> Any:
+        msg = "refused"
+        raise error(msg)
+
+    monkeypatch.setattr(egress, "loopback_http_client", refuse)
+    with pytest.raises(error, match="refused"):
+        deploy.class_up(rendered.cfg, "reasoning", actor=ACTOR, now=deploy.clock.now())
+    assert rendered.time.sleeps == []
+
+
 def test_ut10_64_compose_failure_is_model_unavailable(rendered: Env) -> None:
     """UT10-64 a failing ``up -d`` is ``ModelUnavailable``; no history line."""
     env = rendered
@@ -421,9 +445,64 @@ def test_ut10_65_prune_missing_dirs_and_failures(env: Env) -> None:
         ["wsl.exe", "-d", "herness", "--exec", "docker", "image", "rm",
          f"{seeded['jev_repo']}@sha256:{_hex('9')}"], returncode=1,
     )  # fmt: skip
-    counts = deploy.prune(env.cfg, actor=ACTOR)
+    with structlog.testing.capture_logs() as logs:
+        counts = deploy.prune(env.cfg, actor=ACTOR)
     assert counts == {"images": 2, "snapshots": 2, "blobs": 3, "gguf": 0, "failed": 2}
     assert repo_dir("org/gone") not in env.host.snapshot_dirs
+    failed = [x for x in logs if x["event"] == "deploy.prune.remove_failed"]
+    assert [(x["kind"], x["item"], x["returncode"]) for x in failed] == [
+        ("images", f"{seeded['jev_repo']}@sha256:{_hex('9')}", 1),
+        ("gguf", f"{GGUF_DIR}/old-1.gguf", 1),
+    ]
+
+
+@pytest.mark.parametrize("returncode", [1, 124], ids=["find-error", "timeout"])
+def test_ut10_65_failed_snapshot_listing_removes_no_blob(env: Env, returncode: int) -> None:
+    """UT10-65 a failing or timed-out snapshot listing: no ``rm`` there, pinned blobs survive."""
+    seeded = _seed_history(env)
+    repo = seeded["repo"]
+    blobs_before = list(env.host.blob_files[repo])
+    find = ["wsl.exe", "-d", "herness", "--exec", "find", f"{repo}/snapshots"]
+    env.host.runner.add(find, returncode=returncode)
+    counts = deploy.prune(env.cfg, actor=ACTOR)
+    assert counts["snapshots"] == 0
+    assert counts["blobs"] == 0
+    assert not any(p.startswith(repo + "/") for p in env.host.removed)
+    assert env.host.blob_files[repo] == blobs_before
+
+
+def test_ut10_65_kept_revision_missing_from_listing_removes_no_blob(env: Env) -> None:
+    """UT10-65 a kept revision absent from the snapshot listing: no blob of the repo goes."""
+    seeded = _seed_history(env)
+    repo = seeded["repo"]
+    env.host.snapshot_dirs[repo].remove(env.cfg.deploy.reasoning.revision)  # current not listed
+    counts = deploy.prune(env.cfg, actor=ACTOR)
+    assert counts["snapshots"] == 2  # unkept revisions may still go
+    assert counts["blobs"] == 0
+    assert not any(p.startswith(f"{repo}/blobs/") for p in env.host.removed)
+
+
+def test_ut10_65_failed_blob_or_gguf_listing_removes_nothing(env: Env) -> None:
+    """UT10-65 a failing blobs or GGUF listing plans no removal there."""
+    seeded = _seed_history(env)
+    wsl_find = ["wsl.exe", "-d", "herness", "--exec", "find"]
+    env.host.runner.add([*wsl_find, f"{seeded['repo']}/blobs"], returncode=124)
+    env.host.runner.add([*wsl_find, GGUF_DIR], returncode=1)
+    counts = deploy.prune(env.cfg, actor=ACTOR)
+    assert (counts["blobs"], counts["gguf"], counts["snapshots"]) == (0, 0, 2)
+
+
+def test_ut10_65_in_use_check_ignores_malformed_history(env: Env) -> None:
+    """UT10-65 a malformed newest entry of the loaded class is ignored, not a ``KeyError``."""
+    _seed_history(env)
+    path = history_path(env.cfg)
+    bad = {"image": env.cfg.deploy.reasoning.image, "revision": _hex("8", 40)}  # no model
+    line = {"ts": "2026-09-24T12:00:00Z", "gpu_class": "reasoning", "pins": bad,
+            "config_hash": "h"}  # fmt: skip
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\n")
+    env.jobs.loaded = "reasoning"
+    assert deploy.prune(env.cfg, actor=ACTOR)["snapshots"] == 2
 
 
 def test_ut10_65_prune_skips_invalid_history_and_listing_failure(env: Env) -> None:

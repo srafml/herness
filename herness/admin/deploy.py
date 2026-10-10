@@ -342,7 +342,8 @@ def _refuse_in_use(cfg: HernessConfig, history: DeployHistory, todo: dp.PrunePla
     if loaded not in _CLASSES:
         return
     in_use: set[str] = set()
-    for pins in [_pins(cfg, loaded), *history.last_promoted(loaded, 1)]:
+    valid = [p for p in history.last_promoted(loaded, _ALL) if dp.valid_pins(loaded, p)]
+    for pins in [_pins(cfg, loaded), *valid[:1]]:
         in_use.add(pins.get("image", ""))
         if "revision" in pins:
             in_use.add(f"{dp.repo_of(cfg, pins['model'])}/snapshots/{pins['revision']}")
