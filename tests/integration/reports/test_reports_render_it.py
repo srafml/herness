@@ -479,3 +479,24 @@ def test_it09_02_metrics_recorded(report_env: ReportEnv) -> None:
     assert {"result": "error"} in labels
     uncited = [row for row in rows if row["name"] == "herness_reports_uncited_total"]
     assert uncited == []  # the fixture draft has no uncited numeral
+
+
+def test_it09_02_html_size_warning(report_env: ReportEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+    """IT09-02 (manifest) ``report.html exceeds 5 MB`` is warned past the limit, still written."""
+    monkeypatch.setattr(render, "_HTML_LIMIT", 1000)
+    manifest = report_env.render(FUND_RUN)
+    assert manifest.warnings == ["report.html exceeds 5 MB"]
+    assert ReportManifest.model_validate_json(report_env.out(FUND_RUN, "manifest.json")) == manifest
+
+
+def test_it09_02_evidence_not_found_warning(report_env: ReportEnv) -> None:
+    """IT09-02 (manifest) a score row citing an id found nowhere: warned, not counted as linked."""
+    missing = "q_0000000000000abc"
+    with duckdb.connect(str(report_env.warehouse)) as con:
+        con.execute("UPDATE score.funding SET query_ids = [$q] WHERE candidate_id = 'epic-2'",
+                    {"q": missing})  # fmt: skip
+    manifest = report_env.render(FUND_RUN)
+    assert manifest.warnings == [f"evidence not found: {missing}"]
+    assert manifest.numbers_linked < manifest.numbers_total
+    html = report_env.out(FUND_RUN, "report.html").decode()
+    assert "Evidence not found for this query in the ops store or the build." in html
