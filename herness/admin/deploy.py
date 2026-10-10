@@ -1,9 +1,13 @@
-"""``herness deploy render`` and the deploy history (impl 10 U10-78, U10-79; design 10 §5.6, §7.4).
+"""``herness deploy render|up|down|rollback|prune`` and the deploy history (impl 10 U10-78,
+U10-79, U10-84, U10-85; design 10 §3.7, §5.6, §7.4).
 
 ``render_env`` is the only place secrets reach the containers (TH10-28): the env file is written
 inside WSL from stdin by one fixed shell script, root-owned with mode 600, and the config value
 ``env_file`` enters only as the positional ``$1`` (TH10-05). Callers see key names, never values.
-T10-25 adds ``class_up``, ``class_down``, ``rollback_class`` and ``prune`` here.
+``class_up`` / ``class_down`` defer to a live worker's arbiter, else hold ``data/locks/gpu.lock``
+(TH10-31) and are audited (TH10-32). ``rollback_class`` uses only what is on disk (TH10-46);
+``prune`` keeps the current pins and the two newest promoted pin sets (planning in
+``herness.admin._deploy_prune``).
 """
 
 from __future__ import annotations
@@ -12,18 +16,26 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
+from herness.admin import _deploy_compose as dc
+from herness.admin import _deploy_prune as dp
 from herness.admin import wsl
+from herness.admin.deploy_pull import verify_weights
 from herness.core import time as clock
 from herness.core.audit import append_jsonl_locked, audit, log_lock
 from herness.core.config import HernessConfig, config_hash, get_config
-from herness.core.errors import ConfigError, FatalError
+from herness.core.errors import ConfigError, FatalError, ModelUnavailable, StoreBusy
 from herness.core.ids import canonical_json, sha256_hex
+from herness.core.jobs import gpu_state, request_gpu_class, worker_alive
 from herness.core.logging import get_logger
 from herness.core.secrets import resolve
+from herness.core.settings import PinClass
 
-__all__ = ["ENV_KEYS", "SCRIPT", "DeployHistory", "render_env"]
+__all__ = ["ENV_KEYS", "SCRIPT", "DeployHistory", "class_down", "class_up", "prune", "render_env"]
+__all__ += ["rollback_class"]
+
+type DeployClass = Literal["reasoning", "decider", "large"]
 
 # The fixed script of U10-79 step 4; no config value is ever part of its text.
 SCRIPT: Final = (
@@ -40,6 +52,14 @@ ENV_KEYS: Final = (
 )  # fmt: skip
 _RENDER_TIMEOUT_S: Final = 30
 _BAD_CHARS: Final = ("\n", "\r", "\0")
+_CLASSES: Final[tuple[DeployClass, ...]] = ("reasoning", "decider", "large")
+_SECTION: Final[dict[str, PinClass]] = {
+    "reasoning": "reasoning",
+    "decider": "openjev",
+    "large": "large",
+}
+_WORKER_GRACE_S: Final = 300  # the worker gets start_timeout_s + 300 s to load the class
+_ALL: Final = 1_000_000  # ``last_promoted`` bound meaning "every distinct pin set"
 _log = get_logger("admin.deploy")
 
 
@@ -185,3 +205,169 @@ class DeployHistory:
             if pins not in distinct:
                 distinct.append(pins)
         return distinct[: max(n, 0)]
+
+
+# --- U10-84 class_up, class_down -------------------------------------------------------------
+
+
+def _check_class(gpu_class: str) -> None:
+    if gpu_class not in _CLASSES:
+        msg = "gpu_class must be reasoning, decider or large"
+        raise ConfigError(msg)
+
+
+def _pins(cfg: HernessConfig, gpu_class: str) -> dict[str, str]:
+    """The current pin set of a class (U10-78 keys)."""
+    if gpu_class == "large":
+        lg = cfg.deploy.large
+        return {"image": lg.image, "gguf": lg.gguf, "sha256": lg.sha256}
+    section = cfg.deploy.reasoning if gpu_class == "reasoning" else cfg.deploy.openjev
+    return {"image": section.image, "model": section.model, "revision": section.revision}
+
+
+def _target(gpu_class: str, pins: dict[str, str]) -> str:
+    """Audit target ``<class>:<pinned digest or gguf sha>``."""
+    pin = pins["sha256"] if gpu_class == "large" else pins["image"].partition("@")[2]
+    return f"{gpu_class}:{pin}"
+
+
+def _history(cfg: HernessConfig) -> DeployHistory:
+    return DeployHistory(_deploy_dir(cfg) / "history.jsonl")
+
+
+def _require_rendered(cfg: HernessConfig) -> None:
+    """Precondition: ``rendered.json`` belongs to this config."""
+    try:
+        record = json.loads((_deploy_dir(cfg) / "rendered.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        record = None
+    if not isinstance(record, dict) or record.get("config_hash") != config_hash(cfg):
+        msg = "run herness deploy render first"
+        raise ConfigError(msg)
+
+
+def _up_worker(cfg: HernessConfig, gpu_class: DeployClass) -> bool:
+    """Step 2: ask the worker's arbiter and wait for it; False when no worker took it."""
+    if request_gpu_class(gpu_class) != "requested":
+        return False
+    _log.info("deploy.class.requested", via="worker", gpu_class=gpu_class)
+    services = cfg.resilience.resilience.gpu.classes[gpu_class].services.values()
+    deadline = clock.monotonic() + max(s.start_timeout_s for s in services) + _WORKER_GRACE_S
+    while gpu_state().loaded_class() != gpu_class:
+        if clock.monotonic() >= deadline:
+            msg = f"worker did not load {gpu_class}"
+            raise ModelUnavailable(msg)
+        clock.sleep(dc.POLL_S)
+    return True
+
+
+def class_up(
+    cfg: HernessConfig, gpu_class: DeployClass, *, actor: str, now: datetime
+) -> dict[str, str]:
+    """``herness deploy up <class>`` (U10-84): via the worker, else under the GPU lock."""
+    _check_class(gpu_class)
+    cfg.deploy.require_pinned([_SECTION[gpu_class]])
+    _require_rendered(cfg)
+    pins = _pins(cfg, gpu_class)
+    audit("admin_action", actor, action="deploy_up", target=_target(gpu_class, pins))
+    via = "worker" if worker_alive() and _up_worker(cfg, gpu_class) else "compose"
+    if via == "compose":
+        dc.up_compose(cfg, gpu_class)
+    _history(cfg).record(gpu_class, pins, config_hash(cfg), now)
+    _log.info("deploy.class.up", gpu_class=gpu_class, via=via)
+    return {"gpu_class": gpu_class, "via": via, "status": "loaded"}
+
+
+def class_down(cfg: HernessConfig, gpu_class: DeployClass, *, actor: str) -> dict[str, str]:
+    """``herness deploy down <class>`` (U10-84): worker class ``none``, else compose ``stop``."""
+    _check_class(gpu_class)
+    audit("admin_action", actor, action="deploy_down", target=gpu_class)
+    if worker_alive() and request_gpu_class("none") == "requested":
+        _log.info("deploy.class.requested", via="worker", gpu_class="none")
+        return {"gpu_class": gpu_class, "via": "worker", "status": "requested"}
+    gpu = cfg.resilience.resilience.gpu
+    with dc.gpu_lock(cfg):
+        dc.compose(gpu, ["--profile", gpu_class, "stop"], gpu.stop_timeout_s)
+    _log.info("deploy.class.down", gpu_class=gpu_class, via="compose")
+    return {"gpu_class": gpu_class, "via": "compose", "status": "stopped"}
+
+
+# --- U10-85 rollback_class, prune ------------------------------------------------------------
+
+
+def rollback_class(
+    cfg: HernessConfig, gpu_class: DeployClass, *, actor: str, now: datetime
+) -> dict[str, str]:
+    """``herness deploy rollback <class>`` (U10-85): on-disk check, render, down, up, audit."""
+    _check_class(gpu_class)
+    pins = _pins(cfg, gpu_class)
+    weights = verify_weights(cfg, gpu_class, full=False)
+    if weights["status"] != "ok" or not dc.image_on_disk(cfg, pins["image"]):
+        msg = "rollback target not on disk; run deploy pull"
+        raise ConfigError(msg)
+    render_env(cfg, actor=actor)
+    class_down(cfg, gpu_class, actor=actor)
+    result = class_up(cfg, gpu_class, actor=actor, now=now)
+    audit("admin_action", actor, action="deploy_rollback", target=_target(gpu_class, pins))
+    return result
+
+
+def _keep(cfg: HernessConfig, history: DeployHistory) -> dict[str, list[dict[str, str]]]:
+    """Step 1: per class the current pins plus the two newest valid promoted pin sets."""
+    keep: dict[str, list[dict[str, str]]] = {}
+    for cls in _CLASSES:
+        promoted = [p for p in history.last_promoted(cls, _ALL) if dp.valid_pins(cls, p)]
+        keep[cls] = [_pins(cfg, cls), *promoted[:2]]
+    return keep
+
+
+def _models(history: DeployHistory, keep: dict[str, list[dict[str, str]]]) -> dict[str, set[str]]:
+    """Model -> kept revisions, over every model a valid pin set of the HF classes names."""
+    revisions: dict[str, set[str]] = {}
+    for cls in ("reasoning", "decider"):
+        for pins in history.last_promoted(cls, _ALL):
+            if dp.valid_pins(cls, pins):
+                revisions.setdefault(pins["model"], set())
+        for pins in keep[cls]:
+            revisions.setdefault(pins["model"], set()).add(pins["revision"])
+    return revisions
+
+
+def _refuse_in_use(cfg: HernessConfig, history: DeployHistory, todo: dp.PrunePlan) -> None:
+    """``StoreBusy`` while the loaded class uses an item the plan would remove."""
+    loaded = gpu_state().loaded_class()
+    if loaded == "swapping":
+        msg = "GPU class swap in progress; prune refused"
+        raise StoreBusy(msg)
+    if loaded not in _CLASSES:
+        return
+    in_use: set[str] = set()
+    valid = [p for p in history.last_promoted(loaded, _ALL) if dp.valid_pins(loaded, p)]
+    for pins in [_pins(cfg, loaded), *valid[:1]]:
+        in_use.add(pins.get("image", ""))
+        if "revision" in pins:
+            in_use.add(f"{dp.repo_of(cfg, pins['model'])}/snapshots/{pins['revision']}")
+        if "gguf" in pins:
+            in_use.add(f"{cfg.deploy.model_root}/gguf/{pins['gguf']}")
+    if in_use & todo.items():
+        msg = "the loaded GPU class uses an item prune would remove"
+        raise StoreBusy(msg)
+
+
+def prune(cfg: HernessConfig, *, actor: str) -> dict[str, int]:
+    """``herness deploy prune`` (U10-85): plan, refuse while in use, remove, audit counts."""
+    cfg.deploy.require_pinned()
+    history = _history(cfg)
+    keep = _keep(cfg, history)
+    todo = dp.plan(
+        cfg,
+        kept_refs={pins["image"] for sets in keep.values() for pins in sets},
+        kept_revisions=_models(history, keep),
+        kept_gguf={pins["gguf"] for pins in keep["large"]},
+    )
+    _refuse_in_use(cfg, history, todo)
+    counts = dp.execute(cfg, todo)
+    summary = ";".join(f"{kind}={n}" for kind, n in counts.items())
+    audit("admin_action", actor, action="deploy_prune", target="model_root", counts=summary)
+    _log.info("deploy.prune.completed", **counts)
+    return counts
