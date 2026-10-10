@@ -1151,7 +1151,9 @@ Spec note (T06-22, review round 1): design 06 §6.2 ("Planner dead → run `fail
 | Signature | `review_job_handler(ctx: JobContext) -> JobOutcome` (one argument, R-42); `build_swarm_from_config(cfg: HernessConfig) -> Swarm` |
 | Algorithm | Handler: 1. `cfg = get_config()`; `swarm = build_swarm_from_config(cfg)`. 2. Payload `ctx.job.payload` (R-42): `{"run_id": str, "resume": true, "force"?: bool}` → `asyncio.run(swarm.resume(run_id, ctx, force=force))`; `{"request": {...}}` → `RunRequest.model_validate(...)` (failure → `ConfigError("review payload invalid: job_id=<id>")`), then `asyncio.run(swarm.start(req, ctx))`; anything else → `ConfigError`. 3. Result status non-terminal and `ctx.should_yield()` → `JobOutcome(status="yield", result={"run_id", "status"})`; else `JobOutcome(status="done", result={"run_id", "status", "partial": status == "partial"})`. 4. `swarm.close()` in `finally`. `build_swarm_from_config`: `T05-10 (herness.harness.llm.registry.LLMRegistry)(cfg.models, profile=cfg.profile)`, `T07-23 (herness.harness.memory.MemoryStore.from_config)(cfg)`, default `SwarmDeps` (`worker_alive` bound to `T08-12 (herness.core.jobs.worker_alive)` for U06-86). This is a composition root for the job child process (ENG §2.2 exception, §13 O06-12). |
 | Errors | `ConfigError` propagates (spec 08 marks the job failed). |
-| Tests | UT06-56 |
+| Tests | UT06-56, UT06-96 |
+
+T06-22b spec note (2026-10-10, ruling): the scheduler (spec 08 U08-73) submits chain payloads of the `config/resilience.yaml` shape `{"pipeline": "funding_review"|"org_review", "depth": "fast"|"standard"|"deep"}` plus the keys `schedule` (str), `fire_at` (str), `step` (int). Step 2 therefore has a third accepted form: the **scheduled form** (keys within `pipeline`, `depth`, `schedule`, `fire_at`, `step`; `pipeline` required and one of the two review kinds, `depth` optional, default `standard`; every value strictly typed) becomes `RunRequest(kind=pipeline, depth=depth)` and `swarm.start(req, ctx)`. The spec 08 shape was chosen because impl 06 only said "anything else → `ConfigError`" and never named the scheduled payload; the request and resume forms are unchanged. Anything else stays `ConfigError` (fail closed): a missing, unknown or `chat` pipeline, a list-valued `pipeline`, the plural `pipelines`, a bad or non-string `depth`, any other key (`question`, `request`, `run_id`, `resume`) alongside `pipeline`, a wrongly typed scheduler key. One job starts exactly one run (the job's yield and resume carry one `run_id`), so `config/resilience.yaml` `weekly_deep` is a chain (a failed funding_review step stops the chain, so org_review deep does not run that week): `job` funding_review `deep`, `then` org_review `deep` (previously one job with `pipelines: [funding_review, org_review]`). Test: UT06-96.
 
 ### 3.9 Planner (`herness/harness/swarm/planner.py`)
 
@@ -1584,7 +1586,9 @@ Spec note (T06-22, review round 1): design 06 §6.2 ("Planner dead → run `fail
 | Signature | `env: RunEnv`; `render: Callable[[str, Sequence[str]], object]` → `None` |
 | Algorithm | 1. Load `draft.json` and the cited findings. 2. `rec_ids = await asyncio.to_thread(memory.write_recommendations, run_id, pipeline.recommendation_drafts(draft, findings))` (idempotent per run). 3. Set `rec_id` in order; `write_draft_atomic`. 4. `memory.promote_procedural(run_id)` in a thread. 5. `set_run_status(to="done", allowed_from={"recording"})`. 6. `render(run_id, app.reports.formats)`; a `HernessError` → `update_run_fields(meta_patch={"render_error": "<class>: <message>"})` and log `harness.render.failed` (ERROR); the run stays `done`. 7. Log `harness.record.completed` (INFO: `n_recs`). For `partial` runs U06-82 calls only step 6. |
 | Errors | `ReportContractError` from spec 07 (changed recommendations on resume) → run `failed` through U06-82 step 8. |
-| Tests | IT06-31, IT06-22, FT06-02 |
+| Tests | IT06-31, IT06-22, FT06-02, IT06-37 |
+
+T06-22b spec note (2026-10-10): a funding run's recommendations target `candidate` (spec 07 U07-07 now lists it), so the drafts of step 2 pass `write_recommendations` unchanged and `rec_id`s are filled for them; the T06-22 IT harness no longer maps `candidate` to `work_item`. Test: IT06-37 (real `MemoryStore.write_recommendations`, run `done`, `rec_id` in `draft.json`).
 
 #### U06-123 herness.harness.swarm.hybrid.build_evidence_pack
 
@@ -2227,6 +2231,7 @@ Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `
 | UT06-93 | U06-140 | state with duplicates; valid state; stored invalid JSON | validate; read back | duplicates rejected; round trip equal; `SchemaViolation` |
 | UT06-94 | U06-142 | 60 verified findings, fake `verify` | build | `mode = findings_only`; one `executive_summary` section with 50 claim paragraphs in priority order; no recommendations; banner `partial_run`; `publishable = false`; `verification` stored |
 | UT06-95 | U06-144 | ops store with two findings whose `numbers` cite the record (one by `record_id`, one by key only), whose claims carry the matching markers, and one finding that does not | `scrub_record_from_findings` inside `run_write`; then again | cited elements removed and their markers replaced by `[redacted]`; other elements and rows unchanged; second call returns 0 |
+| UT06-96 | U06-85 | the review payloads of `config/resilience.yaml` plus scheduler keys; malformed variants (missing, unknown or `chat` pipeline, bad or non-string depth, list-valued or plural pipeline, extra keys, wrongly typed scheduler keys) | handler | each shipped payload starts one run of its pipeline and depth; each malformed one → `ConfigError`, no run started |
 
 ### 11.2 Property tests (`unit`, hypothesis)
 
@@ -2281,6 +2286,7 @@ Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `
 | IT06-34 | U06-136 | job run twice | second run makes no model call |
 | IT06-35 | U06-87 | build with DQ fails, prior recs | context fields filled with query ids |
 | IT06-36 | U06-129 step 5k (R-32) | user message classified as a correction by the fake spec 07 classifier; a second turn with a failing session save | first turn: `correction_captured` event after `final`, answer text has no mention of the capture; second turn: `final` delivered, `harness.chat.session_save_failed` logged, no `error` event |
+| IT06-37 | U06-122, U06-70 (T06-22b) | `drv` funding run whose Writer recommends candidate `c1`; real `MemoryStore` instead of the fake | `start` | run `done`; `recommendation` row (`fund`, `candidate`, `c1`); the `rec_id` filled in `draft.json` |
 
 ### 11.4 Fault tests (`fault`)
 

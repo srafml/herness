@@ -189,7 +189,7 @@ class RecommendationDraft(_Strict):
 
     rank: int = Field(ge=1)
     kind: Literal["fund", "org_action"]
-    target_type: Literal["service", "team", "org", "work_item"]
+    target_type: Literal["service", "team", "org", "work_item", "candidate"]
     target_id: str = Field(max_length=200)
     summary: str = Field(min_length=1, max_length=400)
     numbers: Annotated[list[NumberRef], Field(max_length=20)]

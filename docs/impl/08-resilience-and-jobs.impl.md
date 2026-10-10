@@ -2373,6 +2373,8 @@ All keys come from `config/resilience.yaml` unless stated. Every key is read thr
 | env `HERNESS_ENV` | str | unset | `test` enables fault plans (R-40); any other value or unset ignores them | yes (read once per process) | internal |
 | env `HERNESS_STUB_SERVICES` | JSON object, service name → loopback base URL | unset | read only by the `kill_service:` fault action under `HERNESS_ENV=test` (impl 11 DD11-04) | yes | internal |
 
+T06-22b spec note (2026-10-10, ruling): the `review` payloads of `schedule.jobs` use the design shape `{pipeline, depth}` (one pipeline per payload); the scheduler adds `schedule`, `fire_at`, `step` (U08-73) and the handler of impl 06 U06-85 accepts exactly this scheduled form (an unknown or plural key is a `ConfigError`). The design row `weekly_deep` with `payload: {pipelines: [funding_review, org_review], depth: deep}` is shipped as a chain, `job` funding_review `deep` and `then` org_review `deep` (a job runs and yields one run); the design text in `docs/specs/08` is unchanged and its multi-pipeline payload is not accepted by the handler. UT06-96 loads `config/resilience.yaml` and checks every review payload.
+
 Constants (not configurable): `BREAKER_CACHE_S = 5`, `HALF_OPEN_STALE_S = 600`, `METRIC_FLUSH_INTERVAL_S = 10`, `METRIC_BUFFER_MAX = 10000`, `METRIC_GAUGE_KEYS_MAX = 1000`, `CHECKPOINT_MAX_BYTES = 4194304`, `CHECKPOINT_SCHEMA_VERSION = 1`, `GPU_SLOT_KINDS = {build_pipeline}`, `MAX_PIPE_MSG_BYTES = 8388608`, `PAYLOAD_MAX_BYTES = 65536`, `RESULT_MAX_BYTES = 1048576`, `COMPOSE_UP_TIMEOUT_S = 120`, `SWAP_ETA_S = 360`, `SOURCE_SYNC_CATCH_UP = 1 h`, `SOURCE_RECONCILE_CATCH_UP = 12 h`, `SWAP_FAILURE_POSTPONE = 10 min`, supervisor store-failure limit 10 ticks.
 
 ## 10. Performance and capacity

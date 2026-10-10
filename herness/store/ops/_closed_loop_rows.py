@@ -238,7 +238,7 @@ REC_CHECKS: Final[Mapping[str, Check]] = {
     "rec_id": _str(REC_ID_RE),
     "run_id": _str(RUN_ID_RE),
     "kind": _one_of("fund", "org_action"),
-    "target_type": _one_of("service", "team", "org", "work_item"),
+    "target_type": _one_of("service", "team", "org", "work_item", "candidate"),
     "target_id": _text(200),
     "summary": _text(400),  # R-30
     "numbers": lambda v: isinstance(v, list),

@@ -82,7 +82,8 @@ schedule:
               {kind: review, gpu_class: reasoning, payload: {pipeline: org_review, depth: standard}, skip_on: [SUN]},
               {kind: eval, gpu_class: reasoning, payload: {suite: golden}, enabled: false}]}
     - {name: weekly_deep, cron: "0 21 * * SUN", catch_up_max: 12h,
-       job: {kind: review, gpu_class: reasoning, payload: {pipelines: [funding_review, org_review], depth: deep}}}
+       job: {kind: review, gpu_class: reasoning, payload: {pipeline: funding_review, depth: deep}},
+       then: [{kind: review, gpu_class: reasoning, payload: {pipeline: org_review, depth: deep}}]}
     - {name: memory_maintenance, cron: "0 5 * * *", catch_up_max: 24h, job: {kind: memory_maintenance, gpu_class: none}}
     - {name: outcomes, cron: "0 6 * * MON", catch_up_max: 48h, job: {kind: outcome_measure, gpu_class: none, payload: {sweep: true}}}
   maintenance: {catch_up_max: 12h}        # time comes from backup.nightly_at (spec 10)
