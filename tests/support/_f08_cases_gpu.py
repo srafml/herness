@@ -233,10 +233,11 @@ def test_ft08_10_preempted_at_08_00_yields_then_resumes_at_19_00(
 ) -> None:
     """FT08-10 F10: a `build_pipeline` job switches to `decider` at 07:50 (in-job, allowed
     until the next boundary) and finishes 2 of 4 checkpointed batches. At the 08:00 `chat`
-    boundary (hard start) it gets `stop("preempt")` and yields while the clock still reads
-    08:00, inside `preempt_grace_min` (15 min); the yield charges no attempt and keeps its
-    state. The chat window keeps it queued (priority 60 < 70); at 19:00 it resumes and runs
-    only batches 2 and 3: finished batches are not redone.
+    boundary (hard start) it gets `stop("preempt")`; with the clock moved on to 08:14 (inside
+    `preempt_grace_min`, 15 min) the child reports `yield` itself and exits (no forced stop);
+    the yield charges no attempt and keeps its state. The chat window keeps it queued
+    (priority 60 < 70); at 19:00 it resumes and runs only batches 2 and 3: finished batches
+    are not redone.
 
     Not run on real containers (open-questions (b)9/(b)15): `fake_gpu` compose host."""
     fault_env([])  # HERNESS_ENV=test with the plan loader on in every process; no rule
@@ -251,8 +252,16 @@ def test_ft08_10_preempted_at_08_00_yields_then_resumes_at_19_00(
 
     drive_at(sup, lambda: _note(sup) == WAITING_NOTE)
     assert gpu_worker.job(job_id).attempts == 1
+    run = sup.slots["gpu"]
+    assert run is not None
     box[0] = local(8)
+    sup.tick(clock.now())  # the boundary tick: `stop("preempt")` is sent, the grace starts
+    assert (run.stop_sent, run.preempt_at) == ("preempt", local(8))
+    box[0] = local(8, 14)  # still inside preempt_grace_min (15 min): no forced stop is due
     drive_at(sup, lambda: gpu_worker.job(job_id).status == "queued" and sup.slots["gpu"] is None)
+    assert run.outcome is not None  # the child reported its own `yield` ...
+    assert run.outcome.status == "yield"
+    assert run.proc.exitcode == 0  # ... and exited: it was not terminated after the grace
     queued = gpu_worker.job(job_id)
     assert queued.attempts == 0  # the preempted attempt is not charged
     assert queued.result is not None
@@ -260,7 +269,7 @@ def test_ft08_10_preempted_at_08_00_yields_then_resumes_at_19_00(
     [yielded] = [e for e in fj.job_events("job_yield") if e["job_id"] == job_id]
     assert yielded["stop_reason"] == "preempt"
     preempted_at = clock.parse_utc(yielded["ts"])
-    assert local(8) <= preempted_at < local(8, 15)  # within preempt_grace_min
+    assert local(8) <= preempted_at <= local(8, 14) < local(8, 15)  # within the grace
     box[0] = local(18, 59)
     for _ in range(3):
         sup.tick(clock.now())
@@ -301,8 +310,18 @@ def test_ft08_12_build_pipeline_in_job_switches_on_the_gpu_slot(
         assert sup.start() is None  # start-up detection: `none` (nothing runs)
         loaded = Loaded(require_jobs_backend())
         bind_jobs_backend(loaded)  # type: ignore[arg-type]  # the real backend, recorded
-        drive_at(sup, lambda: gpu_worker.job(job_id).status == "done")
+        seen: set[tuple[str, str | None]] = set()  # (slot running the job, stored lease owner)
 
+        def done() -> bool:
+            row = gpu_worker.job(job_id)
+            for slot, run in sup.slots.items():
+                if run is not None and run.row.job_id == job_id and row.status == "running":
+                    seen.add((slot, row.lease_owner))
+            return row.status == "done"
+
+        drive_at(sup, done)
+
+    assert seen == {("gpu", f"{sup.worker_id}:gpu")}  # the GPU slot ran it; cpu0 never did
     claims = [e["owner"] for e in logs if e["event"] == "jobs.job.claimed"]
     assert claims == [f"{sup.worker_id}:gpu"]
     changes = [cls for cls in loaded.classes if cls != "swapping"]

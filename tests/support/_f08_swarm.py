@@ -9,6 +9,7 @@ The evidence rows are the parent's (the fixture already recorded them).
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from tests.unit.harness._blackboard_env import PLANTED_NAME
 
 from herness.core import config as c
 from herness.core import redact as r
+from herness.core import time as clock
 from herness.core.errors import ModelUnavailable
 from herness.core.jobs.ports import bind_jobs_backend
 from herness.core.redact_directory import NameDirectory
@@ -39,9 +41,24 @@ from herness.harness.swarm import (
     writer,
 )
 from herness.harness.swarm.run import SwarmDeps
-from herness.store.ops import reset_connections
+from herness.store.ops import record_evidence_use, reset_connections
 from herness.store.ops.jobs import SqliteJobsBackend
 from herness.store.ops.resilience import SqliteResilienceBackend
+
+
+def link_evidence(mp: pytest.MonkeyPatch, agents: e.Agents) -> None:
+    """Make each scripted analyst record the use of its team's incident evidence (the
+    `evidence_use` row a real `run_sql` call writes, through the real ops store) before it
+    posts its finding, so a run has per-task evidence links (FT08-06)."""
+    analyst = agents._analyst
+
+    async def linked(ctx: Any, hooks: Any) -> Any:
+        qid = e.incident_qid(e._team_of(ctx.task_id))
+        use = (qid, ctx.run_id, ctx.task_id, clock.now())
+        await asyncio.to_thread(record_evidence_use, *use)
+        return await analyst(ctx, hooks)
+
+    mp.setattr(agents, "_analyst", linked)
 
 
 def _no_embedding(findings: Any) -> Any:
@@ -78,6 +95,7 @@ def build_drv(mp: pytest.MonkeyPatch, cfg_root: Path, data_root: Path) -> e.Drv:
     agents, memory, metrics, pool = e.Agents(), e.Memory(), e.Metrics(), e._Pool()
     for module in (planner, scheduler, challenge, writer):
         mp.setattr(module, "run_agent", agents)
+    link_evidence(mp, agents)
     mp.setattr(dedup, "_embed_all", _no_embedding)
     mp.setattr(_run_env, "get_pipeline", _pipeline)
     mp.setattr(_run_steps, "build_plan_context", _plan_context)

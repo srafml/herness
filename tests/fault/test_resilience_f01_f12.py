@@ -267,10 +267,8 @@ def test_ft08_04_http_429_retry_after_three_retries_watermark_once(
 
 F5_RULE = {"point": "http.page", "action": "http_503", "count": 10, "source": "servicenow"}
 F5_GAP = (
-    "the runner's stream pre-check guard(key) (U01-39 step 3) claims the half-open probe, so "
-    "the page fetch's own guard (U08-28) refuses the claimed probe and no probe request is "
-    "ever sent: a source breaker never closes through sync - carry-over: new fix card "
-    "(controller to assign; owners impl 01 U01-39 runner, impl 08 U08-24 breaker)"
+    "product gap: SyncRunner._incremental_stream guard(key) consumes the half-open probe, so "
+    "the page fetch's own guard refuses it and no probe request is sent - fix card T01-27"
 )
 
 
@@ -324,7 +322,7 @@ def test_ft08_05_503s_open_the_breaker_and_no_call_while_open(
     assert fs.events("breaker_half_open") == []
 
 
-@pytest.mark.xfail(strict=True, reason=F5_GAP)
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=F5_GAP)
 def test_ft08_05_half_open_after_cooldown_and_closed_after_a_good_probe(
     f5: tuple[Any, Any, FakeClock],
 ) -> None:
