@@ -43,6 +43,7 @@ pytest_plugins = [
     "tests.support.fake_runner",
     "tests.support.truth",
     "tests.support.bench",
+    "tests.support.builds",
 ]
 
 collect_ignore = ["support", "fixtures"]
