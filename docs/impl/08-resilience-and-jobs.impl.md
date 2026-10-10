@@ -811,6 +811,10 @@ Errors:
 |-----------|-------------|---------------------|
 | `StoreBusy` from the backend after `sqlite_write` retries | `StoreBusy` (propagates) | `key` |
 
+Spec note (T01-27): a source probe is claimed and counted through the sync path by the request-level guard only. `SyncRunner._incremental_stream`, the backfill slice and `reconcile_entity` run `herness.connectors._breaker_gate.guard` first, which calls `retry_at()` and never `allow()`, so it cannot take the half-open claim; the first `retry_page` attempt (`guard` then `allow()`) after the cooldown wins the claim (`breaker_half_open`), sends exactly one request and `record_success`/`record_failure` closes or re-opens the breaker. A caller that claims the probe and does not send a request leaves the breaker `half_open` until the stale limit (`HALF_OPEN_STALE_S`, 600 s), so a pre-flight check must not call `allow()`. No `source` probe function is registered with `register_probe`, so `run_due_probes` never recovers a source breaker: sources recover through this caller-probe path.
+
+Spec note (T01-27, for the impl 08/11 owner): `herness.core.resilience.faults._stub_url` parses `HERNESS_STUB_SERVICES` as a JSON object, while `tests/support/stub_http.py` (`_register_service`, the `stub_services` fixture; DD11-04) treats it as the path of a JSON file. Not aligned here because it is not a one-line change (the two sides would have to agree on file-or-JSON); FT08-01 sets the JSON object directly.
+
 #### U08-25 `herness.core.resilience.breaker`
 
 | Param | Type | Kind | Constraints |

@@ -73,6 +73,7 @@ Default layer imports per ENG §2.1: L2 may import L0 (`herness.core.*`) and L1 
 | `herness/connectors/lakefiles.py` | Orphan temp cleanup and per-writer schema tracking | `cleanup_orphan_temp_files`, `SchemaTracker`, `SchemaDrift` | L2 | `pyarrow` | 160 |
 | `herness/connectors/runner.py` | `SyncRunner` and `SyncResult`; incremental flow and the shared write loop | `SyncRunner`, `SyncResult` | L2 | `pyarrow` | 390 |
 | `herness/connectors/_write_loop.py` | Private sibling of `runner.py` holding the U01-40 write-loop state (`WriteLoop`, `StreamSpec`, `StreamOutcome`, `metric`); `SyncRunner._write_stream` is its only caller. Build note T01-06: split out so `runner.py` stays inside 390 lines with room for T01-07, T01-08 and T01-10 | — (private; imported by `runner.py`) | L2 | `pyarrow` | 200 |
+| `herness/connectors/_breaker_gate.py` | Private sibling of `runner.py`, `backfill.py` and `reconcile.py` holding the non-claiming pre-flight `guard(key)` (T01-27); they import it as `guard` | — (private) | L2 | — | 30 |
 | `herness/connectors/backfill.py` | Slice planning and parallel slice execution | `run_backfill` | L2 | — | 260 |
 | `herness/connectors/reconcile.py` | Key reconciliation with DuckDB anti-join and safety valve | `reconcile_entity`, `find_missing_keys` | L2 | `duckdb`, `pyarrow` | 260 |
 | `herness/connectors/files.py` | Files connector: inbox listing, fingerprint, DuckDB readers | `FilesConnector`, `InboxFile`, `InboxFileChanged`, `fingerprint_file`, `MAX_INBOX_FILE_BYTES` | L2 | `duckdb`, `pyarrow` | 360 |
@@ -1176,6 +1177,8 @@ Returns `SyncResult`.
 | Complexity and limits | — |
 | Security notes | — |
 | Tests | UT01-29, UT01-30, UT01-32, UT01-35, IT01-02 |
+
+Spec note (T01-27): the step 1 `guard(key)` of this unit, the slice guard of U01-43 step 4c and the reconcile guard of U01-44 are a *pre-flight* check, `herness.connectors._breaker_gate.guard`, not `herness.core.resilience.guard`: it raises `CircuitOpen` only while the breaker is open and its cooldown is not over (`breaker(key).retry_at()` in the future) and never claims the half-open probe. The request-level guard inside `retry_page` (U08-28) is the only claimer, so after the cooldown the first page request wins the single probe, goes out, and its outcome closes or re-opens the breaker (FT08-05). An open breaker still skips the source with no request. If the cooldown is over but the sync makes no request (zero-window return of step 5), no probe is claimed.
 
 #### U01-40 herness.connectors.runner.SyncRunner._write_stream
 
