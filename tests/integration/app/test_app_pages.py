@@ -132,8 +132,9 @@ def test_it09_11_no_current_build(env: SimpleNamespace, spec: PageSpec) -> None:
     at = AppTest.from_file(str(spec.path), default_timeout=TIMEOUT_S).run()
     assert not at.exception
     assert not at.error, [e.value for e in at.error]
-    # Home's Builds block shows the line itself; pages 08 - 11 never read the warehouse (T09-18)
-    shows_line = spec.needs_warehouse or spec.path.name == "Home.py"
+    # Home's Builds block and Chat (works without a build, T09-19) show the line themselves;
+    # pages 08 - 10 never read the warehouse (T09-18)
+    shows_line = spec.needs_warehouse or spec.path.name in ("Home.py", "11_Chat.py")
     assert [i.value for i in at.info].count(NO_BUILD_TEXT) == int(shows_line)
     assert [c.value for c in at.sidebar.caption] == ["No promoted build"]
     if spec.needs_warehouse:
