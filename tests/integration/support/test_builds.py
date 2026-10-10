@@ -39,6 +39,7 @@ from tests.support.builds import (
     BuildHandle,
     build_root,
     clear_build_outputs,
+    default_cache_dir,
     ensure_build,
     private_dir,
 )
@@ -53,7 +54,7 @@ _CHANGE_TS = ("opened_at", "planned_start", "planned_end", "actual_start", "actu
 # FIXTURE_REV -> base32 SHA-256 of builds.py + _build_cache.py (LF). A change to either file
 # fails this pin: bump FIXTURE_REV when the change alters how builds are made, then re-pin.
 _SOURCE_PIN = {
-    1: "im5jfsdi6ctzw7qjiuqgc6cjtjmx2qw73h4sz4v4sb5strar5y5a",  # pragma: allowlist secret
+    1: "ucacjh275w565zygyagr2olgvsptypywf4tarh2tseqlz3gbuk6a",  # pragma: allowlist secret
 }
 
 
@@ -222,7 +223,7 @@ def test_it11_11_reentry_from_a_child_fails_fast(tmp_path: Path) -> None:
     (tmp_path / "7-tiny.lock").write_text(holder_json(os.getppid()), encoding="utf-8")
     with (
         pytest.raises(BuildFixtureError, match="re-entered"),
-        build_lock(tmp_path / "7-tiny", wait_s=600, poll_s=0.05),
+        build_lock(tmp_path / "7-tiny", wait_s=5, poll_s=0.05),
     ):
         pass
 
@@ -235,10 +236,10 @@ def test_it11_11_lock_permission_failure_fails_fast(
     def denied(*_args: object) -> int:
         raise PermissionError(13, "denied")
 
-    monkeypatch.setattr(_build_cache.os, "open", denied)
+    monkeypatch.setattr(_build_cache, "_os_open", denied)
     with (
         pytest.raises(BuildFixtureError, match="permission denied"),
-        build_lock(tmp_path / "7-tiny", wait_s=600),
+        build_lock(tmp_path / "7-tiny", wait_s=5),
     ):
         pass
 
@@ -365,3 +366,40 @@ def test_it11_11_rebuild_cleanup_does_not_delete_through_a_symlink(tmp_path: Pat
     with pytest.raises(BuildFixtureError, match="symlink"):
         clear_build_outputs(tmp_path / "data_link", frozenset())
     assert (victim / "keep.txt").exists()
+
+
+def test_it11_11_link_in_the_parent_chain_to_an_unsafe_dir_is_refused(tmp_path: Path) -> None:
+    """IT11-11 (cv) a cache dir reached through a link is refused: on Windows any symlink or
+    junction in the chain; on POSIX a link whose target chain is writable by others."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)  # no sticky bit (a no-op on Windows)
+    _dir_link(tmp_path / "link", shared)
+    with pytest.raises(BuildFixtureError, match=r"parent chain|sticky"):
+        private_dir(tmp_path / "link" / "cache")
+    assert not (shared / "cache").exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX modes and owners (Windows: none)")
+def test_it11_11_writable_or_foreign_ancestor_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IT11-11 (cv) OpenSSH StrictModes rule on the ancestors: a group/other-writable parent
+    without the sticky bit is refused, a sticky one (like /tmp) is accepted, and a parent
+    owned by another (non-root) user is refused."""
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    parent.chmod(0o777)
+    with pytest.raises(BuildFixtureError, match="sticky"):
+        private_dir(parent / "cache")
+    parent.chmod(0o1777)
+    assert private_dir(parent / "cache").is_dir()
+    uid = parent.stat().st_uid
+    monkeypatch.setattr(os, "getuid", lambda: uid + 1)
+    with pytest.raises(BuildFixtureError, match="another user"):
+        private_dir(parent / "other")
+
+
+def test_it11_11_default_cache_dir_passes_the_chain_check() -> None:
+    """IT11-11 (cv) the default per-user root under the system temp dir passes the checks."""
+    assert private_dir(default_cache_dir()).is_dir()

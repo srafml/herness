@@ -1,6 +1,7 @@
 """Private sibling of `tests.support.builds` (U11-48, T11-17 spec note): the build lock,
 the generator marker check and the build fingerprint, split off for the 350-line budget of
-`builds.py`, which re-exports `BuildFixtureError`; imported only by `builds`.
+`builds.py`, which re-exports `BuildFixtureError`; imported by `builds`, `_build_dirs` and
+the T11-17 tests.
 
 Lock (F11-06 step 1): `<root>.lock` is created with `os.open(O_CREAT | O_EXCL)` and holds the
 holder's host, pid and process create time as JSON; a waiter polls every 1 s for up to
@@ -49,6 +50,9 @@ EMPTY_LOCK_STALE_S: Final = 60.0
 Scale = Literal["tiny", "small"]
 
 
+_os_open = os.open  # module seam: the permission test patches this, not `os.open`
+
+
 class BuildFixtureError(RuntimeError):
     """The build fixture could not lock, generate or build (the message says which)."""
 
@@ -94,7 +98,10 @@ def _check_reentry(text: str) -> None:
     holder = _local_holder(text)
     if holder is None or not _alive(*holder):
         return
-    mine = {os.getpid(), *(p.pid for p in psutil.Process().parents())}
+    try:
+        mine = {os.getpid(), *(p.pid for p in psutil.Process().parents())}
+    except psutil.Error:  # an ancestor cannot be inspected: not re-entry, keep polling
+        return
     if holder[0] in mine:
         msg = (
             "build lock held by this process or an ancestor: ensure_build re-entered"
@@ -146,7 +153,7 @@ def build_lock(
     deadline = time.monotonic() + wait_s
     while True:
         try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            fd = _os_open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             break
         except (FileExistsError, PermissionError) as exc:  # Windows: delete-pending lock file
             if isinstance(exc, PermissionError) and not _lock_present(lock):

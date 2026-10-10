@@ -19,13 +19,14 @@ spec 02 pipeline; later calls, sessions and concurrent processes reuse it (T11-1
 
 Deviations (T11-17 rulings): the cache is per user, outside the repo
 (`<tempfile.gettempdir()>/herness-synth-builds-<user>`, or `cache_dir` / `--synth-builds-dir`;
-no new `HERNESS_*` variable), created 0o700; a symlink, junction or (POSIX) foreign-owned
-root or slot is refused, deletes never follow links (Windows has no owner check: a `TMP` on a
-shared folder is not private). `enrich` / `score` run T02-22's fake hooks, so no stubs start
-and `StubSet` is empty until T11-34. Compose is answered by `fake_gpu.FakeGpu` (class `none`).
-Process-wide state is restored after the build. `tiny_root` copies `tests/fixtures/lake_small/`
-into a tmp dir. `small` generation uses a `spawn` pool: a script calling `ensure_build` outside
-pytest needs an `if __name__ == "__main__":` guard (re-entry fails fast with a clear error).
+no new `HERNESS_*` variable), created 0o700; a symlink, junction or (POSIX) foreign-owned root
+or slot and an unsafe parent chain are refused (`_build_dirs`), deletes never follow links
+(Windows has no owner check: a `TMP` on a shared folder is not private). `enrich` / `score` run
+T02-22's fake hooks, so no stubs start and `StubSet` is empty until T11-34. Compose is answered
+by `fake_gpu.FakeGpu` (class `none`). Process-wide state is restored after the build.
+`tiny_root` copies `tests/fixtures/lake_small/` into a tmp dir. `small` generation uses a
+`spawn` pool: a script calling `ensure_build` outside pytest needs an `if __name__ ==
+"__main__":` guard (re-entry fails fast with a clear error).
 """
 
 from __future__ import annotations
@@ -36,7 +37,6 @@ import getpass
 import os
 import re
 import shutil
-import stat
 import subprocess
 import tempfile
 import types
@@ -49,6 +49,7 @@ import pytest
 from pydantic import BaseModel
 from tests.support import _build_cache as cache
 from tests.support._build_cache import BuildFixtureError, Scale
+from tests.support._build_dirs import clear_build_outputs, private_dir, safe_rmtree
 from tests.support.config_tree import SHIPPED, write_full_config
 from tests.support.fake_gpu import FakeGpu, shipped_gpu_settings
 from tests.support.fake_keyring import MemoryKeyring
@@ -76,8 +77,12 @@ __all__ = [
     "BuildFixtureError",
     "BuildHandle",
     "StubSet",
+    "build_root",
+    "clear_build_outputs",
     "default_cache_dir",
     "ensure_build",
+    "private_dir",
+    "safe_rmtree",
     "small_build",
     "tiny_build",
     "tiny_root",
@@ -107,54 +112,6 @@ class BuildHandle:
     warehouse: Path
     truth: TruthManifest
     stubs: StubSet
-
-
-# --- private cache directories -------------------------------------------------------------
-
-
-def _linked(path: Path) -> bool:
-    return path.is_symlink() or path.is_junction()
-
-
-def private_dir(path: Path) -> Path:
-    """Create `path` (mode 0o700) or accept it; refuse a link, a non-directory or (POSIX) a
-    directory owned by another user."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with contextlib.suppress(FileExistsError):
-        path.mkdir(mode=0o700)
-    info = os.lstat(path)
-    if _linked(path) or not stat.S_ISDIR(info.st_mode):
-        msg = f"refusing build cache path (symlink, junction or not a directory): {path}"
-        raise BuildFixtureError(msg)
-    if hasattr(os, "getuid"):  # POSIX only: Windows has no st_uid
-        if info.st_uid != os.getuid():
-            msg = f"refusing build cache path owned by another user: {path}"
-            raise BuildFixtureError(msg)
-        if info.st_mode & 0o077:
-            os.chmod(path, 0o700)  # an older run's 0o755: make it private again
-    return path
-
-
-def safe_rmtree(path: Path) -> None:
-    """`shutil.rmtree(path)`, refused when `path` itself is a symlink or junction."""
-    if _linked(path):
-        msg = f"refusing to delete through a symlink or junction: {path}"
-        raise BuildFixtureError(msg)
-    shutil.rmtree(path)
-
-
-def clear_build_outputs(data_root: Path, keep: frozenset[str]) -> None:
-    """Remove every child of `data_root` except `keep`; a linked child is refused."""
-    for child in private_dir(data_root).iterdir():
-        if child.name in keep:
-            continue
-        if _linked(child):
-            msg = f"refusing to delete through a symlink or junction: {child}"
-            raise BuildFixtureError(msg)
-        if child.is_dir():
-            shutil.rmtree(child)
-        else:
-            child.unlink()
 
 
 def default_cache_dir() -> Path:
