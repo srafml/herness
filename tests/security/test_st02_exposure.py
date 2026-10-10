@@ -6,10 +6,8 @@ column names design 02 §7.6 classifies as personal: `short_description`, `descr
 `close_notes`, `root_cause_text`, `summary`) is in the default
 `config/models.yaml harness.sql.blocked_columns`, which the spec 05 SQL guard denies to agents.
 
-Known gap (reported on T02-22): `core.work_item.summary` is raw ticket text per §7.6 but the
-T05-04 default does not list it, so the second test is a strict `xfail` until the default
-(`config/models.yaml` and `SqlSettings`) gains that entry; the strict xfail then fails, which
-says to drop the marker.
+`core.work_item.summary` is raw ticket text per §7.6 but is not blocked: spec 05 D9 redacts it on
+read (`REDACT_ON_READ_COLUMNS`), so the second test counts that list as covered (T05-04b).
 """
 
 from __future__ import annotations
@@ -25,6 +23,7 @@ from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.resilience import ProcessState
 from herness.harness.llm.settings import SqlSettings
+from herness.harness.sql_guard import REDACT_ON_READ_COLUMNS
 from herness.model.build import run_build_pipeline
 from herness.store import warehouse
 from herness.store.layout import DataLayout
@@ -88,15 +87,12 @@ def test_st02_13_no_stg_payload_and_blocked_list_matches_catalog(
     assert sorted(published - _raw_text(columns)) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="core.work_item.summary is raw text (design 02 7.6) but not in the T05-04 default",
-)
 def test_st02_13_every_raw_text_core_column_is_blocked(
     columns: list[tuple[str, str, str, str]],
 ) -> None:
     """ST02-13 TH02-13 every `core` VARCHAR column that holds raw text per design 02 §7.6 is
-    in the default `harness.sql.blocked_columns`."""
+    in the default `harness.sql.blocked_columns` or in the guard's `REDACT_ON_READ_COLUMNS`
+    (spec 05 D9: `core.work_item.summary` is redacted on read)."""
     raw_text = _raw_text(columns)
     assert raw_text, "no raw text column found in core"
-    assert sorted(raw_text - _published_default()) == []
+    assert sorted(raw_text - (_published_default() | set(REDACT_ON_READ_COLUMNS))) == []

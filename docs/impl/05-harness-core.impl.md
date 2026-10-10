@@ -2666,7 +2666,7 @@ Cross-spec rulings are recorded in [`DECISIONS.md`](DECISIONS.md) (R-01–R-76);
 
 | Design item | Default |
 |-------------|---------|
-| Q1 / D9: Jira titles | Not blocked; redacted on read (`core.work_item.summary`, also `score.funding.title`) and wrapped as untrusted |
+| Q1 / D9: Jira titles | Not blocked; redacted on read (`core.work_item.summary`, also `score.funding.title`) and wrapped as untrusted (ST02-13 accepts `REDACT_ON_READ_COLUMNS` as covered, T05-04b) |
 | Q2: verification items | VI-2–VI-7 below |
 | Q3–Q11 | Resolved in the design; no action |
 | D5 (hybrid allowed) | `local` only; Anthropic paths tested with fakes; ET05-02 and IT05-09 run only when approved |
