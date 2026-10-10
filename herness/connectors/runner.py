@@ -21,6 +21,7 @@ from typing import Literal, Protocol, cast
 
 import pyarrow as pa
 
+from herness.connectors._breaker_gate import guard
 from herness.connectors._write_loop import StreamOutcome, StreamSpec, WriteLoop
 from herness.connectors._write_loop import metric as _metric
 from herness.connectors.base import (
@@ -37,7 +38,6 @@ from herness.core import time as clock
 from herness.core.config import get_config
 from herness.core.errors import CircuitOpen, ConfigError, FatalError, HernessError, RetryableError
 from herness.core.logging import get_logger
-from herness.core.resilience import guard
 from herness.store.lake import LakeWriter
 from herness.store.ops import get_watermark, record_metric_samples
 

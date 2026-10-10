@@ -20,6 +20,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from herness.connectors._breaker_gate import guard
 from herness.connectors._write_loop import metric
 from herness.connectors.base import KEY_SCHEMA, SupportsKeyListing
 from herness.connectors.deletion import DeletionFilter
@@ -29,7 +30,6 @@ from herness.core import time as clock
 from herness.core.errors import SchemaViolation
 from herness.core.ids import new_ulid
 from herness.core.logging import get_logger
-from herness.core.resilience import guard
 from herness.store.lake import LAKE_FILE_PATTERN, LakeWriter
 from herness.store.ops import get_watermark, record_metric_samples
 
