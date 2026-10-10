@@ -1261,8 +1261,10 @@ Top level: `minimum_pre_commit_version: "3.2.0"`; `default_install_hook_types: [
 | 7 | `fixtures-pii-scan` | local | `uv run --frozen python -m herness.core.redact --scan tests/fixtures` (T10-11 (herness.core.redact_scan.main)) | `^tests/fixtures/` | false | pre-commit |
 | 8 | `module-size` | local | `uv run --frozen python -m tools.check_module_size` | `\.py$` | false | pre-commit |
 | 9 | `type-ownership` | local | `uv run --frozen python -m tools.check_type_ownership` | `^(herness\|app)/.*\.py$` | false | pre-commit |
-| 10 | `pytest-unit` | local | `uv run --frozen pytest -m unit -x -q` | — (`always_run: true`) | false | pre-commit |
+| 10 | `pytest-unit` | local | `uv run --frozen pytest -m unit -x -q` | — (`always_run: true`) | false | pre-push |
 | 11 | `pytest-cpu` | local | `uv run --frozen pytest -m "(unit or integration or fault) and not gpu and not slow" --cov` | — (`always_run: true`) | false | pre-push |
+
+T00-12 note (2026-10-09, controller ruling): pytest-unit runs at pre-push; the unit suite still gates every card (sub-controller gate) and every merge batch.
 
 `.secrets.baseline` is generated with `uv run detect-secrets scan --exclude-files '^(uv\.lock|tests/fixtures/pii_corpus\.jsonl)$'`, written to `.secrets.baseline` and committed; every entry is audited with `detect-secrets audit` and marked a false positive before commit. `uv.lock` is excluded because its SHA-256 hashes look like high-entropy strings; the PII corpus is synthetic and is scanned by hook 7 instead.
 
