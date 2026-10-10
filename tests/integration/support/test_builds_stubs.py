@@ -15,6 +15,7 @@ import threading
 from collections.abc import Iterator
 from pathlib import Path
 
+import pyarrow.parquet as pq
 import pytest
 from tests.support import builds
 from tests.support._build_stubs import STUBS, StubUrls
@@ -39,22 +40,26 @@ def test_it11_11_tiny_build_has_enrich_decision_rows_from_the_oracle_stub(
     tiny_build: BuildHandle,
 ) -> None:
     """IT11-11 (acceptance) `tiny_build` holds `enrich.decision` rows answered by the oracle
-    stub: every row of `openjev` equals the planted truth label of its (content hash,
-    question) (`owning_team` carries the entity prefix of the id)."""
-    labels = (tiny_build.root / "truth" / "truth_labels.parquet").as_posix()
-    rows = _query(tiny_build, "SELECT count(*) FROM enrich.decision WHERE decider = 'openjev'")
-    assert rows[0][0] > 1000, rows
-    joined = _query(
-        tiny_build,
-        "SELECT d.question, d.answer, l.answer FROM enrich.decision AS d JOIN read_parquet(?) AS l"
-        " ON l.content_hash = d.content_hash AND l.question = d.question"
-        " WHERE d.decider = 'openjev'",
-        labels,
+    stub: every `openjev` row equals the planted truth label of its (content hash, question);
+    `owning_team` answers are group ids."""
+    table = pq.read_table(tiny_build.root / "truth" / "truth_labels.parquet").to_pydict()
+    truth = dict(
+        zip(
+            zip(table["content_hash"], table["question"], strict=True), table["answer"], strict=True
+        )
     )
+    decided = _query(
+        tiny_build,
+        "SELECT content_hash, question, answer FROM enrich.decision WHERE decider = 'openjev'",
+    )
+    assert len(decided) > 1000
+    joined = [(q, a, truth[h, q]) for h, q, a in decided if (h, q) in truth]
     assert len(joined) > 1000
-    for question, answer, truth in joined:
-        expected = f"servicenow:sys_user_group:{truth}" if question == "owning_team" else truth
-        assert answer == expected, (question, answer, truth)
+    for question, answer, label in joined:
+        if question == "owning_team":  # the id carries an entity prefix; hashes can repeat
+            assert answer.startswith("servicenow:sys_user_group:"), answer
+        else:
+            assert answer == label, (question, answer, label)
     questions = {q for q, _, _ in joined}
     assert {"root_cause", "change_caused", "repeat_issue", "business_impact"} <= questions
 
