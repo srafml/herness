@@ -220,4 +220,4 @@ def register(root: typer.Typer) -> None:
         root.command(name)(handler)
     metrics = typer.Typer(name="metrics", no_args_is_help=True, help="Metric catalog.")
     metrics.command("list")(metrics_list)
-    root.add_typer(metrics)
+    root.add_typer(metrics, name="metrics")

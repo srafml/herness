@@ -321,6 +321,6 @@ def register(root: typer.Typer) -> None:
     report.command("funding")(_report_command("funding_review", "report funding"))
     report.command("org")(_report_command("org_review", "report org"))
     report.command("render")(report_render)
-    root.add_typer(report)
+    root.add_typer(report, name="report")
     for name, handler in (("review", review), ("resume", resume), ("decide", decide)):
         root.command(name)(handler)

@@ -59,23 +59,20 @@ class CliEnv:
 
 @contextmanager
 def preserved_app() -> Iterator[None]:
-    """Restore the root app's commands, groups and group-registration flag on exit.
+    """Restore the root app's commands and groups on exit (tests that add probe commands).
 
-    For tests that add probe commands: ``main`` registers the command groups once per
-    process (``cli._registered``), so restoring only ``registered_commands`` after a ``main``
-    that registered them would leave the flag set and the groups gone (T09-23).
+    ``main`` adds the command groups whose names the app lacks (``cli._register_groups``), so
+    a probe registered first under a real command's name keeps that name for the test.
     """
     from herness import cli  # noqa: PLC0415 - the CLI module loads on first use
 
     commands = list(cli.app.registered_commands)
     groups = list(cli.app.registered_groups)
-    registered = cli._registered
     try:
         yield
     finally:
         cli.app.registered_commands[:] = commands
         cli.app.registered_groups[:] = groups
-        cli._registered = registered
 
 
 @pytest.fixture

@@ -35,9 +35,6 @@ def guarded_app(cli_env: CliEnv) -> Iterator[list[str]]:
     """Register guarded probes for an admin, a viewer and a denied-allowed path."""
     ran: list[str] = []
     with preserved_app():
-        if not cli._registered:  # real groups first, so the probes below replace them
-            cli._register_groups(cli.app)
-            cli._registered = True
         for path in ("build", "sync", "status", "doctor"):
             cli.app.command(path)(guarded(path)(_probe(path, ran)))
         yield ran

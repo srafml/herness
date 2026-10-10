@@ -89,9 +89,7 @@ def test_ut09_66_every_registered_command_has_a_role() -> None:
 
     T09-23 registers the data and review groups; T09-22, T09-24 and T09-25 add theirs.
     """
-    if not cli._registered:  # the groups register on the first `main` of the process
-        cli._register_groups(app)
-        cli._registered = True
+    cli._register_groups(app)  # idempotent; `main` runs it before every command
     table = _table()
     paths = set(_registered(typer.main.get_command(app)))
     assert {"sync", "metrics list", "report funding", "report render", "decide"} <= paths
