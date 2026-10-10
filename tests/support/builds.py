@@ -40,6 +40,10 @@ Deviations (sub-controller rulings, T11-17):
 Process-wide state (config, ops store binding, process state, hooks, env) is set for the
 build only and restored after it. `tiny_root` copies `tests/fixtures/lake_small/` into a tmp
 dir (no build). Registered as a pytest plugin by `tests/conftest.py`.
+
+`small` generation runs a `spawn` process pool (tools/synth/shards.py); a script that calls
+`ensure_build` outside pytest needs an `if __name__ == "__main__":` guard, or each worker
+re-runs it and waits on the held lock.
 """
 
 from __future__ import annotations
