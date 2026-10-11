@@ -37,7 +37,7 @@ from tests.support.eval_golden_run import (
 pytestmark = pytest.mark.eval
 
 LIMIT_S: Final = 300.0  # ET11-01 "< 5 min"
-QUESTIONS: Final = 36
+QUESTIONS: Final = 37  # every id of design §5.3.3 (its heading says 36; the table lists 37)
 URL_ENV: Final = "HERNESS_LLM_URL"
 
 

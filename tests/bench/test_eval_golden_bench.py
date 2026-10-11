@@ -29,7 +29,7 @@ def test_bt11_06_mock_golden_eval_under_300_s(
     """BT11-06 mock golden eval on CPU, committed scripts, tiny build: timed run < 300 s."""
     build = cached_build(42, "tiny", tmp_path_factory)
     run = run_golden_job(build, tmp_path_factory.mktemp("bt11-06"), golden_payload())
-    assert len(run.results) == 36
+    assert len(run.results) == 37  # every id of design §5.3.3
     sys.stderr.write(f"BT11-06 seconds {run.wall_s:.2f} s (target < 300)\n")
     target = BenchTarget("BT11-06", "11", "seconds", "s", LIMIT_S, "tiny")
     rec = record_value(bench_recorder, target, run.wall_s)
