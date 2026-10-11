@@ -1086,7 +1086,7 @@ T11-34 spec note (U11-48): `ensure_build` runs the real `run_enrichment` (text, 
 | Field | Content |
 |-------|---------|
 | Kind | function; model `ClassifierReport(version, question_set_version, gate_check: list[GateMetricCheck], deciders: dict[str, dict[str, DeciderMetrics]], synthetic: dict[str, DeciderMetrics] \| None, passed: bool)` |
-| Signature | `run_classifier(qset_version: str, deciders: Sequence[str], *, data_root: Path, warehouse: DuckDBPyConnection \| None, truth_dir: Path \| None, settings: ClassifierSettings, rng_seed: int = 20261001) -> ClassifierReport` |
+| Signature | `run_classifier(qset_version: str, deciders: Sequence[str], *, data_root: Path, warehouse: DuckDBPyConnection \| None, truth_dir: Path \| None, settings: ClassifierSettings, rng_seed: int = 20261001, inputs: ClassifierInputs | None = None) -> ClassifierReport` (`inputs`: T11-35 note (8)) |
 | Algorithm | Flow F11-09 (§5). Metrics: accuracy, macro-F1 (`sklearn.metrics.f1_score(average="macro")`) for choice and bool; MAE and within-one for score; ECE and temperature through `T03-10 (herness.enrich.calibrate)` (15 equal-mass bins, 2-fold cross-fit on `gold.fold`); coverage and accuracy at the question threshold on calibrated probabilities; confusion matrix; bootstrap percentile 95 % CIs with `settings.bootstrap` resamples from `numpy.random.default_rng(rng_seed)`; reliability bins (15) as data. |
 | Errors | missing `CURRENT`, `eval.json` or gold → `ConfigError`; gate mismatch is a failed check, not an error |
 | Tests | IT11-25..IT11-27, ST11-04 |
