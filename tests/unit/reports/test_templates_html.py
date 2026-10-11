@@ -196,7 +196,8 @@ def test_ut09_92_missing_nested_attribute(name: str) -> None:
 
 @pytest.mark.parametrize("kind", ["funding_review", "org_review"])
 def test_ut09_92_full_context_renders_offline(kind: str) -> None:
-    """UT09-92 the fixture context renders; ST09-03 static scan is clean."""
+    """UT09-92 the fixture context renders; the static scan (no script, URL, ``url(``; CSP
+    meta first in ``<head>``) is clean."""
     html = _full(kind)
     assert html.startswith("<!DOCTYPE html>\n<html")
     assert "<script" not in html.lower()

@@ -92,7 +92,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/cli.py` | Typer root app, entry point, global options, error boundary, worker bootstrap, start-up validation call | `app`, `main`, `GlobalOptions`, `worker_bootstrap`, `run_startup_validation` | L5 | `typer` | 330 |
 | `herness/_cli/__init__.py` | Package marker | none | L5 | — | 5 |
 | `herness/_cli/output.py` | JSON envelope, Error/Fix printing, exit codes | `CliResult`, `CommandResult`, `emit`, `emit_error`, `json_default`, `EXIT_CODES`, `exit_code_for` | L5 | `rich` | 250 |
-| `herness/_cli/_exit_codes.py` | R-46 exit-code table and mapping, private sibling of `output.py`, which re-exports it (T09-20 review round 1) | `EXIT_CODES`, `exit_code_for`, `exit_code_for_class_name` | L5 | none | 120 |
+| `herness/_cli/_exit_codes.py` | R-46 exit-code table and mapping, private sibling of `output.py`, which re-exports it (T09-20 review round 1); `abort_error` for click's `Abort` (T09-26, M-5) | `EXIT_CODES`, `exit_code_for`, `exit_code_for_class_name`, `abort_error` | L5 | none | 120 |
 | `herness/_cli/identity.py` | CLI actor, command→role table, elevation check | `cli_actor`, `COMMAND_ROLES`, `DENIED_ALLOWED`, `WRITE_COMMANDS`, `ELEVATED_COMMANDS`, `check_command_role`, `guarded` | L5 | none | 220 |
 | `herness/_cli/term.py` | Terminal-safe text | `safe_terminal_text` | L5 | none | 60 |
 | `herness/_cli/wait.py` | Enqueue, follow and inline-run jobs | `submit_job`, `follow_job`, `FollowOutcome`, `run_job_inline` | L5 | `rich` | 300 |
@@ -2318,12 +2318,14 @@ The exit codes are those of R-46 (corrected): design 09 §5.8 plus 14 for a fail
 
 `exit_code_for(exc: BaseException) -> int`: `KeyboardInterrupt` → 130; `click.exceptions.UsageError` or `UserInputError` → 2; otherwise the first matching row of the table above, checked with `isinstance` in table order from code 3 to 13 (so a subclass maps with its parent); every other exception → 1. `exit_code_for_class_name(name: str, *, key: str | None = None) -> int` applies the same table to a job's `last_error["class"]` (and `last_error["key"]` for `CircuitOpen`), because a failed job carries the class name, not the exception; an unknown name → 1. The error class stays visible to automation as `error.type` in the JSON envelope (U09-86).
 
+T09-26 spec note (2026-10-11, T09-20 review M-5): Typer's `main` turns an `EOFError` that escapes a command, and click's prompts turn end of input or Ctrl+C at a prompt, into `Abort` (Ctrl+C in a command body is already `Exit(130)`). `herness._cli._exit_codes.abort_error(exc)` classifies it: `None` when the `Abort`'s cause or context is a `KeyboardInterrupt` (exit 130, no output, R-46), otherwise `UserInputError("input ended before the prompt was answered", hint="Run the command in a terminal and answer the prompt.")`; `exit_code_for` maps an `Abort` the same way (130, else 2). U09-84 step 6 handles `KeyboardInterrupt` and `Abort` together: 130 for an interrupt, else `emit_error` with that `UserInputError` (exit 2, Error/Fix lines or the JSON error envelope); neither logs `cli.command.failed`. Tests: UT09-63, IT09-15.
+
 | Field | Content |
 |-------|---------|
 | Kind | functions and constant |
 | Purpose | Stable exit codes (R-46 corrected, design 09 §5.8). |
 | Preconditions | None. |
-| Postconditions | Deterministic; never returns 2 except for the two usage classes. |
+| Postconditions | Deterministic; returns 2 only for the two usage classes and an end-of-input `Abort` (T09-26 note); an `Abort` caused by Ctrl+C (`KeyboardInterrupt`) returns 130. |
 | Invariants | `EXIT_CODES` keys are exactly 0–14 and 130. |
 | Algorithm | As above. |
 | Side effects | None. |
@@ -3150,14 +3152,14 @@ Same steps as F09-04 with terminal output: step 4 prints tool lines and the fina
 | TH09-14 | TB7 | D | Oversized questions, huge result sets, slow queries | M | M | Length caps, row caps, 30 s query timeout, one in-flight turn (U09-33, U09-62, U09-71) | ASVS v5.0.0-V2.2, V2.4; LLM10 | ST09-14, UT09-60 |
 | TH09-15 | TB5 | T | Terminal escape sequences in model text or memory content | L | M | `safe_terminal_text` on all untrusted terminal output (U09-100) | ASVS v5.0.0-V1.2 (section) | ST09-15 |
 | TH09-16 | TB4/TB5 | T | Fabricated or uncited numbers presented as facts | M | H | Strict mode refuses uncited numerals; markers must resolve (U09-09 with `herness.core.numbers`, U09-08) | LLM09 | ST09-16, IT09-02 |
-| TH09-17 | TB4 | T | Evidence references to non-existent queries or foreign recommendations | L | H | Contract rules 3–4 (U09-08) | ASVS v5.0.0-V2.3 | UT09-13, IT09-05 |
+| TH09-17 | TB4 | T | Evidence references to non-existent queries or foreign recommendations | L | H | Contract rules 3–4 (U09-08) | ASVS v5.0.0-V2.3 | UT09-13, IT09-05, ST09-32 |
 | TH09-18 | TB7/TB10 | T, I | Path traversal via `run_id`, trace path, report paths | L | H | `RUN_ID_RE`, resolve-and-contain, symlink refusal (U09-06, U09-64, U09-24) | ASVS v5.0.0-V5.3 | ST09-17 |
-| TH09-19 | TB7 | R | Decisions and approvals denied later | M | M | Audit lines with `user_ref`; audit failure blocks the action (impl 02 `decide_review_item` via U09-38, U09-37, U09-39, U09-40) | ASVS v5.0.0-V16.3 | UT09-43, FT09-02, IT09-22 |
+| TH09-19 | TB7 | R | Decisions and approvals denied later | M | M | Audit lines with `user_ref`; audit failure blocks the action (impl 02 `decide_review_item` via U09-38, U09-37, U09-39, U09-40) | ASVS v5.0.0-V16.3 | UT09-43, FT09-02, IT09-22, ST09-33 |
 | TH09-20 | TB10 | I | Secret values in reports, CLI output or JSON | L | H | Secrets resolved only at use; `config show` keeps `secret:` refs; hidden prompt for `secrets set` (U09-98) | ASVS v5.0.0-V13.3 (section) | ST09-19 |
 | TH09-21 | TB7 | I | Chat text or usernames in logs | M | M | Logs carry ids, lengths and `user_ref` only (U09-34, U09-55) | ASVS v5.0.0-V16.2 | ST09-20 |
 | TH09-22 | TB10 | T | Automation parses mixed stdout (logs + JSON) | L | L | Logs and progress to stderr; one JSON object on stdout (U09-86) | ASVS v5.0.0-V16.2 (section) | ST09-24 |
 | TH09-23 | TB4/TB5 | T | HTML in `result_sample` cells rendered as markup | L | M | Samples escaped in templates; dataframes in the dashboard (U09-14, U09-67) | ASVS v5.0.0-V1.2 | ST09-18 |
-| TH09-24 | local | T | Partial or torn report files | L | M | tmp + fsync + `os.replace`; manifest last (U09-25) | ASVS v5.0.0-V5.3 (section) | UT09-32, FT09-03 |
+| TH09-24 | local | T | Partial or torn report files | L | M | tmp + fsync + `os.replace`; manifest last (U09-25) | ASVS v5.0.0-V5.3 (section) | UT09-32, FT09-03, ST09-34 |
 | TH09-25 | TB4 | E | Template injection through model text | L | H | Model text never a template source; package loader only (U09-23) | ASVS v5.0.0-V1.2 | ST09-26 |
 | TH09-26 | TB3/TB7 | T | Prompt injection through "Correct a fact" becoming trusted memory | M | M | Corrections always `propose` with `via="chat"` → pending review (spec 07 scan) (U09-36) | LLM01, LLM04 | ST09-27 |
 | TH09-27 | TB10 | E | OS user (or a user exporting another account's name in `USERNAME`/`LOGNAME`/`USER`/`LNAME`) without the role runs admin commands, runs a job in-process with `--inline`, or runs an `admin (OS)` command from a non-elevated shell | M | H | identity from process credentials, not the environment (U09-89); `guarded` role check on every command; `--inline` admin-only (R-45); elevation check for `ELEVATED_COMMANDS` (U09-89, U09-103) | ASVS v5.0.0-V8.2 | ST09-21, ST09-29, UT09-66 |
@@ -3475,7 +3477,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | UT09-110 | U09-89 | both credential lookups raise `OSError` (then return empty); `getpass.getuser` patched | `cli_actor` | falls back to `getpass.getuser()`; exactly one `cli.identity.fallback` WARNING (field `source`, no user name) across two calls |
 | UT09-111 | U09-65 | unconfirmed weight keys; `get_conn` raises `OSError`; warehouse and non-warehouse page | render (AppTest) | sidebar shows "Build information unavailable" and still the D2 warning; one `app.widget.failed` with `block = "Sidebar"` |
 | UT09-112 | U09-65 | `record_histogram` raises; then succeeds | render (AppTest) | page renders; exactly one `app.widget.metric_failed` WARNING (`page`, `error_type`); none on success |
-| UT09-111 | U09-75 | scored build; recorded `s_org_metrics` / `s_org_weights` hold two metrics (0.6, 0.2); `z_score` set for team T1 on the first only | `org.coverage` for `team` | T1 = 0.6 / 0.8; T2 (no `z_score`) = 0.0; only team rows |
+| UT09-114 | U09-75 | scored build; recorded `s_org_metrics` / `s_org_weights` hold two metrics (0.6, 0.2); `z_score` set for team T1 on the first only | `org.coverage` for `team` | T1 = 0.6 / 0.8; T2 (no `z_score`) = 0.0; only team rows |
 | UT09-113 | U09-14 | ST09-30's sample cases (always-drop columns, name variants, nested keys, 26-digit strings, deep nesting) plus numeric PII (phone `2025550123` as a JSON number, `2025550123.0` as a float, `555.0123`) with a redaction double, without a key, with the real fixed-key redactor and with `limit` | `_sample_policy.sample_rows` | the dashboard evidence widget re-exports `sample_rows` and gives identical output for every case (T09-15e); numeric cells are redacted (dropped without a key) under the T09-15d ruling; phone-shaped numbers masked, counts and decimals unchanged; e-mail- and phone-shaped column names dropped with and without a key (review I1); a non-JSON nested value is redacted, not an error (review M3); `FORBIDDEN_TEXT_COLUMNS` equals `app.common.wh.FORBIDDEN_TEXT_COLUMNS` |
 | UT09-114 | U09-38 | pending `label_check` item | reject with a note, and without | stored note is `{"reason": <clean note>}`, status rejected; no note → `UserInputError` |
 | UT09-115 | U09-38 | pending `label_check` item | approve with answer and note | stored note `{"answer":"yes","reason":"..."}` |
@@ -3574,6 +3576,9 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | ST09-29 | TH09-27 | Admin OS user in a non-elevated shell runs `secrets set`, `deploy install`; reviewer runs `sync --inline` | refused with `PermissionDenied` before any `herness.admin` call, keyring write or job claim; one `auth` audit line each |
 | ST09-30 | TH09-11 | Stored `result_sample` whose `title`, `summary`, `description`, `notes` and FORBIDDEN_TEXT_COLUMNS hold a raw title with a planted PII token, plus a free-text column; redaction key loaded (double, and a real test HMAC key with the real redactor) and not loaded; a 26-digit account number bare and `prefix_`-ed; name variants ` title`, `Title `, `NOTES`; a nested cell with `Title`/`notes` keys | evidence widget (AppTest) | token and raw title absent from every rendered text and dataframe cell; free text and numeric columns shown only redacted (key) or dropped (no key, T09-15e); boolean, date/time and id columns shown; phone-like numbers masked and PII-shaped column names dropped with the real redactor, long-digit names dropped without a key; digit strings redacted, never shown as ids; name variants and nested always-drop keys dropped; real redactor replaces the planted e-mail |
 | ST09-31 | TH09-11 | Stored `result_sample` (ops and warehouse rows) whose `title`, ` Summary `, `description`, `NOTES` and FORBIDDEN_TEXT_COLUMNS hold a raw title with a planted PII e-mail, plus a free-text column, a nested cell with a `Title` key, a phone `2025550123` stored as a JSON number and `2025550123.0` as a float; fixed-key test redactor | render funding and org reports | token, raw title, e-mail domain and both numbers, plus an e-mail-shaped and a phone-shaped column name, absent from report.html, report.md and manifest.json; free text shown only redacted; numeric, date and id cells shown; no always-drop column header in the appendix |
+| ST09-32 | TH09-17 | `herness report render` of a draft citing a query id with no evidence row, and of a draft citing a recommendation of another run | exit 12 with `error.type` `ReportContractError` naming the field; no report file and no manifest written |
+| ST09-33 | TH09-19 | A reviewer's `herness decide`, then the same with the audit writer failing | one hash-chained `recommendation_decision` audit line whose actor and `decided_by` are the reviewer's `user_ref` (never the OS name); with the audit failing the decision is refused (exit 1) and nothing reaches the memory store |
+| ST09-34 | TH09-24 | Re-render where replacing `report.md` fails after `report.html` was replaced | exit 5 (`SchemaViolation` naming the file); no tmp file left; each report file is a complete render; `manifest.json` is still the previous complete render's |
 
 ### 11.6 Benchmarks (`tests/bench`, markers `slow`, `gpu` for BT09-04)
 
@@ -3675,7 +3680,7 @@ All cards are Phase 5. Cross-spec dependencies use `X:<NN>/<symbol>`; they point
 | Depends on | T09-04, T09-05, T09-06 |
 | Units | U09-13, U09-14, U09-17, U09-18 |
 | Files | `herness/reports/_evidence.py`, `herness/reports/_markup.py` |
-| Tests | UT09-22, UT09-23, UT09-25, UT09-26, UT09-27, PT09-03 |
+| Tests | UT09-22, UT09-23, UT09-25, UT09-26, UT09-27, PT09-03, UT09-113, ST09-31 |
 | Threats | TH09-01, TH09-02, TH09-23 |
 | Acceptance checks | Listed tests pass |
 | Blocked by | none |
@@ -3789,7 +3794,7 @@ Follow-up T09-15d (found by T09-15c): the evidence appendix sanitises stored `re
 | Depends on | T09-14; T08-22 (herness.core.jobs.status_snapshot) |
 | Units | U09-65, U09-66, U09-67, U09-68, U09-72 |
 | Files | `app/common/widgets.py`, `app/Home.py` |
-| Tests | UT09-73, UT09-74, UT09-84, UT09-96, FT09-05, ST09-08, IT09-10 (Home), IT09-11 (Home) |
+| Tests | UT09-73, UT09-74, UT09-84, UT09-96, FT09-05, ST09-08, IT09-10 (Home), IT09-11 (Home), UT09-111, UT09-112, ST09-30 |
 | Threats | TH09-08 |
 | Acceptance checks | Listed tests pass with `streamlit.testing.v1.AppTest` |
 | Blocked by | none |
@@ -3805,7 +3810,7 @@ Follow-up T09-15c (found by T09-16): the evidence widget moved to the private si
 | Depends on | T09-15 |
 | Units | U09-73, U09-74, U09-75, U09-76 |
 | Files | `app/pages/01_Funding_Ranking.py`, `app/pages/02_Portfolio.py`, `app/pages/03_Org_Scorecards.py`, `app/pages/04_Action_Levers.py` |
-| Tests | IT09-10, IT09-11 (these pages) |
+| Tests | IT09-10, IT09-11 (these pages), UT09-114, IT09-29 |
 | Threats | TH09-11 |
 | Acceptance checks | AppTest runs each page on `tiny_build` without exceptions; titles pass through the redaction test double (asserted) |
 | Blocked by | none |
@@ -3945,11 +3950,13 @@ Follow-up T09-15c (found by T09-16): the evidence widget moved to the private si
 | Depends on | T09-11 – T09-25, T09-27; T11-14 (tools.synth_data.main) `--seed 42 --scale full` dataset and its build; T11-03 (tests/support/fake_clock.FakeClock) |
 | Units | none (tests only) |
 | Files | no production files (tests under `tests/integration`, `tests/bench`, `tests/unit/security_09`) |
-| Tests | IT09-10, IT09-11, IT09-14, IT09-15, IT09-16, ST09-19 (end-to-end), ST09-20, ST09-29, BT09-01, BT09-02, BT09-03, BT09-07 |
+| Tests | IT09-10, IT09-11, IT09-14, IT09-15, IT09-16, ST09-19 (end-to-end), ST09-20, ST09-29, ST09-32, ST09-33, ST09-34, BT09-01, BT09-02, BT09-03, BT09-07 |
 | Threats | all TH09 (verification) |
 | Acceptance checks | `pytest -m "integration and not slow" -k 09` passes; nightly `pytest -m slow -k BT09` meets §10 thresholds; traceability script resolves every ID in this document |
 | Blocked by | none |
 | Size | M |
+
+T09-26 spec note (2026-10-11): (1) Layout: the security rows live in `tests/security/test_st09_*.py` (the landed ST09 layout and the `tests/security -k st09` gate), not `tests/unit/security_09`. (2) Traceability (no row deleted): the second §11.1 `UT09-111` (U09-75, `org.coverage`) is renumbered `UT09-114` with its test; UT09-111, UT09-112 and ST09-30 join T09-15's Tests row, UT09-114 and IT09-29 join T09-16's, UT09-113 and ST09-31 join T09-07's (their units' cards); TH09-17, TH09-19 and TH09-24 gain the security rows ST09-32, ST09-33 and ST09-34 (this card). (3) IT09-10 and IT09-11 are the landed page tests (all 12 pages, the scored `metrics_tiny` build planted by `plant_scored_build` standing in for `tiny_build`, whose warehouse has no score tables); IT09-15's eval-gate row is in `tests/integration/cli/test_cli_eval_it.py`. (4) `tests/fixtures/cli/cli1.schema.json` is the `cli/1` envelope of U09-86 with one `$defs` shape per data kind (list, job, report, doctor); a job's data may also carry the eval command's `passed` and `compare_run_id`; exit 6 gives `ok: false` with data and a null error. (5) ST09-19 runs the pilot path in one process; `--inline` registers no job handlers in the CLI process (U09-103), so the test registers the owners' handlers (and seams for `build_pipeline` and `review`) itself, and a strict xfail records the gap (a product gap with a program owner: the inline helper does not call `worker_bootstrap`; the xfail reason names the card). The seams ST09-19 uses, all outside the asserted paths (every CLI command, `report render`, secret resolution and redaction run for real): `init` copies a test template tree through `herness._cli._init.TEMPLATE_DIR` (not the shipped `config/`); `doctor_host.doctor_checks` returns no host rows (no host subprocesses), so `doctor` is asserted literally as exit 0 with `ok: true`; the inline GPU controller is stubbed (no model server); the `build_pipeline` handler plants the report warehouse and the `review` handler renders a fixed run; chat uses a fake chat service and memory store. (6) BT09-01 - BT09-03 run a real scored synthetic build at scale `small` unless `HERNESS_BENCH_FULL=1` (then `full`, from `HERNESS_SYNTH_FULL_ROOT` or generated); BT09-03 uses 50,000 evidence rows at `small` and 1,000,000 at `full`. BT09-01 rows for pages 06 and 07 are strict xfail on the program-owned `load_catalog` gap (~2.2 s; the xfail reason names the card) (cold p95 2.92 s / 2.84 s at `small`); every other page keeps p95 cold < 2 s, warm < 0.5 s.
 
 ### T09-27 Worker bootstrap
 

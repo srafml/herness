@@ -10,11 +10,12 @@ from collections.abc import Mapping
 from typing import Final
 
 from typer._click.exceptions import UsageError
+from typer.exceptions import Abort
 
 from herness.core import errors as e
 from herness.reports.rules import UserInputError
 
-__all__ = ["EXIT_CODES", "exit_code_for", "exit_code_for_class_name"]
+__all__ = ["EXIT_CODES", "abort_error", "exit_code_for", "exit_code_for_class_name"]
 
 EXIT_CODES: Final[Mapping[int, str]] = types.MappingProxyType({
     0: "Success, including a --no-wait enqueue",
@@ -61,10 +62,27 @@ def _code_of_class(cls: type, key: str | None) -> int:
     return next((code for classes, code in _TABLE if issubclass(cls, classes)), 1)
 
 
+def abort_error(exc: BaseException) -> UserInputError | None:
+    """T09-20 M-5 (T09-26): click turns end of input or Ctrl+C at a prompt into ``Abort``.
+
+    None for an interrupt (exit 130, R-46), else the usage error of a prompt that got no
+    input (exit 2): it names no value, so the JSON envelope and the Fix line stay clean.
+    """
+    # Limit: a bare ``Abort`` (no KeyboardInterrupt cause), as from a future
+    # ``typer.confirm(..., abort=True)`` answered "no", also reads as end of input (exit 2).
+    # No caller raises one today; such a caller must map its refusal itself.
+    cause = (exc.__cause__ or exc.__context__) if isinstance(exc, Abort) else exc
+    if isinstance(cause, KeyboardInterrupt):
+        return None
+    msg = "input ended before the prompt was answered"
+    return UserInputError(msg, hint="Run the command in a terminal and answer the prompt.")
+
+
 def exit_code_for(exc: BaseException) -> int:
-    """R-46 exit code of ``exc``; 2 only for the two usage classes (U09-87)."""
-    if isinstance(exc, KeyboardInterrupt):
-        return 130
+    """R-46 exit code of ``exc``; 2 only for the two usage classes and an end-of-input
+    ``Abort`` (U09-87, M-5)."""
+    if isinstance(exc, KeyboardInterrupt | Abort):
+        return 130 if abort_error(exc) is None else 2
     if isinstance(exc, _USAGE):
         return 2
     return _code_of_class(type(exc), getattr(exc, "key", None))

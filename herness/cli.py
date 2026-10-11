@@ -22,8 +22,9 @@ import typer.main
 from typer._click.exceptions import UsageError
 from typer.models import CommandInfo, TyperInfo
 
+from herness._cli._exit_codes import EXIT_CODES, abort_error
 from herness._cli.identity import cli_actor
-from herness._cli.output import EXIT_CODES, emit_error, exit_code_for
+from herness._cli.output import emit_error
 from herness.core import time as clock
 from herness.core.config_sources import BootstrapConfig, load_bootstrap, resolve_profile
 from herness.core.egress_socket import install_socket_guard
@@ -296,8 +297,8 @@ def _run(opts: GlobalOptions, args: list[str]) -> int:
             exc.show()
             return 2
         return emit_error(opts, opts.command, exc)
-    except KeyboardInterrupt:
-        return exit_code_for(KeyboardInterrupt())
+    except (KeyboardInterrupt, typer.Abort) as exc:  # M-5: Abort wraps EOF and Ctrl+C
+        return 130 if (err := abort_error(exc)) is None else emit_error(opts, opts.command, err)
     except HernessError as exc:
         return emit_error(opts, opts.command, exc)
     except Exception as exc:  # noqa: BLE001 - the CLI error boundary (ENG §3.4)
