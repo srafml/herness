@@ -1766,6 +1766,8 @@ Spec note (card T10-28): (a) `wsl_git` above was added by the controller ruling 
 | Security notes | TH10-03. |
 | Tests | UT10-76 |
 
+T07-25 spec note (R-81): `local.yaml` stays `version: 1` only. The base `models.yaml` fallback chains end in `claude-opus`; under `local` and `synth` (egress off) those cloud tails are dropped by `LLMRegistry` (impl 05 U05-31) rather than the template ending its chains in a local model, because C02 checks role heads only and `hybrid` and `premium` inherit the same base chains. UT05-134 loads every shipped profile through `LLMRegistry`.
+
 #### U10-95 .streamlit/config.toml, .env.example
 
 | Field | Content |

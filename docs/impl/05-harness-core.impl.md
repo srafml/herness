@@ -89,6 +89,7 @@ Line budgets are hard limits enforced by the CI module-length check (ENG §2.4).
 | `herness/harness/llm/anthropic_client.py` | Anthropic adapter | `AnthropicClient` | L4 | `anthropic` | 400 |
 | `herness/harness/llm/_anthropic_batch.py` | Anthropic batch helpers (private, U05-29) | `check_batch_supported`, `build_batch_requests`, `validate_batch_id`, `validate_poll_interval`, `prepare_submit`, `validate_collect`, `poll_until_ended`, `collect_results`, `BATCH_MAX_WAIT_S` | L4 | `anthropic` | 200 |
 | `herness/harness/llm/registry.py` | Client registry and routing | `LLMRegistry`, `client_for` | L4 | none | 200 |
+| `herness/harness/llm/_fallback.py` | Private sibling of `registry.py`: off-network predicate, egress-aware fallback tails (T07-25, R-81) | `is_off_network`, `reachable_fallback`, `used_client_names` | L4 | `herness.core.logging`, `herness.harness.llm.settings` | 60 |
 | `herness/harness/tracing.py` | JSONL trace writer (R-02) | `Tracer`, `TraceType`, `llm_call_fields`, `tool_call_fields` | L4 | none | 360 |
 | `herness/harness/warehouse.py` | Read-only DuckDB handles per build | `DuckWarehouse`, `WarehousePool`, `open_warehouse`, `BUILD_ID_RE` | L4 | `duckdb` | 220 |
 | `herness/harness/sql_guard.py` | SQL guard | `SqlGuard`, `GuardedQuery`, `DENIED_NODE_NAMES`, `DENIED_FUNCTION_RULES`, `ALLOWED_SCHEMAS`, `ALLOWED_TABLE_FUNCTIONS` | L4 | `sqlglot`, `duckdb`, `rapidfuzz` | 390 |
@@ -695,7 +696,7 @@ This spec owns the `evidence` area of the `herness.store.ops` package (R-08). Ev
 | Purpose | One client instance per client key per process; routing of model roles to client keys and chains (design §3.2). |
 | Signature | `__init__(self, cfg: ModelsConfig, *, profile: str, egress_enabled: bool | None = None) -> None` (`None` reads `T10-03 (herness.core.config.get_config)().security.egress.enabled`). Methods: `client(name: str) -> LLMClient`; `config(name: str) -> ClientConfig`; `model_for(model_role: str, depth: str) -> str`; `chain_for(model_role: str, depth: str) -> list[str]`; `role_params(model_role: str) -> RoleParams | None`; `health() -> dict[str, str]`. |
 | Preconditions | `cfg` validated (U05-19). |
-| Postconditions | Construction raises `ConfigError` when a client named by `roles`, `fallback` or `depth_overrides` has `off_network == true` and egress is disabled (design §7). |
+| Postconditions | Construction raises `ConfigError` when a client named by `roles`, `depth_overrides` or the head of a `fallback` chain has `off_network == true` and egress is disabled (design §7). Off-network fallback tails (entries after the head) are dropped with WARNING `harness.llm.fallback_tail_dropped` instead (T07-25, R-81); `chain_for` and `health` never name them. |
 | Invariants | `client(name)` returns the same object for the same name for the registry's lifetime. |
 | Algorithm | (1) `client`: under a `threading.Lock`, return the cached instance or construct `T10-04 (herness.core.registry.get)("llm_client", cfg.kind)(cfg)`; unknown name → `ConfigError("unknown model client <name>")`. (2) `config`: lookup; unknown → `ConfigError`. (3) `model_for`: effective roles = `cfg.models.roles` updated with `depth_overrides[depth].roles`; look up `model_role`, then `BASE_ROLE[model_role]`; still missing → `ConfigError("no model for role <r>")`. (4) `chain_for`: `head = model_for(...)`; `rest = fallback[model_role]`, else `fallback[BASE_ROLE[model_role]]`, else `[]`; return `[head]` followed by `rest` without `head` and without duplicates, order kept. (5) `role_params`: `role_params[model_role]`, else `role_params[BASE_ROLE[model_role]]`, else `None`. (6) `health`: for each client key used by any role: local client → `ok` when `GET <root>/v1/models` on its loopback `base_url` returns 200 within 2 s through `T10-17 (herness.core.egress.loopback_http_client)(root, timeout_s=2)` (R-06), else `down`; for a `vllm` server whose model entry reports `max_model_len`, `cfg.context_window > max_model_len` → `down` with reason `context_window <n> above server max_model_len <m>` (R-52; a missing field skips the check); off-network client → `ok` without a call when egress is enabled, else `down`. |
 | Side effects | Client construction (secret resolution); `health` makes loopback HTTP calls. |
@@ -703,7 +704,9 @@ This spec owns the `evidence` area of the `herness.store.ops` package (R-08). Ev
 | Concurrency | `client` is lock-protected; other methods are read-only. |
 | Complexity and limits | O(1) per lookup. |
 | Security notes | TH05-13. |
-| Tests | UT05-18, UT05-40, UT05-41, UT05-123 |
+| Tests | UT05-18, UT05-40, UT05-41, UT05-123, UT05-132–UT05-134 |
+
+T07-25 spec note (R-81): (1) The shipped `local` and `synth` profiles end six fallback chains in `claude-opus`; before this card that made `LLMRegistry`, and so `get_memory_store()`, raise under egress off. Choice (b) of the card: the registry drops unreachable off-network tails (private sibling `_fallback.py`, §2 row), consistent with C02 (heads only) and `ModelChain._usable` (TH08-07); no cloud client is built, health-checked or named by `chain_for` under egress off, and `chat_policy` / `breaker` / `distill` see only the filtered chains. Role, depth-override and chain heads still fail closed. (2) Tests: UT05-18 now uses a config whose role HEAD is off-network (its former config had only a cloud tail, which is now tolerated by design). (3) `worker_bootstrap` (T09-27) was not on the base of this card; the cold-process bootstrap row under `local` is covered by T09-22's worker tests once both land.
 
 #### U05-32 herness.harness.llm.registry.client_for
 
@@ -2139,6 +2142,9 @@ Markers per spec 11 §4.1. Fixtures: `tiny_build`, `small_build`, `lake_small` (
 | UT05-129 | U05-64 | `tiny_build`; stored evidence whose hash differs by float-sum order only; one whose values changed; one with `row_count > 50` | verify | first passes and counts `n_hash_equivalent`; second → `query_failed` (`result drift`); third counted `n_hash_values_only` and judged by value comparison (R-15) |
 | UT05-130 | U05-14, U05-58, U05-69 | scripted repeat, then no-progress signals; tracer bound to a task | run_agent with a recording policy; read tracer properties | `state.loop_signals` is 1 then 2 when the policy is called and `nudges` counts only signal nudges; `tracer.run_id` and `tracer.task_id` equal the bound values; root tracer `task_id is None` (R-66) |
 | UT05-131 | U05-33 | registry | register a spec 06 and a spec 07 tool whose schema has an optional property not in `required` | `ConfigError` for both; the same schemas made strict-compatible register, and `tool_specs` returns `strict=True` (R-26) |
+| UT05-132 | U05-31 | `LLMRegistry` over the test config, egress off; spies on `get_guard` and `loopback_http_client` | construct, `chain_for`, `health`; also egress on | cloud tails dropped with WARNING `fallback_tail_dropped`; no cloud key in chains or health; zero guard or cloud calls; egress on keeps the tail (R-81) |
+| UT05-133 | U05-31 | off-network role head, or depth-override head, egress off | construct | `ConfigError` and ERROR `config_invalid`; constructs when egress is enabled (R-81) |
+| UT05-134 | U05-31 | every `config/profiles/*.yaml` loaded from the repo tree (approvals recorded for hybrid and premium) | construct `LLMRegistry`, `chain_for` every role and depth | constructs; every chain is non-empty with known clients; no off-network key when egress is off (R-81) |
 
 ### 11.2 Property tests (marker `unit`, hypothesis)
 
