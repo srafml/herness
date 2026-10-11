@@ -338,14 +338,18 @@ def test_cv_t11_30_repeats_and_tags(runner_store: OpsStoreHandle, tmp_path: Path
         )
 
 
-def test_cv_t11_30_yield_then_resume(runner_store: OpsStoreHandle, tmp_path: Path) -> None:
+@pytest.mark.parametrize("after", [0, 1])
+def test_cv_t11_30_yield_then_resume(
+    after: int, runner_store: OpsStoreHandle, tmp_path: Path
+) -> None:
     """CV-T11-30 `should_yield` between questions → `yield` with the run id; the requeued job
-    resumes from `results.jsonl` (saved state) and reuses the run row (F11-10)."""
+    resumes from `results.jsonl` (saved state) and reuses the run row (F11-10), also when
+    it yielded before its first result."""
     con = make_root(runner_store.data_root)
     questions = [chat_q("G01"), chat_q("G02"), chat_q("G03")]
     suite = env.suite_file(tmp_path / "suite.yaml", questions)
     payload = {"suite": str(suite), "profile": "local", "depth": "fast", "repeat": 1}
-    ctx = FakeCtx(payload, yield_after=1)
+    ctx = FakeCtx(payload, yield_after=after)
     chat = AnswerChat()
     runner._Binding.factory = None
     runner.set_deps_factory(lambda c: make_deps(runner_store.data_root, con, chat=chat, job=c))
@@ -354,7 +358,9 @@ def test_cv_t11_30_yield_then_resume(runner_store: OpsStoreHandle, tmp_path: Pat
         assert first.status == "yield"
         run_id = str(first.result["run_id"])
         out = runner_store.data_root / "reports" / "eval" / run_id
-        assert [r["id"] for r in lines(out / "results.jsonl")] == ["G01"]
+        assert out.is_dir()
+        done = lines(out / "results.jsonl") if after else []
+        assert [r["id"] for r in done] == ["G01"][:after]
         ctx.yield_after = None
         second = handle_eval(ctx)  # type: ignore[arg-type]
     finally:

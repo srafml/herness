@@ -206,6 +206,7 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
     con = deps.warehouse_for(plan.build_id)
     kind = dataset_kind(con)
     truth = load_truth(truth_dir_for(deps.data_root)) if kind == "synthetic" else None
+    out_dir = deps.data_root / "reports" / "eval" / plan.run_id
     meta = RunMeta(
         run_id=plan.run_id, profile=profile, depth=depth, build_id=plan.build_id,
         dataset_kind=kind, dataset_scale=truth.scale if truth is not None else "full",
@@ -215,6 +216,7 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
     if not plan.resumed:
         job_id = deps.job.job_id if deps.job is not None else None
         insert_eval_run(meta, data_root=deps.data_root)
+        out_dir.mkdir(parents=True, exist_ok=True)  # a resume needs it before any result
         if deps.job is not None:
             deps.job.save_state({"eval_run_id": plan.run_id})  # a retried job resumes the run
         _log.info("eval.run.started", run_id=plan.run_id, job_id=job_id,
@@ -229,7 +231,6 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
         traces_dir=deps.data_root / "traces", open_session=open_session_for(deps.clock),
         names=name_index(con), numerals=numerals(),
     )  # fmt: skip
-    out_dir = deps.data_root / "reports" / "eval" / plan.run_id
     try:
         return _run(env, meta, selected, repeat, deps, out_dir)
     except BaseException:
