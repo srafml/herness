@@ -22,7 +22,7 @@ from tests.unit.harness.memory._write_env import PATTERNS, Env, FakeEmbed, make_
 from herness.harness.memory import MemoryStore
 from herness.harness.memory.settings import MemoryConfig
 from herness.harness.memory.store import Embedder
-from herness.store.ops import core
+from herness.store.ops import core, record_evidence
 
 if TYPE_CHECKING:
     import pytest
@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     from herness.harness.swarm.run import Swarm
 
 __all__ = [
-    "Mem", "memory_store", "pin_tiny", "record_portfolio", "run_review", "run_summaries",
-    "swarm_for",
+    "Mem", "memory_store", "pin_tiny", "real_prior_context", "record_portfolio", "run_review",
+    "run_summaries", "swarm_for",
 ]  # fmt: skip
 
 
@@ -68,8 +68,6 @@ def memory_store(
 def record_portfolio() -> None:
     """The portfolio evidence row the scripted Writer's recommendation cites (IT06-37)."""
     from tests.integration.harness import _swarm_run_env as e  # noqa: PLC0415
-
-    from herness.store.ops import record_evidence  # noqa: PLC0415
 
     portfolio = e._evidence("SELECT 1 AS expected_impact_usd", {}, {"expected_impact_usd": 1200})
     assert record_evidence(portfolio.model_copy(update={"query_id": e.PORTFOLIO_QID}))
@@ -116,4 +114,39 @@ def pin_tiny(drv: Drv, data_root: Path, build: BuildHandle, monkeypatch: pytest.
     (wh / "CURRENT").write_text(build.build_id, encoding="ascii")
     monkeypatch.setattr(e, "BUILD_ID", build.build_id)
     drv.pool.warehouse = FakeWarehouse(build.build_id)
+    for team in ("t1", "t2"):  # the drv evidence again, now for the tiny build id
+        assert record_evidence(e._evidence(e.INCIDENT_SQL, {"team": team}, {"incidents": 7}))
+    sample = {"effort_cost_usd": 300, "confidence": 0.7}
+    assert record_evidence(e._evidence(e.FUNDING_SQL, {"candidate": "c1"}, sample))
     return copy
+
+
+def real_prior_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The driver's plan context with the real `MemoryStore.prior_context` and `_prior_recs`
+    (U07-81 via `_plan_ctx`), the real U06-71 planner and Writer inputs (IT11-23 pattern)."""
+    from tests.integration.harness import _swarm_run_env as e  # noqa: PLC0415
+
+    from herness.core.types import MemoryRunContext  # noqa: PLC0415
+    from herness.harness.pipelines import _review_common  # noqa: PLC0415
+    from herness.harness.swarm import _plan_ctx, _run_steps  # noqa: PLC0415
+
+    async def plan_context(run: Any, knobs: Any, **kw: Any) -> Any:
+        del knobs
+        run_ctx = MemoryRunContext(
+            run_id=run.run_id, run_kind=run.kind, role="planner",
+            task_id=kw["planner_task_id"], build_id=run.build_id, profile=run.profile,
+        )  # fmt: skip
+        pc = await asyncio.to_thread(kw["memory"].prior_context, run_ctx)
+        return e.plan_ctx_for(run).model_copy(
+            update={"prior_context": pc.rendered, "prior_recs": _plan_ctx._prior_recs(pc.items)}
+        )
+
+    def planner_input(self: Any, ctx: Any, tasks: Any) -> dict[str, object]:
+        return _review_common.planner_input(self.kind, ctx, tasks, {})
+
+    def writer_input(self: Any, ctx: Any, verified: list[Any]) -> dict[str, object]:
+        return _review_common.writer_input(self.kind, ctx, ["executive_summary"], verified)
+
+    monkeypatch.setattr(_run_steps, "build_plan_context", plan_context)
+    monkeypatch.setattr(e.StubPipeline, "planner_input", planner_input)
+    monkeypatch.setattr(e.StubPipeline, "writer_input", writer_input)
