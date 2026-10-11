@@ -233,13 +233,6 @@ def test_st06_06_planted_pii_fallback_draft_has_hybrid_fallback_banner(
 
 # --- ST06-09 -----------------------------------------------------------------------------------
 
-LLM_TRACE_GAP = (
-    "product gap T06-29 (gap D): herness/harness/swarm/_routing_ctx.py build_tool_context hands"
-    " the loop the unbound run tracer (tracer=env.tracer, not env.tracer.bind(task_id=, role=)), so"
-    " the spec 05 llm_call and tool_call events of swarm tasks carry task_id null and role null;"
-    " no ops row records an analyst task's model either (task.result has none)"
-)
-
 
 def _full_run(drv: Drv, monkeypatch: pytest.MonkeyPatch) -> tuple[str, list[dict[str, Any]]]:
     """A standard run in which one analyst spawns a subtask, with the real review tracer."""
@@ -299,13 +292,12 @@ def test_st06_09_findings_verdicts_and_spawns_trace_to_task_and_model(
     assert {ev["dedup_key"] for ev in plans if ev["action"] != "dropped"} <= keys
 
 
-@pytest.mark.xfail(strict=True, raises=(AssertionError, KeyError), reason=LLM_TRACE_GAP)
 def test_st06_09_finding_model_traceable_through_llm_call_traces(
     drv: Drv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ST06-09 the model behind every finding and every spawn is traceable: the finding's task
     and the spawning parent task have `llm_call` trace events bound to their task ids, each
-    naming the client and model."""
+    naming the client and model (T06-29 gap D)."""
     run_id, events = _full_run(drv, monkeypatch)
     models: dict[str, set[tuple[str, str]]] = {}
     for ev in events:

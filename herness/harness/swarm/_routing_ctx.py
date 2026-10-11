@@ -156,7 +156,8 @@ def build_tool_context(
         text_access="redacted_only",
         egress_purpose=_egress_purpose(spec, route),
         # Tracer.emit adds typed keyword-only fields; structurally a TraceEmitter (U05-69).
-        tracer=cast("TraceEmitter", env.tracer),
+        # Bound to the task, so its llm_call and tool_call events name it (TH06-09, T06-29).
+        tracer=cast("TraceEmitter", env.tracer.bind(task_id=spec.task_id, role=spec.role)),
     )
 
 
@@ -171,7 +172,7 @@ def build_hooks(
     """The spec 05 `HarnessHooks` of one task (U06-99, design 06 §3.3).
 
     No model chain after a hybrid local fallback (the routed local client is called directly);
-    the phase is the run's current status.
+    the phase is the run's current status; the tracer is bound to the task (TH06-09).
     """
     chain = (
         None
@@ -187,5 +188,5 @@ def build_hooks(
         phase=env.run.status,
         stop=env.stop,
         on_text_delta=on_text_delta,
-        tracer=env.tracer,
+        tracer=env.tracer.bind(task_id=spec.task_id, role=spec.role),
     )
