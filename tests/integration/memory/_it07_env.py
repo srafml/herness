@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     from herness.harness.swarm.run import Swarm
 
 __all__ = [
-    "Mem", "memory_store", "pin_tiny", "real_prior_context", "record_portfolio", "run_review",
-    "run_summaries", "swarm_for",
+    "Mem", "memory_store", "pin_build", "pin_tiny", "real_prior_context", "record_portfolio",
+    "run_review", "run_summaries", "swarm_for",
 ]  # fmt: skip
 
 
@@ -101,23 +101,29 @@ def run_summaries(run_id: str) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def pin_tiny(drv: Drv, data_root: Path, build: BuildHandle, monkeypatch: pytest.MonkeyPatch
-             ) -> Path:  # fmt: skip
-    """Copy the tiny warehouse and `CURRENT` under `data_root`, pin the driver to its id."""
+def pin_build(drv: Drv, build_id: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the driver to `build_id` (whose warehouse is `CURRENT` under the data root) and
+    record the driver's evidence rows again for it."""
     from tests.integration.harness import _swarm_run_env as e  # noqa: PLC0415
     from tests.unit.harness._blackboard_env import FakeWarehouse  # noqa: PLC0415
 
+    monkeypatch.setattr(e, "BUILD_ID", build_id)
+    drv.pool.warehouse = FakeWarehouse(build_id)
+    for team in ("t1", "t2"):
+        assert record_evidence(e._evidence(e.INCIDENT_SQL, {"team": team}, {"incidents": 7}))
+    sample = {"effort_cost_usd": 300, "confidence": 0.7}
+    assert record_evidence(e._evidence(e.FUNDING_SQL, {"candidate": "c1"}, sample))
+
+
+def pin_tiny(drv: Drv, data_root: Path, build: BuildHandle, monkeypatch: pytest.MonkeyPatch
+             ) -> Path:  # fmt: skip
+    """Copy the tiny warehouse and `CURRENT` under `data_root`, pin the driver to its id."""
     wh = data_root / "warehouse"
     wh.mkdir(exist_ok=True)
     copy = wh / build.warehouse.name
     shutil.copyfile(build.warehouse, copy)
     (wh / "CURRENT").write_text(build.build_id, encoding="ascii")
-    monkeypatch.setattr(e, "BUILD_ID", build.build_id)
-    drv.pool.warehouse = FakeWarehouse(build.build_id)
-    for team in ("t1", "t2"):  # the drv evidence again, now for the tiny build id
-        assert record_evidence(e._evidence(e.INCIDENT_SQL, {"team": team}, {"incidents": 7}))
-    sample = {"effort_cost_usd": 300, "confidence": 0.7}
-    assert record_evidence(e._evidence(e.FUNDING_SQL, {"candidate": "c1"}, sample))
+    pin_build(drv, build.build_id, monkeypatch)
     return copy
 
 
