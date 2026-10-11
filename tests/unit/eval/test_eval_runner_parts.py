@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +14,10 @@ import duckdb
 import pytest
 from tests.support.ops_store import OpsStoreHandle
 from tests.unit.eval import _runner_env as env
-from tests.unit.eval._golden_fixtures import ENTITIES_SQL, NUMERIC_SQL, T1_TEAM
+from tests.unit.eval._golden_fixtures import ENTITIES_SQL, NUMERIC_SQL, T1_TEAM, T5_TEAM
 from tests.unit.eval._runner_env import (
     AnswerChat,
+    FakeCtx,
     chat_q,
     lines,
     make_deps,
@@ -27,10 +29,14 @@ from tests.unit.eval._runner_env import (
 from herness.core import time as clock
 from herness.core.errors import FatalError, ModelUnavailable, NotFound
 from herness.core.ids import IdKind, new_id
+from herness.core.types import ReportDraft
+from herness.eval import _runner_question as qmod
 from herness.eval import _runner_support as support
 from herness.eval import runner
 from herness.eval.golden import load_suite
 from herness.eval.runner import EvalOptions, run_golden
+from herness.harness.swarm import RunResult
+from herness.harness.swarm.writer import draft_path
 from herness.store.ops import get_run
 
 pytestmark = pytest.mark.unit
@@ -220,3 +226,118 @@ def test_cv_t11_30_failure_marks_run_failed(
     row = get_run(run_dir.name)
     assert row is not None
     assert row.status == "failed"
+
+
+# --- fix round 1: heartbeats, cancel, resumed skeptic catch -------------------------------------
+
+
+def _bind(store: OpsStoreHandle, con: Any, **deps: Any) -> None:
+    runner._Binding.factory = None
+    runner.set_deps_factory(lambda c: make_deps(store.data_root, con, job=c, **deps))
+
+
+def test_cv_t11_30_heartbeats_between_and_during_questions(
+    runner_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T11-30 the job heartbeats before every question (graded count as the note) and
+    keeps heartbeating while a slow question is in flight (reviews run without the job)."""
+    monkeypatch.setattr(qmod, "HEARTBEAT_S", 0.02)
+    con = make_root(runner_store.data_root)
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01"), chat_q("G02")])
+    ctx = FakeCtx({"suite": str(suite), "profile": "local", "depth": "fast", "repeat": 1})
+    _bind(runner_store, con, chat=AnswerChat(delay_s=0.3))
+    try:
+        assert runner.handle_eval(ctx).status == "done"  # type: ignore[arg-type]
+    finally:
+        runner._Binding.factory = None
+    assert ctx.beats[0] == "eval graded 0"
+    assert ctx.beats[-1] == "eval graded 2"
+    assert ctx.beats.count("eval graded 0") > 3  # beats while G01 is in flight
+
+
+def test_cv_t11_30_cancel_closes_the_run(runner_store: OpsStoreHandle, tmp_path: Path) -> None:
+    """CV-T11-30 a cancel between questions closes the eval run `canceled` (not left
+    `running`); the outcome maps to exit 1. A preempt still yields."""
+    con = make_root(runner_store.data_root)
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01"), chat_q("G02")])
+    ctx = FakeCtx({"suite": str(suite), "profile": "local", "depth": "fast", "repeat": 1},
+                  yield_after=1)  # fmt: skip
+    ctx.stop_reason = "cancel"
+    _bind(runner_store, con)
+    try:
+        outcome = runner.handle_eval(ctx)  # type: ignore[arg-type]
+    finally:
+        runner._Binding.factory = None
+    assert outcome.status == "done"
+    assert outcome.result["canceled"] is True
+    assert runner.exit_code(outcome.model_dump()) == 1
+    row = get_run(str(outcome.result["run_id"]))
+    assert row is not None
+    assert row.status == "canceled"
+
+
+class _OrgSwarm:
+    """Fake swarm: an org run whose draft (under the data root, where the swarm writes it)
+    ranks the T5 confounder team first."""
+
+    def __init__(self, reports_root: Path) -> None:
+        self.reports_root, self.runs = reports_root, 0
+
+    async def start(self, req: Any, job: object = None) -> RunResult:
+        from tests.support.report_drafts import draft_dict, paragraph  # noqa: PLC0415
+
+        self.runs += 1
+        run_id = new_id(IdKind.RUN)
+        ref = {"id": "n1", "value": 2, "unit": "count", "query_id": env.NUMERIC_QID,
+               "column": "value", "row_key": None}  # fmt: skip
+        para = paragraph("Payments Core had [[n1]] priority one incidents.", numbers=[ref])
+        draft = ReportDraft.model_validate(draft_dict(
+            kind="org_review", recommendations=[], caveats=[],
+            sections=[{"id": "executive_summary", "title": "Summary", "paragraphs": [para]}],
+            ranked_entities=[{"rank": 1, "entity_type": "team", "entity_id": T5_TEAM}],
+        ))  # fmt: skip
+        path = draft_path(run_id, self.reports_root)
+        path.parent.mkdir(parents=True)
+        path.write_text(draft.model_dump_json(), encoding="utf-8")
+        return RunResult(run_id=run_id, status="done", draft_path=str(path),
+                         coverage=draft.coverage, dead_task_ids=[], token_usage={},
+                         cost_usd=Decimal(0))  # fmt: skip
+
+
+@pytest.mark.parametrize("draft_lost", [False, True])
+def test_cv_t11_30_resumed_run_keeps_skeptic_catch(
+    draft_lost: bool, runner_store: OpsStoreHandle, tmp_path: Path
+) -> None:
+    """CV-T11-30 a run that yields after O01 and resumes still evaluates `skeptic_catch`:
+    the org output is rebuilt from the stored draft and findings (T5 ranked first → False);
+    a lost draft is noted and fails the skeptic part instead of passing vacuously."""
+    con = make_root(runner_store.data_root)
+    review = {"numeric": {"reference_sql": NUMERIC_SQL, "unit": "count", "tolerance": {"abs": 0}}}
+    questions = [{"id": "O01", "pipeline": "org", "question": "Org review", "expected": review},
+                 chat_q("G01")]  # fmt: skip
+    suite = env.suite_file(tmp_path / "suite.yaml", questions)
+    payload = {"suite": str(suite), "profile": "local", "depth": "standard", "repeat": 1}
+    ctx = FakeCtx(payload, yield_after=1)
+    swarm = _OrgSwarm(runner_store.data_root / "reports")
+    _bind(runner_store, con, swarm=swarm)
+    try:
+        first = runner.handle_eval(ctx)  # type: ignore[arg-type]
+        assert first.status == "yield"
+        if draft_lost:
+            for draft in (runner_store.data_root / "reports").glob("run_*/draft.json"):
+                draft.unlink()
+        ctx.yield_after = None
+        second = runner.handle_eval(ctx)  # type: ignore[arg-type]
+    finally:
+        runner._Binding.factory = None
+    assert swarm.runs == 1  # O01 was not re-run
+    summary = json.loads((env_out(runner_store, second) / "summary.json").read_text("utf-8"))
+    assert summary["metrics"]["skeptic_catch"] is False
+    planted = next(r for r in summary["thresholds"] if r["check"] == "planted_truth")
+    assert planted["passed"] is False
+    missing = [n for n in summary["metrics"]["notes"] if n.startswith("org output missing")]
+    assert bool(missing) is draft_lost
+
+
+def env_out(store: OpsStoreHandle, outcome: Any) -> Path:
+    return store.data_root / "reports" / "eval" / str(outcome.result["run_id"])

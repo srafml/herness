@@ -25,6 +25,7 @@ from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
 from herness.core.types import MetricSample
 from herness.eval._runner_question import required_rubric_skipped
+from herness.eval.invoke import PipelineOutput, review_output
 from herness.eval.metrics import (
     EvalMetrics,
     ThresholdResult,
@@ -32,6 +33,7 @@ from herness.eval.metrics import (
     check_thresholds,
     skeptic_catch,
 )
+from herness.harness.swarm.writer import draft_path
 from herness.store.ops.core import run_write
 from herness.store.ops.metrics import record_metric_samples
 from herness.store.ops.runs import RunRow, get_run, insert_run, set_run_status, update_run_fields
@@ -44,7 +46,8 @@ if TYPE_CHECKING:
     from herness.eval.results import QuestionResult
     from herness.eval.settings import Thresholds
 
-__all__ = ["Outcome", "RunMeta", "finish_run", "insert_eval_run", "mark_failed", "reopen_run",
+__all__ = ["Outcome", "RunMeta", "cancel_run", "finish_run", "insert_eval_run", "mark_failed",
+           "reopen_run",
            "suite_label"]  # fmt: skip
 
 SUMMARY_SCHEMA: Final = 1
@@ -120,14 +123,48 @@ def mark_failed(run_id: str, now: datetime) -> None:
               op="eval_run_failed")  # fmt: skip
 
 
+def cancel_run(run_id: str, now: datetime) -> None:
+    """Close the row as `canceled` when the job was canceled between questions."""
+    run_write(lambda conn: set_run_status(conn, run_id, "canceled", _ACTIVE, now=now),
+              op="eval_run_canceled")  # fmt: skip
+
+
+def _org_outputs(
+    env: QuestionEnv, results: Sequence[QuestionResult], questions: Mapping[str, EvalQuestion]
+) -> tuple[list[PipelineOutput], list[str]]:
+    """The org review outputs of every graded org result: this process's, else rebuilt
+    from the run's stored draft and findings (a resumed run, F11-10); notes name the runs
+    whose output could not be rebuilt."""
+    here = {out.run_id: out for out in env.org_outputs}
+    run_ids = sorted({
+        r.pipeline_run_id for r in results
+        if r.pipeline_run_id and r.status != "error"
+        and (q := questions.get(r.id)) is not None and q.pipeline == "org"
+    })  # fmt: skip
+    outputs: list[PipelineOutput] = []
+    notes: list[str] = []
+    for rid in run_ids:
+        out = here.get(rid) or review_output(rid, draft_path(rid, env.reports_root))
+        if out.error is None:
+            outputs.append(out)
+        else:
+            notes.append(f"org output missing: {rid}")
+    return outputs, notes
+
+
 def _metrics(env: QuestionEnv, results: Sequence[QuestionResult],
              questions: Mapping[str, EvalQuestion]) -> EvalMetrics:  # fmt: skip
-    """F11-07 step 10: traces and run rows of the distinct pipeline runs, skeptic catch."""
+    """F11-07 step 10: traces and run rows of the distinct pipeline runs, skeptic catch.
+    An org result whose output is gone fails the skeptic part: it never passes vacuously."""
     run_ids = sorted({r.pipeline_run_id for r in results if r.pipeline_run_id is not None})
     traces = {rid: trace for rid in run_ids if (trace := env.trace(rid)) is not None}
     runs = {rid: row for rid in run_ids if (row := get_run(rid)) is not None}
-    skeptic = skeptic_catch(env.truth, env.org_outputs)
-    return aggregate_metrics(results, traces, runs, skeptic=skeptic, questions=questions)
+    outputs, missing = _org_outputs(env, results, questions)
+    skeptic = skeptic_catch(env.truth, outputs)
+    if missing and env.truth is not None:
+        skeptic = False
+    m = aggregate_metrics(results, traces, runs, skeptic=skeptic, questions=questions)
+    return m.model_copy(update={"notes": [*m.notes, *missing]}) if missing else m
 
 
 def finish_run(
