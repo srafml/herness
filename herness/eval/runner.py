@@ -48,7 +48,7 @@ from herness.eval._runner_payload import (
     exit_code,
     validate_payload,
 )
-from herness.eval._runner_question import QuestionEnv, execute
+from herness.eval._runner_question import PriorRunSeeder, QuestionEnv, execute
 from herness.eval._runner_support import (
     current_build,
     dataset_kind,
@@ -102,6 +102,7 @@ class EvalDeps:
     data_root: Path
     settings: EvalConfig
     repo_root: Path | None = None
+    seed_prior_run: PriorRunSeeder | None = None  # T11-33: `setup: seed_prior_run` (U11-49)
 
 
 @dataclass(frozen=True)
@@ -242,7 +243,8 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
         judge=deps.judge_for() if judge else None, chat=_lazy(lambda: deps.chat_for(profile)),
         swarm=_lazy(lambda: deps.swarm_for(profile)), traces_dir=deps.data_root / "traces",
         reports_root=deps.data_root / "reports", open_session=open_session_for(deps.clock),
-        names=name_index(con), numerals=numerals(),
+        names=name_index(con), numerals=numerals(), memory=deps.memory,
+        seeder=deps.seed_prior_run,
     )  # fmt: skip
     try:
         return _run(env, meta, selected, repeat, deps, finish)

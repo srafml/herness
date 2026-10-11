@@ -3,8 +3,9 @@
 Private sibling of `herness.eval.runner` (§2 module map). `run_question` runs the setup,
 `resolve`, the pipeline (chat per question, reviews through the repeat's `ReviewCache`),
 grading and `count_unsupported`, and returns the `QuestionResult`; it never raises for a
-question-level failure: a `SuiteError` becomes `suite_error`, anything else `error`.
-Its evidence reader, name index and traces come from `_runner_support`.
+question-level failure: a `SuiteError` becomes `suite_error`, anything else `error`. Its
+evidence reader, name index and traces come from `_runner_support`; `setup: seed_prior_run`
+uses the seeder injected through EvalDeps, once per run (T11-33 note, U11-66).
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 import duckdb
 
@@ -54,12 +55,15 @@ if TYPE_CHECKING:
     from herness.core.jobs import JobContext
     from herness.eval.judge import RubricJudge
     from herness.eval.truth import TruthManifest
+    from herness.harness.memory import MemoryStore
     from herness.harness.pipelines.chat import ChatService
     from herness.harness.swarm import Swarm
 
-__all__ = ["HEARTBEAT_S", "QuestionEnv", "execute", "required_rubric_skipped", "run_question"]
+__all__ = ["HEARTBEAT_S", "PriorRunSeeder", "QuestionEnv", "execute", "required_rubric_skipped",
+           "run_question"]  # fmt: skip
 
-SETUP_UNAVAILABLE: Final = "setup seed_prior_run is not available until T11-33"
+SETUP_NO_DEPS: Final = "setup seed_prior_run needs EvalDeps.memory and EvalDeps.seed_prior_run"
+SETUP_NO_TRUTH: Final = "setup seed_prior_run needs a synthetic build with truth"
 _PLACEHOLDER_RE: Final = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\}")
 _COUNTED: Final = {"retry": "retries", "fallback": "fallbacks", "repair": "repairs"}
 _REVIEW_KINDS: Final = {"funding": "funding_review", "org": "org_review"}
@@ -67,6 +71,13 @@ _SKIPPED_JUDGE: Final = frozenset({"judge_unavailable", "judge_egress_blocked"})
 HEARTBEAT_S: Final = 60.0  # well inside the supervisor stall timeout (1800 s)
 
 _log = get_logger("eval.runner")
+
+
+class PriorRunSeeder(Protocol):
+    """The T6 prior-run seeding of U11-49 (`tests.support.seed_ops.seed_prior_run`)."""
+
+    def __call__(self, memory: MemoryStore, truth: TruthManifest, *,
+                 warehouse: duckdb.DuckDBPyConnection, build_id: str) -> object: ...  # fmt: skip
 
 
 @dataclass
@@ -91,7 +102,11 @@ class QuestionEnv:
     references: dict[str, ReferenceResult] = field(default_factory=dict)
     traces: dict[str, Trace | None] = field(default_factory=dict)
     org_outputs: list[PipelineOutput] = field(default_factory=list)
+    memory: MemoryStore | None = None
+    seeder: PriorRunSeeder | None = None
+    seeded: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _setup_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def trace(self, run_id: str) -> Trace | None:
         """The run's trace events, read once (None when the file is missing)."""
@@ -101,14 +116,13 @@ class QuestionEnv:
             return self.traces[run_id]
 
 
-def run_question(
-    env: QuestionEnv, question: EvalQuestion, repeat: int, cache: ReviewCache
-) -> QuestionResult:
+def run_question(env: QuestionEnv, question: EvalQuestion, repeat: int,
+                 cache: ReviewCache) -> QuestionResult:  # fmt: skip
     """Setup, resolve, invoke, grade and count one question x repeat (F11-07 steps 5-7)."""
     base = _Base(question.id, repeat)
-    if question.setup == "seed_prior_run":
-        return _suite_error(env, base, SETUP_UNAVAILABLE)
     try:
+        if question.setup == "seed_prior_run":
+            _seed_prior_run(env)
         resolved = resolve(
             question, env.truth, env.con, build_id=env.build_id,
             dataset_kind=env.dataset_kind, cache=env.references,
@@ -135,6 +149,20 @@ def run_question(
                      error_type=type(exc).__name__)  # fmt: skip
         return base.result("error", error=exception_text(exc))
     return _from_output(env, base.with_ref(resolved), _status(checks), checks, out, unsupported)
+
+
+def _seed_prior_run(env: QuestionEnv) -> None:
+    """Step 5 setup: plant T6 once per run (U11-49); unavailable -> `SuiteError`."""
+    if env.memory is None or env.seeder is None:
+        raise SuiteError(SETUP_NO_DEPS)
+    if env.truth is None:
+        raise SuiteError(SETUP_NO_TRUTH)
+    with env._setup_lock:
+        if env.seeded:
+            return
+        env.seeder(env.memory, env.truth, warehouse=env.con, build_id=env.build_id)
+        env.seeded = True
+    _log.info("eval.setup.seeded", run_id=env.run_id, setup="seed_prior_run")
 
 
 @dataclass(frozen=True)
@@ -237,9 +265,7 @@ def _grade(env: QuestionEnv, resolved: ResolvedQuestion, out: PipelineOutput) ->
 
 def _status(checks: Sequence[GradeResult]) -> ResultStatus:
     graded = [c.status for c in checks if c.status != "skipped"]
-    if not graded:
-        return "skipped"
-    return "failed" if "failed" in graded else "passed"
+    return "skipped" if not graded else "failed" if "failed" in graded else "passed"
 
 
 def required_rubric_skipped(result: QuestionResult) -> bool:
@@ -313,8 +339,7 @@ class _Flight:
             self.job.heartbeat(f"eval graded {self.graded}")
 
     def settle(self, limit: int) -> None:
-        """Wait until at most `limit` questions are in flight, heartbeating every
-        `HEARTBEAT_S`; a question's exception propagates."""
+        """At most `limit` in flight, heartbeating every `HEARTBEAT_S`; errors propagate."""
         while len(self.inflight) > limit:
             done, self.inflight = wait(self.inflight, timeout=HEARTBEAT_S,
                                        return_when=FIRST_COMPLETED)  # fmt: skip
@@ -324,23 +349,17 @@ class _Flight:
             self.beat()
 
     def drain(self) -> None:
-        """After a question raised: wait for the rest in flight, heartbeating every
-        `HEARTBEAT_S` (their results are dropped; the first error propagates)."""
+        """After an error: wait out the rest in flight with heartbeats (results dropped)."""
         while self.inflight:
             _, self.inflight = wait(self.inflight, timeout=HEARTBEAT_S)
             self.beat()
 
 
 def execute(
-    env: QuestionEnv,
-    pending: Sequence[tuple[EvalQuestion, int]],
-    caches: Mapping[int, ReviewCache],
-    log: ResultsLog,
-    control: tuple[JobContext | None, int],
-) -> Literal["yield", "cancel"] | None:
-    """Run `pending` with at most `workers` in flight (step 9): heartbeat and poll
-    `should_yield` on the job thread before each question; `yield` or `cancel` (the job's
-    stop reason) when the job asked to stop, else None."""
+    env: QuestionEnv, pending: Sequence[tuple[EvalQuestion, int]],
+    caches: Mapping[int, ReviewCache], log: ResultsLog, control: tuple[JobContext | None, int],
+) -> Literal["yield", "cancel"] | None:  # fmt: skip
+    """At most `workers` in flight; heartbeat + `should_yield` before each; stop reason or None."""
     job, workers = control
     flight = _Flight(job)
     stop: Literal["yield", "cancel"] | None = None

@@ -286,7 +286,9 @@ def test_cv_t11_30_statuses_and_open_session(runner_store: OpsStoreHandle, tmp_p
     assert statuses == {"G01": "passed", "G02": "error", "G03": "suite_error",
                         "G04": "skipped", "G05": "suite_error", "G06": "skipped"}  # fmt: skip
     by_id = {r["id"]: r for r in lines(run.out_dir / "results.jsonl")}
-    assert by_id["G05"]["error"] == "SuiteError: setup seed_prior_run is not available until T11-33"
+    assert by_id["G05"]["error"] == (  # no memory in the deps (T11-33 hook)
+        "SuiteError: setup seed_prior_run needs EvalDeps.memory and EvalDeps.seed_prior_run"
+    )
     assert by_id["G03"]["error"] == "SuiteError: reference SQL rejected"
     assert by_id["G01"]["unsupported"]["unsupported"] == 0
     assert by_id["G02"]["error"].startswith("ModelUnavailable")
