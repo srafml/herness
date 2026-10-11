@@ -63,9 +63,12 @@ def period(*, key: str) -> str:
     return str(st.selectbox("Period", PERIODS, index=1, key=key))
 
 
-@st.cache_data(ttl=600, show_spinner=False)
 def metric_names(domain: str) -> tuple[str, ...]:
-    """Enabled catalog metrics of ``domain`` (``MetricDef.domain``), sorted."""
+    """Enabled catalog metrics of ``domain`` (``MetricDef.domain``), sorted.
+
+    ``load_catalog`` is memoised per process (T04-24), so no ``st.cache_data`` layer here: clearing
+    Streamlit caches no longer forces a reload.
+    """
     catalog = load_catalog()
     return tuple(n for n in catalog.names() if catalog.get(n).domain == domain)
 
