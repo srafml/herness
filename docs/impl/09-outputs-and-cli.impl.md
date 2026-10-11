@@ -98,6 +98,9 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/_cli/payloads.py` | Job payload builders (the sync payload is impl 01's `build_sync_payload`) | `pipeline_payload`, `review_request`, `parse_budget_usd`, `STAGE_ORDER` | L5 | none | 180 |
 | `herness/_cli/cmd_system.py` | `init`, `doctor`, `status`, `ui`, `worker`, `gpu` | `register` | L5 | `rich` | 300 |
 | `herness/_cli/doctor.py` | Doctor checks owned here plus spec 10 checks | `CheckResult`, `run_doctor` | L5 | none | 200 |
+| `herness/_cli/_init.py` | Private sibling of `cmd_system.py` (T09-22, budget split): the `init` steps (data folders, config templates from the checkout `config/` tree, `migrate()`; OI-04, OI-05) | `run_init`, `copy_templates`, `template_files`, `TEMPLATE_DIR`, `DATA_SUBDIRS` | L5 | none | 100 |
+| `herness/_cli/_status.py` | Private sibling of `cmd_system.py` (T09-22, budget split): the `status` reads and the CURRENT build reader shared with the doctor row `current_build` | `collect_status`, `current_build`, `dq_failures`, `BuildView`, `NO_CURRENT` | L5 | none | 120 |
+| `herness/_cli/_doctor_ext.py` | Private sibling of `doctor.py` (T09-22, budget split): the `startup_validation`, `sources` and spec 10 host rows (the latter through impl 10's `_config_dir` seam set to `--config-dir`) | `startup_validation`, `sources`, `host` | L5 | none | 90 |
 | `herness/_cli/cmd_data.py` | `sync`, `build`, `enrich`, `score`, `metrics list`, `pipeline` | `register` | L5 | none | 250 |
 | `herness/_cli/_job_cmds.py` | `--wait/--no-wait` and `--inline` options, the `--inline`/`--no-wait` usage check, start/follow and result printing of a job command; private sibling shared by `cmd_data.py` and `cmd_review.py` (T09-23, budget split) | `Wait`, `Inline`, `current_opts`, `wait_options`, `start_job`, `finish_job` | L5 | none | 90 |
 | `herness/_cli/cmd_review.py` | `report`, `review`, `resume`, `decide` | `register` | L5 | none | 330 |

@@ -244,7 +244,11 @@ def _register_groups(root: typer.Typer) -> None:
     from herness._cli import cmd_chat, cmd_data, cmd_review  # noqa: PLC0415 - lazy (BT09-07)
 
     scratch = typer.Typer()
-    # T09-22: cmd_system.register(scratch)
+    # --- T09-22 commands ---
+    from herness._cli import cmd_system  # noqa: PLC0415 - lazy (BT09-07)
+
+    cmd_system.register(scratch)
+    # --- end T09-22 commands ---
     cmd_data.register(scratch)  # T09-23
     cmd_review.register(scratch)  # T09-23
     # T09-24 commands
