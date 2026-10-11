@@ -4,7 +4,8 @@
 least-privilege tool list of a role (spec 05 §5.5 allow-lists, TH06-02) and `role_budget` its
 `TaskBudget` (§13 O06-01). `route_task` resolves the role spec, model role and client of a task
 (TH06-06 off-network detection, hybrid local fallback) and `map_agent_result` maps an
-`AgentResult` to `task.result`. `RunEnv`, `build_tool_context` and `build_hooks` live in the
+`AgentResult` to `task.result`; `AnsweredClients` shows the Writer a chain fallback to a local
+client (T06-29). `RunEnv`, `build_tool_context` and `build_hooks` live in the
 private sibling `_routing_ctx`, `build_task_input` (U06-141) in `_task_input`; both are
 re-exported here.
 """
@@ -12,7 +13,7 @@ re-exported here.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
@@ -27,7 +28,7 @@ from herness.harness.swarm._routing_ctx import RunEnv, build_hooks, build_tool_c
 from herness.harness.swarm._task_input import build_task_input
 
 if TYPE_CHECKING:
-    from herness.core.types import AgentResult
+    from herness.core.types import AgentResult, TraceEmitter
     from herness.harness.budget import RunBudget
     from herness.harness.llm.base import LLMClient
     from herness.harness.llm.registry import LLMRegistry
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BASE_MODEL_ROLE",
+    "AnsweredClients",
     "Route",
     "RunEnv",
     "build_hooks",
@@ -180,6 +182,35 @@ class Route:
     config: ClientConfig
     off_network: bool
     fallback_local: bool
+
+
+@dataclass(slots=True)
+class AnsweredClients:
+    """`TraceEmitter` over a task's tracer that keeps the `client` of every `llm_call` it
+    forwards, so the Writer sees a spec 08 chain fallback inside `run_agent` (U06-115 step 8
+    banner `hybrid_fallback`, §6 "Hybrid egress refused"; T06-29 gap C)."""
+
+    inner: TraceEmitter
+    clients: set[str] = field(default_factory=set)
+
+    @property
+    def run_id(self) -> str:
+        return self.inner.run_id
+
+    @property
+    def task_id(self) -> str | None:
+        return self.inner.task_id
+
+    def emit(self, type: str, /, **fields: object) -> str:  # noqa: A002 - protocol name
+        client = fields.get("client")
+        if type == "llm_call" and isinstance(client, str):
+            self.clients.add(client)
+        return self.inner.emit(type, **fields)
+
+    def fell_back_local(self, route: Route, llms: LLMRegistry) -> bool:
+        """True when an off-network route was answered by a local client (the chain fell
+        back, for example after `EgressBlocked`); never for a local route."""
+        return route.off_network and any(not _off_network(llms.config(c)) for c in self.clients)
 
 
 def _off_network(config: ClientConfig) -> bool:

@@ -52,12 +52,6 @@ def _trace(drv: Drv, run_id: str) -> list[dict[str, Any]]:
 
 API: Final = "https://api.anthropic.com/v1/messages"
 ENTITY_ID: Final = re.compile(r"(?<![A-Za-z0-9_])t[12](?![A-Za-z0-9_])")
-BANNER_GAP = (
-    "product gap T06-29 (gap C): the Writer sets banner hybrid_fallback only for the cost-cap"
-    " route fallback (route.fallback_local, writer.py); a spec 08 chain fallback after"
-    " EgressBlocked inside run_agent is not reported to the Writer, so the draft has no banner"
-    " (impl 06 §6 table 'Hybrid egress refused', design T13)"
-)
 
 
 @dataclass
@@ -221,12 +215,11 @@ def test_st06_06_planted_pii_is_blocked_and_the_writer_falls_back_locally(
     assert [rec.target_id for rec in draft.recommendations] == ["c1"]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=BANNER_GAP)
 def test_st06_06_planted_pii_fallback_draft_has_hybrid_fallback_banner(
     drv: Drv, hybrid: Hybrid, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ST06-06 (T13) after the egress refusal and local fallback the draft carries banner
-    `hybrid_fallback`."""
+    `hybrid_fallback` (T06-29 gap C)."""
     draft = _blocked_run(drv, hybrid, monkeypatch)
     assert "hybrid_fallback" in draft.banners
 

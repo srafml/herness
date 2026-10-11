@@ -1,5 +1,5 @@
-"""UT06-63, UT06-65-UT06-67, UT06-92, UT06-97, UT06-99: result mapping, routing, tool context,
-hooks, task input; the T06-29 cost budget and bound task tracer."""
+"""UT06-63, UT06-65-UT06-67, UT06-92, UT06-97-UT06-99: result mapping, routing, tool context,
+hooks, task input; the T06-29 cost budget, fallback watch and bound task tracer."""
 
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ from herness.harness.pipelines.settings import PipelinesConfig, resolve_knobs
 from herness.harness.roles.base import get_role
 from herness.harness.swarm import _routing_ctx, routing
 from herness.harness.swarm.routing import (
+    AnsweredClients,
     Route,
     RunEnv,
     build_hooks,
@@ -673,6 +674,46 @@ def test_ut06_97_no_cost_cap_or_cap_spent_leaves_zero() -> None:
         env = _env(_run(profile=profile), reg)
         ctx = build_tool_context(env, _spec("writer"), opus, task_tools={}, ledger=ledger, now=NOW)
         assert ctx.budgets.max_cost_usd == 0
+
+
+# --- UT06-98 (T06-29 gap C)
+
+
+def _answered(*clients: str) -> tuple[AnsweredClients, RecordingTracer]:
+    inner = RecordingTracer("run_x", task_id="task_w")
+    watch = AnsweredClients(inner)
+    for client in clients:
+        watch.emit("llm_call", step=0, client=client, model="m")
+    watch.emit("tool_call", step=0, client="not-a-model-call")
+    return watch, inner
+
+
+def test_ut06_98_chain_fallback_to_local_is_seen() -> None:
+    """UT06-98 the Writer's `AnsweredClients` forwards every event to the task tracer and
+    reports a local fallback when an off-network route was answered by a local client (the
+    spec 08 chain after `EgressBlocked`), so the draft gets banner `hybrid_fallback` (T06-29
+    gap C)."""
+    reg = _hybrid()
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    watch, inner = _answered("claude-opus", "local-30b")
+    assert [(kind, f.get("client")) for kind, _span, f in inner.events] == [
+        ("llm_call", "claude-opus"), ("llm_call", "local-30b"), ("tool_call", "not-a-model-call"),
+    ]  # fmt: skip
+    assert (watch.run_id, watch.task_id) == ("run_x", "task_w")
+    assert watch.clients == {"claude-opus", "local-30b"}
+    assert watch.fell_back_local(opus, reg) is True
+
+
+def test_ut06_98_no_fallback_no_banner() -> None:
+    """UT06-98 an off-network route answered only off-network, a local route (a plain local
+    run, or the cost-cap `fallback_local` route) and no call at all report no chain
+    fallback."""
+    reg = _hybrid()
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    local = _route(reg, "local-30b", model_role="writer")
+    assert _answered("claude-opus")[0].fell_back_local(opus, reg) is False
+    assert _answered("local-30b")[0].fell_back_local(local, reg) is False
+    assert _answered()[0].fell_back_local(opus, reg) is False
 
 
 # --- UT06-99 (T06-29 gap D)
