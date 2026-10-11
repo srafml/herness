@@ -67,6 +67,7 @@ class Thresholds(_Model):
     latency_p95_ratio_max: _PosFloat
     cost_ratio_max: _PosFloat
     bench_regression_max: _NonNegFloat
+    latency_baseline_floor_s: _PosFloat = 1.0  # below it the ratio is skipped (T11-32 note)
 
 
 class ClassifierSettings(_Model):

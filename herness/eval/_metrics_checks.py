@@ -120,10 +120,13 @@ def latency_check(
     fails: list[str] = []
     notes: list[str] = []
     limits: list[float] = []
+    base = None if baseline is None else baseline.chat_latency_p95_s
     if baseline is None:
         notes.append(_NO_BASELINE)
-    elif baseline.chat_latency_p95_s is not None:
-        limits.append(settings.latency_p95_ratio_max * baseline.chat_latency_p95_s)
+    elif base is not None and base < settings.latency_baseline_floor_s:
+        notes.append("baseline latency below floor")  # a mock baseline (T11-32 note)
+    elif base is not None:
+        limits.append(settings.latency_p95_ratio_max * base)
     if profile == "local" and depth == "standard":
         limits.append(_CHAT_P95_LOCAL_STANDARD_S)
     limit = min(limits) if limits else None
