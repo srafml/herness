@@ -4,7 +4,8 @@
 spec 02 pipeline; later calls, sessions and concurrent processes reuse it (T11-17 spec note):
 
 1. Slot `root = <cache>/<seed>-<scale>-<fingerprint[:12]>`. The fingerprint (SHA-256 over
-   `GENERATOR_VERSION`, the params hash, `FIXTURE_REV` and the sorted path/content hashes of
+   `GENERATOR_VERSION`, the params hash, `FIXTURE_REV`, the pinned build date and the sorted
+   path/content hashes of
    `herness/model/sql/*.sql` and `*.jinja`, `config/*.yaml`, `config/profiles/synth.yaml`,
    `tests/fixtures/llm_scripts/build/*.yaml`
    under `repo_root`) keys the slot, so another worktree builds beside it and never clears a
@@ -17,6 +18,8 @@ spec 02 pipeline; later calls, sessions and concurrent processes reuse it (T11-1
    `synth` on a `config_tree` tree with the shipped `mappings.yaml` (`paths.data =
    <root>/data`, `HERNESS_SYNTH_CONFIG = <root>/synth_mappings.yaml`), migrate the ops store,
    enqueue `build_pipeline` with every stage and `run_inline` it; write the fingerprint file.
+   The whole section runs with `herness.core.time.now` pinned to the synth end + 1 day
+   (`_build_clock`, T11-39), so a build is the same on any day; the date is fingerprinted.
    Enrichment and cluster naming run for real on the loopback stubs of `_build_stubs`
    (T11-34): started for this build only, stopped in `finally`, never on a reuse.
 
@@ -51,6 +54,7 @@ import pytest
 from pydantic import BaseModel
 from tests.support import _build_cache as cache
 from tests.support._build_cache import BuildFixtureError, Scale
+from tests.support._build_clock import pinned_clock
 from tests.support._build_dirs import clear_build_outputs, private_dir, safe_rmtree
 from tests.support._build_stubs import (
     STUB_SECRETS,
@@ -222,7 +226,7 @@ def ensure_build(
     print_ = cache.fingerprint(repo_root, phash)
     root = private_dir(_slot(base, seed, scale, print_))  # == build_root(...), hashed once
     data_root = root / "data"
-    with cache.build_lock(root):
+    with cache.build_lock(root), pinned_clock():  # enrichment windows are clock-relative
         if not cache.marker_current(root, phash):
             cache.generate_root(seed, scale, root)
         build_id = cache.reusable(data_root, print_)

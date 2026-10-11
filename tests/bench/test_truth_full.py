@@ -268,13 +268,6 @@ def test_bt11_05_small_t3_link_recall(small_records: Mapping[str, BenchRecord]) 
     assert not _failed(small_records, ["t3_link_recall"])
 
 
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=True,
-    reason="product gap T11-34 fixture: the HashEncoder stand-in merges 99k incidents into two "
-    "clusters whose cluster_fix candidates (ranks 1, 2) outrank the T2 epic (rank 3); the "
-    "full-scale threshold (rank 1) is unchanged",
-)
 def test_bt11_05_small_t2_epic_funding_rank_1(small_records: Mapping[str, BenchRecord]) -> None:
     """BT11-05 small scale: the T2 epic has score.funding rank 1."""
     assert not _failed(small_records, ["t2_funding_rank"])
