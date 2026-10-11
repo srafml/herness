@@ -133,7 +133,7 @@ def test_cv_t09_24_eval_cli_threshold_fail_exit_14(admin_cli: Cli) -> None:
 def test_it09_15_eval_gate_failed_exit_14(admin_cli: Cli) -> None:
     """IT09-15 ``herness --json eval`` whose gate fails (a ``suite_error`` question): exit 14
     (R-46, U09-87), ``ok`` false with the job data; the envelope is valid ``cli/1``
-    (``tests/fixtures/cli/cli1.schema.json``, IT09-16) and ``error`` stays null."""
+    (``tests/fixtures/cli/cli1.schema.json``) and ``error`` stays null."""
     env = admin_cli.env
     bad_sql = question("G05", expected={"numeric": {
         "reference_sql": "SELECT n FROM core.missing_table", "unit": "count"}})  # fmt: skip

@@ -1,4 +1,7 @@
-"""UT09-111: the ``org.coverage`` named query (T09-15b; design 04 §5.8 step 7 coverage)."""
+"""UT09-114: the ``org.coverage`` named query (T09-15b; design 04 §5.8 step 7 coverage).
+
+The row was a second UT09-111 in impl 09 §11.1, renumbered by T09-26.
+"""
 
 from __future__ import annotations
 
@@ -44,10 +47,10 @@ def planted(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return data
 
 
-def test_ut09_111_org_coverage_is_covered_weight_fraction(
+def test_ut09_114_org_coverage_is_covered_weight_fraction(
     monkeypatch: pytest.MonkeyPatch, planted: Path
 ) -> None:
-    """UT09-111 coverage = sum of w over non-NULL z_score rows / sum of recorded weights."""
+    """UT09-114 coverage = sum of w over non-NULL z_score rows / sum of recorded weights."""
     queries = wh.load_named_queries(QUERIES_FILE, page_row_limit=5000)
     services = wh_services(planted, queries=queries)
     monkeypatch.setattr(bootstrap, "get_services", lambda: services)

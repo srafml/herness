@@ -126,7 +126,7 @@ def test_st09_14_double_submit_second_refused(env: SimpleNamespace) -> None:
     """ST09-14 a second submit while the turn is in flight: refused, no second user row.
 
     The page disables the input of a session in flight; ``run_turn``'s own guard (the warning)
-    is UT09-97.
+    has its own unit test in ``tests/unit/app``.
     """
     env.services.chat.scripts = [all_kinds()]
     at, session_id = open_chat()
