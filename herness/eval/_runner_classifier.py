@@ -19,11 +19,12 @@ from typing import TYPE_CHECKING, Any, Final
 
 from herness.core import time as clock
 from herness.core.config import get_config
+from herness.core.errors import ConfigError
 from herness.core.ids import IdKind, new_id
 from herness.core.logging import bind_ids, get_logger
 from herness.core.types import JobOutcome
 from herness.eval._runner_finish import (
-    _CODE_DIR,
+    CODE_DIR,
     SUMMARY_SCHEMA,
     RunMeta,
     insert_eval_run,
@@ -32,7 +33,7 @@ from herness.eval._runner_finish import (
 )
 from herness.eval._runner_payload import CLASSIFIER_SUITE, EXIT_GATE, EXIT_OK
 from herness.eval._runner_support import current_build, dataset_kind
-from herness.eval.classifier import ClassifierReport, default_deciders, run_classifier
+from herness.eval.classifier import ClassifierReport, classifier_inputs, run_classifier
 from herness.eval.metrics import EvalMetrics
 from herness.eval.report import write_report
 from herness.eval.truth import load_truth, truth_dir_for
@@ -49,6 +50,8 @@ if TYPE_CHECKING:
 __all__ = ["classifier_outcome"]
 
 _ACTIVE: Final = frozenset({"running"})
+_GOLDEN_ONLY: Final = ("baseline", "set_baseline", "compare_profile", "ids", "tags",
+                       "mock_llm_dir", "resume_run_id")  # fmt: skip
 
 _log = get_logger("eval.runner")
 
@@ -75,7 +78,7 @@ def _summary(
         "schema": SUMMARY_SCHEMA, "run_id": meta.run_id, "profile": meta.profile,
         "depth": meta.depth, "build_id": meta.build_id, "dataset_kind": meta.dataset_kind,
         "dataset_seed": meta.dataset_seed, "dataset_scale": meta.dataset_scale,
-        "git_sha": git_sha(env=os.environ, repo_dir=_CODE_DIR),
+        "git_sha": git_sha(env=os.environ, repo_dir=CODE_DIR),
         "config_hash": run_config_hash(meta.run_id), "suite": CLASSIFIER_SUITE,
         "suite_version": None, "suite_sha256": meta.suite_sha256, "judge_model": None,
         "judge_prompt_sha256": None, "mock": False, "baseline": None, "compare_profile": None,
@@ -84,19 +87,29 @@ def _summary(
     }  # fmt: skip
 
 
+def _refuse_golden_options(payload: EvalPayload) -> None:
+    """`ConfigError` naming (never echoing) the golden-only options set on a classifier job."""
+    names = [name for name in _GOLDEN_ONLY if getattr(payload, name) not in (None, [])]
+    if names:
+        msg = f"options not allowed with --suite classifier: {', '.join(names)}"
+        raise ConfigError(msg)
+
+
 def classifier_outcome(payload: EvalPayload, deps: EvalDeps) -> JobOutcome:
     """Run the classifier eval of `--suite classifier` (U11-68 step 3, F11-09)."""
+    _refuse_golden_options(payload)
     run_id, started = new_id(IdKind.RUN), deps.clock()
     build_id = current_build(deps.data_root)
     con = deps.warehouse_for(build_id)
     kind = dataset_kind(con)
     truth_dir = truth_dir_for(deps.data_root) if kind == "synthetic" else None
     truth = None if truth_dir is None else load_truth(truth_dir)
-    deciders = default_deciders()
+    inputs = classifier_inputs(get_config(), deps.data_root)  # the run's one config read
+    deciders = list(inputs.deciders)
     with bind_ids(run_id=run_id):
         report = run_classifier(
-            get_config().decisions.question_set_version, deciders, data_root=deps.data_root,
-            warehouse=con, truth_dir=truth_dir, settings=deps.settings.classifier,
+            inputs.questions.version, deciders, data_root=deps.data_root, warehouse=con,
+            truth_dir=truth_dir, settings=deps.settings.classifier, inputs=inputs,
         )  # fmt: skip
     extra = _classifier_meta(report, deciders)
     meta = RunMeta(

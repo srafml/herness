@@ -121,11 +121,15 @@ def _within_one(pred: np.ndarray, labels: np.ndarray, _conf: np.ndarray) -> floa
     return float(np.mean(np.abs(pred - labels) <= 1))
 
 
-def _ece(pred: np.ndarray, labels: np.ndarray, conf: np.ndarray) -> float:
+def _ece(pred: np.ndarray, labels: np.ndarray, conf: np.ndarray) -> float | None:
     """Top-label ECE of (confidence, correct) through impl 03's `ece`: column 0 holds the
-    confidence, so the argmax is column 0 and label 0 means correct."""
-    top = np.column_stack([conf, np.zeros_like(conf)])
-    return ece(top, np.where(pred == labels, 0, 1), N_BINS)
+    confidence, so the argmax is column 0 and label 0 means correct. Rows without a
+    confidence (NaN) are left out; None when none has one."""
+    known = ~np.isnan(conf)
+    if not known.any():
+        return None
+    top = np.column_stack([conf[known], np.zeros(int(known.sum()))])
+    return ece(top, np.where(pred[known] == labels[known], 0, 1), N_BINS)
 
 
 def _metric_fns(qtype: QuestionType, *, with_conf: bool) -> dict[str, _MetricFn]:
@@ -191,12 +195,14 @@ def _table(
         "labels": list(space),
         "confusion": _confusion(pred, labels, len(space)),
     }
-    if with_conf:
-        covered = conf >= q.threshold
+    known = ~np.isnan(conf)  # confidence metrics only over rows that have one
+    if with_conf and known.any():
+        p, g, c = pred[known], labels[known], conf[known]
+        covered = c >= q.threshold
         out |= {
-            "reliability": _reliability(pred, labels, conf),
+            "reliability": _reliability(p, g, c),
             "coverage_at_threshold": float(np.mean(covered)),
-            "accuracy_at_threshold": float(np.mean(pred[covered] == labels[covered]))
+            "accuracy_at_threshold": float(np.mean(p[covered] == g[covered]))
             if covered.any()
             else None,
         }
@@ -231,8 +237,9 @@ def hard_metrics(  # noqa: PLR0913 - the answers plus the decider and bootstrap 
     q: Question, space: Sequence[str], pred: np.ndarray, labels: np.ndarray,
     conf: np.ndarray | None, *, version: str | None, rng: np.random.Generator, resamples: int,
 ) -> DeciderMetrics:  # fmt: skip
-    """Hard answers against gold or truth; `conf` (stored top-label probabilities) adds ECE,
-    reliability bins and coverage at the question threshold."""
+    """Hard answers against gold or truth; `conf` (stored top-label probabilities, NaN where
+    none was stored) adds ECE, reliability bins and coverage at the question threshold over
+    the rows that have one; accuracy, F1 and the confusion matrix use every row."""
     if len(labels) == 0:
         return not_scored("absent", version=version)
     with_conf = conf is not None

@@ -10,11 +10,10 @@ stays in `classifier.json`.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from herness.eval._report_compare import fmt, md_table
+from herness.eval._report_compare import fmt, md_code, md_table
 
 if TYPE_CHECKING:
     from herness.eval._classifier_metrics import DeciderMetrics
@@ -70,34 +69,29 @@ def classifier_view(report: ClassifierReport) -> dict[str, Any]:
     }
 
 
-def _code(value: str) -> str:
-    """`value` as an inline code span, so stored text is never read as markup."""
-    longest = max((len(run) for run in re.findall(r"`+", value)), default=0)
-    ticks = "`" * (longest + 1)
-    pad = " " if longest else ""
-    return f"{ticks}{pad}{value}{pad}{ticks}"
-
-
 def classifier_lines(view: Mapping[str, Any]) -> list[str]:
     """The classifier section in Markdown (level-2 heading, as the report's sections)."""
     verdict = "passed" if view["passed"] else "FAILED"
     out = ["## Classifier", "",
-           f"Laya {_code(view['version'])} on question set "
-           f"{_code(view['question_set_version'])}: gate cross-check {verdict}.", "",
+           f"Laya {md_code(view['version'])} on question set "
+           f"{md_code(view['question_set_version'])}: gate cross-check {verdict}.", "",
            "### Gate checks", ""]  # fmt: skip
     out += md_table(
         ("Check", "Question", "Metric", "Stored", "Recomputed", "Passed", "Detail"),
-        [(c, _code(q), m, s, r, fmt(ok), d) for c, q, m, s, r, ok, d in view["checks"]],
+        [
+            (*map(md_code, (c, q, m, s, r)), fmt(ok), md_code(d))
+            for c, q, m, s, r, ok, d in view["checks"]
+        ],  # every text cell: no inline HTML
     )
     out += ["### Deciders", ""]
     out += md_table(
         ("Decider", "Question", "Status", "Version", *view["head"]),
-        [(d, _code(q), s, _code(v), *rest) for d, q, s, v, *rest in view["deciders"]],
+        [(d, md_code(q), s, md_code(v), *rest) for d, q, s, v, *rest in view["deciders"]],
     )
     if view["synthetic"] is not None:
         out += ["### Synthetic truth check (informational)", ""]
         out += md_table(
             ("Question", "Status", *view["head"]),
-            [(_code(q), *rest) for q, *rest in view["synthetic"]],
+            [(md_code(q), *rest) for q, *rest in view["synthetic"]],
         )
     return out

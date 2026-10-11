@@ -46,7 +46,7 @@ from herness.eval.classifier import (
     ClassifierReport,
     DeciderMetrics,
     GateMetricCheck,
-    default_deciders,
+    classifier_inputs,
     run_classifier,
 )
 from herness.eval.metrics import EvalMetrics
@@ -138,6 +138,11 @@ def test_cv_t11_35_calibration_file_temperature_checked(classifier_env: Classifi
     report = _run(classifier_env)
     failed = [(c.question, c.detail) for c in report.gate_check if not c.passed]
     assert failed == [("change_caused", "no calibration.json entry"), ("root_cause", "")]
+    rc = next(c for c in report.gate_check if c.check == "calibration" and not c.passed
+              and c.question == "root_cause")  # fmt: skip
+    stored_t = classifier_env.eval_doc()["questions"]["root_cause"]["laya"]["temperature"]
+    assert rc.stored == stored_t  # eval.json, as every other check
+    assert rc.recomputed == pytest.approx(stored_t + 0.05)  # calibration.json
 
 
 def test_cv_t11_35_accepted_question_criteria(classifier_env: ClassifierEnv) -> None:
@@ -313,15 +318,29 @@ def test_cv_t11_35_human_insufficient_and_ok(classifier_env: ClassifierEnv) -> N
     assert sum(map(sum, cc.confusion)) == 40
 
 
-def test_cv_t11_35_default_deciders(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CV-T11-35 step 5 deciders: jev only when enabled."""
-    base = ["laya", "openjev", "llm", "ensemble", "human"]
-    for enabled, expected in ((False, base), (True, [*base[:2], "jev", *base[2:]])):
-        jev = types.SimpleNamespace(enabled=enabled)
-        cfg = types.SimpleNamespace(models=types.SimpleNamespace(
-            deciders=types.SimpleNamespace(jev=jev)))  # fmt: skip
-        monkeypatch.setattr(classifier, "get_config", lambda cfg=cfg: cfg)
-        assert default_deciders() == expected
+def test_cv_t11_35_classifier_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CV-T11-35 the run's config values (question set, paths, step 5 deciders with jev only
+    when enabled) come from one config object; `run_classifier` with `inputs` never reads
+    the config itself."""
+    base = ("laya", "openjev", "llm", "ensemble", "human")
+    for enabled, expected in ((False, base), (True, (*base[:2], "jev", *base[2:]))):
+        laya = types.SimpleNamespace(current_file="data/models/laya/CURRENT")
+        deciders = types.SimpleNamespace(jev=types.SimpleNamespace(enabled=enabled), laya=laya)
+        cfg = types.SimpleNamespace(decisions=fx.decisions(),
+                                    models=types.SimpleNamespace(deciders=deciders))  # fmt: skip
+        inputs = classifier_inputs(cfg, tmp_path)  # type: ignore[arg-type]
+        assert inputs.deciders == expected
+        assert inputs.questions.version == QSV
+        assert inputs.paths.laya_current() == (tmp_path / "models/laya/CURRENT").resolve()
+
+    def no_config() -> None:
+        msg = "config read"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(classifier, "get_config", no_config)
+    with pytest.raises(ConfigError, match="laya CURRENT"):
+        run_classifier(QSV, ["laya"], data_root=tmp_path, warehouse=None, truth_dir=None,
+                       settings=FAST, inputs=classifier_inputs(cfg, tmp_path))  # type: ignore[arg-type]  # fmt: skip
 
 
 # --- metric helpers -----------------------------------------------------------------------------
@@ -422,6 +441,12 @@ def test_cv_t11_35_synthetic_metrics_join_and_missing_table() -> None:
     assert set(out) == {"q_bool"}
     assert (out["q_bool"].n, out["q_bool"].accuracy) == (40, 0.75)
     assert out["q_bool"].coverage_at_threshold == 1.0
+    con.execute("UPDATE enrich.decision SET probability = NULL WHERE record_id IN ('r1', 'r2')")
+    con.execute("UPDATE enrich.decision SET probability = 0.1 WHERE record_id = 'r3'")
+    nulls = dec.synthetic_metrics(qs, qs.version, con, planted, sample=100, boot=boot)["q_bool"]
+    assert (nulls.n, nulls.accuracy) == (40, 0.75)  # every row in accuracy and F1
+    assert sum(b.n for b in nulls.reliability) == 38  # null probabilities left out, not 0.0
+    assert nulls.coverage_at_threshold == pytest.approx(37 / 38)
     empty = dec.synthetic_metrics(qs, qs.version, duckdb.connect(), planted, sample=100, boot=boot)
     assert empty["q_bool"].status == "absent"
 
@@ -442,7 +467,7 @@ def test_cv_t11_35_truth_labels_reader(tmp_path: Path) -> None:
 
 def _attack_report() -> ClassifierReport:
     check = GateMetricCheck(check="metric", passed=False, question=ATTACK, metric="accuracy",
-                            stored=0.5, recomputed=0.4, detail=ATTACK)  # fmt: skip
+                            stored=ATTACK, recomputed=0.4, detail=ATTACK)  # fmt: skip
     ok = DeciderMetrics(status="ok", decider_version=ATTACK, n=3, accuracy=0.5,
                         ci={"accuracy": (0.25, 0.75)})  # fmt: skip
     return ClassifierReport(version="laya-20261004-1", question_set_version="qs-2026-10-01.1",
@@ -459,6 +484,7 @@ def test_cv_t11_35_report_section_is_escaped(tmp_path: Path) -> None:
     md = (out / "report.md").read_text(encoding="utf-8")
     html = (out / "report.html").read_text(encoding="utf-8")
     assert "`` <script>alert(1)</script>\\|`x` ``" in md
+    assert md.count("<script>") == md.count("`` <script>")  # only inside code spans
     assert "gate cross-check FAILED" in md
     assert "### Synthetic truth check (informational)" in md
     assert "0.5 [0.25, 0.75]" in md
@@ -525,3 +551,24 @@ def test_cv_t11_35_handler_needs_a_build(
     runner.set_deps_factory(lambda c: make_deps(runner_store.data_root, con, job=c))
     with pytest.raises(ConfigError, match="current build"):
         runner.handle_eval(FakeCtx({"suite": "classifier", "profile": "local", "repeat": 1}))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("extra", "names"),
+    [
+        ({"ids": ["G01"], "baseline": "secret-name"}, "baseline, ids"),
+        ({"set_baseline": "x", "compare_profile": "hybrid"}, "set_baseline, compare_profile"),
+        ({"tags": ["t"], "mock_llm_dir": "m", "resume_run_id": "run_01M4M002341HCJCEY2D9DSJFH7"},
+         "tags, mock_llm_dir, resume_run_id"),
+    ],
+)  # fmt: skip
+def test_cv_t11_35_golden_only_options_refused(
+    classifier_env: ClassifierEnv, extra: dict[str, Any], names: str
+) -> None:
+    """CV-T11-35 a classifier payload with golden-only options is `ConfigError` naming the
+    fields, never their values; no run row is written."""
+    with pytest.raises(ConfigError) as caught:
+        classifier_env.handle(**extra)
+    assert f"options not allowed with --suite classifier: {names}" in str(caught.value)
+    assert "secret-name" not in str(caught.value)
+    assert read_all("SELECT run_id FROM run WHERE kind = 'eval'", ()) == []

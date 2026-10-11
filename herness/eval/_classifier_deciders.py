@@ -201,7 +201,7 @@ def _stratified(strata: Sequence[str], total: int, rng: np.random.Generator) -> 
 
 def _decisions(
     warehouse: duckdb.DuckDBPyConnection, qsv: str
-) -> dict[tuple[str, str], tuple[str, float]]:
+) -> dict[tuple[str, str], tuple[str, float | None]]:
     """(record_id, question) -> (answer, probability) of the stored decisions."""
     cursor = warehouse.cursor()
     try:
@@ -210,7 +210,8 @@ def _decisions(
         return {}
     finally:
         cursor.close()
-    return {(str(r[0]), str(r[1])): (str(r[2]), float(r[3] or 0.0)) for r in rows}
+    return {(str(r[0]), str(r[1])): (str(r[2]), None if r[3] is None else float(r[3]))
+            for r in rows}  # fmt: skip
 
 
 def synthetic_metrics(
@@ -233,7 +234,7 @@ def synthetic_metrics(
         space = label_space(q, [a for t, (d, _) in picked for a in (t, d)])
         labels = np.array([space.index(t) for t, _ in picked], dtype=np.int64)
         pred = np.array([space.index(d) for _, (d, _) in picked], dtype=np.int64)
-        conf = np.array([p for _, (_, p) in picked], dtype=np.float64)
+        conf = np.array([np.nan if p is None else p for _, (_, p) in picked], dtype=np.float64)
         out[q.id] = hard_metrics(q, space, pred, labels, conf, version=None, rng=boot.rng,
                                  resamples=boot.resamples)  # fmt: skip
     return out
