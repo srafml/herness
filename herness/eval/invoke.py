@@ -89,15 +89,18 @@ def invoke_chat(
     mode: ChatMode,
     now: Callable[[], float],
     name_index: Mapping[str, str] | None = None,
+    open_session: Callable[[str], str] | None = None,
 ) -> PipelineOutput:
-    """One chat turn in a fresh `eval_` session (U11-62); `name_index` (display name →
-    entity id) yields `ranked_ids` via `chat_entity_ids`."""
+    """One chat turn in a fresh session (U11-62); `name_index` (display name → entity id)
+    yields `ranked_ids` via `chat_entity_ids`. `open_session(text)` (the U11-62 amendment,
+    supplied by the eval runner) creates the `ses_` session holding the redacted user message
+    the real `ChatService` answers; without it the session id is `eval_<ulid>`."""
     started = now()
-    session_id = "eval_" + new_ulid()
     answer: ChatAnswer | None = None
     run_id = ""
     error: str | None = None
     try:
+        session_id = "eval_" + new_ulid() if open_session is None else open_session(text)
         for event in chat.answer(session_id, text, EVAL_USER_REF, mode):
             if isinstance(event, FinalEvent):
                 answer, run_id = event.answer, event.run_id
