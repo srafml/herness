@@ -58,6 +58,7 @@ EXPECTED_FAILED: Final = {
     "G10": "T11-30: cluster labels are not in the name index; T11-17: two planted clusters "
     "cannot meet topk_contains:5:4",
     "F03": "static script: the Writer cannot cite a run-time finding id, so no number",
+    "F05": "static script: the Writer cannot cite the seeded epics' outcomes, so no must_mention",
     "O04": "static script: the Writer cannot name the T5 team",
     "O06": "static script: the Writer cannot cite a run-time finding id, so no trend_slope",
 }

@@ -31,11 +31,13 @@ from typing import Any, Final
 
 import duckdb
 import keyring
+from tests.support import seed_ops
 from tests.support.dispatch_standin import use_test_config
 from tests.support.fake_keyring import MemoryKeyring
 from tests.support.metrics_synth import SynthEnv, generate_root, release
 from tests.support.metrics_synth import scored_build as _scored_build
 from tests.unit.eval._runner_env import FakeCtx
+from tests.unit.harness.memory._write_env import FakeEmbed
 
 from herness.core import config as herness_config
 from herness.core import redact as r
@@ -165,7 +167,7 @@ class GoldenEnv:
         bind_chain_registry(llms)
         memory = MemoryStore(
             self.cfg.memory, conn_factory=ops.connection, vectors=VectorIndex(),
-            embedder=Embedder(model_name=self.cfg.decisions.embedding.model),
+            embedder=Embedder(FakeEmbed(), model_name=self.cfg.decisions.embedding.model),
             redactor=r.get_redactor(), llms=llms,
             allowed_numeral_patterns=self.cfg.app.reports.allowed_numeral_patterns,
             data_root=self.data_root, relatedness=RelatednessCache(),
@@ -196,7 +198,7 @@ class GoldenEnv:
             swarm_for=lambda profile: swarm,
             chat_for=lambda profile: chat, judge_for=lambda: judge, memory=memory, job=ctx,
             clock=clock.now, data_root=self.data_root, settings=self.settings,
-            repo_root=self.repo_root,
+            repo_root=self.repo_root, seed_prior_run=seed_ops.seed_prior_run,
         )  # fmt: skip
 
     def handle(self, payload: dict[str, Any]) -> tuple[FakeCtx, Any]:
