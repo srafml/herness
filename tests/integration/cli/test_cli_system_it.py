@@ -12,7 +12,6 @@ process starts.
 from __future__ import annotations
 
 import json
-import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -166,7 +165,6 @@ def test_cv_t09_22_worker_once_in_process(
     cli_env: CliEnv,
     fake_keyring: MemoryKeyring,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """CV T09-22 stand-in for the manual `herness worker --once` acceptance: the real
     `run_worker` with the real `herness.cli:worker_bootstrap` (hybrid profile) on an empty
@@ -187,10 +185,12 @@ def test_cv_t09_22_worker_once_in_process(
             "--profile", "hybrid"]  # fmt: skip
     assert _main([*args, "init"]) == 0
     assert ops.pending_migrations() == []
-    with caplog.at_level(logging.INFO):
-        code = _main([*args, "worker", "--once", "--gpu-class", "none"])
+    code = _main([*args, "worker", "--once", "--gpu-class", "none"])
     assert code == 0
-    events = " ".join(record.getMessage() for record in caplog.records)
+    # The JSON log file of `data/logs` (not caplog: suite (a) runs with -p no:logging).
+    lines = [line for f in sorted((data / "logs").glob("*.jsonl"))
+             for line in f.read_text(encoding="utf-8").splitlines()]  # fmt: skip
+    events = [json.loads(line).get("event") for line in lines if line.startswith("{")]
     assert "jobs.worker.nothing_to_do" in events
     assert "jobs.worker.config_invalid" not in events
     assert Path(os.environ["HERNESS_CONFIG_DIR"]) == cli_env.config_dir.resolve()
