@@ -37,6 +37,7 @@ from herness.eval._report_compare import (
     build_comparison,
     comparison_lines,
     comparison_view,
+    delta,
     delta_text,
     fmt,
     md_cell,
@@ -180,8 +181,7 @@ def _diff(baseline: EvalMetrics, metrics: EvalMetrics) -> dict[str, Any]:
     rows = []
     for name in DIFF_FIELDS:
         before, after = getattr(baseline, name), getattr(metrics, name)
-        delta = None if before is None or after is None else after - before
-        rows.append((name, _fmt(before), _fmt(after), delta_text(name, delta)))
+        rows.append((name, _fmt(before), _fmt(after), delta_text(name, delta(before, after))))
     return {"suite_changed": baseline.suite_changed, "rows": rows}
 
 

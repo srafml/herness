@@ -81,6 +81,7 @@ def test_ut11_100_rows_deltas_and_flips(tmp_path: Path) -> None:
     md = (out / "comparison.md").read_text(encoding="utf-8")
     assert "| answer_correctness | 0.5 | 0.75 | +25.0 pp |" in md
     assert "| tokens_in | 10 | 4 | -6 |" in md
+    assert "| cost_usd | 1 | 1.5 | +0.5 |" in md  # as in the baseline diff (normalised)
     assert "`G02`" in md
     assert not (tmp_path / "reports" / "eval" / RUN_A / "comparison.json").exists()
 
@@ -307,3 +308,28 @@ def test_cv_t11_38_compare_runs_job_unknown_run_is_exit_3(
         with pytest.raises(ConfigError):
             handle_eval(FakeCtx({"profile": "local", "repeat": 1,  # type: ignore[arg-type]
                                  "compare_runs": ids}))  # fmt: skip
+
+
+def test_cv_t11_38_every_metric_is_rendered(tmp_path: Path) -> None:
+    """CV-T11-38 the comparison shows every §5.3.4 metric: `skeptic_catch` (no delta) and the
+    per-pipeline and per-tag correctness in pp; stored tag names are escaped (md code span,
+    html autoescape)."""
+    first = EvalMetrics(skeptic_catch=True, correctness_by_pipeline={"chat": 0.5},
+                        correctness_by_tag={"<b>t|1</b>": 1.0})  # fmt: skip
+    second = EvalMetrics(skeptic_catch=False, correctness_by_pipeline={"chat": 1.0})
+    store_run(tmp_path, RUN_A, metrics=first, results=[q_result("G01")])
+    store_run(tmp_path, RUN_B, metrics=second, results=[q_result("G01")],
+              started_at="2026-10-10T09:00:00Z")  # fmt: skip
+    table = compare([RUN_A, RUN_B], data_root=tmp_path)
+    md = (tmp_path / "reports" / "eval" / RUN_B / "comparison.md").read_text(encoding="utf-8")
+    assert "| skeptic_catch | true | false | - |" in md
+    assert "| `correctness_by_pipeline.chat` | 0.5 | 1.0 | +50.0 pp |" in md
+    assert "| `correctness_by_tag.<b>t\\|1</b>` | 1.0 | - | - |" in md
+    out = tmp_path / "rendered"
+    run = EvalRun(run_id=RUN_B, out_dir=out, summary=_summary(), passed=True)
+    write_report(run, out, results=[], metrics=EvalMetrics(), thresholds=[], baseline=None,
+                 classifier=None, comparison=table)  # fmt: skip
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert "correctness_by_tag.&lt;b&gt;t|1&lt;/b&gt;" in html
+    assert "<b>t" not in html
+    assert "skeptic_catch" in html
