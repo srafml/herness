@@ -191,7 +191,11 @@ def _register_service(name: str, base_url: str) -> None:
         raw = os.environ.get(SERVICES_ENV)
         if raw is None:
             return  # no `stub_services` fixture: nothing is registered, nothing leaks
-        services = json.loads(raw) if raw.strip() else {}
+        try:
+            services = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            msg = f"{SERVICES_ENV} must hold a JSON object, got {raw!r}"
+            raise ValueError(msg) from None
         services[name] = base_url
         os.environ[SERVICES_ENV] = json.dumps(services, sort_keys=True)
 

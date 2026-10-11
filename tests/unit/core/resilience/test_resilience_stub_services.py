@@ -27,13 +27,12 @@ def _refused(server: StubHTTPServer) -> bool:
     return False
 
 
+@pytest.mark.usefixtures("stub_services")
 def test_ut08_113_stub_fixture_url_resolves_and_kill_service_reaches_it(
-    stub_services: object,
     fault_env: FaultEnv,
     reset_process_state: ProcessState,
 ) -> None:
     """UT08-113 a `stub_services` URL resolves via `faults._stub_url`; kill_service reaches it."""
-    del stub_services
     hook: list[str] = []
     reset_process_state.kill_service_hook = hook.append
     fault_env([{"point": "gpu.after_start", "action": "kill_service:openjev"}])

@@ -881,7 +881,7 @@ T11-34 spec note (U11-48): `ensure_build` runs the real `run_enrichment` (text, 
 |-------|---------|
 | Kind | functions |
 | Purpose | Write spec 08 §5.13 fault plans as JSON and set `HERNESS_FAULTS` (R-40) |
-| Signature | `write_fault_plan(tmp_path: Path, rules: Sequence[Mapping[str, object]]) -> Path`; `fault_env(plan: Path, *, stub_services: Path \| None = None) -> dict[str, str]` |
+| Signature | `write_fault_plan(tmp_path: Path, rules: Sequence[Mapping[str, object]]) -> Path`; `fault_env(plan: Path, *, stub_services: Mapping[str, str] \| None = None) -> dict[str, str]` |
 | Algorithm | 1. Validate that each rule has `point` ∈ `T08-08 (herness.core.resilience.faults.NAMED_POINTS)` (impl 08's registry is the only source of point names, R-40) and `action` in the impl 08 action list; a rule with `p` must also carry `seed` (impl 08 `FaultRule`). 2. Write `<tmp_path>/faults.json` with `json.dumps(list(rules), sort_keys=True)`, tmp then `os.replace`. Fault plans are JSON only (R-40); this helper never writes YAML. 3. `fault_env` returns `HERNESS_ENV=test`, `HERNESS_FAULTS=<plan>`, and `HERNESS_STUB_SERVICES` when given (the `stub_services` mapping name → URL, serialised as inline JSON with `json.dumps(sort_keys=True)`). Impl 08 honours a plan only when `HERNESS_ENV=test`; in any other environment it ignores the file and logs a `WARNING` event (R-40). |
 | Errors | unknown point or action, `p` without `seed` → `ConfigError` (catches plan typos such as `task.before_commit`) |
 | Tests | UT11-77, UT11-115 |
