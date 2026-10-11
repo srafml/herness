@@ -111,13 +111,13 @@ def _configure(
     return cfg, config_dir
 
 
-def _register_all() -> None:
-    """Step 6: every owner registers its own handlers; ``eval`` deps stay unbound (T09-24)."""
+def _register_all(config_dir: Path) -> None:
+    """Step 6: every owner registers its own handlers; ``eval`` with its deps (T09-24)."""
     import herness.admin  # noqa: PLC0415 - lazy: after the socket guard (TH09-28)
     import herness.connectors.jobs  # noqa: PLC0415
-    import herness.eval.runner  # noqa: PLC0415
     import herness.harness.memory  # noqa: PLC0415
     import herness.harness.swarm.handler  # noqa: PLC0415
+    from herness._cli import _eval_deps  # noqa: PLC0415
     from herness.core.jobs.handlers import register_handler  # noqa: PLC0415
     from herness.harness.pipelines.chat import chat_job_handler  # noqa: PLC0415
     from herness.harness.tools import tool_registry  # noqa: PLC0415
@@ -131,7 +131,7 @@ def _register_all() -> None:
         register_handler(cast("Literal['build_pipeline', 'distill']", kind), handler)
     herness.harness.swarm.handler.register_handlers()
     register_handler("chat", chat_job_handler)
-    herness.eval.runner.register_handlers()
+    _eval_deps.bind(config_dir)  # set_deps_factory, then register_handlers
 
 
 def boot(
@@ -147,5 +147,5 @@ def boot(
 
     bind_core_backends()  # R-04
     validate(cfg, config_dir=config_dir)  # U09-106, R-71
-    _register_all()
+    _register_all(config_dir)
     _Booted.state = state

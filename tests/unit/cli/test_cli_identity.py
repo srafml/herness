@@ -124,7 +124,9 @@ def test_ut09_66_register_groups_respects_unnamed_entries() -> None:
         commands = [c for c in root.registered_commands if cli._entry_name(c) == "sync"]
         assert [g.typer_instance for g in groups] == [probe]
         assert [c.callback for c in commands] == [sync]
-    assert cli._entry_name(root.registered_groups[-1]) == "metrics"
+    assert {"metrics", "jobs", "maintenance"} <= {
+        cli._entry_name(g) for g in root.registered_groups
+    }
 
 
 def test_ut09_66_paths_parser() -> None:

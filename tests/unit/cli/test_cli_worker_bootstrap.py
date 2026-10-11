@@ -20,7 +20,7 @@ import herness.harness.swarm.handler
 import herness.harness.tools
 import herness.store.ops.resilience
 from herness import cli
-from herness._cli import _worker_boot
+from herness._cli import _eval_deps, _worker_boot
 from herness.core.config import get_config
 from herness.core.errors import ConfigError
 from herness.harness import memory
@@ -59,6 +59,7 @@ def boot_env(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> tuple[CliEnv, 
     monkeypatch.setattr(herness.admin, "register_handlers", spy("admin"))
     monkeypatch.setattr(herness.connectors.jobs, "register_job_handlers", spy("connectors"))
     monkeypatch.setattr(herness.eval.runner, "register_handlers", spy("eval"))
+    monkeypatch.setattr(herness.eval.runner._Binding, "factory", None)  # bound by T09-24
     monkeypatch.setattr(herness.harness.memory, "register_memory_components", spy("memory"))
     monkeypatch.setattr(herness.harness.swarm.handler, "register_handlers", spy("review"))
     monkeypatch.setattr(herness.harness.memory, "get_memory_store", object)
@@ -81,6 +82,7 @@ def test_ut09_101_worker_bootstrap_order_and_idempotence(
     for owner in ("admin", "connectors", "memory", "review", "eval"):
         assert first.count(owner) == 1
     assert "purge" in first
+    assert herness.eval.runner._Binding.factory is _eval_deps.make_deps  # T09-24
     cli.worker_bootstrap()
     assert events == first  # the second call changes nothing
 
