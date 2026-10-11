@@ -13,6 +13,7 @@ import dataclasses
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from tests.support.ops_store import OpsStoreHandle
@@ -194,3 +195,27 @@ def test_cv_t11_38_set_baseline_once_and_baseline_in_both_reports(
                "report.md")  # fmt: skip
     assert "## Baseline diff" in md
     assert "## Comparison" in md
+
+
+def test_cv_t11_38_compare_job_context_delegates(tmp_path: Path) -> None:
+    """CV-T11-38 the compare run's job context is the real one except `save_state`, which
+    stores the compare run id next to the primary's; an unfinished primary is not read
+    back from disk."""
+    inner = MagicMock()
+    inner.load_state.return_value = {"eval_run_id": "run_a"}
+    job = _runner_compare._CompareJob(inner)
+    assert (job.job, job.job_id, job.kind, job.attempt) == (
+        inner.job, inner.job_id, inner.kind, inner.attempt)  # fmt: skip
+    assert (job.services, job.stop_reason) == (inner.services, inner.stop_reason)
+    assert job.should_yield() is inner.should_yield.return_value
+    job.heartbeat("n")
+    job.require_gpu_class("reasoning", timeout_s=1.0)
+    assert job.gpu_scope("reasoning") is inner.gpu_scope.return_value
+    job.save_state({"eval_run_id": "run_b"})
+    inner.heartbeat.assert_called_once_with("n")
+    inner.require_gpu_class.assert_called_once_with("reasoning", timeout_s=1.0)
+    inner.save_state.assert_called_once_with({"eval_run_id": "run_a", "compare_run_id": "run_b"})
+    assert job.load_state() == {"eval_run_id": "run_a"}
+    deps = make_deps(tmp_path, None)  # type: ignore[arg-type]
+    assert _runner_compare._finished(None, deps) is None
+    assert _runner_compare._finished("run_01JA0000000000000000000009", deps) is None

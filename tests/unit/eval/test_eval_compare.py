@@ -26,6 +26,7 @@ from tests.unit.eval._runner_env import FakeCtx, make_deps
 
 from herness.core.errors import ConfigError
 from herness.eval import report, runner
+from herness.eval.grading import GradeResult
 from herness.eval.metrics import EvalMetrics
 from herness.eval.report import ComparisonTable, compare, write_report
 from herness.eval.runner import EvalRun, exit_code, handle_eval
@@ -124,6 +125,16 @@ def test_cv_t11_38_flips_only_over_shared_keys_and_suite_changed(tmp_path: Path)
         (numeric("7", "7"), numeric("7", "7.0"), False),  # the same number
         (numeric("7", "3", "7"), numeric("7", "7"), False),  # the matched ref, not every one
         (numeric("7", "9", passed=False), numeric("7", "8", passed=False), False),  # no match
+        (numeric("7", "x", "7"), numeric("7", "7"), False),  # a value that is no number
+        (
+            GradeResult(
+                check="numeric",
+                status="passed",
+                detail={"reference": None, "candidates": [{"value": True}]},
+            ),
+            numeric("7", "7"),
+            True,
+        ),  # an unusable stored reference differs
     ],
 )
 def test_ut11_101_harness_defect_names_the_question(
