@@ -4,8 +4,8 @@
   "depth": "standard",
   "metrics": {
     "answer_correctness": 0.8611111111111112,
-    "chat_latency_p50_s": 2.375,
-    "chat_latency_p95_s": 2.5929999999934807,
+    "chat_latency_p50_s": 2.452999999979511,
+    "chat_latency_p95_s": 2.6410000000614673,
     "correctness_by_pipeline": {
       "chat": 0.9130434782608695,
       "funding": 0.8333333333333334,
@@ -83,9 +83,9 @@
     },
     "repairs_per_run": 0.0,
     "retries_per_run": 0.0,
-    "review_latency_max_s": 145.5779999999795,
-    "review_latency_p50_s": 65.32800000009593,
-    "review_latency_p95_s": 145.5779999999795,
+    "review_latency_max_s": 153.75,
+    "review_latency_p50_s": 62.813000000081956,
+    "review_latency_p95_s": 153.75,
     "skeptic_catch": true,
     "tokens_in": 1528888,
     "tokens_out": 7585,
@@ -96,6 +96,6 @@
   "name": "synthetic-42-small-mock",
   "profile": "local",
   "schema": 1,
-  "suite_sha256": "5d56df55b770479d15e1287dfae0f0311445924b94f4ac927b61090bd133dec3",
+  "suite_sha256": "2eec5625f8924678ec61d2b243fe231aeb97a026df70bf7a1c676f53c507a246",
   "suite_version": 3
 }
