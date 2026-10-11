@@ -1506,6 +1506,7 @@ This component reads no secret. The `synth` profile uses the `dotenv` backend wi
 | `eval.question.graded` | INFO | `run_id`, `question_id`, `repeat`, `status`, `latency_s` | F11-07 step 8 |
 | `eval.question.errored` | WARNING | `run_id`, `question_id`, `error_type` | pipeline or script error |
 | `eval.suite_error.detected` | WARNING | `run_id`, `question_id`, `reason` | `SuiteError` |
+| `eval.setup.seeded` | INFO | `run_id`, `setup` | F11-07 step 5, the run's `seed_prior_run` setup done (T11-33) |
 | `eval.judge.skipped` | WARNING | `run_id`, `question_id`, `reason` | judge unavailable or blocked |
 | `eval.threshold.failed` | ERROR | `run_id`, `check`, `actual`, `limit` | F11-07 step 11 |
 | `eval.classifier.mismatch` | ERROR | `run_id`, `question`, `metric`, `stored`, `recomputed` | F11-09 |
