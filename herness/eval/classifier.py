@@ -48,7 +48,7 @@ from herness.eval._classifier_deciders import (
     synthetic_metrics,
 )
 from herness.eval._classifier_metrics import DeciderMetrics, ReliabilityBin, label_space, matrix
-from herness.eval.truth import load_truth_labels
+from herness.eval.truth import load_planted_answers
 
 if TYPE_CHECKING:
     from duckdb import DuckDBPyConnection
@@ -351,7 +351,7 @@ def run_classifier(  # noqa: PLR0913 - U11-67 signature
                                 store=store, fixed=fixed, boot=boot)  # fmt: skip
     synthetic = None
     if truth_dir is not None and warehouse is not None:  # step 6
-        synthetic = synthetic_metrics(qs, qset_version, warehouse, load_truth_labels(truth_dir),
+        synthetic = synthetic_metrics(qs, qset_version, warehouse, load_planted_answers(truth_dir),
                                       sample=settings.synthetic_sample, boot=boot)  # fmt: skip
     return ClassifierReport(
         version=version, question_set_version=qset_version, gate_check=checks.rows,

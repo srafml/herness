@@ -106,7 +106,6 @@ def classifier_outcome(payload: EvalPayload, deps: EvalDeps) -> JobOutcome:
         mock=False, started_at=started, dataset_seed=None if truth is None else truth.seed,
     )  # fmt: skip
     insert_eval_run(meta, data_root=deps.data_root)
-    out_dir = deps.data_root / "reports" / "eval" / run_id
     try:
         _finish(meta, report, extra, deps)
     except BaseException:
@@ -114,7 +113,7 @@ def classifier_outcome(payload: EvalPayload, deps: EvalDeps) -> JobOutcome:
         raise
     code = EXIT_OK if report.passed else EXIT_GATE
     _log.info("eval.run.completed", run_id=run_id, passed=report.passed, exit_code=code,
-              suite=CLASSIFIER_SUITE, out_dir=out_dir.name)  # fmt: skip
+              suite=CLASSIFIER_SUITE)  # fmt: skip
     return JobOutcome(
         status="done", result={"run_id": run_id, "passed": report.passed, "exit_code": code}
     )

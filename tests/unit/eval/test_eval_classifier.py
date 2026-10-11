@@ -427,14 +427,14 @@ def test_cv_t11_35_synthetic_metrics_join_and_missing_table() -> None:
 
 
 def test_cv_t11_35_truth_labels_reader(tmp_path: Path) -> None:
-    """CV-T11-35 `load_truth_labels` reads the four scoring columns (no `pii_spans`); an
+    """CV-T11-35 `load_planted_answers` reads the four scoring columns (no `pii_spans`); an
     unreadable file is `ConfigError`."""
     table = pa.Table.from_pylist([{"record_id": "r", "content_hash": "h", "question": "q",
                                    "answer": "a", "pii_spans": "[]"}])  # fmt: skip
     pq.write_table(table, tmp_path / "truth_labels.parquet")
-    assert truth.load_truth_labels(tmp_path).column_names == list(truth.TRUTH_LABEL_COLUMNS)
+    assert truth.load_planted_answers(tmp_path).column_names == list(truth.PLANTED_ANSWER_COLUMNS)
     with pytest.raises(ConfigError, match="cannot read truth labels"):
-        truth.load_truth_labels(tmp_path / "none")
+        truth.load_planted_answers(tmp_path / "none")
 
 
 # --- report section and runner branch -----------------------------------------------------------
