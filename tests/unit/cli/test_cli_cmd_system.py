@@ -50,7 +50,8 @@ def admin(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> CliEnv:
     """``alice`` is an admin; the child-process variables are restored after the test."""
     cli_env.write_config(admins=["alice"])
     for name in _CHILD_VARS:
-        monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(name, "")  # recorded, so the os.environ writes are undone
+        monkeypatch.delenv(name)
     return cli_env
 
 
@@ -524,3 +525,9 @@ def test_ut09_86_current_build_age(
     view = _status.current_build(now)
     expected = 3.5 if row == (0,) else age
     assert view == _status.BuildView("b1", expected)
+
+
+def test_cv_t09_22_worker_env_restored_after_tests() -> None:
+    """CV T09-22 the `worker` tests leave no child-process variable behind (an unrecorded
+    `delenv` once leaked HERNESS_PROFILE=hybrid into later tests)."""
+    assert not any(os.environ.get(name) for name in _CHILD_VARS)
