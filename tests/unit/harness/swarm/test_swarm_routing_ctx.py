@@ -1,4 +1,4 @@
-"""UT06-63, UT06-65-UT06-67, UT06-92, UT06-97-UT06-99: result mapping, routing, tool context,
+"""UT06-63, UT06-65-UT06-67, UT06-92, UT06-97-UT06-100: result mapping, routing, tool context,
 hooks, task input; the T06-29 cost budget, fallback watch and bound task tracer."""
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from herness.core.types import (
 )
 from herness.harness.budget import RunBudget
 from herness.harness.findings import compute_dedup_key
+from herness.harness.llm.base import egress_purpose_for
 from herness.harness.llm.registry import LLMRegistry
 from herness.harness.llm.settings import ClientConfig, ModelsConfig, SqlSettings, TraceSettings
 from herness.harness.loop import HarnessHooks
@@ -630,6 +631,36 @@ def test_ut06_92_tuples_are_walked_and_kept() -> None:
     out = build_task_input("analyst", {"task_id": "t", "items": ("x", {"notes": "n"})})
     wrapped = wrap_untrusted("n", source="task_notes", record_id="t")
     assert out["items"] == ("x", {"notes": wrapped})
+
+
+# --- UT06-100 (T06-29 gap E)
+
+
+def test_ut06_100_hybrid_final_skeptic_role_carries_skeptic_final() -> None:
+    """UT06-100 a hybrid final Skeptic (model role `skeptic_final`, routed to claude-opus)
+    gets the skeptic `RoleSpec` with model role `skeptic_final`, so the role's egress purpose
+    is `reasoning_final` and equals its tool context's (the guard allows it and the spec 05
+    `run_agent` precheck passes); a non-final Skeptic and a local final Skeptic keep their
+    model roles and local routing (T06-29 gap E)."""
+    reg = _hybrid()
+    env = _env(_run(profile="hybrid"), reg)
+    final = _spec("skeptic", model_role="skeptic_final")
+    route = route_task(final, llms=reg, depth="standard", profile="hybrid", ledger=env.analysis)
+    assert (route.client_key, route.off_network) == ("claude-opus", True)
+    assert (route.role_spec.name, route.role_spec.model_role) == ("skeptic", "skeptic_final")
+    purpose = egress_purpose_for(route.role_spec.model_role)
+    assert purpose == _ctx(env, final, route).egress_purpose == "reasoning_final"
+    plain = route_task(_spec("skeptic"), llms=reg, depth="standard", profile="hybrid",
+                       ledger=env.analysis)  # fmt: skip
+    assert (plain.role_spec.model_role, plain.client_key, plain.off_network) == (
+        "skeptic", "local-30b", False,
+    )  # fmt: skip
+    local = route_task(final, llms=_registry(_models()), depth="standard", profile="local",
+                       ledger=env.analysis)  # fmt: skip
+    assert (local.role_spec.model_role, local.client_key, local.off_network) == (
+        "skeptic_final", "local-30b", False,
+    )  # fmt: skip
+    assert _ctx(env, final, local).egress_purpose is None
 
 
 # --- UT06-97 (T06-29 gap B)

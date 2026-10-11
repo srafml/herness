@@ -247,7 +247,8 @@ def route_task(
     In the `hybrid` profile an off-network route switches to the first local key of the model
     role's chain once the ledger's cost cap is reached (`fallback_local`, TH06-12).
     """
-    role_spec = get_role(role_prompt_name(spec.role, spec.specialty))
+    # The task's model role (a final Skeptic's `skeptic_final`) sets the role's egress purpose.
+    role_spec = get_role(role_prompt_name(spec.role, spec.specialty), model_role=spec.model_role)
     model_role, key = _route_key(llms, spec.model_role, depth)
     config = llms.config(key)
     off_network, fallback_local = _off_network(config), False
