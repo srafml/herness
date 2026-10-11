@@ -544,7 +544,7 @@ def test_ut09_100_inline_failed_and_not_terminal(
 def test_ut09_115_boot_before_run_inline_after_role_check(
     install: Callable[[FakeJobs], FakeJobs], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """UT09-115 the inline helper bootstraps the process with the CLI's config dir before
+    """UT09-119 the inline helper bootstraps the process with the CLI's config dir before
     ``run_inline``; a refused reviewer boots nothing."""
     fake = install(FakeJobs(_row("done")))
     monkeypatch.setattr(_inline_boot, "boot_inline", lambda _dir: fake.calls.append("boot"))

@@ -51,7 +51,7 @@ def _steps(
 
 
 def test_ut09_115_ports_then_owners_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT09-115 boot_inline binds the ports, registers each owner, and a second call in the
+    """UT09-119 boot_inline binds the ports, registers each owner, and a second call in the
     same process does nothing."""
     sync, review = _make("sync"), _make("review")
     events = _steps(
@@ -68,7 +68,7 @@ def test_ut09_115_ports_then_owners_once_per_process(monkeypatch: pytest.MonkeyP
 
 
 def test_ut09_115_prebound_kind_is_kept_not_a_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT09-115 a kind already bound in this process keeps its handler, the rest of the same
+    """UT09-119 a kind already bound in this process keeps its handler, the rest of the same
     owner still registers, and nothing raises "handler already registered"."""
     mine, theirs, other = _make("mine"), _make("theirs"), _make("other")
     register_handler("sync", mine)
@@ -86,7 +86,7 @@ def test_ut09_115_prebound_kind_is_kept_not_a_conflict(monkeypatch: pytest.Monke
 def test_ut09_115_config_error_skips_owner_and_logs_class_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """UT09-115 an owner raising ConfigError stays unbound (even its partial work), is logged
+    """UT09-119 an owner raising ConfigError stays unbound (even its partial work), is logged
     with owner, kinds and the error class only, and the other owners proceed."""
     chat, kept = _make("chat"), _make("kept")
     register_handler("review", kept)
@@ -117,7 +117,7 @@ def test_ut09_115_config_error_skips_owner_and_logs_class_only(
 
 
 def test_ut09_115_other_errors_are_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT09-115 only ConfigError is tolerated; anything else propagates."""
+    """UT09-119 only ConfigError is tolerated; anything else propagates."""
 
     def broken() -> None:
         msg = "boom"
