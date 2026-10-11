@@ -252,7 +252,7 @@ def test_cv_t11_28_invoke_chat(ops_store: object) -> None:
                       now=_clock(1.0, 2.0), name_index={"Team One": "team:t1"})  # fmt: skip
     session_id, text, user_ref, mode = chat.calls[0]
     assert session_id.startswith("eval_")
-    assert (text, user_ref, mode) == ("How many incidents?", "eval", "live")
+    assert (text, user_ref, mode) == ("How many incidents?", invoke_mod.EVAL_USER_REF, "live")
     assert out.error is None
     assert out.final_text == "Team One had 42 incidents."
     assert out.run_id.startswith("run_")
