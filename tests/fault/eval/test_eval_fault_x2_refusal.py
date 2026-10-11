@@ -199,17 +199,6 @@ def test_ft11_02_refused_skeptic_call_falls_back_once(
     assert plan.counters == [2]  # two skeptic calls met the rule: the refused one, the fallback
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "product gap T06-29 (gap E; impl 06 U06-101 route_task): the route's role "
-        "spec keeps model_role 'skeptic' for a skeptic_final task (get_role without "
-        "model_role), so its off-network requests carry egress purpose 'reasoning', which "
-        "hybrid refuses (purpose_not_allowed); the spec 05 run_agent precheck would refuse "
-        "the route outright (egress purpose mismatch)"
-    ),
-)
 def test_ft11_02_final_skeptic_calls_use_the_reasoning_final_purpose(
     drv: e.Drv, tmp_path: Path, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -221,16 +210,6 @@ def test_ft11_02_final_skeptic_calls_use_the_reasoning_final_purpose(
     assert run.egress_purposes() == {"reasoning_final"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "product gap T06-29 (gap A): every off-network request carries the role context line "
-        "`build: <build_id>`, whose 14 digits match the PHONE pattern, so the egress guard "
-        "refuses the un-faulted Skeptic calls to claude-opus (pii_detected) and each one "
-        "falls back too"
-    ),
-)
 def test_ft11_02_other_skeptic_calls_reach_claude_one_fallback_in_the_run(
     drv: e.Drv, tmp_path: Path, fake_keyring: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
