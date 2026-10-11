@@ -30,8 +30,8 @@ from herness.eval.results import QuestionResult, ResultsLog
 
 __all__ = [
     "DIFF_FIELDS", "RUN_ID_RE", "ComparisonDelta", "ComparisonRow", "ComparisonTable", "Flip",
-    "build_comparison", "comparison_lines", "comparison_view", "delta_text", "fmt",
-    "load_summary", "md_cell", "md_code", "md_table",
+    "build_comparison", "comparison_lines", "comparison_view", "delta", "delta_text", "fmt",
+    "load_summary", "md_cell", "md_code", "md_table", "run_dir",
 ]  # fmt: skip
 
 RUN_ID_RE: Final = re.compile(r"^run_[0-9A-HJKMNP-TV-Z]{26}$")
@@ -114,7 +114,8 @@ class _Stored:
     results: list[QuestionResult]
 
 
-def _run_dir(run_id: str, data_root: Path) -> Path:
+def run_dir(run_id: str, data_root: Path) -> Path:
+    """The run directory of `run_id`, checked as `run_<ulid>` before the path is joined."""
     if not RUN_ID_RE.fullmatch(run_id):
         msg = "run ids must be run_<ulid>"
         raise ConfigError(msg)
@@ -123,7 +124,7 @@ def _run_dir(run_id: str, data_root: Path) -> Path:
 
 def load_summary(run_id: str, data_root: Path) -> dict[str, Any]:
     """The stored `summary.json` of `run_id` (checked as `run_<ulid>` first)."""
-    path = _run_dir(run_id, data_root) / "summary.json"
+    path = run_dir(run_id, data_root) / "summary.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -146,7 +147,7 @@ def _load(run_id: str, data_root: Path) -> _Stored:
     except ValidationError as exc:
         msg = f"summary is not valid: run_id={run_id}"
         raise ConfigError(msg) from exc
-    log = ResultsLog(_run_dir(run_id, data_root) / "results.jsonl")
+    log = ResultsLog(run_dir(run_id, data_root) / "results.jsonl")
     results = [r for r in log.read_all() if r.id in metrics.question_status]
     return _Stored(run_id, head, metrics, results)
 
@@ -155,7 +156,7 @@ def build_comparison(run_ids: Sequence[str], data_root: Path) -> ComparisonTable
     """Compare the stored runs `run_ids` (U11-71); nothing is written here."""
     ids = list(dict.fromkeys(run_ids))
     for run_id in ids:
-        _run_dir(run_id, data_root)  # every id is checked before any file is read
+        run_dir(run_id, data_root)  # every id is checked before any file is read
     if len(ids) < 2:  # noqa: PLR2004 - a comparison needs two runs
         msg = "compare needs at least two distinct runs"
         raise ConfigError(msg)
@@ -181,7 +182,7 @@ def build_comparison(run_ids: Sequence[str], data_root: Path) -> ComparisonTable
             ComparisonDelta(
                 run_id=r.run_id,
                 metrics={
-                    name: _delta(getattr(first.metrics, name), getattr(r.metrics, name))
+                    name: delta(getattr(first.metrics, name), getattr(r.metrics, name))
                     for name in DIFF_FIELDS
                 },
             )
@@ -193,7 +194,7 @@ def build_comparison(run_ids: Sequence[str], data_root: Path) -> ComparisonTable
     )
 
 
-def _delta(before: Any, after: Any) -> Number | None:  # noqa: ANN401 - one metric's type
+def delta(before: Any, after: Any) -> Number | None:  # noqa: ANN401 - int, float or Decimal
     """`after - before` of one metric (both int, float or Decimal); None if either is."""
     return None if before is None or after is None else after - before
 
@@ -276,14 +277,15 @@ def fmt(value: object) -> str:
     return str(value)
 
 
-def delta_text(name: str, delta: Number | None) -> str:
-    """A delta: signed percentage points for a rate (0..1), else a signed difference."""
-    if delta is None:
+def delta_text(name: str, value: Number | None) -> str:
+    """A delta: signed percentage points for a rate (0..1, also the per-pipeline and per-tag
+    correctness), else a signed difference."""
+    if value is None:
         return "-"
-    if name in _RATES:
-        return f"{float(delta) * 100:+.1f} pp"
-    text = fmt(delta)
-    return f"+{text}" if delta > 0 else text
+    if name in _RATES or name.startswith("correctness_by_"):
+        return f"{float(value) * 100:+.1f} pp"
+    text = fmt(value)
+    return f"+{text}" if value > 0 else text
 
 
 def md_cell(value: str) -> str:
@@ -309,7 +311,6 @@ def md_code(value: str) -> str:
 def comparison_view(table: ComparisonTable) -> dict[str, Any]:
     """Plain strings of `table` for both renderings (escaped by each renderer)."""
     labels = [f"#{n}" for n in range(1, len(table.rows) + 1)]
-    deltas = [d.metrics for d in table.deltas]
     return {
         "suite_changed": table.suite_changed,
         "labels": labels,
@@ -317,20 +318,30 @@ def comparison_view(table: ComparisonTable) -> dict[str, Any]:
             (label, r.run_id, r.profile, r.depth, r.build_id)
             for label, r in zip(labels, table.rows, strict=True)
         ],
-        "metrics": [
-            (
-                name,
-                [fmt(r.metrics.get(name)) for r in table.rows]
-                + [delta_text(name, d.get(name)) for d in deltas],
-            )
-            for name in DIFF_FIELDS
-        ],
+        "metrics": _metric_rows(table),
         "flips": [
             (f.question_id, str(f.repeat), f.from_run, f.to_run, f.before, f.after)
             for f in table.flips
         ],
         "harness_defects": list(table.harness_defects),
     }
+
+
+def _metric_rows(table: ComparisonTable) -> list[tuple[str, list[str]]]:
+    """Every §5.3.4 metric of every run, then the deltas against the first run: the scalar
+    metrics, `skeptic_catch` (no delta) and the per-pipeline and per-tag correctness."""
+    ms = [EvalMetrics.model_validate(r.metrics) for r in table.rows]  # typed: Decimal cost
+    rows = [(name, [getattr(m, name) for m in ms]) for name in (*DIFF_FIELDS, "skeptic_catch")]
+    for field in ("correctness_by_pipeline", "correctness_by_tag"):
+        keys = sorted({key for m in ms for key in getattr(m, field)})
+        rows += [(f"{field}.{key}", [getattr(m, field).get(key) for m in ms]) for key in keys]
+    return [
+        (name, [fmt(v) for v in values] + [
+            "-" if isinstance(v, bool) else delta_text(name, delta(values[0], v))
+            for v in values[1:]
+        ])
+        for name, values in rows
+    ]  # fmt: skip
 
 
 def comparison_lines(view: Mapping[str, Any], *, level: int) -> list[str]:
@@ -355,7 +366,8 @@ def comparison_lines(view: Mapping[str, Any], *, level: int) -> list[str]:
     labels = view["labels"]
     out += [f"{h}# Metrics", ""]
     out += md_table(("Metric", *labels, *(f"Δ {label}" for label in labels[1:])),
-                    [(name, *cells) for name, cells in view["metrics"]])  # fmt: skip
+                    [(md_code(name) if "." in name else name, *cells)
+                     for name, cells in view["metrics"]])  # fmt: skip
     out += [f"{h}# Flips", ""]
     if not view["flips"]:
         return [*out, "None.", ""]

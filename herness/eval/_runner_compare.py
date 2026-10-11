@@ -8,7 +8,10 @@ build (same deps; a moved `CURRENT` is refused), then compares the two runs, wri
 comparison into the newer run and re-renders its report with the comparison section. The
 job state keeps both run ids (`eval_run_id`, `compare_run_id`), so a yield or retry resumes
 each run from its `results.jsonl`; a primary run that already finished is read back from its
-`summary.json` instead of being finished again.
+`summary.json` instead of being finished again. A resumed run keeps the build pinned in its
+`run` row, and the two runs' build ids are checked equal before they are compared.
+The combined verdict (both runs passed, no harness defect) and `compare_run_id` exist only in
+the job outcome: each run's own `summary.json` and report keep that run's own verdict.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from herness.core.errors import ConfigError
 from herness.core.types import JobOutcome
-from herness.eval._report_compare import load_summary
+from herness.eval._report_compare import load_summary, run_dir
 from herness.eval._runner_support import current_build
 from herness.eval.metrics import EvalMetrics, ThresholdResult
 from herness.eval.report import ComparisonTable, compare, load_baseline, write_report
@@ -129,7 +132,7 @@ def _finished(run_id: str | None, deps: EvalDeps) -> _Primary | None:
     """The primary run read back from its `summary.json` when it already finished."""
     if run_id is None:
         return None
-    out = deps.data_root / "reports" / "eval" / run_id
+    out = run_dir(run_id, deps.data_root)  # `run_<ulid>` checked before the path is joined
     if not (out / "summary.json").is_file():
         return None
     summary = load_summary(run_id, deps.data_root)
@@ -169,6 +172,9 @@ def run_eval(
     )  # fmt: skip
     if second.yielded:
         return second.model_copy(update={"run_id": primary.run_id, "out_dir": primary.out_dir})
+    if second.summary.get("build_id") != primary.summary.get("build_id"):
+        msg = "the compared runs are on different builds; --compare needs the same build"
+        raise ConfigError(msg)
     table = compare([primary.run_id, second.run_id], data_root=deps.data_root)
     _rerender(second, table, deps)
     passed = primary.passed and second.passed and not table.harness_defects
