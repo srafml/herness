@@ -1,9 +1,9 @@
 """Make or check a mock golden baseline (impl 11 U11-75, U11-72; T11-32).
 
     uv run python -m tests.support.eval_golden_baseline --seed 42 --scale small \
-        --set-baseline synthetic-42-small-mock [--exclude F05] [--work DIR]
+        --set-baseline synthetic-42-small-mock [--exclude IDS] [--work DIR]
     uv run python -m tests.support.eval_golden_baseline --seed 42 --scale small \
-        --baseline synthetic-42-small-mock [--exclude F05]
+        --baseline synthetic-42-small-mock [--exclude IDS]
 
 builds the scored synthetic build (`eval_golden.scored_build`: generation, the real build,
 truth-planted enrichment, real scoring) under `--work` (default: a new temp dir), then runs
