@@ -7,6 +7,7 @@ messages that hold names and statement types only, never SQL text or values (TH0
 import re
 import string
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
 
 import sqlglot
@@ -140,7 +141,7 @@ def template_problems(template: str, /) -> list[str]:
     return problems
 
 
-def parse_catalog_bytes(data: bytes, path: object) -> MetricsCatalogConfig:
+def parse_catalog_bytes(data: bytes, path: Path) -> MetricsCatalogConfig:
     """Parse the catalog file bytes (UTF-8 YAML) into the model; ConfigError names fields only."""
     try:
         raw = yaml.safe_load(data.decode("utf-8"))

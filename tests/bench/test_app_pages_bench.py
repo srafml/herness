@@ -203,7 +203,7 @@ def _gate(recorder: BenchRecorder, target: BenchTarget, values: list[float]) -> 
 
 
 PAGE_PARAMS: Final = [pytest.param(spec, id=spec.path.stem) for spec in APP_PAGES]
-WARM_GAP_PAGE: Final = "06_Change_Health"  # warm render gated in its own strict xfail (T09-30)
+WARM_GAP_PAGE: Final = "06_Change_Health"  # warm render gated in its own non-strict xfail (T09-30)
 
 
 @pytest.mark.parametrize("spec", PAGE_PARAMS)
@@ -242,13 +242,16 @@ def test_bt09_01_dashboard_page_first_load(
     assert all(passed), f"BT09-01 {page}: a p95 is over its threshold (see stderr)"
 
 
-# Not strict: page 06 warm p95 swings 0.48 - 0.78 s with host load (T04-24 fix round 1 saw both),
-# so a strict xfail would fail on the good runs. Controller ruling asked for strict; see report.
+# Non-strict by controller ruling: the page 06 warm p95 depends on host load (0.479 s idle,
+# 0.74-0.78 s under load), so a strict xfail would fail whenever it passes. Owner: T09-30.
 @pytest.mark.xfail(strict=False, reason="product gap T09-30 (page 06 warm render chart cost)")
 def test_bt09_01_page_06_warm_render(
     pages: SimpleNamespace, built: Built, bench_recorder: BenchRecorder
 ) -> None:
-    """BT09-01 page 06 warm render, 20 repetitions: p95 < 0.5 s (cold is gated above)."""
+    """BT09-01 page 06 warm render, 20 repetitions: p95 < 0.5 s (cold is gated above).
+
+    Measured 0.479 s idle and 0.74-0.78 s under host load; xfail (not strict) until T09-30.
+    """
     spec = next(s for s in APP_PAGES if s.path.stem == WARM_GAP_PAGE)
     _render(spec)  # warm-up
     warm = [_render(spec) for _ in range(REPS)]
