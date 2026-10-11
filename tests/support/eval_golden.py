@@ -37,6 +37,7 @@ from tests.support.metrics_synth import SynthEnv, generate_root, release
 from tests.support.metrics_synth import scored_build as _scored_build
 from tests.support.seed_ops import seed_prior_run
 from tests.unit.eval._runner_env import FakeCtx
+from tests.unit.harness.memory._write_env import FakeEmbed
 
 from herness.core import config as herness_config
 from herness.core import redact as r
@@ -166,7 +167,7 @@ class GoldenEnv:
         bind_chain_registry(llms)
         memory = MemoryStore(
             self.cfg.memory, conn_factory=ops.connection, vectors=VectorIndex(),
-            embedder=Embedder(model_name=self.cfg.decisions.embedding.model),
+            embedder=Embedder(FakeEmbed(), model_name=self.cfg.decisions.embedding.model),
             redactor=r.get_redactor(), llms=llms,
             allowed_numeral_patterns=self.cfg.app.reports.allowed_numeral_patterns,
             data_root=self.data_root, relatedness=RelatednessCache(),
