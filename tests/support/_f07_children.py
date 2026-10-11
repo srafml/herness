@@ -52,7 +52,7 @@ def run_recs(cfg_root: Path, data_root: Path, memory_root: Path, mode: str) -> s
     import asyncio  # noqa: PLC0415 - child process only
 
     import pytest  # noqa: PLC0415 - child process only
-    from tests.integration.memory._it07_env import (  # noqa: PLC0415 - child process only
+    from tests.support._f07_env import (  # noqa: PLC0415 - child process only
         memory_store,
         swarm_for,
     )

@@ -13,6 +13,8 @@ scripted Writer recommends funding the same epic, which the real record step han
 
 Deviation (recorded in the report): the spec names the target `grp_db_ops`; the tiny build's T6
 plant has no such target, so the seeded `unpaid` epic (a `work_item`) is the target.
+The row runs on `tiny_build` (not a scored build) because `seed_prior_run` needs the tiny
+build's T6 plant (truth and warehouse), and the driver's stub pipeline reads no `score.*`.
 """
 
 from __future__ import annotations
