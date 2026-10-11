@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
-from pathlib import Path
+from collections.abc import Callable
 
 import httpx2
 import pytest
@@ -92,26 +93,31 @@ def test_ut11_72_kill_drops_open_connections() -> None:
     assert _refused(server)
 
 
-def test_ut11_72_service_file_lists_the_names(stub_services: Path) -> None:
-    """UT11-72 service_name servers merge `{name: base_url}` into HERNESS_STUB_SERVICES."""
-    stub_services.write_text(json.dumps({"openjev": "http://127.0.0.1:1"}), encoding="utf-8")
+def test_ut11_72_service_file_lists_the_names(
+    stub_services: Callable[[], dict[str, str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT11-72 service_name servers merge `{name: base_url}` into the inline
+    HERNESS_STUB_SERVICES JSON (DD11-04); the variable is restored after the test."""
+    monkeypatch.setenv("HERNESS_STUB_SERVICES", json.dumps({"openjev": "http://127.0.0.1:1"}))
     with (
         _Echo(service_name="vllm-reasoning") as a,
         _Echo(service_name="llamacpp-large") as b,
         _Echo() as unnamed,
     ):
-        services = json.loads(stub_services.read_text(encoding="utf-8"))
+        services = stub_services()
+        assert json.loads(os.environ["HERNESS_STUB_SERVICES"]) == services
     assert services == {
         "openjev": "http://127.0.0.1:1",
         "vllm-reasoning": a.base_url,
         "llamacpp-large": b.base_url,
     }
     assert unnamed.base_url not in services.values()
-    assert [p.name for p in stub_services.parent.iterdir() if p.suffix == ".tmp"] == []
 
 
-def test_ut11_72_concurrent_service_writes_keep_every_name(stub_services: Path) -> None:
-    """UT11-72 service file writes are serialised under the lock: no name is lost."""
+def test_ut11_72_concurrent_service_writes_keep_every_name(
+    stub_services: Callable[[], dict[str, str]],
+) -> None:
+    """UT11-72 inline service registrations are serialised under the lock: no name is lost."""
     servers = [_Echo(service_name=f"svc-{i}") for i in range(8)]
     threads = [threading.Thread(target=s.start) for s in servers]
     for t in threads:
@@ -119,7 +125,7 @@ def test_ut11_72_concurrent_service_writes_keep_every_name(stub_services: Path) 
     for t in threads:
         t.join()
     try:
-        services = json.loads(stub_services.read_text(encoding="utf-8"))
+        services = stub_services()
         assert services == {s.service_name: s.base_url for s in servers}
     finally:
         for s in servers:

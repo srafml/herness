@@ -69,10 +69,11 @@ def test_ut11_115_p_without_seed_is_config_error(tmp_path: Path) -> None:
 
 def test_ut11_115_fault_env_holds_test_env_and_plan(tmp_path: Path) -> None:
     """UT11-115 `fault_env`: `HERNESS_ENV=test` and `HERNESS_FAULTS=<plan>` (R-40), plus
-    `HERNESS_STUB_SERVICES` only when given."""
+    inline-JSON `HERNESS_STUB_SERVICES` (a name -> URL mapping) only when given."""
     plan = faults.write_fault_plan(tmp_path, [GOOD])
     assert faults.fault_env(plan) == {"HERNESS_ENV": "test", "HERNESS_FAULTS": str(plan)}
-    stubs = tmp_path / "stubs.json"
+    stubs = {"openjev": "http://127.0.0.1:9", "a": "http://127.0.0.1:1"}
+    expected_stubs = json.dumps(stubs, sort_keys=True)
     assert faults.fault_env(plan, stub_services=stubs) == {
-        "HERNESS_ENV": "test", "HERNESS_FAULTS": str(plan), "HERNESS_STUB_SERVICES": str(stubs),
+        "HERNESS_ENV": "test", "HERNESS_FAULTS": str(plan), "HERNESS_STUB_SERVICES": expected_stubs,
     }  # fmt: skip
