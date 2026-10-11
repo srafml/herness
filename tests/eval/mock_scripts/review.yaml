@@ -1,0 +1,114 @@
+# Mock review roles for the golden suite (impl 11 U11-75; R-65 script format).
+# Review calls are keyed by role and their task's dedup key; every task has its own key,
+# so one script per role (glob `*`) serves each task from turn 0. One funding and one org
+# review run per eval (ReviewCache), both scripted here; the Writer script serves both.
+# The spec 05 loop asks for the JSON answer after a final text, so every role ends with
+# a text turn and an output turn. Answer text holds no numeral outside a marker.
+- match: {role: planner, dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: get_scores
+          arguments: {kind: org, entity_id: null, top: 1, scenario: null}
+    - final: {text: "Plan ready."}
+    - final:
+        output:
+          tasks:
+            - dedup_key: null
+              specialty: general
+              objective: "Review the top ranked entity of the org comparison."
+              entity_type: "{{row.entity_type}}"
+              entity_ids: ["{{row.entity_id}}"]
+              notes: null
+          rationale: "Cover the top ranked entity first; the deterministic tasks cover the rest."
+          unknowns: []
+# One script per analyst specialty (the role name is `analyst_<specialty>`). Each posts one
+# finding on the top ranked team's restore time, cited from the real tool result.
+- &analyst
+  match: {role: analyst_general, dedup_key: "*"}
+  turns:
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: restore time of the top ranked team
+            sql: >-
+              SELECT entity_id AS team_id, value AS mttr_hours FROM score.org
+              WHERE entity_type = 'team' AND metric = 'mttr_hours' AND value IS NOT NULL
+              ORDER BY rank, entity_id LIMIT 1
+    - final:
+        post_finding:
+          claim: "The top ranked team restores incidents in [[n1]] hours on average."
+          entity_type: team
+          entity_id: "{{row.team_id}}"
+          confidence: 0.8
+          numbers_from: last_tool_result
+    - final: {text: "Posted one finding."}
+    - final:
+        output:
+          summary: "Posted one finding on the restore time of the top ranked team."
+          unknowns: []
+          suggested_followups: []
+- <<: *analyst
+  match: {role: analyst_ops, dedup_key: "*"}
+- <<: *analyst
+  match: {role: analyst_change, dedup_key: "*"}
+- <<: *analyst
+  match: {role: analyst_delivery, dedup_key: "*"}
+- <<: *analyst
+  match: {role: analyst_org, dedup_key: "*"}
+- <<: *analyst
+  match: {role: analyst_crosscheck, dedup_key: "*"}
+- <<: *analyst
+  match: {role: analyst_retrospective, dedup_key: "*"}
+# The Skeptic upholds; the swarm sets the finding id of its task. Extra pairs serve the
+# self-consistency samples a task may ask for.
+- match: {role: skeptic, dedup_key: "*"}
+  turns:
+    - &checked {final: {text: "Checked."}}
+    - &verdict
+      final:
+        output:
+          finding_id: fnd_00000000000000000000000000
+          checks:
+            - {check: confounding, result: pass, note: "No confounder found."}
+            - {check: seasonality, result: pass, note: "No seasonal pattern in the restore time."}
+            - {check: mis_mapping, result: pass, note: "The team mapping holds."}
+            - {check: small_sample, result: pass, note: "The sample is large enough."}
+            - {check: double_counting, result: pass, note: "No double counting."}
+            - {check: survivorship, result: n_a, note: "Not applicable."}
+          verdict: uphold
+          required_actions: []
+    - *checked
+    - *verdict
+    - *checked
+    - *verdict
+# The Writer: one draft for both pipelines (its task key differs per run). No
+# recommendation, so the ranked entities follow the pipeline's must-cover ranks (U06-69).
+# Extra pairs serve the fix passes.
+- match: {role: writer, dedup_key: "*"}
+  turns:
+    - &drafted {final: {text: "Draft ready."}}
+    - &draft
+      final:
+        output:
+          title: "Review summary"
+          sections:
+            - id: executive_summary
+              title: "Summary"
+              paragraphs:
+                - text: >-
+                    The ranking follows the composite scores of the review. Cutting mttr_hours is
+                    the biggest lever for the top ranked group, whose restore time trend is rising.
+                  numbers: []
+                  finding_ids: []
+                - text: >-
+                    Teams with noisy services should tune alert noise first, and teams with poor
+                    change health should cut emergency changes.
+                  numbers: []
+                  finding_ids: []
+          recommendations: []
+          caveats: ["Seasonal volume peaks are not counted against team performance."]
+          prior_outcomes_commentary: null
+    - *drafted
+    - *draft
+    - *drafted
+    - *draft

@@ -1,0 +1,453 @@
+# Golden question suite (impl 11 U11-75; design 11 §4.5 format, §5.3.3 questions).
+# Reference SQL runs read-only on the run's build at eval time; the file never stores a
+# result. Time windows end at the build's as-of day: the end of the newest `week` period in
+# metrics.metric_value. CIs have no display name in core.* (design §4.5 lookup list), so the
+# T3 questions G08 and G17 name the CI's owning team (spec note T11-32). PII-bearing text is
+# never quoted here: questions name entities only through placeholders.
+version: 3
+defaults: {tolerance: {rel: 0.01}, datasets: [synthetic, real]}
+questions:
+  - id: G01
+    pipeline: chat
+    question: "How many P1 incidents were opened in the most recent quarter?"
+    tags: [count, priority]
+    expected:
+      numeric:
+        unit: count
+        tolerance: {abs: 0}
+        reference_sql: |
+          SELECT count(*) AS value FROM metrics.incident_fact
+          WHERE NOT excluded AND priority = 1
+            AND opened_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+            AND opened_at < (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week')
+  - id: G02
+    pipeline: chat
+    datasets: [synthetic]
+    question: "What is the mttr_hours of P2 incidents on {T2.service} over the last 90 days?"
+    tags: [mttr, service]
+    expected:
+      numeric:
+        unit: hours
+        tolerance: {rel: 0.01}
+        reference_sql: |
+          SELECT avg(resolve_h) AS value FROM metrics.incident_fact
+          WHERE NOT excluded AND priority = 2 AND resolve_h IS NOT NULL
+            AND service_id = (SELECT service_id FROM core.work_item WHERE record_id =
+                (SELECT candidate_id FROM score.funding ORDER BY rank, candidate_id LIMIT 1))
+            AND opened_at >= (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week') - INTERVAL 90 DAY
+  - id: G03
+    pipeline: chat
+    question: "Which assignment group has the highest median MTTR among groups with at least 20 incidents in the last 12 months?"
+    tags: [mttr, ranking, planted]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT team_id FROM metrics.incident_fact
+          WHERE NOT excluded AND resolve_h IS NOT NULL AND team_id IS NOT NULL
+            AND opened_at >= (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week') - INTERVAL 12 MONTH
+          GROUP BY team_id HAVING count(*) >= 20
+          ORDER BY median(resolve_h) DESC, team_id LIMIT 3
+        check: rank1
+        truth_ref: plants.T1_bad_team.team_id
+      must_mention: ["{entity_name}"]
+  - id: G04
+    pipeline: chat
+    question: "What is the change_failure_rate of org {org} over the last 12 months?"
+    tags: [change, org]
+    expected:
+      placeholders_sql: |
+        SELECT o.name AS org FROM metrics.incident_fact f JOIN core.org o ON o.org_id = f.org_id
+        WHERE NOT f.excluded GROUP BY o.org_id, o.name ORDER BY count(*) DESC, o.org_id LIMIT 1
+      numeric:
+        unit: ratio
+        tolerance: {abs: 0.005}
+        reference_sql: |
+          SELECT value FROM metrics.metric_value
+          WHERE metric = 'change_failure_rate' AND period = 't12m' AND entity_type = 'org'
+            AND entity_id = (SELECT org_id FROM metrics.incident_fact WHERE NOT excluded AND org_id IS NOT NULL
+                             GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1)
+  - id: G05
+    pipeline: chat
+    question: "Which are the top 3 orgs by emergency_change_ratio over the last 12 months?"
+    tags: [change, ranking, org]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT entity_id FROM metrics.metric_value
+          WHERE metric = 'emergency_change_ratio' AND period = 't12m' AND entity_type = 'org' AND value IS NOT NULL
+          ORDER BY value DESC, entity_id LIMIT 3
+        check: "kendall_tau>=0.8"
+  - id: G06
+    pipeline: chat
+    question: "Which service has the highest alert_noise_ratio over the last 12 months (at least 20 events)?"
+    tags: [noise, ranking, planted]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT entity_id FROM metrics.metric_value
+          WHERE metric = 'alert_noise_ratio' AND period = 't12m' AND entity_type = 'service' AND denominator >= 20
+          ORDER BY numerator / denominator DESC, entity_id LIMIT 3
+        check: rank1
+        truth_ref: plants.T4_noisy_service.service_id
+      must_mention: ["{entity_name}"]
+  - id: G07
+    pipeline: chat
+    question: "What is the alert_noise_ratio of that service over the last 12 months?"
+    tags: [noise]
+    expected:
+      numeric:
+        unit: ratio
+        tolerance: {rel: 0.01}
+        reference_sql: |
+          SELECT numerator / denominator AS value FROM metrics.metric_value
+          WHERE metric = 'alert_noise_ratio' AND period = 't12m' AND entity_type = 'service' AND denominator >= 20
+          ORDER BY numerator / denominator DESC, entity_id LIMIT 1
+  - id: G08
+    pipeline: chat
+    datasets: [synthetic]
+    question: "How many incidents are linked (link score at least 0.5) to changes made by {T3.owning_team}?"
+    tags: [change, link]
+    expected:
+      numeric:
+        unit: count
+        tolerance: {abs: 0}
+        reference_sql: |
+          SELECT count(DISTINCT l.incident_id) AS value FROM enrich.incident_change_link l
+          JOIN core.change c ON c.record_id = l.change_id
+          WHERE l.score >= 0.5 AND c.team_id = (
+            SELECT c2.team_id FROM enrich.incident_change_link l2 JOIN core.change c2 ON c2.record_id = l2.change_id
+            WHERE l2.score >= 0.5 AND c2.team_id IS NOT NULL
+            GROUP BY c2.team_id ORDER BY count(DISTINCT l2.incident_id) DESC, c2.team_id LIMIT 1)
+  - id: G09
+    pipeline: chat
+    question: "What is the reopen_rate of org {org} in the most recent quarter?"
+    tags: [quality, org]
+    expected:
+      placeholders_sql: |
+        SELECT o.name AS org FROM metrics.incident_fact f JOIN core.org o ON o.org_id = f.org_id
+        WHERE NOT f.excluded GROUP BY o.org_id, o.name ORDER BY count(*) DESC, o.org_id LIMIT 1
+      numeric:
+        unit: ratio
+        tolerance: {abs: 0.002}
+        reference_sql: |
+          SELECT value FROM metrics.metric_value
+          WHERE metric = 'reopen_rate' AND period = 'quarter' AND entity_type = 'org'
+            AND period_start = (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+            AND entity_id = (SELECT org_id FROM metrics.incident_fact WHERE NOT excluded AND org_id IS NOT NULL
+                             GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1)
+  - id: G10
+    pipeline: chat
+    question: "Which are the top 5 recurring incident clusters by customer_impact_minutes?"
+    tags: [cluster, ranking]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT cluster_id FROM metrics.incident_fact
+          WHERE NOT excluded AND cluster_id IS NOT NULL
+          GROUP BY cluster_id ORDER BY sum(coalesce(impact_h, 0)) DESC, cluster_id LIMIT 5
+        check: "topk_contains:5:4"
+  - id: G11
+    pipeline: chat
+    datasets: [synthetic]
+    question: "Which epics are in progress for {T2.service}?"
+    tags: [delivery, service]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT record_id FROM core.work_item
+          WHERE type = 'epic' AND status_category = 'in_progress'
+            AND service_id = (SELECT service_id FROM core.work_item WHERE record_id =
+                (SELECT candidate_id FROM score.funding ORDER BY rank, candidate_id LIMIT 1))
+          ORDER BY key
+        check: set_equals
+  - id: G12
+    pipeline: chat
+    question: "What is the mean cycle_time_days of work items finished in project {project} in the most recent quarter?"
+    tags: [delivery]
+    expected:
+      placeholders_sql: |
+        SELECT w.project AS project FROM metrics.work_item_fact f JOIN core.work_item w USING (record_id)
+        WHERE f.done_at IS NOT NULL AND f.cycle_days IS NOT NULL
+          AND f.done_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+        GROUP BY w.project ORDER BY count(*) DESC, w.project LIMIT 1
+      numeric:
+        unit: days
+        tolerance: {rel: 0.02}
+        reference_sql: |
+          SELECT avg(f.cycle_days) AS value FROM metrics.work_item_fact f JOIN core.work_item w USING (record_id)
+          WHERE f.done_at IS NOT NULL AND f.cycle_days IS NOT NULL
+            AND f.done_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+            AND w.project = (
+              SELECT w2.project FROM metrics.work_item_fact f2 JOIN core.work_item w2 USING (record_id)
+              WHERE f2.done_at IS NOT NULL AND f2.cycle_days IS NOT NULL
+                AND f2.done_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+              GROUP BY w2.project ORDER BY count(*) DESC, w2.project LIMIT 1)
+  - id: G13
+    pipeline: chat
+    question: "Which teams have the oldest open backlog (mean age of open work items, backlog_age_days)?"
+    tags: [delivery, ranking]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT team_id FROM metrics.work_item_fact
+          WHERE done_at IS NULL AND team_id IS NOT NULL
+          GROUP BY team_id HAVING count(*) >= 3
+          ORDER BY avg(date_diff('day', created_at, (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week'))) DESC, team_id
+          LIMIT 3
+        check: "kendall_tau>=0.8"
+  - id: G14
+    pipeline: chat
+    question: "How many P1 incidents breached their SLA in the most recent month?"
+    tags: [sla, count, priority]
+    expected:
+      numeric:
+        unit: count
+        tolerance: {abs: 0}
+        reference_sql: |
+          SELECT count(*) AS value FROM metrics.incident_fact
+          WHERE NOT excluded AND priority = 1 AND sla_breached
+            AND opened_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'month')
+            AND opened_at < (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week')
+  - id: G15
+    pipeline: chat
+    datasets: [synthetic]
+    question: "Is {T5.team} getting worse?"
+    tags: [confounder, planted]
+    expected:
+      rules:
+        must_mention:
+          - {entity: "{T5.team}", with_any: ["seasonal", "request volume", "volume"]}
+        must_not_claim:
+          - {entity: "{T5.team}", pattern: "\\b(degrad\\w*|worse|deteriorat\\w*|declin\\w*|slower)\\b"}
+      rubric: {criteria: [states_the_seasonal_driver, separates_volume_from_performance], min_score: 3}
+  - id: G16
+    pipeline: chat
+    datasets: [synthetic]
+    question: "Why did incidents on {T5.service} spike recently?"
+    tags: [confounder]
+    expected:
+      rules:
+        must_mention: ["request volume"]
+        must_not_claim:
+          - {entity: "{T5.team}", pattern: "\\b(team|staff\\w*|performance|slower|worse)\\b"}
+  - id: G17
+    pipeline: chat
+    question: "Which team's changes caused the most incidents (link score at least 0.5) in the last 6 months?"
+    tags: [change, ranking, planted]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT c.team_id FROM enrich.incident_change_link l
+          JOIN core.change c ON c.record_id = l.change_id
+          WHERE l.score >= 0.5 AND c.team_id IS NOT NULL
+            AND c.actual_end >= (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week') - INTERVAL 6 MONTH
+          GROUP BY c.team_id ORDER BY count(DISTINCT l.incident_id) DESC, c.team_id LIMIT 3
+        check: rank1
+        truth_ref: plants.T3_change_cluster.owning_team_id
+      must_mention: ["{entity_name}"]
+  - id: G18
+    pipeline: chat
+    question: "What is the MTTR of service \"Quantum Ledger\"?"
+    tags: [negative]
+    expected:
+      rules:
+        must_mention: ["not found"]
+        max_number_refs: 0
+  - id: G19
+    pipeline: chat
+    question: "How many incidents were opened in 2019?"
+    tags: [negative]
+    expected:
+      rules:
+        must_mention: ["no data"]
+        max_number_refs: 0
+  - id: G20
+    pipeline: chat
+    question: "How many changes per week did team {team} make over the last 12 weeks?"
+    tags: [change, team]
+    expected:
+      placeholders_sql: |
+        SELECT t.name AS team FROM metrics.change_fact c JOIN core.team t ON t.team_id = c.team_id
+        GROUP BY t.team_id, t.name ORDER BY count(*) DESC, t.team_id LIMIT 1
+      numeric:
+        unit: other  # a weekly mean, not a whole count
+        tolerance: {rel: 0.02}
+        reference_sql: |
+          SELECT count(*) / 12.0 AS value FROM metrics.change_fact
+          WHERE actual_end >= (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week') - INTERVAL 84 DAY
+            AND actual_end < (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week')
+            AND team_id = (SELECT team_id FROM metrics.change_fact WHERE team_id IS NOT NULL
+                           GROUP BY team_id ORDER BY count(*) DESC, team_id LIMIT 1)
+  - id: G21
+    pipeline: chat
+    question: "What share of incidents has no mapped service?"
+    tags: [quality]
+    expected:
+      numeric:
+        unit: ratio
+        tolerance: {abs: 0.005}
+        reference_sql: |
+          SELECT avg(CASE WHEN service_id IS NULL THEN 1.0 ELSE 0.0 END) AS value
+          FROM metrics.incident_fact WHERE NOT excluded
+  - id: G22
+    pipeline: chat
+    question: "Which team has the highest reassignment_rate over the last 12 months?"
+    tags: [ranking, team]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT entity_id FROM metrics.metric_value
+          WHERE metric = 'reassignment_rate' AND period = 't12m' AND entity_type = 'team' AND value IS NOT NULL
+          ORDER BY value DESC, entity_id LIMIT 3
+        check: rank1
+      must_mention: ["{entity_name}"]
+  - id: G23
+    pipeline: chat
+    question: "What is the mtta_minutes of P1 incidents in the most recent quarter?"
+    tags: [mtta, priority]
+    expected:
+      numeric:
+        unit: minutes
+        tolerance: {rel: 0.02}
+        reference_sql: |
+          SELECT avg(date_diff('second', i.opened_at, i.acknowledged_at)) / 60.0 AS value
+          FROM core.incident i JOIN metrics.incident_fact f USING (record_id)
+          WHERE NOT f.excluded AND f.priority = 1 AND i.acknowledged_at IS NOT NULL
+            AND f.opened_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+  - id: F01
+    pipeline: funding
+    question: "What should we fund next?"
+    tags: [funding, ranking, planted]
+    expected:
+      entities:
+        reference_sql: SELECT candidate_id FROM score.funding ORDER BY rank, candidate_id LIMIT 5
+        check: rank1
+        truth_ref: plants.T2_roi_epic.epic_record_id
+  - id: F02
+    pipeline: funding
+    question: "Which are the top 5 funding candidates?"
+    tags: [funding, ranking]
+    expected:
+      entities:
+        reference_sql: SELECT candidate_id FROM score.funding ORDER BY rank, candidate_id LIMIT 5
+        check: "kendall_tau>=0.8"
+  - id: F03
+    pipeline: funding
+    question: "What is the addressable pain in dollars of the top funding candidate?"
+    tags: [funding, usd]
+    expected:
+      numeric:
+        unit: usd
+        tolerance: {rel: 0.005}
+        reference_sql: SELECT addressable_pain_usd AS value FROM score.funding ORDER BY rank, candidate_id LIMIT 1
+  - id: F04
+    pipeline: funding
+    question: "With the {scenario} budget of {budget_usd} dollars, what do we fund?"
+    tags: [funding, portfolio]
+    expected:
+      placeholders_sql: |
+        SELECT scenario, CAST(CAST(budget_usd AS BIGINT) AS VARCHAR) AS budget_usd FROM score.portfolio
+        WHERE scenario = 'base' LIMIT 1
+      entities:
+        reference_sql: |
+          SELECT candidate_id FROM score.portfolio WHERE scenario = 'base' AND selected
+          ORDER BY order_rank, candidate_id
+        check: set_equals
+  - id: F05
+    pipeline: funding
+    datasets: [synthetic]
+    setup: seed_prior_run
+    question: "Did the epics we funded last quarter pay off?"
+    tags: [outcomes, memory]
+    expected:
+      rules:
+        must_mention:
+          - {entity: "{T6.paid.epic_key}", with_any: ["paid off", "improved", "reduced"]}
+          - {entity: "{T6.unpaid.epic_key}", with_any: ["no effect", "did not improve", "no measurable"]}
+        must_not_claim:
+          - {entity: "{T6.unpaid.epic_key}", pattern: "(paid off|improved|reduced incidents)"}
+      rubric: {criteria: [cites_outcome_measurement, distinguishes_the_two_epics], min_score: 3}
+  - id: F06
+    pipeline: funding
+    datasets: [synthetic]
+    question: "Is {T2.decoy} a good investment?"
+    tags: [funding, decoy]
+    expected:
+      must_not_claim:
+        - {entity: "{T2.decoy}", pattern: "(top priority|fund (it )?first|best investment|highest (return|roi))"}
+  - id: F07
+    pipeline: funding
+    question: "How good is the executive summary of the funding review?"
+    tags: [funding, prose]
+    expected:
+      rubric: {criteria: [clarity, actionability, evidence_cited, uncertainty_stated], min_score: 3.5}
+  - id: O01
+    pipeline: org
+    question: "Which group should improve first?"
+    tags: [org, ranking, planted]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT entity_id FROM (SELECT DISTINCT entity_id, rank FROM score.org WHERE entity_type = 'team')
+          ORDER BY rank, entity_id LIMIT 3
+        check: rank1
+        truth_ref: plants.T1_bad_team.team_id
+  - id: O02
+    pipeline: org
+    question: "Which action yields the biggest dollar impact for that group?"
+    tags: [org, levers]
+    expected:
+      placeholders_sql: |
+        SELECT metric FROM score.action_lever
+        WHERE entity_type = 'team' AND entity_id = (
+          SELECT entity_id FROM (SELECT DISTINCT entity_id, rank FROM score.org WHERE entity_type = 'team')
+          ORDER BY rank, entity_id LIMIT 1)
+        ORDER BY delta_usd DESC, metric, target_kind LIMIT 1
+      must_mention: ["{metric}"]
+  - id: O03
+    pipeline: org
+    question: "Which are the top 3 teams by composite score?"
+    tags: [org, ranking]
+    expected:
+      entities:
+        reference_sql: |
+          SELECT entity_id FROM (SELECT DISTINCT entity_id, rank FROM score.org WHERE entity_type = 'team')
+          ORDER BY rank, entity_id LIMIT 3
+        check: "kendall_tau>=0.8"
+  - id: O04
+    pipeline: org
+    datasets: [synthetic]
+    question: "Should {T5.team} be on the improvement list?"
+    tags: [org, confounder]
+    expected:
+      rules:
+        must_mention:
+          - {entity: "{T5.team}", with_any: ["seasonal", "volume"]}
+        must_not_claim:
+          - {entity: "{T5.team}", pattern: "\\b(degrad\\w*|worse|deteriorat\\w*|declin\\w*|slower)\\b"}
+  - id: O05
+    pipeline: org
+    datasets: [synthetic]
+    question: "What should the team of {T4.service} do?"
+    tags: [org, noise]
+    expected:
+      rules:
+        must_mention: ["alert noise"]
+  - id: O06
+    pipeline: org
+    datasets: [synthetic]
+    question: "Is the MTTR trend of {T1.team} improving?"
+    tags: [org, trend]
+    expected:
+      rules:
+        must_mention: ["rising"]
+        number_signs: [{column: trend_slope, sign: positive}]
+  - id: O07
+    pipeline: org
+    datasets: [synthetic]
+    question: "Why is change health poor for {T3.owning_team}?"
+    tags: [org, change]
+    expected:
+      rules:
+        must_mention: ["emergency changes"]
+      rubric: {criteria: [names_the_change_driver, actionability], min_score: 3}

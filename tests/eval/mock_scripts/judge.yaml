@@ -1,0 +1,27 @@
+# Mock rubric judge for the golden suite (impl 11 U11-75; R-65 script format).
+# Judge calls are keyed `model_role: eval_judge`, `dedup_key: <question id>` (U11-40);
+# one script per rubric question, every criterion scored 4 of 5.
+- match: {model_role: eval_judge, dedup_key: G15}
+  turns:
+    - final:
+        output:
+          scores: {states_the_seasonal_driver: 4, separates_volume_from_performance: 4}
+          rationale: "Names the seasonal driver and keeps volume apart from performance."
+- match: {model_role: eval_judge, dedup_key: F05}
+  turns:
+    - final:
+        output:
+          scores: {cites_outcome_measurement: 4, distinguishes_the_two_epics: 4}
+          rationale: "Cites the outcome measurement and treats the two epics apart."
+- match: {model_role: eval_judge, dedup_key: F07}
+  turns:
+    - final:
+        output:
+          scores: {clarity: 4, actionability: 4, evidence_cited: 4, uncertainty_stated: 4}
+          rationale: "Clear and actionable; evidence and caveats are stated."
+- match: {model_role: eval_judge, dedup_key: O07}
+  turns:
+    - final:
+        output:
+          scores: {names_the_change_driver: 4, actionability: 4}
+          rationale: "Names emergency changes as the driver and says what to do."
