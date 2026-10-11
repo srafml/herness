@@ -159,7 +159,7 @@ def run_eval(
     primary = _finished(resume_run_id, deps) if second_id is not None else None
     if primary is None:
         first = run(payload.profile, resume_run_id, deps, options)
-        if first.yielded:
+        if first.yielded or first.canceled:
             return first
         primary = _Primary(first.run_id, first.out_dir, first.summary, first.passed)
     if second_id is None and current_build(deps.data_root) != primary.summary.get("build_id"):
@@ -168,9 +168,9 @@ def run_eval(
     job = _CompareJob(deps.job) if deps.job is not None else None
     second = run(
         payload.compare_profile, second_id, dataclasses.replace(deps, job=job),
-        dataclasses.replace(options, set_baseline=None, compare_profile=None),
+        dataclasses.replace(options, baseline=None, set_baseline=None, compare_profile=None),
     )  # fmt: skip
-    if second.yielded:
+    if second.yielded or second.canceled:
         return second.model_copy(update={"run_id": primary.run_id, "out_dir": primary.out_dir})
     if second.summary.get("build_id") != primary.summary.get("build_id"):
         msg = "the compared runs are on different builds; --compare needs the same build"
