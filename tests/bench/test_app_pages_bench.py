@@ -204,7 +204,6 @@ def _gate(recorder: BenchRecorder, target: BenchTarget, values: list[float]) -> 
 
 
 PAGE_PARAMS: Final = [pytest.param(spec, id=spec.path.stem) for spec in APP_PAGES]
-WARM_GAP_PAGES: Final = ("06_Change_Health", "07_Delivery_Health")  # warm: own xfail rows (T09-30)
 
 
 @pytest.mark.parametrize("spec", PAGE_PARAMS)
@@ -228,10 +227,9 @@ def test_bt09_01_dashboard_page_first_load(
         _clear_caches()
         cold.append(_render(spec))
     passed = [_gate(bench_recorder, target("render_cold", COLD_S), cold)]
-    if spec.path.stem not in WARM_GAP_PAGES:
-        _render(spec)  # warm-up
-        warm = [_render(spec) for _ in range(REPS)]
-        passed.append(_gate(bench_recorder, target("render_warm", WARM_S), warm))
+    _render(spec)  # warm-up
+    warm = [_render(spec) for _ in range(REPS)]
+    passed.append(_gate(bench_recorder, target("render_warm", WARM_S), warm))
     if replay:
         passed += [
             _gate(bench_recorder, target("queries_cold", COLD_S),
@@ -241,28 +239,6 @@ def test_bt09_01_dashboard_page_first_load(
         ]  # fmt: skip
     assert spec.needs_warehouse is False or replay, "a warehouse page ran no named query"
     assert all(passed), f"BT09-01 {page}: a p95 is over its threshold (see stderr)"
-
-
-# Non-strict by controller ruling: the warm p95 of pages 06 and 07 depends on host load (page 06:
-# 0.479 s idle, 0.74-0.78 s loaded; page 07: 0.724 s in a full run, 0.660 s alone), so a strict
-# xfail would fail whenever it passes. Owner: T09-30 (chart cost); cold rows stay enforced above.
-@pytest.mark.parametrize("page", WARM_GAP_PAGES)
-@pytest.mark.xfail(strict=False, reason="product gap T09-30 (pages 06/07 warm render chart cost)")
-def test_bt09_01_warm_render_gap_pages(
-    pages: SimpleNamespace, built: Built, bench_recorder: BenchRecorder, page: str
-) -> None:
-    """BT09-01 warm render of pages 06 and 07, 20 repetitions: p95 < 0.5 s (cold is gated above).
-
-    Page 06 measured 0.479 s idle and 0.74-0.78 s loaded; page 07 0.724 s loaded (full run) and
-    0.660 s alone. xfail (not strict) until T09-30.
-    """
-    spec = next(s for s in APP_PAGES if s.path.stem == page)
-    _render(spec)  # warm-up
-    warm = [_render(spec) for _ in range(REPS)]
-    target = BenchTarget(
-        "BT09-01", "09", f"{spec.path.stem.lower()}_render_warm_p95", "s", WARM_S, built.scale
-    )
-    assert _gate(bench_recorder, target, warm)
 
 
 def test_bt09_02_cluster_detail_ten_largest(

@@ -2533,6 +2533,20 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Blocked by | none |
 | Size | S |
 
+#### T04-24 Memoise load_catalog per process (follow-up, found by T09-26)
+
+| Field | Content |
+|-------|---------|
+| Goal | `load_catalog()` costs 2-3 s per call, so dashboard pages 06 and 07 missed the BT09-01 2 s cold-render threshold. The loaded, validated catalog is memoised per process, keyed by a SHA-256 over the catalog file bytes, the SQL templates and macros it renders and the weights JSON (any edit reloads; `validate_catalog` stays fail-closed); the dashboard reaches the catalog through that memo; validation shares one Jinja environment across the grain renders (first load about 0.7 s). The strict xfail T09-26 planted on the pages 06 and 07 rows is removed. |
+| Depends on | T04-22, T09-26 |
+| Units | U04-24, U04-38 (`load_catalog`, `validate_catalog`, `render_metric_query` optional `env`) |
+| Files | `herness/metrics/catalog.py`, `herness/metrics/_catalog_cache.py`, `herness/metrics/render.py`, `herness/metrics/_catalog_checks.py`, `app/common/_pages_05_07.py` (`metric_names` no longer behind `st.cache_data`), docs/impl/04 + 09 notes |
+| Tests | UT04-124, BT09-01 (pages 06 and 07 cold render under 2 s at scale `small`) |
+| Threats | TH04-06 (a stale catalog after a file edit is impossible: the key is the bytes, not a timestamp) |
+| Acceptance checks | `uv run pytest tests/unit/metrics -k catalog tests/unit/app -q -p pandas` passes; BT09-01 cold p95 of pages 06 and 07 under 2 s; fast gates |
+| Blocked by | none |
+| Size | S |
+
 ## 13. Design deltas and open items
 
 ### 13.1 Design deltas (contract changes requested)

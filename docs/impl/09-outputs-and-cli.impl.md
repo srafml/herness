@@ -83,7 +83,8 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `app/common/_wh_queries.py` | Private helper of `wh.py` (T09-14 split for the line budget): named-query file loader, strict parameter checks and the raw-text guard (U09-61); its public names are re-exported by `app.common.wh` | `ParamSpec`, `NamedQuery`, `PARAM_CHECKS`, `load_named_queries`, `check_forbidden_columns`, `FORBIDDEN_TEXT_COLUMNS` | L5 | `yaml`, `sqlglot`, `pydantic` | 200 |
 | `app/common/queries.sql.yaml` | Named SQL queries | see U09-63 | data | — | 400 |
 | `app/common/data.py` | Cached ops reads, cache invalidation, trace pages | `ops_read`, `after_write`, `TracePage`, `read_trace_page` | L5 | `streamlit` | 220 |
-| `app/common/_pages_05_07.py` | Private helpers shared by pages 05–07 (T09-17): named-query reads, plain-text cells, entity and period filters, the catalog-domain metric table and line charts | `ALL`, `PERIODS`, `NO_VALUES`, `Row`, `rows`, `cell`, `options`, `choose`, `period`, `metric_names`, `metrics_block` | L5 | `streamlit`, `pyarrow` | 120 |
+| `app/common/_pages_05_07.py` | Private helpers shared by pages 05–07 (T09-17): named-query reads, plain-text cells, entity and period filters, the catalog-domain metric table and line charts, cached per build (T09-30) | `ALL`, `PERIODS`, `NO_VALUES`, `Row`, `rows`, `cell`, `options`, `choose`, `period`, `metric_names`, `metric_view`, `metrics_block` | L5 | `streamlit`, `pyarrow` | 120 |
+| `app/common/_metric_view.py` | Private helper of `_pages_05_07.py` (T09-30): `cell`, the metric table records and one Vega-Lite line-chart spec per metric, built once per build and cached by `metric_view`; plain values only (TH09-11) | `METRIC_COLUMNS`, `MetricView`, `cell`, `chart_spec`, `metric_view_data` | L5 | `altair`, `pyarrow` | 80 |
 | `app/common/_pages_08_10.py` | Private helpers shared by pages 08–10 (T09-18): role gates mirroring the actions' own `require_role` checks, the action runner (error card next to the form, `after_write`, confirmation and rerun), ops-read rows, plain-text cells, filters, `NumberRef` parsing | `ALL`, `DONE_KEY`, `Row`, `allowed`, `review_action`, `rows`, `cell`, `choose`, `numbers`, `flash`, `act` | L5 | `streamlit` | 120 |
 | `app/common/widgets.py` | Page wrapper, error isolation, evidence widget (implemented in `_widgets_evidence.py` and re-exported here, T09-15c), badges, banners, sidebar | `PageContext`, `page`, `block`, `evidence`, `verification_badge`, `banner_strip`, `sidebar_build`, `user_error` | L5 | `streamlit` | 300 |
 | `app/common/_widgets_evidence.py` | Private helper of `widgets.py` (T09-15c split for the line budget): the evidence widget (U09-67); `result_sample` cell sanitising is delegated to `herness/reports/_sample_policy.py` (TH09-11, T09-15e) and its public names are re-exported by `app.common.widgets` | `evidence`, `sample_rows`, `parse_json`, `ALWAYS_DROPPED`, `REDACTED`, `EVIDENCE_SHOWN`, `CELL_MAX` | L5 | `streamlit`, `pyarrow`, `herness.reports._sample_policy` | 200 |
@@ -2094,7 +2095,7 @@ Test note (T09-15): the Home AppTests (IT09-10, IT09-11, FT09-05) run on a real 
 
 Tests: IT09-10, UT09-79, BT09-01. Security notes: TH09-11 (titles redacted), TH09-02.
 
-T04-24 spec note (2026-10-11): `metric_names` (`app/common/_pages_05_07.py`) no longer sits behind `st.cache_data`; it reads the catalog through `load_catalog`, which is memoised per process (impl 04 U04-24), so clearing Streamlit caches never forces the 2-3 s reload and pages 06 and 07 meet the BT09-01 cold-render target (the T09-26 strict xfail is removed).
+T04-24 spec note (2026-10-11): `metric_names` (`app/common/_pages_05_07.py`) no longer sits behind `st.cache_data`; it reads the catalog through `load_catalog`, which is memoised per process (impl 04 U04-24), so clearing Streamlit caches never forces the 2-3 s reload and pages 06 and 07 meet the BT09-01 cold-render target (the T09-26 strict xfail is removed). T09-30: the later warm xfail rows for pages 06/07 are removed too; pages 06/07 warm rows enforced.
 
 Note (T09-16 ruling): no row selected -> detail and evidence show the top row.
 
@@ -3489,6 +3490,7 @@ Markers per spec 11 §4.1. Fixtures: `tests/fixtures/reports/draft_funding.json`
 | UT09-116 | U09-38 | pending `label_check` item | approve with answer only | stored note exactly `{"answer":"yes"}` |
 | UT09-117 | U09-38 | other kinds; label_check note of 1,000 quote characters | `stored_review_note` | plain note unchanged; oversize → `UserInputError`, text not echoed |
 | UT09-119 | U09-103 | `boot_inline` with fake owners: ports, a kind pre-bound, an owner raising `ConfigError`, another error | helper and bootstrap | boot before `run_inline` (after the role check), once per process; pre-bound kind kept; ConfigError owner unbound and logged without message text, others register; other errors propagate |
+| UT09-120 | U09-78, U09-79 | fake `metrics.values` results for builds `b1` and `b2`; same inputs twice; another period, filter or domain | `metric_view` (cached) | same build and inputs: one computation; build `b2` never reuses `b1`'s entry and `b1`'s own entry survives; a different period, filter or domain is a new entry; the cached view holds only the table records and one chart spec per metric |
 
 ### 11.2 Property tests (marker `unit`, hypothesis)
 
@@ -3963,7 +3965,7 @@ Follow-up T09-15c (found by T09-16): the evidence widget moved to the private si
 | Blocked by | none |
 | Size | M |
 
-T09-26 spec note (2026-10-11): (1) Layout: the security rows live in `tests/security/test_st09_*.py` (the landed ST09 layout and the `tests/security -k st09` gate), not `tests/unit/security_09`. (2) Traceability (no row deleted): the second §11.1 `UT09-111` (U09-75, `org.coverage`) is renumbered `UT09-114` with its test (renumbered again `UT09-118` at merge: the U09-38 `label_check` rows took UT09-114..117 on integration); UT09-111, UT09-112 and ST09-30 join T09-15's Tests row, UT09-118 and IT09-29 join T09-16's, UT09-113 and ST09-31 join T09-07's (their units' cards); TH09-17, TH09-19 and TH09-24 gain the security rows ST09-32, ST09-33 and ST09-34 (this card). (3) IT09-10 and IT09-11 are the landed page tests (all 12 pages, the scored `metrics_tiny` build planted by `plant_scored_build` standing in for `tiny_build`, whose warehouse has no score tables); IT09-15's eval-gate row is in `tests/integration/cli/test_cli_eval_it.py`. (4) `tests/fixtures/cli/cli1.schema.json` is the `cli/1` envelope of U09-86 with one `$defs` shape per data kind (list, job, report, doctor); a job's data may also carry the eval command's `passed` and `compare_run_id`; exit 6 gives `ok: false` with data and a null error. (5) ST09-19 runs the pilot path in one process; `--inline` registers no job handlers in the CLI process (U09-103), so the test registers the owners' handlers (and seams for `build_pipeline` and `review`) itself, and a strict xfail records the gap (a product gap with a program owner: the inline helper does not call `worker_bootstrap`; the xfail reason names the card). The seams ST09-19 uses, all outside the asserted paths (every CLI command, `report render`, secret resolution and redaction run for real): `init` copies a test template tree through `herness._cli._init.TEMPLATE_DIR` (not the shipped `config/`); `doctor_host.doctor_checks` returns no host rows (no host subprocesses), so `doctor` is asserted literally as exit 0 with `ok: true`; the inline GPU controller is stubbed (no model server); the `build_pipeline` handler plants the report warehouse and the `review` handler renders a fixed run; chat uses a fake chat service and memory store. (6) BT09-01 - BT09-03 run a real scored synthetic build at scale `small` unless `HERNESS_BENCH_FULL=1` (then `full`, from `HERNESS_SYNTH_FULL_ROOT` or generated); BT09-03 uses 50,000 evidence rows at `small` and 1,000,000 at `full`. BT09-01 rows for pages 06 and 07 are strict xfail on the program-owned `load_catalog` gap (~2.2 s; the xfail reason names the card) (cold p95 2.92 s / 2.84 s at `small`); every other page keeps p95 cold < 2 s, warm < 0.5 s.
+T09-26 spec note (2026-10-11): (1) Layout: the security rows live in `tests/security/test_st09_*.py` (the landed ST09 layout and the `tests/security -k st09` gate), not `tests/unit/security_09`. (2) Traceability (no row deleted): the second §11.1 `UT09-111` (U09-75, `org.coverage`) is renumbered `UT09-114` with its test (renumbered again `UT09-118` at merge: the U09-38 `label_check` rows took UT09-114..117 on integration); UT09-111, UT09-112 and ST09-30 join T09-15's Tests row, UT09-118 and IT09-29 join T09-16's, UT09-113 and ST09-31 join T09-07's (their units' cards); TH09-17, TH09-19 and TH09-24 gain the security rows ST09-32, ST09-33 and ST09-34 (this card). (3) IT09-10 and IT09-11 are the landed page tests (all 12 pages, the scored `metrics_tiny` build planted by `plant_scored_build` standing in for `tiny_build`, whose warehouse has no score tables); IT09-15's eval-gate row is in `tests/integration/cli/test_cli_eval_it.py`. (4) `tests/fixtures/cli/cli1.schema.json` is the `cli/1` envelope of U09-86 with one `$defs` shape per data kind (list, job, report, doctor); a job's data may also carry the eval command's `passed` and `compare_run_id`; exit 6 gives `ok: false` with data and a null error. (5) ST09-19 runs the pilot path in one process; `--inline` registers no job handlers in the CLI process (U09-103), so the test registers the owners' handlers (and seams for `build_pipeline` and `review`) itself, and a strict xfail records the gap (a product gap with a program owner: the inline helper does not call `worker_bootstrap`; the xfail reason names the card). The seams ST09-19 uses, all outside the asserted paths (every CLI command, `report render`, secret resolution and redaction run for real): `init` copies a test template tree through `herness._cli._init.TEMPLATE_DIR` (not the shipped `config/`); `doctor_host.doctor_checks` returns no host rows (no host subprocesses), so `doctor` is asserted literally as exit 0 with `ok: true`; the inline GPU controller is stubbed (no model server); the `build_pipeline` handler plants the report warehouse and the `review` handler renders a fixed run; chat uses a fake chat service and memory store. (6) BT09-01 - BT09-03 run a real scored synthetic build at scale `small` unless `HERNESS_BENCH_FULL=1` (then `full`, from `HERNESS_SYNTH_FULL_ROOT` or generated); BT09-03 uses 50,000 evidence rows at `small` and 1,000,000 at `full`. BT09-01 rows for pages 06 and 07 are strict xfail on the program-owned `load_catalog` gap (~2.2 s; the xfail reason names the card) (cold p95 2.92 s / 2.84 s at `small`); every other page keeps p95 cold < 2 s, warm < 0.5 s. T09-30: pages 06/07 warm rows enforced (the xfail rows are removed).
 
 ### T09-27 Worker bootstrap
 
@@ -3978,6 +3980,50 @@ T09-26 spec note (2026-10-11): (1) Layout: the security rows live in `tests/secu
 | Acceptance checks | `pytest -k UT09-101` passes; `herness worker --once` with a fake job of every kind finds a handler for each (manual check on the dev box) |
 | Blocked by | none |
 | Size | S |
+
+### T09-28 Review Queue label_check reject note (follow-up, found by T09-24)
+
+| Field | Content |
+|-------|---------|
+| Goal | `review-queue reject <label_check> --note ...` and the Review Queue page reject path stop failing with "a label_check note must be a JSON object string": the stored note of kind `label_check` is the canonical JSON object impl 02 `decide_review_item` requires (reason, optional answer); other kinds keep their plain note. The strict xfail `test_cv_t09_24_label_check_reject_via_cli` is removed and the dashboard row is added. |
+| Depends on | T09-12, T09-24 |
+| Units | U09-38 (`herness.reports.actions._stored_note`; impl 02 `decide_review_item` label_check note contract) |
+| Files | `herness/reports/_review_notes.py`, `herness/reports/actions.py`, `herness/_cli/cmd_queue.py`, the Review Queue page, docs/impl/02 + 09 notes |
+| Tests | UT09-114, UT09-115, UT09-116, UT09-117, IT09-21 |
+| Threats | none new (the note passes through the sanitiser) |
+| Acceptance checks | `uv run pytest tests/unit/cli tests/unit/reports tests/unit/app -k 'review or label' -q -p pandas` passes; fast gates |
+| Blocked by | none |
+| Size | S |
+
+### T09-29 Inline commands register the job handlers (follow-up, found by T09-26)
+
+| Field | Content |
+|-------|---------|
+| Goal | Commands that accept `--inline` call `run_inline` after the shared helper has registered every owner's handler (config, socket guard, then handlers), so a fresh CLI process no longer exits 3 "no handler"; the strict xfail of ST09-19's inline row is removed. |
+| Depends on | T09-27, T09-21, T09-26 |
+| Units | U09-103 (inline helper) |
+| Files | `herness/_cli/_inline_boot.py` and the shared inline helper under `herness/_cli/` (`herness/cli.py` is not edited), docs/impl/09 U09-103 note, `tests/unit/cli`, `tests/integration/cli` |
+| Tests | UT09-119, IT09-30, ST09-19 |
+| Threats | none new (bootstrap order: config, socket guard, handlers) |
+| Acceptance checks | `uv run pytest tests/unit/cli tests/integration/cli -m 'not slow' -k inline -q -p pandas` passes; fast gates |
+| Blocked by | none |
+| Size | S |
+
+### T09-30 Pages 06 and 07 warm render under the BT09-01 threshold (follow-up to T04-24)
+
+| Field | Content |
+|-------|---------|
+| Goal | The warm `streamlit.testing` render of Change Health (06) and Delivery Health (07) is under the 0.5 s BT09-01 threshold at scale `small` (cold stays under 2 s): the metric table records and the line-chart specs are built once per build and cached (`st.cache_data`, key = build id, domain, period, metric names, filters) instead of rebuilt on every rerun. The non-strict xfail rows owned by this card are replaced by the plain warm assertion every other page has. |
+| Depends on | T09-17, T04-24 |
+| Units | U09-78, U09-79, `app/common/_pages_05_07.py` (`metrics_block`, `metric_names`, `rows`), `app/common/_metric_view.py` |
+| Files | `app/common/_pages_05_07.py`, `app/common/_metric_view.py`, `tests/bench/test_app_pages_bench.py` (xfail marker removed, no threshold change), `tests/unit/app/test_app_metric_view.py`, this document, docs/impl/04 (T04-24 card) |
+| Tests | UT09-120, BT09-01 (pages 06 and 07 warm, cold) |
+| Threats | TH09-11 (cached values are numbers, ids and catalog metric names only; the key carries the build id, so no cross-build reuse) |
+| Acceptance checks | `PYTHONUTF8=1 uv run pytest tests/unit/app tests/integration/app -m "not slow" -q -p pandas` passes; `uv run pytest tests/bench/test_app_pages_bench.py -q -p pandas -m slow -k test_bt09_01` passes with 0 xfail; `uv run python -m tools.check_traceability --require-implemented 09` |
+| Blocked by | none |
+| Size | S |
+
+T09-30 spec note (2026-10-11): (1) Profile (warm render of page 06 under cProfile, five reruns, `streamlit.testing`; cProfile inflates every figure about 1.7x): 0.79 s per profiled rerun, of which the page script (`widgets.page`) 0.25 s and the AppTest harness the rest (component-manifest scan 0.53 s, script thread start and join), the harness cost being the same for every page. Inside the page script `metrics_block` was 0.135 s, i.e. over half of it: two `st.line_chart` calls per rerun (Altair `Chart` construction and `to_dict` schema validation in `generate_chart`, 0.11 s per rerun, plus the hover-selection layer) and the per-rerun `to_pylist`, record list and series comprehensions. The named queries are cached by `wh.query` (at most 0.036 s) and `load_catalog` is memoised (T04-24), so neither was a cost. (2) Fix: `metric_view` (`_pages_05_07.py`) caches a `MetricView` (table records, plus one Vega-Lite spec per metric, built by `_metric_view.chart_spec`: line mark, `period_start` temporal on x, `value` on y, one colour per `entity`, interactive, same caption order) through `st.cache_data`. The key is the build id (explicit argument, taken from the `metrics.values` result), the domain, the period, the metric names and the filters; the Arrow table is passed unhashed (`_table`) because those inputs determine it for a build. The page renders the spec with `st.vega_lite_chart`. A hit does no chart work; another build, period, filter or domain is a different entry (UT09-120). The cached value holds numbers, ids, units and catalog metric names, never ticket text (TH09-11). (3) The chart is the same line chart but is no longer the exact spec of `st.line_chart` (no hover-rule layer); tables, columns, captions, info texts and order are unchanged. (4) BT09-01 pages 06 and 07: `WARM_GAP_PAGES` and the xfail test are removed; the plain rows gate both warm renders. Small-scale p95 (cold / warm render, s): full run, all 12 pages pass, p95 cold / warm render in seconds: home 0.351 / 0.332, 01 0.349 / 0.296, 02 0.373 / 0.329, 03 0.373 / 0.289, 04 0.329 / 0.297, 05 0.346 / 0.307, 06 0.901 / 0.335, 07 0.431 / 0.347, 08 0.351 / 0.305, 09 0.342 / 0.311, 10 0.339 / 0.329, 11 0.339 / 0.317. T09-26 spec note (6) and the T04-24 note record the earlier xfail rows; those rows are history, T09-30: pages 06/07 warm rows enforced.
 
 ## 13. Design deltas and open items
 
