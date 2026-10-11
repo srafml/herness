@@ -18,6 +18,7 @@ import pytest
 import typer
 from tests.support.cli_env import CliEnv, preserved_app
 from tests.support.fake_keyring import MemoryKeyring
+from tests.unit.eval._golden_fixtures import write_suite
 from typer.testing import CliRunner
 
 import herness.admin
@@ -92,6 +93,7 @@ def admin(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> Recorder:
     cli_env.user = "root"
     monkeypatch.setattr(identity, "_is_elevated", lambda: True)
     monkeypatch.setattr(runner._Binding, "factory", None)  # `eval` binds it
+    monkeypatch.setattr(_eval_deps._Root, "path", None)  # ... and sets the checkout root
     return Recorder()
 
 
@@ -325,6 +327,37 @@ def test_ut09_90_deploy_commands_call_owner_with_cfg_and_actor(
     assert set(_json(capsys)["data"]["classes"]) == {"reasoning", "decider", "large"}
 
 
+def test_ut09_90_deploy_down_all_reports_each_class_and_propagates_failure(
+    deploy: Recorder, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """UT09-90 `deploy down` without CLASS: per-class exit code and data; a failing class
+    sets the exit code; an owner error stops the loop after recording the classes so far."""
+    seen: list[str] = []
+
+    def down(cls: str, **kw: Any) -> CommandResult:
+        seen.append(cls)
+        if cls == "large":
+            msg = "compose down failed"
+            raise ModelUnavailable(msg)
+        return _ok({"stopped": cls}, code=1 if cls == "decider" else 0)
+
+    monkeypatch.setattr(commands_deploy, "cmd_deploy_down", down)
+    assert _main(["--json", "deploy", "down"]) == 1
+    classes = _json(capsys)["data"]["classes"]
+    assert classes["reasoning"] == {"exit_code": 0, "data": {"stopped": "reasoning"}}
+    assert classes["decider"]["exit_code"] == 1
+    assert classes["large"] == {"exit_code": 9, "error": "ModelUnavailable"}
+    assert seen == ["reasoning", "decider", "large"]
+
+    def failing(cls: str, **kw: Any) -> CommandResult:
+        msg = "down"
+        raise ModelUnavailable(msg)
+
+    monkeypatch.setattr(commands_deploy, "cmd_deploy_down", failing)
+    assert _main(["--json", "deploy", "down"]) == 9
+    assert list(_json(capsys)["data"]["classes"]) == ["reasoning"]
+
+
 def test_ut09_90_deploy_bad_class_or_bundle_is_usage_error(
     deploy: Recorder, tmp_path: Path
 ) -> None:
@@ -409,6 +442,41 @@ def test_ut09_90_eval_gpu_class_and_idem_key(
         assert payload["compare_profile"] == "hybrid"
     if "--resume" in args:
         assert (payload["resume_run_id"], payload["profile"]) == (RUN, "synth")
+
+
+@pytest.mark.parametrize(
+    ("args", "ids"),
+    [
+        (["--ids", "G01,F01"], ["G01", "F01"]),
+        (["--ids", "G01", "--ids", "F01"], ["G01", "F01"]),
+        (["--ids", "G01, F01", "--ids", " ,G01", "--ids", "G03,"], ["G01", "F01", "G03"]),
+    ],
+)  # fmt: skip
+def test_cv_t09_24_eval_ids_comma_repeated_and_mixed(
+    jobs: Jobs, args: list[str], ids: list[str]
+) -> None:
+    """CV-T09-24 `--ids` takes comma lists, repeated options or both: blanks dropped,
+    duplicates removed in first-seen order (T11-37 phase gate); `--tags` the same."""
+    assert _main(["eval", *args, "--tags", "a,b", "--tags", "a", "--no-wait"]) == 0
+    payload = jobs.calls[0]["payload"]
+    assert (payload["ids"], payload["tags"]) == (ids, ["a", "b"])
+
+
+def test_cv_t09_24_eval_unknown_id_is_config_error(
+    jobs: Jobs, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CV-T09-24 an id the readable suite does not hold → ConfigError naming it (exit 3);
+    nothing is enqueued. An unreadable suite is left to the runner (U11-66)."""
+    g01 = {"id": "G01", "pipeline": "chat", "question": "How many incidents?",
+           "expected": {"must_mention": ["t1"]}}  # fmt: skip
+    suite = write_suite(tmp_path / "suite.yaml", [g01])
+    assert _main(["--json", "eval", "--suite", str(suite), "--ids", "G01,G99", "--no-wait"]) == 3
+    error = _json(capsys)["error"]
+    assert (error["type"], error["message"]) == ("ConfigError", "unknown question ids: G99")
+    assert jobs.calls == []
+    assert _main(["eval", "--suite", str(suite), "--ids", "G01", "--no-wait"]) == 0
+    assert _main(["eval", "--suite", "classifier", "--ids", "G99", "--no-wait"]) != 3
+    assert _main(["eval", "--ids", "G99", "--no-wait"]) == 0  # golden file absent here
 
 
 def test_ut09_90_eval_bad_option_is_config_error_and_nothing_enqueued(
@@ -611,7 +679,9 @@ def test_ut09_90_privacy_delete_and_inline_runs_each_job(
     assert _main(["--json", *args, "--inline"]) == 0
     assert ran == ["job_1", "job_2"]
     assert bound == [_worker_boot.memory_purge]
-    assert [j["status"] for j in _json(capsys)["data"]["jobs"]] == ["done", "done"]
+    inline_payload = _json(capsys)
+    assert [j["status"] for j in inline_payload["data"]["jobs"]] == ["done", "done"]
+    assert inline_payload["warnings"] == []  # the jobs ran here (review M10)
     assert _main(["privacy", "delete", "--reason-ref", "DSR-1"]) == 2  # --record-id required
 
 

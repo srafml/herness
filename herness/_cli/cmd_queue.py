@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Final, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, cast, get_args
 
 import typer
 
@@ -131,10 +131,15 @@ def review_list(
 ) -> int:  # fmt: skip
     """List review items, one summary line each (spec 02)."""
     from herness.store.ops import list_review_items  # noqa: PLC0415 - lazy (BT09-07)
+    from herness.store.ops.shared import ReviewKind, ReviewStatus  # noqa: PLC0415
 
     del actor
+    kinds, statuses = get_args(ReviewKind.__value__), get_args(ReviewStatus.__value__)
+    if (kind is not None and kind not in kinds) or status not in statuses:
+        msg = "unknown review item kind or status"
+        raise UserInputError(msg, hint=f"Use one of {kinds} and {statuses}.")
     current_opts().config()
-    items = list_review_items(kind=kind, status=status)  # type: ignore[arg-type]
+    items = list_review_items(kind=cast("ReviewKind | None", kind), status=cast("Any", status))
     return _result("items", [_summary(item) for item in items])
 
 

@@ -164,6 +164,8 @@ def test_ut09_89_review_list_summarises_key_fields_without_text(
     assert rows[1]["summary"] == {"blocks": ["usd"], "origin": "operator"}
     assert rows[2]["summary"] == {}
     assert _main(["review-queue", "list", "--status", "approved"]) == 0
+    for bad in (["--kind", "memory"], ["--status", "done"]):  # review M9: store literals
+        assert _main(["review-queue", "list", *bad]) == 2
     out = capsys.readouterr().out
     assert seen[-1] == {"kind": None, "status": "approved"}
     assert "SECRET-TEXT" not in out

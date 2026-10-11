@@ -28,6 +28,7 @@ from herness.reports.rules import Actor, UserInputError  # Actor: Typer reads th
 
 if TYPE_CHECKING:
     from herness.admin.deploy import DeployClass
+    from herness.core.config import HernessConfig
 
 __all__ = ["register"]
 
@@ -35,6 +36,7 @@ _Opt = typer.Option
 _Arg = typer.Argument
 _CLASSES: Final = ("reasoning", "decider", "large")
 _CLASS_HELP: Final = "reasoning, decider or large."
+_NO_WORKER_PREFIX: Final = "no worker is running"  # impl 10 commands_data warning text
 DryRun = Annotated[bool, _Opt("--dry-run", help="Report only; change nothing.")]
 
 
@@ -54,11 +56,9 @@ def _deploy_class(text: str) -> DeployClass:
     return cast("DeployClass", text)
 
 
-def _deploy(op: str, *args: object, actor: Actor, **kwargs: object) -> int:
-    from herness.admin import commands_deploy  # noqa: PLC0415 - lazy (BT09-07)
-
-    command = getattr(commands_deploy, f"cmd_deploy_{op}")
-    return _emit(command(*args, cfg=current_opts().config(), actor=actor.user_ref, **kwargs))
+def _deploy_ctx(actor: Actor) -> tuple[HernessConfig, str]:
+    """The loaded config and the actor's ``user_ref`` every deploy body takes."""
+    return current_opts().config(), actor.user_ref
 
 
 ClassArg = Annotated[str, _Arg(help=_CLASS_HELP)]
@@ -67,7 +67,10 @@ ClassArg = Annotated[str, _Arg(help=_CLASS_HELP)]
 @guarded("deploy render")
 def deploy_render(*, actor: Actor) -> int:
     """Render the model-server compose environment (spec 10)."""
-    return _deploy("render", actor=actor)
+    from herness.admin import commands_deploy as cd  # noqa: PLC0415 - lazy (BT09-07)
+
+    cfg, ref = _deploy_ctx(actor)
+    return _emit(cd.cmd_deploy_render(cfg=cfg, actor=ref))
 
 
 @guarded("deploy pull")
@@ -76,13 +79,45 @@ def deploy_pull(
     actor: Actor,
 ) -> int:  # fmt: skip
     """Pull and verify the pinned model-server images (spec 10)."""
-    return _deploy("pull", actor=actor, allow_download=allow_download)
+    from herness.admin import commands_deploy as cd  # noqa: PLC0415 - lazy (BT09-07)
+
+    cfg, ref = _deploy_ctx(actor)
+    return _emit(cd.cmd_deploy_pull(cfg=cfg, actor=ref, allow_download=allow_download))
 
 
 @guarded("deploy up")
 def deploy_up(gpu_class: ClassArg, *, actor: Actor) -> int:
     """Start one model-server class (spec 10)."""
-    return _deploy("up", _deploy_class(gpu_class), actor=actor)
+    from herness.admin import commands_deploy as cd  # noqa: PLC0415 - lazy (BT09-07)
+
+    cls = _deploy_class(gpu_class)
+    cfg, ref = _deploy_ctx(actor)
+    return _emit(cd.cmd_deploy_up(cls, cfg=cfg, actor=ref))
+
+
+def _down_all(cfg: HernessConfig, ref: str) -> CommandResult:
+    """``deploy down`` without CLASS: every class in turn, each one's result reported; the
+    first failing class sets the exit code and a raised error stops the loop after the
+    classes already handled are recorded (R-46 code of the error)."""
+    from herness._cli.output import exit_code_for  # noqa: PLC0415 - lazy
+    from herness.admin import commands_deploy as cd  # noqa: PLC0415
+    from herness.core.errors import HernessError  # noqa: PLC0415
+
+    classes: dict[str, object] = {}
+    warnings: list[str] = []
+    code = 0
+    for name in _CLASSES:
+        try:
+            result = cd.cmd_deploy_down(_deploy_class(name), cfg=cfg, actor=ref)
+        except HernessError as exc:
+            classes[name] = {"exit_code": exit_code_for(exc), "error": type(exc).__name__}
+            code = code or exit_code_for(exc)
+            break
+        classes[name] = {"exit_code": result.exit_code, "data": result.data}
+        warnings += result.warnings
+        code = code or result.exit_code
+    return CommandResult(ok=code == 0, data={"classes": classes}, warnings=warnings,
+                         exit_code=code)  # fmt: skip
 
 
 @guarded("deploy down")
@@ -91,30 +126,32 @@ def deploy_down(
     *, actor: Actor,
 ) -> int:  # fmt: skip
     """Stop one model-server class, or every class (spec 10)."""
-    if gpu_class is not None:
-        return _deploy("down", _deploy_class(gpu_class), actor=actor)
-    from herness.admin.commands_deploy import cmd_deploy_down  # noqa: PLC0415 - lazy
+    from herness.admin import commands_deploy as cd  # noqa: PLC0415 - lazy (BT09-07)
 
-    cfg = current_opts().config()
-    data: dict[str, object] = {}
-    warnings: list[str] = []
-    for name in _CLASSES:
-        result = cmd_deploy_down(_deploy_class(name), cfg=cfg, actor=actor.user_ref)
-        data[name] = result.data
-        warnings += result.warnings
-    return _emit(CommandResult(ok=True, data={"classes": data}, warnings=warnings, exit_code=0))
+    cls = None if gpu_class is None else _deploy_class(gpu_class)
+    cfg, ref = _deploy_ctx(actor)
+    if cls is None:
+        return _emit(_down_all(cfg, ref))
+    return _emit(cd.cmd_deploy_down(cls, cfg=cfg, actor=ref))
 
 
 @guarded("deploy rollback")
 def deploy_rollback(gpu_class: ClassArg, *, actor: Actor) -> int:
     """Roll one model-server class back to its previous image (spec 10)."""
-    return _deploy("rollback", _deploy_class(gpu_class), actor=actor)
+    from herness.admin import commands_deploy as cd  # noqa: PLC0415 - lazy (BT09-07)
+
+    cls = _deploy_class(gpu_class)
+    cfg, ref = _deploy_ctx(actor)
+    return _emit(cd.cmd_deploy_rollback(cls, cfg=cfg, actor=ref))
 
 
 @guarded("deploy prune")
 def deploy_prune(*, actor: Actor) -> int:
     """Remove unpinned model-server images (spec 10)."""
-    return _deploy("prune", actor=actor)
+    from herness.admin import commands_deploy as cd  # noqa: PLC0415 - lazy (BT09-07)
+
+    cfg, ref = _deploy_ctx(actor)
+    return _emit(cd.cmd_deploy_prune(cfg=cfg, actor=ref))
 
 
 @guarded("deploy install")
@@ -124,7 +161,10 @@ def deploy_install(
     *, actor: Actor,
 ) -> int:  # fmt: skip
     """Verify and install a release bundle (spec 10, R-58)."""
-    return _deploy("install", bundle_dir, actor=actor)
+    from herness.admin import commands_deploy as cd  # noqa: PLC0415 - lazy (BT09-07)
+
+    cfg, ref = _deploy_ctx(actor)
+    return _emit(cd.cmd_deploy_install(bundle_dir, cfg=cfg, actor=ref))
 
 
 # --- distill, laya -------------------------------------------------------------------------------
@@ -198,6 +238,8 @@ def _maintenance_jobs(actor: Actor, result: CommandResult, *, inline: bool) -> i
         outcome = run_job_inline(opts, actor, str(row["job_id"]))
         row["status"] = outcome.job.status
         out.exit_code = out.exit_code or outcome.exit_code
+    if inline:  # the jobs ran here: the owner's "no worker ... rerun with --inline" is moot
+        out.warnings = [w for w in out.warnings if not w.startswith(_NO_WORKER_PREFIX)]
     return emit(opts, out)
 
 

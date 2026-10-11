@@ -60,6 +60,7 @@ def boot_env(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> tuple[CliEnv, 
     monkeypatch.setattr(herness.connectors.jobs, "register_job_handlers", spy("connectors"))
     monkeypatch.setattr(herness.eval.runner, "register_handlers", spy("eval"))
     monkeypatch.setattr(herness.eval.runner._Binding, "factory", None)  # bound by T09-24
+    monkeypatch.setattr(_eval_deps._Root, "path", None)
     monkeypatch.setattr(herness.harness.memory, "register_memory_components", spy("memory"))
     monkeypatch.setattr(herness.harness.swarm.handler, "register_handlers", spy("review"))
     monkeypatch.setattr(herness.harness.memory, "get_memory_store", object)

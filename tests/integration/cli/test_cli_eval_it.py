@@ -77,6 +77,7 @@ def admin_cli(
     cli_env.write_config(admins=["root"])
     cli_env.user = "root"
     monkeypatch.setattr(_eval_deps, "make_deps", eval_env.deps)
+    monkeypatch.setattr(_eval_deps._Root, "path", None)
     monkeypatch.setattr(jobs_inline, "_gpu_controller", lambda *args: None)
     return Cli(eval_env, capsys)
 
@@ -92,6 +93,21 @@ def test_cv_t09_24_eval_cli_single_question_exit_0(admin_cli: Cli) -> None:
     assert (data["status"], data["passed"]) == ("done", True)
     lines = (env.out_dir(data["run_id"]) / "results.jsonl").read_text("utf-8").splitlines()
     assert [json.loads(line)["id"] for line in lines] == ["G01"]
+    assert admin_cli.jobs() == [("eval", "reasoning", "done")]
+
+
+def test_cv_t09_24_eval_cli_repeated_ids_and_unknown_id(admin_cli: Cli) -> None:
+    """CV-T09-24 (T11-37) `--ids G01 --ids G02,G01` runs G01 and G02 once each (exit 0);
+    an id the suite lacks is ConfigError naming it (exit 3) and enqueues nothing."""
+    env = admin_cli.env
+    suite = env.suite([question("G01"), question("G02"), question("G03")])
+    code, payload = admin_cli.run(suite, "--ids", "G01", "--ids", "G02,G01")
+    assert code == 0, payload
+    lines = (env.out_dir(payload["data"]["run_id"]) / "results.jsonl").read_text("utf-8")
+    assert [json.loads(line)["id"] for line in lines.splitlines()] == ["G01", "G02"]
+    code, payload = admin_cli.run(suite, "--ids", "G01,G42")
+    assert code == 3
+    assert payload["error"]["message"] == "unknown question ids: G42"
     assert admin_cli.jobs() == [("eval", "reasoning", "done")]
 
 

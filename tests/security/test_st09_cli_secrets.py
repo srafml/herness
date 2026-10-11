@@ -21,6 +21,7 @@ import typer
 from tests.support.cli_env import CliEnv
 from tests.support.config_tree import write_checked_config
 from tests.support.fake_keyring import MemoryKeyring
+from tests.support.report_env import FUND_RUN, ReportEnv
 
 from herness import cli
 from herness._cli import identity
@@ -114,3 +115,31 @@ def test_st09_19_sentinels_absent_from_cli_output_json_and_logs(
     joined = "\n".join(logs)
     assert '"secret_set"' in joined
     assert '"deploy_render"' in joined
+
+
+def test_st09_19_report_render_never_carries_sentinels(
+    cli_env: CliEnv, report_env: ReportEnv, fake_keyring: MemoryKeyring,
+    capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    """ST09-19 (review M1) `report render` of a fixture draft with the sentinel secrets
+    configured: the rendered files, the CLI output (human and JSON) and the logs hold none."""
+    for name, value in SENTINELS.items():
+        fake_keyring.store[("herness", name.lower())] = value
+    cli_env.write_config(admins=[ADMIN])
+    cli_env.user = ADMIN
+    capsys.readouterr()
+    outputs: list[str] = []
+    for args in (["--json", "report", "render", FUND_RUN], ["report", "render", FUND_RUN]):
+        assert _run(args) == 0
+        out, err = capsys.readouterr()
+        outputs += [out, err]
+    folder = report_env.reports_root / FUND_RUN
+    files = [
+        p.read_text("utf-8", errors="replace") for p in sorted(folder.iterdir()) if p.is_file()
+    ]
+    logs = [p.read_text("utf-8") for p in sorted((cli_env.root / "data" / "logs").glob("*"))]
+    corpus = "\n".join(outputs + files + logs)
+    for sentinel in SENTINELS.values():
+        assert sentinel not in corpus
+    assert (folder / "report.html").stat().st_size > 0  # non-vacuous: a report was rendered
+    assert json.loads(outputs[0])["data"]["run_id"] == FUND_RUN

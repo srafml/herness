@@ -47,6 +47,7 @@ def env(
     cli_env.user = "root"
     data_root, con = classifier_env.data_root, classifier_env.con
     monkeypatch.setattr(_eval_deps, "make_deps", lambda c: make_deps(data_root, con, job=c))
+    monkeypatch.setattr(_eval_deps._Root, "path", None)
     monkeypatch.setattr(jobs_inline, "_gpu_controller", lambda *args: None)
     return classifier_env
 

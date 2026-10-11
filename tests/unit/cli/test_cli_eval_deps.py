@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from tests.support.cli_env import CliEnv
@@ -48,6 +48,10 @@ class Pool:
     def __init__(self, warehouse_dir: Path, sql: object) -> None:
         self.dir, self.sql = warehouse_dir, sql
         self.opened: list[str] = []
+        self.closed = 0
+
+    def close_all(self) -> None:
+        self.closed += 1
 
     def get(self, build_id: str) -> SimpleNamespace:
         self.opened.append(build_id)
@@ -74,6 +78,7 @@ class World:
     )
     chains: list[object] = dataclasses.field(default_factory=list)
     store: object = dataclasses.field(default_factory=object)
+    closed: list[object] = dataclasses.field(default_factory=list)
 
 
 @pytest.fixture
@@ -85,7 +90,9 @@ def world(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> World:
     def record(name: str) -> Any:
         def make(*args: Any, **kwargs: Any) -> SimpleNamespace:
             found.built.append((name, args, kwargs))
-            return SimpleNamespace(name=name, args=args, kwargs=kwargs)
+            made = SimpleNamespace(name=name, args=args, kwargs=kwargs)
+            made.close = lambda: found.closed.append(made)
+            return made
 
         return make
 
@@ -101,6 +108,7 @@ def world(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> World:
     monkeypatch.setattr(herness.harness.memory, "get_memory_store", lambda: found.store)
     monkeypatch.setattr(herness.core.resilience, "bind_chain_registry", found.chains.append)
     monkeypatch.setattr(_eval_deps._Root, "path", None)
+    monkeypatch.setattr(_eval_deps._Cache, "shared", None)  # the process-wide cache
     return found
 
 
@@ -187,14 +195,50 @@ def test_cv_t09_24_mock_llm_wraps_registries_in_scripted_registry(
     swarm, chat = deps.swarm_for("local"), deps.chat_for("local")
     registries = (swarm.args[1], chat.args[1])
     assert all(isinstance(r, ScriptedRegistry) for r in registries)
-    swarm_client, chat_client = (r.client("anything") for r in registries)
-    assert isinstance(swarm_client, ScriptedLLMClient)
-    assert swarm_client._resolver is not None
-    assert chat_client._resolver is None
-    assert deps.swarm_for("local").args[1] is swarm.args[1]  # one registry per profile
-    assert deps.judge_for().args[0] is swarm_client
+    swarm_slot, chat_slot = (r.client("anything") for r in registries)
+    assert isinstance(swarm_slot.client, ScriptedLLMClient)
+    assert swarm_slot.client._resolver is not None
+    assert chat_slot.client._resolver is None
+    assert deps.swarm_for("local") is swarm  # one swarm per profile and mode
+    assert deps.judge_for().args[0] is swarm_slot
+    first_book = swarm_slot.client._book
+    deps2 = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
+    assert deps2.swarm_for("local") is swarm  # reused across jobs ...
+    assert swarm_slot.client._book is not first_book  # ... with this job's fresh book
+    assert swarm_slot.name == "fake"  # the slot delegates the client surface
     assert world.chains
     assert not isinstance(world.chains[0], ScriptedRegistry)
+
+
+def test_cv_t09_24_cache_reused_across_jobs_and_closed_on_change(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T09-24 (review I1) a second job in the same process reuses the pool, verifier and
+    services (no new writer thread, no second handle on a build); a new config object closes
+    every swarm built and every warehouse handle before the cache is rebuilt."""
+    ctx = FakeCtx({"profile": "local", "repeat": 1})
+    first = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
+    swarm, chat = first.swarm_for("local"), first.chat_for("local")
+    second = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
+    assert second.swarm_for("local") is swarm
+    assert second.chat_for("local") is chat
+    assert [name for name, _, _ in world.built] == ["verifier", "swarm", "chat"]
+    held = _eval_deps._Cache.shared
+    assert held is not None
+    pool = cast("Pool", held.pool)
+    cfg = herness.core.config.get_config().model_copy()
+    monkeypatch.setattr(herness.core.config, "get_config", lambda: cfg)
+    third = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
+    assert world.closed == [swarm]
+    assert pool.closed == 1
+    assert third.swarm_for("local") is not swarm
+
+
+def test_cv_t09_24_empty_script_slot_refuses() -> None:
+    """CV-T09-24 a scripted slot without a loaded book has no client surface."""
+    slot = _eval_deps._ScriptSlot(None)
+    with pytest.raises(AttributeError, match="no mock scripts loaded"):
+        slot.complete  # noqa: B018 - the attribute access is the check
 
 
 def test_cv_t09_24_make_deps_needs_eval_settings(

@@ -31,18 +31,40 @@ if TYPE_CHECKING:
     from herness._cli.wait import FollowOutcome
     from herness.cli import GlobalOptions
     from herness.core.jobs import JobRow
+    from herness.eval.settings import EvalConfig
 
 __all__ = ["eval_command"]
 
 _Opt = typer.Option
 _NAMED_SUITES: Final = ("golden", "classifier")
 _DEPTHS: Final = ("fast", "standard", "deep")
-_FAILED_FIX: Final = "See `herness jobs list` and the worker log for the job."
 
 
-def _split(text: str | None) -> list[str] | None:
-    """``"G01, F01"`` -> ``["G01", "F01"]``; None when the option was not given."""
-    return None if text is None else [part.strip() for part in text.split(",") if part.strip()]
+def _split(values: str | list[str] | None) -> list[str] | None:
+    """Comma lists and repeated options as one list: blanks dropped, duplicates removed in
+    first-seen order (``--ids G01,F01 --ids G01`` -> ``["G01", "F01"]``); None if not given."""
+    if values is None:
+        return None
+    texts = [values] if isinstance(values, str) else values
+    parts = [part.strip() for text in texts for part in text.split(",")]
+    return list(dict.fromkeys(part for part in parts if part))
+
+
+def _check_ids(suite: str | None, ids: list[str] | None, settings: EvalConfig | None) -> None:
+    """Unknown ``--ids`` → ConfigError (exit 3) before anything is enqueued, when the golden
+    suite file is readable here (the runner refuses them too, U11-66 ``_select``)."""
+    from herness.eval.golden import load_suite  # noqa: PLC0415 - lazy (BT09-07)
+
+    name = suite or "golden"
+    if not ids or name == "classifier" or (name == "golden" and settings is None):
+        return
+    path = Path(settings.suite if name == "golden" and settings is not None else name)
+    if not path.is_file():
+        return  # the worker resolves and reports it
+    unknown = [qid for qid in ids if qid not in {q.id for q in load_suite(path).questions}]
+    if unknown:
+        msg = f"unknown question ids: {', '.join(unknown)}"
+        raise ConfigError(msg, hint="Use ids from the suite file (`--ids G01,F01`).")
 
 
 def _path(text: str | None) -> str | None:
@@ -111,8 +133,10 @@ def eval_command(  # noqa: PLR0913 - one parameter per spec 11 §3.2 option
     profile: Annotated[str | None, _Opt("--profile", help="Eval profile.")] = None,
     compare: Annotated[str | None, _Opt("--compare", help="Second profile to compare.")] = None,
     depth: Annotated[str | None, _Opt("--depth", help="fast, standard or deep.")] = None,
-    ids: Annotated[str | None, _Opt("--ids", help="Question ids, e.g. G01,F01.")] = None,
-    tags: Annotated[str | None, _Opt("--tags", help="Question tags (comma list).")] = None,
+    ids: Annotated[
+        list[str] | None, _Opt("--ids", help="Question ids: G01,F01; repeatable.")
+    ] = None,
+    tags: Annotated[list[str] | None, _Opt("--tags", help="Question tags; repeatable.")] = None,
     repeat: Annotated[int | None, _Opt("--repeat", help="Runs per question.")] = None,
     mock_llm: Annotated[str | None, _Opt("--mock-llm", help="Script directory.")] = None,
     no_judge: Annotated[bool, _Opt("--no-judge", help="Skip rubric judging.")] = False,
@@ -141,9 +165,11 @@ def eval_command(  # noqa: PLR0913 - one parameter per spec 11 §3.2 option
     if compare_runs is not None:
         return _compare_runs(opts, _split(compare_runs) or [])
     _eval_deps.bind(opts.config_dir)
+    question_ids = _split(ids)
+    _check_ids(suite, question_ids, cfg.eval)
     payload = build_eval_payload(
         suite=suite if suite is None or suite in _NAMED_SUITES else _path(suite),
-        profile=profile or cfg.profile, compare_profile=compare, depth=depth, ids=_split(ids),
+        profile=profile or cfg.profile, compare_profile=compare, depth=depth, ids=question_ids,
         tags=_split(tags), repeat=repeat, mock_llm_dir=_path(mock_llm), no_judge=no_judge or None,
         resume_run_id=resume, baseline=baseline, set_baseline=set_baseline, settings=cfg.eval,
     )  # fmt: skip
