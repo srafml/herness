@@ -83,5 +83,47 @@ pre { background: #f7f7f7; border: 1px solid #ddd; padding: 0.5rem; white-space:
 {% endif %}
 </section>
 {% endfor %}
+
+{% if comparison is not none %}
+<h2>Comparison</h2>
+<p>Deltas are against run #1; numbers come from the stored runs only.</p>
+{% if comparison.suite_changed %}
+<p class="fail">Suite changed: the runs used different golden suites; flips cover only the
+questions present in both runs.</p>
+{% endif %}
+<table>
+<tr><th>#</th><th>Run</th><th>Profile</th><th>Depth</th><th>Build</th></tr>
+{% for label, run_id, profile, depth, build_id in comparison.runs %}
+<tr><td>{{ label }}</td><td>{{ run_id }}</td><td>{{ profile }}</td><td>{{ depth }}</td><td>{{ build_id }}</td></tr>
+{% endfor %}
+</table>
+{% if comparison.harness_defects %}
+<h3 class="fail">Harness defects</h3>
+<p>Numeric questions that disagree on the same build (spec 00 principle 1):</p>
+<ul>
+{% for qid in comparison.harness_defects %}
+<li>{{ qid }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+<h3>Metrics</h3>
+<table>
+<tr><th>Metric</th>{% for label in comparison.labels %}<th>{{ label }}</th>{% endfor %}{% for label in comparison.labels[1:] %}<th>&Delta; {{ label }}</th>{% endfor %}</tr>
+{% for name, cells in comparison.metrics %}
+<tr><td>{{ name }}</td>{% for cell in cells %}<td>{{ cell }}</td>{% endfor %}</tr>
+{% endfor %}
+</table>
+<h3>Flips</h3>
+{% if comparison.flips %}
+<table>
+<tr><th>Question</th><th>Repeat</th><th>From</th><th>To</th><th>Before</th><th>After</th></tr>
+{% for qid, repeat, from_run, to_run, before, after in comparison.flips %}
+<tr><td>{{ qid }}</td><td>{{ repeat }}</td><td>{{ from_run }}</td><td>{{ to_run }}</td><td>{{ before }}</td><td>{{ after }}</td></tr>
+{% endfor %}
+</table>
+{% else %}
+<p>None.</p>
+{% endif %}
+{% endif %}
 </body>
 </html>

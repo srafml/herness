@@ -76,6 +76,7 @@ class RunMeta:
     started_at: datetime
     dataset_seed: int | None = None
     baseline: str | None = None  # the baseline compared against (`run.meta.baseline`)
+    compare_profile: str | None = None  # `--compare PROFILE` on the primary run (T11-38)
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,8 @@ def insert_eval_run(meta: RunMeta, *, data_root: Path) -> None:
         token_usage={}, cost_usd=Decimal(0), config_hash=config_hash(get_config()),
         meta={
             "suite": meta.suite, "suite_version": meta.suite_version,
-            "suite_sha256": meta.suite_sha256, "baseline": meta.baseline, "compare_profile": None,
+            "suite_sha256": meta.suite_sha256, "baseline": meta.baseline,
+            "compare_profile": meta.compare_profile,
             "mock": meta.mock, "dataset_kind": meta.dataset_kind,
             "dataset_root": data_root.as_posix(), "resume_of": None,
         },
@@ -216,6 +218,7 @@ def _summary(  # noqa: PLR0913 - the summary's parts, keyword-only after the met
         "suite_sha256": meta.suite_sha256,
         "judge_model": env.judge.model if env.judge is not None else None,
         "judge_prompt_sha256": judge_prompt_hash(), "mock": meta.mock, "baseline": meta.baseline,
+        "compare_profile": meta.compare_profile,
         "started_at": clock.format_utc(meta.started_at), "finished_at": clock.format_utc(finished),
         "metrics": m.model_dump(mode="json"),
         "thresholds": [row.model_dump(mode="json") for row in rows],

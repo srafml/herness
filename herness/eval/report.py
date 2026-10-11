@@ -7,8 +7,10 @@ autoescaped `<pre>` in HTML (TH11-05); the HTML loads nothing external. Baseline
 `tests/eval/baselines/<name>.json` hold aggregates only and are refused on real builds
 (TH11-14) and, for a mock run, unless the name ends in `-mock` (TH11-10). A baseline of
 another suite comes back with `suite_changed` set, which turns the correctness drop check
-into the detail `suite changed` (TH11-03). `compare` and `ComparisonTable` (U11-71) are
-T11-38's; until then the report has no comparison section.
+into the detail `suite changed` (TH11-03). `compare` (U11-71) compares stored runs and
+writes `comparison.json` and `comparison.md` into the newest one; the model, loading and
+Markdown live in the private sibling `_report_compare`. `write_report` adds the comparison
+section when given one (`--compare`).
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping, Sequence
-from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -30,6 +31,17 @@ from pydantic import BaseModel
 from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
 from herness.core.secrets import scrub_secrets
+from herness.eval._report_compare import (
+    DIFF_FIELDS,
+    ComparisonTable,
+    build_comparison,
+    comparison_lines,
+    comparison_view,
+    delta_text,
+    fmt,
+    md_cell,
+    md_table,
+)
 from herness.eval.metrics import EvalMetrics
 
 if TYPE_CHECKING:
@@ -38,8 +50,8 @@ if TYPE_CHECKING:
     from herness.eval.runner import EvalRun
 
 __all__ = [
-    "BASELINES_DIR", "BASELINE_NAME_RE", "PROVENANCE_KEYS", "check_baseline_target",
-    "load_baseline", "save_baseline", "write_report",
+    "BASELINES_DIR", "BASELINE_NAME_RE", "PROVENANCE_KEYS", "ComparisonTable",
+    "check_baseline_target", "compare", "load_baseline", "save_baseline", "write_report",
 ]  # fmt: skip
 
 BASELINE_NAME_RE: Final = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -55,14 +67,7 @@ _BASELINE_KEYS: Final = (
 _META_KEYS: Final = (
     "run_id", "profile", "depth", "build_id", "dataset_kind", "dataset_seed", "dataset_scale",
     "suite_version", "suite_sha256", "git_sha", "config_hash", "judge_model",
-    "judge_prompt_sha256", "mock", "baseline", "started_at", "finished_at",
-)  # fmt: skip
-_DIFF_FIELDS: Final = (
-    "answer_correctness", "unsupported_number_rate", "verifier_rejection_rate",
-    "tool_call_success_rate", "retries_per_run", "fallbacks_per_run", "repairs_per_run",
-    "guard_stops_per_run", "tokens_in", "tokens_out", "cost_usd", "chat_latency_p50_s",
-    "chat_latency_p95_s", "review_latency_p50_s", "review_latency_p95_s",
-    "review_latency_max_s", "judge_mean",
+    "judge_prompt_sha256", "mock", "baseline", "compare_profile", "started_at", "finished_at",
 )  # fmt: skip
 _FAILING: Final = frozenset({"failed", "error", "suite_error"})
 _TEXT_MAX: Final = 20_000
@@ -85,8 +90,10 @@ def write_report(  # noqa: PLR0913 - signature fixed by U11-70 (keyword-only aft
     thresholds: Sequence[ThresholdResult],
     baseline: EvalMetrics | None,
     classifier: BaseModel | Mapping[str, Any] | None,
+    comparison: ComparisonTable | None = None,
 ) -> list[Path]:
-    """Write the run's report files atomically; returns their paths in write order."""
+    """Write the run's report files atomically; returns their paths in write order. With
+    `comparison` (`--compare`) both reports end with the comparison section."""
     summary: dict[str, Any] = {
         **eval_run.summary,
         "metrics": metrics.model_dump(mode="json"),
@@ -97,6 +104,7 @@ def write_report(  # noqa: PLR0913 - signature fixed by U11-70 (keyword-only aft
         msg = f"summary lacks provenance keys: {', '.join(missing)}"
         raise ConfigError(msg)
     view = _view(summary, results, metrics, thresholds, baseline)
+    view["comparison"] = None if comparison is None else comparison_view(comparison)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = [
         _write(out_dir / "summary.json", _json(summary)),
@@ -148,7 +156,7 @@ def _view(
             }
             for row in rows
         ],
-        "metrics": [(name, _fmt(getattr(metrics, name))) for name in _DIFF_FIELDS],
+        "metrics": [(name, _fmt(getattr(metrics, name))) for name in DIFF_FIELDS],
         "baseline": None if baseline is None else _diff(baseline, metrics),
         "questions": [
             {
@@ -170,23 +178,14 @@ def _rank(status: str) -> int:
 
 def _diff(baseline: EvalMetrics, metrics: EvalMetrics) -> dict[str, Any]:
     rows = []
-    for name in _DIFF_FIELDS:
+    for name in DIFF_FIELDS:
         before, after = getattr(baseline, name), getattr(metrics, name)
         delta = None if before is None or after is None else after - before
-        rows.append((name, _fmt(before), _fmt(after), _fmt(delta)))
+        rows.append((name, _fmt(before), _fmt(after), delta_text(name, delta)))
     return {"suite_changed": baseline.suite_changed, "rows": rows}
 
 
-def _fmt(value: object) -> str:
-    if value is None:
-        return "-"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, float):
-        return repr(round(value, 6))
-    if isinstance(value, Decimal):
-        return format(value.normalize(), "f")
-    return str(value)
+_fmt, _cell, _table = fmt, md_cell, md_table  # shared with the comparison text (T11-38)
 
 
 def _clean(text: str) -> str:
@@ -196,20 +195,10 @@ def _clean(text: str) -> str:
     return clean if len(clean) <= _TEXT_MAX else clean[:_TEXT_MAX] + _TRUNCATED
 
 
-def _cell(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("|", "\\|").replace("\r", " ").replace("\n", " ")
-
-
 def _fence(text: str) -> str:
     """A code fence longer than any backtick run in `text`, so the text stays literal."""
     longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
     return "`" * max(3, longest + 1)
-
-
-def _table(head: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
-    lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
-    lines += ["| " + " | ".join(_cell(v) for v in row) + " |" for row in rows]
-    return [*lines, ""]
 
 
 def _markdown(view: Mapping[str, Any]) -> str:
@@ -239,6 +228,8 @@ def _markdown(view: Mapping[str, Any]) -> str:
             if text:
                 fence = _fence(text)
                 out += [f"{label}:", "", f"{fence}text", text, fence, ""]
+    if view["comparison"] is not None:
+        out += comparison_lines(view["comparison"], level=2)
     return "\n".join(out)
 
 
@@ -257,6 +248,20 @@ def _write(path: Path, text: str) -> Path:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
     return path
+
+
+# --- U11-71 compare ------------------------------------------------------------------------------
+
+
+def compare(run_ids: Sequence[str], *, data_root: Path) -> ComparisonTable:
+    """Compare the stored eval runs `run_ids` (U11-71): rows, deltas against the first run,
+    flips and harness defects; writes `comparison.json` and `comparison.md` into the newest
+    run's directory (atomically) and returns the table. Never re-runs a pipeline."""
+    table = build_comparison(run_ids, data_root)
+    out = data_root / "reports" / "eval" / table.newest_run_id
+    _write(out / "comparison.json", _json(table.model_dump(mode="json")))
+    _write(out / "comparison.md", "\n".join(comparison_lines(comparison_view(table), level=1)))
+    return table
 
 
 # --- U11-72 save_baseline, load_baseline ---------------------------------------------------------

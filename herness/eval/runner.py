@@ -29,6 +29,7 @@ from herness.core.ids import IdKind, new_id
 from herness.core.jobs import register_handler
 from herness.core.logging import get_logger
 from herness.core.types import Depth, JobOutcome
+from herness.eval._runner_compare import compare_runs_outcome, run_eval
 from herness.eval._runner_finish import (
     RunMeta,
     close_run,
@@ -138,8 +139,6 @@ def _check(repeat: int, options: EvalOptions) -> None:
     if not 1 <= repeat <= MAX_REPEAT:
         msg = f"repeat must be 1..{MAX_REPEAT}"
         raise ConfigError(msg)
-    if options.compare_profile is not None:
-        _not_built("profile comparison", "T11-38")
 
 
 def _select(suite: Suite, options: EvalOptions) -> list[EvalQuestion]:
@@ -224,6 +223,7 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
         suite=options.suite, suite_version=suite.version, suite_sha256=suite.sha256,
         mock=options.mock, started_at=plan.started_at,
         dataset_seed=truth.seed if truth is not None else None, baseline=base_name,
+        compare_profile=options.compare_profile,
     )  # fmt: skip
     if not plan.resumed:
         job_id = deps.job.job_id if deps.job is not None else None
@@ -343,8 +343,6 @@ def register_handlers() -> None:
 
 
 def _refuse_unbuilt(payload: EvalPayload) -> None:
-    if payload.compare_runs:
-        _not_built("run comparison", "T11-38")
     if payload.suite == CLASSIFIER_SUITE:
         _not_built("classifier eval", "T11-35")
 
@@ -364,6 +362,8 @@ def handle_eval(ctx: JobContext) -> JobOutcome:
         payload = validate_payload(ctx.job.payload)
         _refuse_unbuilt(payload)
         deps = factory(ctx)
+        if payload.compare_runs:  # step 2: compare stored runs only (T11-38)
+            return compare_runs_outcome(payload.compare_runs, deps)
         if payload.mock_llm_dir is not None:
             load_scripts(Path(payload.mock_llm_dir))  # the factory wraps the registries
         suite = load_suite(_suite_path(payload.suite, deps.settings))
@@ -375,21 +375,20 @@ def handle_eval(ctx: JobContext) -> JobOutcome:
             set_baseline=payload.set_baseline, compare_profile=payload.compare_profile,
             suite=payload.suite,
         )  # fmt: skip
-        run = run_golden(
-            suite, payload.profile, payload.depth, repeat=payload.repeat,
-            judge=not payload.no_judge, resume_run_id=run_id, deps=deps, options=options,
-        )  # fmt: skip
+        run = run_eval(run_golden, suite, payload, resume_run_id=run_id, deps=deps,
+                       options=options)  # step 4, also for --compare (T11-38)  # fmt: skip
     except ConfigError:
         _log.error("eval.run.failed", run_id=run_id, error_type="ConfigError")
         raise
     if run.yielded:
         return JobOutcome(status="yield", result={"run_id": run.run_id})
-    code = run.summary.get("exit_code")
+    code, second = run.summary.get("exit_code"), run.summary.get("compare_run_id")
     return JobOutcome(
         status="done",
         result={
             "run_id": run.run_id,
             "passed": run.passed,
             "exit_code": code if isinstance(code, int) else 1,
+            **({"compare_run_id": second} if isinstance(second, str) else {}),
         },
     )
