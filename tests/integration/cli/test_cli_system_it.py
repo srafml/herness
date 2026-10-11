@@ -134,7 +134,8 @@ def test_cv_t09_22_worker_once_in_process(
     data = cli_env.root / "data"
     for name in ("HERNESS_CONFIG_DIR", "HERNESS_DATA_DIR", "HERNESS_PROFILE",
                  "HERNESS_SET_OVERRIDES"):  # fmt: skip
-        monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(name, "")  # recorded, so the os.environ writes are undone
+        monkeypatch.delenv(name)
     monkeypatch.setattr(supervisor, "run_scheduler", lambda now: None)  # no scheduled jobs
     monkeypatch.setattr(supervisor, "run_due_probes", lambda now: None)  # no model probes
     args = ["--config-dir", str(cli_env.config_dir), "--data-dir", str(data),
