@@ -4,7 +4,10 @@ Private sibling of `herness.eval.runner` (§2 module map). `run_question` runs t
 `resolve`, the pipeline (chat per question, reviews through the repeat's `ReviewCache`),
 grading and `count_unsupported`, and returns the `QuestionResult`; it never raises for a
 question-level failure: a `SuiteError` becomes `suite_error`, anything else `error`.
-Its evidence reader, name index and traces come from `_runner_support`.
+Its evidence reader, name index and traces come from `_runner_support`. A question with
+`setup: seed_prior_run` first plants T6 through the seeder EvalDeps supplies (`herness.eval`
+never imports `tests/`; the test seeding `tests.support.seed_ops.seed_prior_run` is injected),
+once per run (T11-33 spec note under U11-66).
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 import duckdb
 
@@ -46,18 +49,29 @@ from herness.store.ops import get_run
 if TYPE_CHECKING:
     from herness.eval.judge import RubricJudge
     from herness.eval.truth import TruthManifest
+    from herness.harness.memory import MemoryStore
     from herness.harness.pipelines.chat import ChatService
     from herness.harness.swarm import Swarm
 
-__all__ = ["QuestionEnv", "required_rubric_skipped", "run_question"]
+__all__ = ["PriorRunSeeder", "QuestionEnv", "required_rubric_skipped", "run_question"]
 
-SETUP_UNAVAILABLE: Final = "setup seed_prior_run is not available until T11-33"
+SETUP_NO_DEPS: Final = "setup seed_prior_run needs EvalDeps.memory and EvalDeps.seed_prior_run"
+SETUP_NO_TRUTH: Final = "setup seed_prior_run needs a synthetic build with truth"
 _PLACEHOLDER_RE: Final = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\}")
 _COUNTED: Final = {"retry": "retries", "fallback": "fallbacks", "repair": "repairs"}
 _REVIEW_KINDS: Final = {"funding": "funding_review", "org": "org_review"}
 _SKIPPED_JUDGE: Final = frozenset({"judge_unavailable", "judge_egress_blocked"})
 
 _log = get_logger("eval.runner")
+
+
+class PriorRunSeeder(Protocol):
+    """The T6 prior-run seeding of U11-49 (`tests.support.seed_ops.seed_prior_run`)."""
+
+    def __call__(
+        self, memory: MemoryStore, truth: TruthManifest, *,
+        warehouse: duckdb.DuckDBPyConnection, build_id: str,
+    ) -> object: ...  # fmt: skip
 
 
 @dataclass
@@ -81,7 +95,11 @@ class QuestionEnv:
     references: dict[str, ReferenceResult] = field(default_factory=dict)
     traces: dict[str, Trace | None] = field(default_factory=dict)
     org_outputs: list[PipelineOutput] = field(default_factory=list)
+    memory: MemoryStore | None = None
+    seeder: PriorRunSeeder | None = None
+    seeded: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _setup_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def trace(self, run_id: str) -> Trace | None:
         """The run's trace events, read once (None when the file is missing)."""
@@ -96,9 +114,9 @@ def run_question(
 ) -> QuestionResult:
     """Setup, resolve, invoke, grade and count one question x repeat (F11-07 steps 5-7)."""
     base = _Base(question.id, repeat)
-    if question.setup == "seed_prior_run":
-        return _suite_error(env, base, SETUP_UNAVAILABLE)
     try:
+        if question.setup == "seed_prior_run":
+            _seed_prior_run(env)
         resolved = resolve(
             question, env.truth, env.con, build_id=env.build_id,
             dataset_kind=env.dataset_kind, cache=env.references,
@@ -125,6 +143,21 @@ def run_question(
                      error_type=type(exc).__name__)  # fmt: skip
         return base.result("error", error=_exc_text(exc))
     return _from_output(env, base.with_ref(resolved), _status(checks), checks, out, unsupported)
+
+
+def _seed_prior_run(env: QuestionEnv) -> None:
+    """Step 5 setup: plant T6 once per run through the injected seeder (U11-49);
+    unavailable -> `SuiteError`; a seeding error propagates (the question is `error`)."""
+    if env.memory is None or env.seeder is None:
+        raise SuiteError(SETUP_NO_DEPS)
+    if env.truth is None:
+        raise SuiteError(SETUP_NO_TRUTH)
+    with env._setup_lock:
+        if env.seeded:
+            return
+        env.seeder(env.memory, env.truth, warehouse=env.con, build_id=env.build_id)
+        env.seeded = True
+    _log.info("eval.setup.seeded", run_id=env.run_id, setup="seed_prior_run")
 
 
 @dataclass(frozen=True)
