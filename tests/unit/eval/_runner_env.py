@@ -142,6 +142,7 @@ class AnswerChat:
     query_id: str = NUMERIC_QID
     column: str = "value"
     text: str = ANSWER
+    run_id: str | None = None
     delay_s: float = 0.0
     calls: list[tuple[str, str]] = field(default_factory=list)
     modes: list[ChatMode] = field(default_factory=list)
@@ -164,7 +165,13 @@ class AnswerChat:
             if text in self.errors:
                 yield ErrorEvent(error_type="ModelUnavailable", message="down", hint=None)
             else:
-                yield final(self.value, text=self.text, query_id=self.query_id, column=self.column)
+                yield final(
+                    self.value,
+                    text=self.text,
+                    query_id=self.query_id,
+                    column=self.column,
+                    run_id=self.run_id,
+                )
         finally:
             with self._lock:
                 self.running -= 1
