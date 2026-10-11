@@ -50,7 +50,7 @@ def _steps(
     return events
 
 
-def test_ut09_115_ports_then_owners_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ut09_119_ports_then_owners_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT09-119 boot_inline binds the ports, registers each owner, and a second call in the
     same process does nothing."""
     sync, review = _make("sync"), _make("review")
@@ -67,7 +67,7 @@ def test_ut09_115_ports_then_owners_once_per_process(monkeypatch: pytest.MonkeyP
     assert events == ["ports"]
 
 
-def test_ut09_115_prebound_kind_is_kept_not_a_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ut09_119_prebound_kind_is_kept_not_a_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT09-119 a kind already bound in this process keeps its handler, the rest of the same
     owner still registers, and nothing raises "handler already registered"."""
     mine, theirs, other = _make("mine"), _make("theirs"), _make("other")
@@ -83,7 +83,7 @@ def test_ut09_115_prebound_kind_is_kept_not_a_conflict(monkeypatch: pytest.Monke
     assert resolve_handler("reconcile") is other
 
 
-def test_ut09_115_config_error_skips_owner_and_logs_class_only(
+def test_ut09_119_config_error_skips_owner_and_logs_class_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """UT09-119 an owner raising ConfigError stays unbound (even its partial work), is logged
@@ -116,7 +116,7 @@ def test_ut09_115_config_error_skips_owner_and_logs_class_only(
     assert "SECRET" not in repr(logs)
 
 
-def test_ut09_115_other_errors_are_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ut09_119_other_errors_are_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """UT09-119 only ConfigError is tolerated; anything else propagates."""
 
     def broken() -> None:

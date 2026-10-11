@@ -541,7 +541,7 @@ def test_ut09_100_inline_failed_and_not_terminal(
     assert "failed (StoreBusy): busy" in capsys.readouterr().err
 
 
-def test_ut09_115_boot_before_run_inline_after_role_check(
+def test_ut09_119_boot_before_run_inline_after_role_check(
     install: Callable[[FakeJobs], FakeJobs], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """UT09-119 the inline helper bootstraps the process with the CLI's config dir before
