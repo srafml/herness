@@ -102,6 +102,7 @@ def _down_all(cfg: HernessConfig, ref: str) -> CommandResult:
     from herness._cli.output import exit_code_for  # noqa: PLC0415 - lazy
     from herness.admin import commands_deploy as cd  # noqa: PLC0415
     from herness.core.errors import HernessError  # noqa: PLC0415
+    from herness.reports.rules import user_message  # noqa: PLC0415
 
     classes: dict[str, object] = {}
     warnings: list[str] = []
@@ -110,7 +111,9 @@ def _down_all(cfg: HernessConfig, ref: str) -> CommandResult:
         try:
             result = cd.cmd_deploy_down(_deploy_class(name), cfg=cfg, actor=ref)
         except HernessError as exc:
-            classes[name] = {"exit_code": exit_code_for(exc), "error": type(exc).__name__}
+            what, _fix = user_message(exc)  # names and keys only, never values (ENG §3.4)
+            classes[name] = {"exit_code": exit_code_for(exc), "error": type(exc).__name__,
+                             "message": what}  # fmt: skip
             code = code or exit_code_for(exc)
             break
         classes[name] = {"exit_code": result.exit_code, "data": result.data}

@@ -10,13 +10,14 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from tests.support.cli_env import CliEnv
 from tests.unit.eval._runner_env import FakeCtx
 
 import herness.core.config
+import herness.core.jobs.handlers
 import herness.core.resilience
 import herness.eval.judge
 import herness.harness.llm.registry
@@ -28,6 +29,7 @@ import herness.harness.warehouse
 from herness._cli import _eval_deps
 from herness.core.config import init_config
 from herness.core.errors import ConfigError
+from herness.core.types import JobOutcome
 from herness.eval import runner
 from herness.eval.scripted_client import ScriptedLLMClient, ScriptedRegistry
 
@@ -47,14 +49,12 @@ class FakeDeps:
 class Pool:
     def __init__(self, warehouse_dir: Path, sql: object) -> None:
         self.dir, self.sql = warehouse_dir, sql
-        self.opened: list[str] = []
         self.closed = 0
 
     def close_all(self) -> None:
         self.closed += 1
 
     def get(self, build_id: str) -> SimpleNamespace:
-        self.opened.append(build_id)
         return SimpleNamespace(cursor=lambda: f"cursor:{build_id}")
 
 
@@ -108,63 +108,101 @@ def world(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> World:
     monkeypatch.setattr(herness.harness.memory, "get_memory_store", lambda: found.store)
     monkeypatch.setattr(herness.core.resilience, "bind_chain_registry", found.chains.append)
     monkeypatch.setattr(_eval_deps._Root, "path", None)
-    monkeypatch.setattr(_eval_deps._Cache, "shared", None)  # the process-wide cache
+    monkeypatch.setattr(_eval_deps._Registries, "key", None)
+    monkeypatch.setattr(_eval_deps._Jobs, "open", {})
     return found
 
 
-def test_cv_t09_24_bind_installs_factory_and_registers_handler(
+def _ctx(**payload: Any) -> FakeCtx:
+    return FakeCtx({"profile": "local", "repeat": 1, **payload})
+
+
+def test_cv_t09_24_bind_installs_factory_and_teardown_handler(
     cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CV-T09-24 `bind`: set_deps_factory(make_deps), then register_handlers; the checkout
-    root is the config directory's parent (T11-31 repo_root)."""
-    order: list[str] = []
+    """CV-T09-24 `bind`: set_deps_factory(make_deps), then `run_eval_job` registered for
+    `eval` (idempotent); the checkout root is the config directory's parent."""
+    order: list[object] = []
     monkeypatch.setattr(runner._Binding, "factory", None)
     monkeypatch.setattr(_eval_deps._Root, "path", None)
     monkeypatch.setattr(runner, "set_deps_factory", lambda f: order.append(f.__name__))
-    monkeypatch.setattr(runner, "register_handlers", lambda: order.append("register"))
+    monkeypatch.setattr(herness.core.jobs.handlers, "register_handler",
+                        lambda kind, h: order.append((kind, h)))  # fmt: skip
     _eval_deps.bind(Path("config"))
-    assert order == ["make_deps", "register"]
+    assert order == ["make_deps", ("eval", _eval_deps.run_eval_job)]
     assert _eval_deps._Root.path == cli_env.root.resolve()
 
 
-def test_cv_t09_24_make_deps_shares_one_pool_and_verifier(
+def test_cv_t09_24_make_deps_shares_one_pool_and_verifier_per_job(
     world: World, cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CV-T09-24 one WarehousePool and one Verifier serve warehouse_for, the swarm and the
-    chat service; services are built lazily per call with the real registry per profile."""
+    """CV-T09-24 one WarehousePool and one Verifier per job serve warehouse_for, the swarm and
+    the chat service; one swarm per profile within the job; registries are process-wide."""
     monkeypatch.setattr(_eval_deps._Root, "path", cli_env.root)
-    ctx = FakeCtx({"profile": "local", "repeat": 1})
+    ctx = _ctx()
     deps = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
-    assert world.built == [("verifier", world.built[0][1], {})]  # nothing else built yet
+    assert [b[0] for b in world.built] == ["verifier"]  # nothing else built yet
     pool = world.built[0][1][1]
     assert isinstance(pool, Pool)
     assert deps.warehouse_for("b1") == "cursor:b1"
     swarm, chat = deps.swarm_for("hybrid"), deps.chat_for("premium")
-    verifier = world.built[0]
-    assert swarm.kwargs["deps"] == FakeDeps(pool, swarm.kwargs["deps"].verifier)
-    assert swarm.kwargs["deps"].verifier.name == verifier[0]
+    assert deps.swarm_for("hybrid") is swarm
+    assert swarm.kwargs["deps"].warehouses is pool
+    assert swarm.kwargs["deps"].verifier.name == "verifier"
     assert chat.kwargs["deps"].warehouses is pool
     assert swarm.args[1].profile == "hybrid"
     assert chat.args[1].profile == "premium"
     assert swarm.args[2] is world.store
-    assert chat.args[2] is world.store
     assert world.chains == [chat.args[1]]  # the chat mode policy reads the chain registry
-    assert deps.memory is None
-    assert deps.job is ctx
-    assert deps.repo_root == cli_env.root
+    assert (deps.memory, deps.job, deps.repo_root) == (None, ctx, cli_env.root)
     assert deps.data_root == Path(herness.core.config.get_config().paths.data)
     assert deps.settings is herness.core.config.get_config().eval
+    other = _eval_deps.make_deps(_ctx())  # type: ignore[arg-type]
+    assert other.swarm_for("hybrid") is not swarm  # a new job, its own swarm and pool
+    assert other.swarm_for("hybrid").args[1] is swarm.args[1]  # ... one registry per process
+
+
+def test_cv_t09_24_run_eval_job_closes_the_jobs_resources(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T09-24 (review r2 ruling) `run_eval_job` calls `handle_eval` and, in `finally`,
+    closes every swarm the job built and its pool, also when the handler raises."""
+    ctx = _ctx()
+    built: list[Any] = []
+
+    def handle(job_ctx: Any) -> JobOutcome:
+        deps = _eval_deps.make_deps(job_ctx)
+        built.extend([deps.swarm_for("local"), deps.swarm_for("hybrid")])
+        built.append(_eval_deps._Jobs.open[job_ctx.job_id].pool)
+        return JobOutcome(status="done", result={"run_id": "r"})
+
+    monkeypatch.setattr(runner, "handle_eval", handle)
+    assert _eval_deps.run_eval_job(ctx).status == "done"  # type: ignore[arg-type]
+    assert world.closed == built[:2]
+    assert built[2].closed == 1
+    assert _eval_deps._Jobs.open == {}
+
+    def boom(job_ctx: Any) -> JobOutcome:
+        _eval_deps.make_deps(job_ctx).swarm_for("local")
+        msg = "suite missing"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(runner, "handle_eval", boom)
+    with pytest.raises(ConfigError):
+        _eval_deps.run_eval_job(ctx)  # type: ignore[arg-type]
+    assert len(world.closed) == 3
+    assert _eval_deps._Jobs.open == {}
+    _eval_deps.close_job("never-built")  # no-op
 
 
 def test_cv_t09_24_judge_uses_eval_judge_client_and_root_cache(
-    world: World, cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    world: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """CV-T09-24 the judge: `eval.judge.profile` client on the loaded profile, temperature
     from eval.yaml, a relative cache dir under the checkout root, impl 10 redaction."""
     from herness.core.redact import redact_text  # noqa: PLC0415
 
-    deps = _eval_deps.make_deps(FakeCtx({"profile": "local", "repeat": 1}))  # type: ignore[arg-type]
-    judge = deps.judge_for()
+    judge = _eval_deps.make_deps(_ctx()).judge_for()  # type: ignore[arg-type]
     settings = herness.core.config.get_config().eval
     assert settings is not None
     assert judge.args == ("client:local-judge", judge.args[1])
@@ -178,67 +216,43 @@ def test_cv_t09_24_judge_uses_eval_judge_client_and_root_cache(
         update={"cache_dir": str(absolute)})})  # fmt: skip
     cfg = herness.core.config.get_config().model_copy(update={"eval": patched})
     monkeypatch.setattr(herness.core.config, "get_config", lambda: cfg)
-    again = _eval_deps.make_deps(FakeCtx({"profile": "local", "repeat": 1}))  # type: ignore[arg-type]
+    again = _eval_deps.make_deps(_ctx())  # type: ignore[arg-type]
     assert again.judge_for().kwargs["cache_dir"] == absolute
 
 
 def test_cv_t09_24_mock_llm_wraps_registries_in_scripted_registry(
     world: World, tmp_path: Path
 ) -> None:
-    """CV-T09-24 `--mock-llm`: swarm, chat and judge registries are ScriptedRegistry; swarm
-    and judge calls resolve the ops task's dedup key, chat calls are keyed `chat`."""
+    """CV-T09-24 `--mock-llm`: swarm, chat and judge registries are ScriptedRegistry over the
+    job's own book; swarm and judge calls resolve the ops task's dedup key, chat is `chat`."""
     mock = tmp_path / "mock"
     mock.mkdir()
     (mock / "judge.yaml").write_text(JUDGE_SCRIPT, encoding="utf-8")
-    ctx = FakeCtx({"profile": "local", "repeat": 1, "mock_llm_dir": str(mock)})
-    deps = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
+    deps = _eval_deps.make_deps(_ctx(mock_llm_dir=str(mock)))  # type: ignore[arg-type]
     swarm, chat = deps.swarm_for("local"), deps.chat_for("local")
     registries = (swarm.args[1], chat.args[1])
     assert all(isinstance(r, ScriptedRegistry) for r in registries)
-    swarm_slot, chat_slot = (r.client("anything") for r in registries)
-    assert isinstance(swarm_slot.client, ScriptedLLMClient)
-    assert swarm_slot.client._resolver is not None
-    assert chat_slot.client._resolver is None
-    assert deps.swarm_for("local") is swarm  # one swarm per profile and mode
-    assert deps.judge_for().args[0] is swarm_slot
-    first_book = swarm_slot.client._book
-    deps2 = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
-    assert deps2.swarm_for("local") is swarm  # reused across jobs ...
-    assert swarm_slot.client._book is not first_book  # ... with this job's fresh book
-    assert swarm_slot.name == "fake"  # the slot delegates the client surface
+    swarm_client, chat_client = (r.client("anything") for r in registries)
+    assert isinstance(swarm_client, ScriptedLLMClient)
+    assert swarm_client._resolver is not None
+    assert chat_client._resolver is None
+    assert isinstance(deps.judge_for().args[0], ScriptedLLMClient)
+    other = _eval_deps.make_deps(_ctx(mock_llm_dir=str(mock)))  # type: ignore[arg-type]
+    other_client = other.swarm_for("local").args[1].client("x")
+    assert other_client._book is not swarm_client._book  # each job its own book
     assert world.chains
     assert not isinstance(world.chains[0], ScriptedRegistry)
 
 
-def test_cv_t09_24_cache_reused_across_jobs_and_closed_on_change(
+def test_cv_t09_24_registries_rebuilt_for_a_new_config(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CV-T09-24 (review I1) a second job in the same process reuses the pool, verifier and
-    services (no new writer thread, no second handle on a build); a new config object closes
-    every swarm built and every warehouse handle before the cache is rebuilt."""
-    ctx = FakeCtx({"profile": "local", "repeat": 1})
-    first = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
-    swarm, chat = first.swarm_for("local"), first.chat_for("local")
-    second = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
-    assert second.swarm_for("local") is swarm
-    assert second.chat_for("local") is chat
-    assert [name for name, _, _ in world.built] == ["verifier", "swarm", "chat"]
-    held = _eval_deps._Cache.shared
-    assert held is not None
-    pool = cast("Pool", held.pool)
+    """CV-T09-24 the process-wide registries follow the config object (no DuckDB handle)."""
+    first = _eval_deps.make_deps(_ctx()).swarm_for("local").args[1]  # type: ignore[arg-type]
     cfg = herness.core.config.get_config().model_copy()
     monkeypatch.setattr(herness.core.config, "get_config", lambda: cfg)
-    third = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
-    assert world.closed == [swarm]
-    assert pool.closed == 1
-    assert third.swarm_for("local") is not swarm
-
-
-def test_cv_t09_24_empty_script_slot_refuses() -> None:
-    """CV-T09-24 a scripted slot without a loaded book has no client surface."""
-    slot = _eval_deps._ScriptSlot(None)
-    with pytest.raises(AttributeError, match="no mock scripts loaded"):
-        slot.complete  # noqa: B018 - the attribute access is the check
+    second = _eval_deps.make_deps(_ctx()).swarm_for("local").args[1]  # type: ignore[arg-type]
+    assert second is not first
 
 
 def test_cv_t09_24_make_deps_needs_eval_settings(
@@ -249,9 +263,8 @@ def test_cv_t09_24_make_deps_needs_eval_settings(
     monkeypatch.setattr(herness.core.config, "get_config",
                         lambda: cfg.model_copy(update={"eval": None}))  # fmt: skip
     with pytest.raises(ConfigError, match="eval settings are not configured"):
-        _eval_deps.make_deps(FakeCtx({"profile": "local", "repeat": 1}))  # type: ignore[arg-type]
+        _eval_deps.make_deps(_ctx())  # type: ignore[arg-type]
     monkeypatch.setattr(herness.core.config, "get_config", lambda: cfg)
     with pytest.raises(ConfigError):
-        _eval_deps.make_deps(  # type: ignore[arg-type]
-            FakeCtx({"profile": "local", "repeat": 1, "mock_llm_dir": str(tmp_path / "none")})
-        )
+        _eval_deps.make_deps(_ctx(mock_llm_dir=str(tmp_path / "none")))  # type: ignore[arg-type]
+    assert _eval_deps._Jobs.open == {}

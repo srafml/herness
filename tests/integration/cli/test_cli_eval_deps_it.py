@@ -1,19 +1,20 @@
-"""The real eval composition root across jobs in one process (T09-24 review I1, U09-98).
+"""The real eval composition root and its per-job teardown (T09-24 review r2 ruling, U09-98).
 
-``_eval_deps.make_deps`` runs unpatched (real ``WarehousePool``, ``Verifier``, ``Swarm``,
-``ChatService`` and model registry) on a copy of ``tiny_build`` under the ``ops_store`` data
-root; only the memory store is the recording fake (the ``local`` profile's real store needs the
-off-network fallback client, T09-27 note 6). A second job must open the same build and add no
-writer thread; a new config object must close the old handles so the rebuilt pool can harden
-its own connection to the same build.
+``_eval_deps.make_deps`` and ``run_eval_job`` run unpatched (real ``WarehousePool``,
+``Verifier``, ``Swarm``, ``ChatService`` and model registry) on a copy of ``tiny_build`` under
+the ``ops_store`` data root; the runner's ``handle_eval`` is replaced by a job body that uses
+the deps (queries the build, builds the swarm and the chat service). After the job, the same
+build must open through a fresh ``WarehousePool`` built the way the review handler builds it
+(``SwarmDeps.from_config``), a second eval job must run, and no writer thread may be left.
+Profile ``hybrid`` (egress on): the ``local`` registry refuses its off-network fallback client
+(T09-27 note 6); the memory store is the recording fake.
 """
 
 from __future__ import annotations
 
 import shutil
 import threading
-from collections.abc import Iterator
-from pathlib import Path
+from typing import Any
 
 import pytest
 from tests.support.builds import BuildHandle
@@ -24,7 +25,10 @@ from tests.unit.eval._runner_env import FakeCtx
 
 from herness._cli import _eval_deps
 from herness.core import config as herness_config
+from herness.core.types import JobOutcome
+from herness.eval import runner
 from herness.harness import memory
+from herness.harness.swarm.run import SwarmDeps
 from herness.store.ops.resilience import bind_core_backends
 
 pytestmark = pytest.mark.integration
@@ -34,7 +38,7 @@ pytestmark = pytest.mark.integration
 def build_id(
     cli_env: CliEnv, ops_store: OpsStoreHandle, tiny_build: BuildHandle,
     monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[str]:  # fmt: skip
+) -> str:  # fmt: skip
     """tiny_build's warehouse and CURRENT under the data root; the cli_env config loaded."""
     wh = ops_store.data_root / "warehouse"
     wh.mkdir(exist_ok=True)
@@ -43,35 +47,43 @@ def build_id(
     herness_config.init_config("hybrid", (), cli_env.write_config())  # egress on (T09-27 note 6)
     bind_core_backends()
     monkeypatch.setattr(memory, "get_memory_store", FakeMemoryStore)
-    monkeypatch.setattr(_eval_deps._Cache, "shared", None)
     monkeypatch.setattr(_eval_deps._Root, "path", None)
-    yield tiny_build.build_id
-    held = _eval_deps._Cache.shared
-    if held is not None:
-        held.close()
+    monkeypatch.setattr(_eval_deps._Jobs, "open", {})
+    return tiny_build.build_id
 
 
-def _query(deps: object, build_id: str) -> int:
-    cursor = deps.warehouse_for(build_id)  # type: ignore[attr-defined]
-    row = cursor.execute("SELECT count(*) FROM meta.build").fetchone()
-    return int(row[0])
+def _count(cursor: Any) -> int:
+    return int(cursor.execute("SELECT count(*) FROM meta.build").fetchone()[0])
 
 
-def test_cv_t09_24_real_make_deps_twice_reuses_handles_and_threads(build_id: str) -> None:
-    """CV-T09-24 two eval jobs in one process: the second opens the same build through the
-    shared pool and builds no second swarm (no extra writer thread); after a config reload the
-    old swarm and handles are closed and a fresh pool opens the build again."""
-    ctx = FakeCtx({"profile": "local", "repeat": 1})
-    first = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
-    assert _query(first, build_id) >= 1
-    swarm, chat = first.swarm_for("hybrid"), first.chat_for("hybrid")
+def test_cv_t09_24_eval_job_teardown_frees_the_build(
+    build_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T09-24 an eval job through `run_eval_job` (real make_deps on tiny_build) builds and
+    uses its swarm, chat service and pool; afterwards the review handler's own fresh pool opens
+    the same build, a second eval job runs, and no writer thread is left behind."""
+    seen: list[int] = []
+
+    def job_body(ctx: Any) -> JobOutcome:
+        deps = runner._Binding.factory(ctx)  # type: ignore[misc]
+        seen.append(_count(deps.warehouse_for(build_id)))
+        assert deps.swarm_for("hybrid") is deps.swarm_for("hybrid")  # one per profile
+        deps.chat_for("hybrid")
+        return JobOutcome(status="done", result={"run_id": "r", "passed": True})
+
+    monkeypatch.setattr(runner._Binding, "factory", _eval_deps.make_deps)
+    monkeypatch.setattr(runner, "handle_eval", job_body)
     threads = threading.active_count()
-    second = _eval_deps.make_deps(FakeCtx({"profile": "local", "repeat": 1}))  # type: ignore[arg-type]
-    assert _query(second, build_id) >= 1
-    assert second.swarm_for("hybrid") is swarm
-    assert second.chat_for("hybrid") is chat
+    outcome = _eval_deps.run_eval_job(FakeCtx({"profile": "hybrid", "repeat": 1}))  # type: ignore[arg-type]
+    assert outcome.status == "done"
+    assert threading.active_count() <= threads  # the swarm's writer thread was stopped
+    assert _eval_deps._Jobs.open == {}
+    review_pool = SwarmDeps.from_config(herness_config.get_config()).warehouses
+    try:
+        assert _count(review_pool.get(build_id).cursor()) >= 1  # hardening succeeds
+    finally:
+        review_pool.close_all()
+    again = _eval_deps.run_eval_job(FakeCtx({"profile": "hybrid", "repeat": 1}))  # type: ignore[arg-type]
+    assert again.status == "done"
+    assert seen == [seen[0], seen[0]]
     assert threading.active_count() <= threads
-    herness_config.init_config("hybrid", (), Path("config"))  # a new config object (cwd = root)
-    third = _eval_deps.make_deps(ctx)  # type: ignore[arg-type]
-    assert _query(third, build_id) >= 1  # hardening on a fresh pool succeeds
-    assert third.swarm_for("hybrid") is not swarm

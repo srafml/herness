@@ -346,7 +346,9 @@ def test_ut09_90_deploy_down_all_reports_each_class_and_propagates_failure(
     classes = _json(capsys)["data"]["classes"]
     assert classes["reasoning"] == {"exit_code": 0, "data": {"stopped": "reasoning"}}
     assert classes["decider"]["exit_code"] == 1
-    assert classes["large"] == {"exit_code": 9, "error": "ModelUnavailable"}
+    assert classes["large"]["exit_code"] == 9
+    assert classes["large"]["error"] == "ModelUnavailable"
+    assert classes["large"]["message"]  # the operator sees the reason (review r2 M3)
     assert seen == ["reasoning", "decider", "large"]
 
     def failing(cls: str, **kw: Any) -> CommandResult:
@@ -683,6 +685,22 @@ def test_ut09_90_privacy_delete_and_inline_runs_each_job(
     assert [j["status"] for j in inline_payload["data"]["jobs"]] == ["done", "done"]
     assert inline_payload["warnings"] == []  # the jobs ran here (review M10)
     assert _main(["privacy", "delete", "--reason-ref", "DSR-1"]) == 2  # --record-id required
+
+
+def test_cv_t09_24_inline_drops_the_real_owner_no_worker_warning(
+    admin: Recorder, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CV-T09-24 (review r2 M1) with the real `cmd_maintenance` and no worker: the owner's own
+    warning is shown on a queued run and dropped with `--inline` (the job ran here)."""
+    monkeypatch.setattr(commands_data, "enqueue", lambda *a, **kw: "job_9")
+    monkeypatch.setattr(commands_data, "worker_alive", lambda: False)
+    monkeypatch.setattr(herness.admin, "register_handlers", lambda *, memory_purge: None)
+    monkeypatch.setattr(cmd_admin, "run_job_inline", lambda opts, actor, job_id: SimpleNamespace(
+        job=SimpleNamespace(status="done"), exit_code=0))  # fmt: skip
+    assert _main(["--json", "maintenance", "backup"]) == 0
+    assert _json(capsys)["warnings"] == [commands_data._NO_WORKER]  # the owner's real text
+    assert _main(["--json", "maintenance", "backup", "--inline"]) == 0
+    assert _json(capsys)["warnings"] == []
 
 
 @pytest.mark.parametrize("action", ["backup", "purge"])
