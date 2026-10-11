@@ -526,6 +526,7 @@ Not documented, verify at Phase 4: a health endpoint, `python3` in the image, an
 5. `herness deploy render`; `herness deploy pull --allow-download` (opens the firewall window, pulls images by digest and weights by revision, closes it).
 6. Before the worker service is registered: `herness deploy up reasoning` → healthy; `herness deploy down`; `herness deploy up decider` → healthy (if D7 fails, record it and switch spec 03's teacher to the LLM decider); `down`; the same check for `large` if deep mode will use it.
 7. Register services (§5.6.4). `herness doctor` must pass all checks.
+8. Worker smoke check (impl 09 T09-22, owed on the target PC): `herness --profile hybrid worker --once` on an empty queue exits 0 and logs `jobs.worker.nothing_to_do`. The shipped `local` profile cannot start a worker until T07-25 (its model clients raise `ConfigError` with egress off).
 
 Checks this spec adds to spec 09's `herness doctor` (same PASS/WARN/FAIL table with a fix hint per row): Python 3.12 and `uv`; config validate; all secret refs exist; ACLs on `data\`; BitLocker on; audit hash chain intact; WSL distro present, systemd and dockerd running; `nvidia-smi` in WSL; GPU VRAM ≥ 24 GB; images present with pinned digests; weights present at pinned revisions; health of the running model server; ports 8000, 8100, 8200 and `security.ui.port` listening on loopback only; socket-guard self-test (a connect to `1.1.1.1:443` must raise `EgressBlocked` in `local`); firewall rules present; free disk ≥ 50 GB; clock skew < 5 s.
 

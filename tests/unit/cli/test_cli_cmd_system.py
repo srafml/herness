@@ -49,10 +49,16 @@ def _json(capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:
 def admin(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> CliEnv:
     """``alice`` is an admin; the child-process variables are restored after the test."""
     cli_env.write_config(admins=["alice"])
-    for name in _CHILD_VARS:
-        monkeypatch.setenv(name, "")  # recorded, so the os.environ writes are undone
-        monkeypatch.delenv(name)
+    _isolate_child_env(monkeypatch)
     return cli_env
+
+
+def _isolate_child_env(mp: pytest.MonkeyPatch) -> None:
+    """Record the four child variables as absent, so ``worker``'s ``os.environ`` writes are
+    undone at teardown (a bare ``delenv(raising=False)`` of an absent name records nothing)."""
+    for name in _CHILD_VARS:
+        mp.setenv(name, "")
+        mp.delenv(name)
 
 
 # --- registration (UT09-66 for the T09-22 paths) ----------------------------------------------
@@ -527,7 +533,14 @@ def test_ut09_86_current_build_age(
     assert view == _status.BuildView("b1", expected)
 
 
-def test_cv_t09_22_worker_env_restored_after_tests() -> None:
-    """CV T09-22 the `worker` tests leave no child-process variable behind (an unrecorded
-    `delenv` once leaked HERNESS_PROFILE=hybrid into later tests)."""
-    assert not any(os.environ.get(name) for name in _CHILD_VARS)
+def test_cv_t09_22_worker_env_restored(cli_env: CliEnv, worker_spy: WorkerSpy) -> None:
+    """CV T09-22 `worker` writes the child variables into os.environ; the isolation the
+    worker tests use restores the values seen before the test once it is undone."""
+    cli_env.write_config(admins=["alice"])
+    before = {name: os.environ.get(name) for name in _CHILD_VARS}
+    with pytest.MonkeyPatch.context() as mp:
+        _isolate_child_env(mp)
+        assert _main(["--config-dir", str(cli_env.config_dir), "worker", "--once"]) == 0
+        assert os.environ["HERNESS_PROFILE"] == "local"
+        assert worker_spy.env["HERNESS_PROFILE"] == "local"
+    assert {name: os.environ.get(name) for name in _CHILD_VARS} == before
