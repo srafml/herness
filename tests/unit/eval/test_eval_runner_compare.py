@@ -219,3 +219,54 @@ def test_cv_t11_38_compare_job_context_delegates(tmp_path: Path) -> None:
     deps = make_deps(tmp_path, None)  # type: ignore[arg-type]
     assert _runner_compare._finished(None, deps) is None
     assert _runner_compare._finished("run_01JA0000000000000000000009", deps) is None
+
+
+def test_cv_t11_38_finished_checks_the_run_id_first(tmp_path: Path) -> None:
+    """CV-T11-38 reading a finished primary back checks `run_<ulid>` before any path join."""
+    deps = make_deps(tmp_path, None)  # type: ignore[arg-type]
+    for bad in ("../outside", "run_x"):
+        with pytest.raises(ConfigError, match="run ids must be run_<ulid>"):
+            _runner_compare._finished(bad, deps)
+
+
+def test_cv_t11_38_resumed_compare_run_keeps_its_build(
+    runner_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T11-38 a retried job resumes the half-finished compare run on the build pinned in
+    its run row, not on a `CURRENT` that moved in between; both runs compare on one build."""
+    con = make_root(runner_store.data_root)
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01"), chat_q("G02")])
+    _bind(monkeypatch, lambda c: make_deps(runner_store.data_root, con, job=c))
+    ctx = FakeCtx(_payload(suite), yield_after=3)
+    assert handle_eval(ctx).status == "yield"  # type: ignore[arg-type]
+    assert "compare_run_id" in ctx.state
+    moved = lambda root: "bld_other"  # noqa: E731 - CURRENT moved after the yield
+    monkeypatch.setattr(runner, "current_build", moved)
+    monkeypatch.setattr(_runner_compare, "current_build", moved)
+    ctx.yield_after = None
+    done = handle_eval(ctx)  # type: ignore[arg-type]
+    assert (done.status, done.result["exit_code"]) == ("done", 0)
+    rows = read_all("SELECT build_id FROM run WHERE kind = 'eval'", ())
+    assert [r["build_id"] for r in rows] == [env.BUILD_ID, env.BUILD_ID]
+
+
+def test_cv_t11_38_runs_on_different_builds_are_not_compared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T11-38 should the two runs report different builds, `run_eval` refuses to compare
+    them (ConfigError) instead of writing a comparison."""
+    deps = make_deps(tmp_path, None)  # type: ignore[arg-type]
+
+    def golden(suite: object, profile: str, depth: str, **kw: object) -> runner.EvalRun:
+        build = "bld_a" if profile == "local" else "bld_b"
+        return runner.EvalRun(run_id=f"r_{profile}", out_dir=tmp_path,
+                              summary={"build_id": build}, passed=True)  # fmt: skip
+
+    monkeypatch.setattr(_runner_compare, "current_build", lambda root: "bld_a")
+    payload = runner.EvalPayload(profile="local", compare_profile="hybrid", repeat=1)
+    with pytest.raises(ConfigError, match="different builds"):
+        _runner_compare.run_eval(
+            golden, None, payload, resume_run_id=None,  # type: ignore[arg-type]
+            deps=deps, options=runner.EvalOptions(),
+        )  # fmt: skip
+    assert not list(tmp_path.rglob("comparison.json"))
