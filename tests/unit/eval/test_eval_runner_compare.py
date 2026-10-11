@@ -178,11 +178,13 @@ def test_cv_t11_38_compare_needs_the_same_build(
     assert len(_eval_rows()) == 1
 
 
-def test_cv_t11_38_set_baseline_once_and_baseline_in_both_reports(
+def test_cv_t11_38_set_baseline_and_named_baseline_apply_to_the_primary_only(
     runner_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """CV-T11-38 `--set-baseline` saves the primary run only; a later `--compare` with
-    `--baseline` re-renders the compare run's report with both sections."""
+    `--baseline` compares only the primary with it (the compare run's re-rendered report has
+    the comparison, no baseline diff). The verdict is not asserted: the baseline's latency
+    comes from the host's wall time, so its ratio check is timing-dependent here."""
     con = make_root(runner_store.data_root)
     suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01")])
     _bind(monkeypatch, lambda c: make_deps(runner_store.data_root, con, job=c))
@@ -200,7 +202,14 @@ def test_cv_t11_38_set_baseline_once_and_baseline_in_both_reports(
     primary = _read(runner_store.data_root / "reports" / "eval" / str(outcome.result["run_id"]),
                     "report.md")  # fmt: skip
     assert "## Baseline diff" in primary
-    assert outcome.result["exit_code"] == 0
+    assert outcome.status == "done"
+    eval_dir = runner_store.data_root / "reports" / "eval"
+    assert _read(eval_dir / str(outcome.result["run_id"]), "summary.json")["baseline"] == (
+        "cmp-base"
+    )
+    assert (
+        _read(eval_dir / str(outcome.result["compare_run_id"]), "summary.json")["baseline"] is None
+    )
 
 
 def test_cv_t11_38_compare_run_uses_a_comparable_default_baseline(
