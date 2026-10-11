@@ -9,7 +9,6 @@ backs `count_unsupported` (U11-60, DD11-09): ops `evidence`, else the build's
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -23,7 +22,8 @@ from herness.core.errors import ConfigError, FatalError, HernessError, NotFound
 from herness.core.numbers import compile_allowed_patterns
 from herness.core.redact import redact_text
 from herness.core.resilience import retry_call
-from herness.eval.golden import _guard
+from herness.eval.golden import reference_guard
+from herness.eval.invoke import EVAL_USER_REF
 from herness.store.layout import DataLayout
 from herness.store.ops import get_evidence
 from herness.store.ops.chat import append_chat_message, create_chat_session
@@ -35,7 +35,6 @@ if TYPE_CHECKING:
 __all__ = ["EVAL_USER_REF", "EvidenceReader", "Trace", "current_build", "dataset_kind",
            "load_trace", "name_index", "numerals", "open_session_for"]  # fmt: skip
 
-EVAL_USER_REF: Final = hashlib.sha256(b"herness-eval").hexdigest()[:32]  # 32 hex (U09-46)
 RERUN_MAX_ROWS: Final = 10_000
 _META_SQL: Final = "SELECT sql, params FROM meta.evidence WHERE query_id = ?"
 _NAME_SQL: Final = (  # chat_entity_ids name index (U11-57): display name -> entity id
@@ -148,7 +147,7 @@ class EvidenceReader:
         sql, params = stored
         cur = self._con.cursor()
         try:
-            _guard(cur).check(sql)
+            reference_guard(cur).check(sql)
             cur.execute(sql, params or None)
             columns = [str(d[0]) for d in cur.description or ()]
             rows = cur.fetchmany(RERUN_MAX_ROWS + 1)

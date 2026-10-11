@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from herness.core.config import get_config
 from herness.core.errors import ConfigError
 from herness.core.types import Depth
-from herness.eval.settings import EvalConfig
+from herness.eval.settings import MAX_REPEAT, EvalConfig
 
 __all__ = [
     "EXIT_CONFIG",
@@ -50,7 +50,7 @@ class EvalPayload(BaseModel):
     depth: Depth = "standard"
     ids: list[str] = Field(default=[], max_length=500)
     tags: list[str] = Field(default=[], max_length=100)
-    repeat: int = Field(ge=1, le=10)  # TH11-13
+    repeat: int = Field(ge=1, le=MAX_REPEAT)  # TH11-13
     mock_llm_dir: str | None = Field(default=None, min_length=1, max_length=1024)
     no_judge: bool = False
     resume_run_id: str | None = Field(default=None, pattern=r"^run_[0-9A-HJKMNP-TV-Z]{26}$")
