@@ -137,17 +137,17 @@ def test_ft11_06_eval_killed_before_complete_resume_reruns_no_question(
     assert (again.status, again.result["run_id"]) == ("done", run_id)
     assert (eval_env.chat.calls, eval_env.drv.agents.calls) == ([], {})
     assert (out / "results.jsonl").read_bytes() == before
-    assert _call_counts_equal_a_clean_run(eval_env, killed_calls)
+    _assert_call_counts_equal_a_clean_run(eval_env, killed_calls)
 
 
-def _call_counts_equal_a_clean_run(env: EvalEnv, killed: Counter[str]) -> bool:
+def _assert_call_counts_equal_a_clean_run(env: EvalEnv, killed: Counter[str]) -> None:
     """A clean run of the same suite in this process makes the same scripted calls."""
     _, outcome = env.handle(_payload(env))
     assert outcome.status == "done"
     clean = Counter({"chat": len(env.chat.calls)} | env.drv.agents.calls)
     assert killed == clean, (killed, clean)
     results = lines(env.out_dir(outcome.result["run_id"]) / "results.jsonl")
-    return [r["id"] for r in results] == list(IDS)
+    assert [r["id"] for r in results] == list(IDS)
 
 
 def test_ft11_06_summary_written_before_the_kill(eval_env: EvalEnv, tmp_path: Path) -> None:
