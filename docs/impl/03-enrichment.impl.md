@@ -3575,6 +3575,8 @@ All keys except `deciders.*` live in `config/decisions.yaml` (root `decisions` i
 | `mapping_suggest.weights` | {fuzzy, semantic, cooccurrence} | {0.35, 0.45, 0.20} | sum 1 | internal |
 | `mapping_suggest.abbreviations` | map str → str | `{pmt: payment, auth: authentication}` | keys `^[a-z0-9]{1,16}$`; no expansion equals a key | internal |
 
+
+Fixture-build note (T11-39): `clustering.window_days` and the other enrichment windows (`escalation.bootstrap_window_days`) are relative to `clock.now()` by design, not to the newest record. Synthetic fixture builds (`tests/support/builds.ensure_build`, spec 11) therefore pin `herness.core.time.now` to the synth end + 1 day and fingerprint that date, so a cached build does not depend on the day it was made.
 Keys read from other files: the `deciders` section of `models.yaml` (owned here, U03-150, R-76), `paths.data` (T10-01 (herness.core.settings.PathsConfig)), the pinned `openjev` image reference under `deploy` (T10-01 (herness.core.settings.OpenJevDeploy)), `security.egress.*` (T10-01 (herness.core.settings.EgressConfig), read through the guard T10-16 (herness.core.egress.EgressGuard)), `models.yaml` roles `enrich_decider` and `cluster_namer` (resolved by the composition root through T05-10 (herness.harness.llm.registry.client_for)), retry policies and breakers in `resilience.yaml` (T08-26 (herness.core.resilience.settings.ResilienceSection)).
 
 ---

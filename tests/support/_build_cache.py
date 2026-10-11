@@ -28,6 +28,7 @@ import shutil
 import socket
 import time
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Final, Literal
 
@@ -43,7 +44,7 @@ from tools.synth._manifest import MARKER
 from tools.synth.params import SOURCES, load_params, params_hash
 
 FINGERPRINT: Final = ".fixture_build.json"
-FIXTURE_REV: Final = 3  # bump when `builds` changes how a build is made (3: stub script book)
+FIXTURE_REV: Final = 4  # bump when `builds` changes how a build is made (4: pinned clock)
 LOCK_WAIT_S: Final = 30 * 60.0
 LOCK_POLL_S: Final = 1.0
 EMPTY_LOCK_STALE_S: Final = 60.0
@@ -216,7 +217,8 @@ def generate_root(seed: int, scale: Scale, root: Path) -> None:
 
 
 def fingerprint(repo_root: Path, phash: str) -> str:
-    """SHA-256 over the generator version, params hash, `FIXTURE_REV` and fingerprinted files."""
+    """SHA-256 over the generator version, params hash, `FIXTURE_REV`, the pinned build date
+    (`DEFAULT_END` + 1 day) and fingerprinted files."""
     files = [
         *repo_root.glob("herness/model/sql/*.sql"),
         *repo_root.glob("herness/model/sql/*.jinja"),
@@ -227,7 +229,8 @@ def fingerprint(repo_root: Path, phash: str) -> str:
         f"{p.relative_to(repo_root).as_posix()} {hashlib.sha256(p.read_bytes()).hexdigest()}"
         for p in files
     )
-    text = "\n".join([GENERATOR_VERSION, phash, f"rev {FIXTURE_REV}", *entries])
+    pin = f"clock {DEFAULT_END + timedelta(days=1)}"  # `_build_clock.PIN`: the day builds read
+    text = "\n".join([GENERATOR_VERSION, phash, f"rev {FIXTURE_REV}", pin, *entries])
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
