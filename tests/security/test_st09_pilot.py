@@ -233,7 +233,8 @@ def test_st09_19_pilot_path_end_to_end_no_sentinel_no_egress(
     assert code == 0
     assert listed is not None
     assert {row["kind"] for row in listed["data"]["jobs"]} == {"sync", "build_pipeline", "review"}
-    assert pilot.run("doctor")[0] in (0, 1)
+    code, doctor = pilot.run("doctor")
+    assert (code, doctor["ok"] if doctor else None) == (0, True), pilot.outputs[-1]
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{QUESTION}\n/quit\n"))
     assert pilot.run("chat", "--new", json_mode=False)[0] == 0
     corpus = "\n".join(
@@ -253,9 +254,8 @@ def test_st09_19_pilot_path_end_to_end_no_sentinel_no_egress(
 
 @pytest.mark.xfail(
     strict=True,
-    reason="U09-103 `run_job_inline` registers no job handlers, so `--inline` in a fresh CLI "
-    "process fails with ConfigError 'no handler for <kind>' (exit 3); owner: T09-21 "
-    "(U09-103) / T09-27 (handler registration), T09-26 concern",
+    reason="product gap T09-29 (inline helper does not call worker_bootstrap; no handlers in a "
+    "fresh process): `--inline` fails with ConfigError 'no handler for <kind>' (exit 3)",
 )
 def test_st09_19_inline_job_runs_without_test_registered_handlers(pilot: Pilot) -> None:
     """ST09-19 pilot stage ``sync files --inline`` as a fresh CLI process runs it: the CLI
@@ -264,3 +264,6 @@ def test_st09_19_inline_job_runs_without_test_registered_handlers(pilot: Pilot) 
     drop_inbox(pilot.data)
     code, synced = pilot.run("sync", "files", "--inline")
     assert code == 0, synced
+    assert synced is not None
+    assert synced["data"]["status"] == "done"
+    assert list((pilot.data / "raw" / "files" / "teams").rglob("*.parquet"))

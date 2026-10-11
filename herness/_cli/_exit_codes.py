@@ -68,6 +68,9 @@ def abort_error(exc: BaseException) -> UserInputError | None:
     None for an interrupt (exit 130, R-46), else the usage error of a prompt that got no
     input (exit 2): it names no value, so the JSON envelope and the Fix line stay clean.
     """
+    # Limit: a bare ``Abort`` (no KeyboardInterrupt cause), as from a future
+    # ``typer.confirm(..., abort=True)`` answered "no", also reads as end of input (exit 2).
+    # No caller raises one today; such a caller must map its refusal itself.
     cause = (exc.__cause__ or exc.__context__) if isinstance(exc, Abort) else exc
     if isinstance(cause, KeyboardInterrupt):
         return None

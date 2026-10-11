@@ -78,6 +78,7 @@
         "publishable", "files", "numbers_total", "numbers_linked", "uncited",
         "evidence_entries", "warnings"
       ],
+      "additionalProperties": false,
       "properties": {
         "schema": {"$ref": "#/$defs/schema_tag"},
         "run_id": {"type": "string", "minLength": 1},

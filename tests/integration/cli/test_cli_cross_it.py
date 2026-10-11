@@ -173,13 +173,12 @@ def test_it09_15_command_error_exit_code_by_class(
         raise exc
 
     monkeypatch.setattr(herness.core.jobs, "list_jobs", raising)
-    got, out, err = run("--json", "jobs", "list")
+    got, out, _ = run("--json", "jobs", "list")
     assert got == code
     envelope = _valid(out)
     assert (envelope["ok"], envelope["data"]) == (False, None)
     assert (envelope["error"]["type"], envelope["error"]["exit_code"]) == (_kind(exc), code)
     assert run("jobs", "list")[0] == code  # human mode: same code
-    del err
 
 
 @pytest.mark.parametrize(("exc", "code"), CLASS_CASES, ids=CASE_IDS)
