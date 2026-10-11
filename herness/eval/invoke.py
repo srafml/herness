@@ -11,6 +11,7 @@ The chat mode is the caller's decision (OI-3: `cloud` for `premium`, else `live`
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -41,11 +42,14 @@ if TYPE_CHECKING:
     from herness.harness.pipelines.chat import ChatService
     from herness.harness.swarm import RunRequest, Swarm
 
-__all__ = ["PipelineOutput", "ReviewCache", "invoke_chat", "invoke_review"]
+__all__ = [
+    "EVAL_USER_REF", "PipelineOutput", "ReviewCache", "exception_text", "invoke_chat",
+    "invoke_review", "review_output",
+]  # fmt: skip
 
 ERROR_MESSAGE_MAX: Final = 500
 FINDINGS_LIMIT: Final = 500  # the store's per-call maximum (U06-43)
-EVAL_USER_REF: Final = "eval"
+EVAL_USER_REF: Final = hashlib.sha256(b"herness-eval").hexdigest()[:32]  # 32 hex (U09-46)
 _WITHHELD: Final = "[message withheld]"
 
 _log = get_logger("eval.invoke")
@@ -74,7 +78,8 @@ def _error_text(kind: str, message: str) -> str:
     return f"{kind}: {text[:ERROR_MESSAGE_MAX]}"
 
 
-def _exc_text(err: BaseException) -> str:
+def exception_text(err: BaseException) -> str:
+    """`<class name>: <message>` of `err`, secrets scrubbed, message cut to 500 chars."""
     return _error_text(type(err).__name__, str(err))
 
 
@@ -89,22 +94,25 @@ def invoke_chat(
     mode: ChatMode,
     now: Callable[[], float],
     name_index: Mapping[str, str] | None = None,
+    open_session: Callable[[str], str] | None = None,
 ) -> PipelineOutput:
-    """One chat turn in a fresh `eval_` session (U11-62); `name_index` (display name →
-    entity id) yields `ranked_ids` via `chat_entity_ids`."""
+    """One chat turn in a fresh session (U11-62); `name_index` (display name → entity id)
+    yields `ranked_ids` via `chat_entity_ids`. `open_session(text)` (the U11-62 amendment,
+    supplied by the eval runner) creates the `ses_` session holding the redacted user message
+    the real `ChatService` answers; without it the session id is `eval_<ulid>`."""
     started = now()
-    session_id = "eval_" + new_ulid()
     answer: ChatAnswer | None = None
     run_id = ""
     error: str | None = None
     try:
+        session_id = "eval_" + new_ulid() if open_session is None else open_session(text)
         for event in chat.answer(session_id, text, EVAL_USER_REF, mode):
             if isinstance(event, FinalEvent):
                 answer, run_id = event.answer, event.run_id
             elif isinstance(event, ErrorEvent):
                 error = _error_text(event.error_type, event.message)
     except Exception as err:  # noqa: BLE001 - U11-62: a pipeline exception is never raised
-        error = _exc_text(err)
+        error = exception_text(err)
     latency = now() - started
     if answer is None:
         error = error or "NoFinalEvent: the chat turn ended without a final answer"
@@ -134,10 +142,21 @@ def invoke_review(
         found = query_findings(run_id, statuses=None, limit=FINDINGS_LIMIT)
         latency = now() - started
     except Exception as err:  # noqa: BLE001 - U11-62: a pipeline exception is never raised
-        return PipelineOutput(run_id=run_id, latency_s=now() - started, error=_exc_text(err))
+        return PipelineOutput(run_id=run_id, latency_s=now() - started, error=exception_text(err))
     if len(found) >= FINDINGS_LIMIT:  # the store caps one read; later findings are not seen
         _log.warning("eval.invoke.findings_truncated", run_id=run_id, limit=FINDINGS_LIMIT)
     return _from_draft(run_id, draft, found, latency)
+
+
+def review_output(run_id: str, draft: Path) -> PipelineOutput:
+    """A finished review's output rebuilt from its stored draft and findings (an eval resumed
+    after the run, F11-10); a draft or findings read failure becomes `error`."""
+    try:
+        parsed = ReportDraft.model_validate_json(draft.read_text(encoding="utf-8"))
+        found = query_findings(run_id, statuses=None, limit=FINDINGS_LIMIT)
+    except Exception as err:  # noqa: BLE001 - U11-62: never raised
+        return PipelineOutput(run_id=run_id, error=exception_text(err))
+    return _from_draft(run_id, parsed, found, 0.0)
 
 
 def _from_draft(
@@ -239,7 +258,7 @@ class ReviewCache:
             try:
                 slot.output = factory()
             except Exception as err:  # noqa: BLE001 - U11-62: a pipeline exception is never raised
-                slot.output = PipelineOutput(error=_exc_text(err))
+                slot.output = PipelineOutput(error=exception_text(err))
             finally:
                 if slot.output is None:  # owner died (BaseException): later callers re-run
                     with self._lock:
