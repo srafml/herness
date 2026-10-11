@@ -111,7 +111,7 @@ def test_ut11_110_failures_first_and_baseline_diff(tmp_path: Path) -> None:
     assert md.index("G02") < md.index("G03") < md.index("G01")
     assert md.index("| correctness") < md.index("| unsupported_numbers")
     assert "## Baseline diff" in md
-    assert "| answer_correctness | 0.9 | 0.5 | -0.4 |" in md
+    assert "| answer_correctness | 0.9 | 0.5 | -40.0 pp |" in md
     assert "| chat_latency_p95_s | 4.0 | - | - |" in md
     assert "```text\nPassing answer.\n```" in md
     html = (out / "report.html").read_text(encoding="utf-8")
@@ -351,8 +351,7 @@ def test_cv_t11_31_template_ships_as_package_data() -> None:
 
 
 def test_cv_t11_31_report_module_public_names() -> None:
-    """CV-T11-31 the report module exports the U11-70/U11-72 functions (compare and
-    ComparisonTable are T11-38's)."""
+    """CV-T11-31 the report module exports the U11-70/U11-72 functions."""
     assert {"write_report", "save_baseline", "load_baseline"} <= set(report.__all__)
     assert report.BASELINE_NAME_RE.pattern == "^[a-z0-9][a-z0-9-]{0,63}$"
 
