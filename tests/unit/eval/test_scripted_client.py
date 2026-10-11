@@ -381,13 +381,15 @@ def test_ut11_69_registry_routes_every_key_to_the_scripted_client() -> None:
     inner = _inner_registry()
     scripted = ScriptedLLMClient(_book(*_scripts()))
     registry = ScriptedRegistry(inner, scripted)
-    assert registry.client("local-30b") is scripted
-    assert registry.client("local-large") is scripted
-    assert registry.client("claude-opus") is scripted
+    assert registry.client("fake") is scripted
+    for key in ("local-30b", "local-large", "claude-opus"):  # named per key (T11-32 note)
+        named = registry.client(key)
+        assert isinstance(named, ScriptedLLMClient)
+        assert (named.name, named._book) == (key, scripted._book)
     assert registry.chain_for("writer", "standard") == ["local-30b", "local-large"]
     assert registry.chain_for("writer", "standard") == inner.chain_for("writer", "standard")
     assert registry.model_for("planner", "deep") == "local-large"
-    assert registry.config("local-30b") == inner.config("local-30b")
+    assert registry.config("local-30b") == inner.config("local-30b")  # no GPU class here
     assert registry.role_params("writer") is None
 
 
