@@ -121,6 +121,8 @@ def test_et11_01_mock_golden_question_outcomes(
 
 
 @pytest.mark.slow
+# 365 s alone (T11-37); default 300 s is too tight under concurrent suites (load, not a hang)
+@pytest.mark.timeout(900)
 def test_et11_01_mock_golden_meets_every_threshold_on_small(
     tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
 ) -> None:
