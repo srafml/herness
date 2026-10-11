@@ -27,6 +27,7 @@ PLANTED_IDS: Final = ("G03", "G06", "F01", "O01")
 _CHAT_P95_LOCAL_STANDARD_S: Final = 30.0
 _REVIEW_STANDARD_FULL_S: Final = 5_400.0
 _NO_BASELINE: Final = "no baseline"
+_SUITE_CHANGED: Final = "suite changed"
 
 
 class ThresholdResult(BaseModel):
@@ -70,6 +71,8 @@ def correctness_check(
     notes: list[str] = []
     if baseline is None:
         notes.append(_NO_BASELINE)
+    elif baseline.suite_changed:  # TH11-03: a baseline of another suite is not compared
+        notes.append(_SUITE_CHANGED)
     elif baseline.answer_correctness is None:
         notes.append(f"{_NO_BASELINE} correctness")
     else:

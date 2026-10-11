@@ -145,6 +145,8 @@ def test_cv_t11_30_rule_placeholders_and_entities(
 
 
 class _DownJudge:
+    model = "judge-down"
+
     def score(self, *args: object) -> object:
         msg = "judge down"
         raise ModelUnavailable(msg)

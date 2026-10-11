@@ -135,7 +135,12 @@ report_only = ["nvidia-*"]  # open item O-03
 packages = ["herness"]
 # Role and memory prompts are package data read through importlib.resources (impl 05 T05-21,
 # impl 07 T07-14); listed explicitly so the wheel keeps them even if a VCS ignore rule matched.
-artifacts = ["herness/harness/roles/prompts/*.md", "herness/harness/memory/prompts/*.md"]
+# The eval report template is loaded through jinja2.PackageLoader (impl 11 T11-31).
+artifacts = [
+    "herness/harness/roles/prompts/*.md",
+    "herness/harness/memory/prompts/*.md",
+    "herness/eval/templates/*.j2",
+]
 
 [tool.hatch.build.targets.sdist]
 include = ["herness", "README.md", "pyproject.toml", "uv.lock"]

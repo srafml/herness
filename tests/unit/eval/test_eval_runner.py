@@ -215,8 +215,8 @@ def test_ut11_116_register_handlers_idempotent() -> None:
         ({"compare_runs": [_RESUME]}, "run comparison is not available until T11-38"),
         ({"suite": "classifier"}, "classifier eval is not available until T11-35"),
         ({"compare_profile": "premium"}, "profile comparison is not available until T11-38"),
-        ({"baseline": "synthetic-42-small"}, "baseline comparison is not available until T11-31"),
-        ({"set_baseline": "x-mock"}, "baseline comparison is not available until T11-31"),
+        ({"baseline": "synthetic-42-small"}, "baseline not found: name=synthetic-42-small"),
+        ({"set_baseline": "Bad_Name"}, "set_baseline"),
         ({"ids": ["G77"]}, "unknown question ids: G77"),
         ({"mock_llm_dir": "no/such/dir"}, ""),
     ],
@@ -225,8 +225,8 @@ def test_cv_t11_30_config_errors(
     extra: dict[str, Any], message: str, runner_store: OpsStoreHandle, tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:  # fmt: skip
-    """CV-T11-30 payload, unbuilt features (T11-31/35/38), unknown ids and a bad mock dir
-    are `ConfigError` (exit 3)."""
+    """CV-T11-30 payload, unbuilt features (T11-35/38), a missing named baseline (T11-31),
+    unknown ids and a bad mock dir are `ConfigError` (exit 3)."""
     con = make_root(runner_store.data_root)
     suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01")])
     payload = {"suite": str(suite), "profile": "local", "depth": "fast", "repeat": 1} | extra

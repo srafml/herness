@@ -79,7 +79,7 @@ class EvalEnv:
             warehouse_for=lambda b: self.con, swarm_for=lambda profile: swarm,
             chat_for=lambda profile: self.chat,  # type: ignore[arg-type,return-value]
             judge_for=lambda: None, memory=None, job=ctx, clock=clock.now,
-            data_root=self.data_root, settings=settings(),
+            data_root=self.data_root, settings=settings(), repo_root=self.tmp,
         )  # fmt: skip
 
     def handle(self, payload: dict[str, Any]) -> tuple[FakeCtx, Any]:

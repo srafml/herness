@@ -149,6 +149,10 @@ class RubricJudge:
         self._cache_dir, self._temperature = Path(cache_dir), temperature
         self._tracer, self._redact = tracer, redact
 
+    @property
+    def model(self) -> str:  # the `judge_model` provenance of `summary.json` (T11-31)
+        return self._cfg.model
+
     def score(
         self, question_id: str, criteria: Sequence[str], min_score: float, final_text: str
     ) -> JudgeScore:
