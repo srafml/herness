@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from rich.console import Console
 
 from herness._cli import output as o
+from herness._cli._exit_codes import abort_error
 from herness.cli import GlobalOptions
 from herness.core import errors as e
 from herness.harness.memory.types import MemoryNotFound
@@ -66,6 +67,31 @@ def test_ut09_63_exit_code_table() -> None:
     assert o.exit_code_for(KeyboardInterrupt()) == 130
     assert set(o.EXIT_CODES) == {*range(15), 130}
     assert all(isinstance(v, str) and v for v in o.EXIT_CODES.values())
+
+
+def _aborted(cause: BaseException) -> typer.Abort:
+    """``typer.Abort`` as click's prompt raises it while ``cause`` is handled
+    (``raise Abort() from None``: the cause stays as the suppressed context)."""
+    abort = typer.Abort()
+    abort.__context__ = cause
+    abort.__suppress_context__ = True
+    return abort
+
+
+def test_ut09_63_abort_from_eof_or_interrupt() -> None:
+    """UT09-63 (T09-20 M-5, T09-26) ``Abort`` from Ctrl+C -> 130 and no error; from end of
+    input (or bare) -> 2 with a ``UserInputError`` that names no value."""
+    interrupt = _aborted(KeyboardInterrupt())
+    assert (o.exit_code_for(interrupt), abort_error(interrupt)) == (130, None)
+    assert abort_error(KeyboardInterrupt()) is None
+    for abort in (_aborted(EOFError()), typer.Abort()):
+        error = abort_error(abort)
+        assert isinstance(error, UserInputError)
+        assert error.message == "input ended before the prompt was answered"
+        assert o.exit_code_for(abort) == 2
+    caused = typer.Abort()
+    caused.__cause__ = KeyboardInterrupt()
+    assert o.exit_code_for(caused) == 130
 
 
 def test_ut09_63_exit_code_for_class_name() -> None:

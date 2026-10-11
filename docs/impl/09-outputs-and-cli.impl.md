@@ -91,7 +91,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/cli.py` | Typer root app, entry point, global options, error boundary, worker bootstrap, start-up validation call | `app`, `main`, `GlobalOptions`, `worker_bootstrap`, `run_startup_validation` | L5 | `typer` | 330 |
 | `herness/_cli/__init__.py` | Package marker | none | L5 | — | 5 |
 | `herness/_cli/output.py` | JSON envelope, Error/Fix printing, exit codes | `CliResult`, `CommandResult`, `emit`, `emit_error`, `json_default`, `EXIT_CODES`, `exit_code_for` | L5 | `rich` | 250 |
-| `herness/_cli/_exit_codes.py` | R-46 exit-code table and mapping, private sibling of `output.py`, which re-exports it (T09-20 review round 1) | `EXIT_CODES`, `exit_code_for`, `exit_code_for_class_name` | L5 | none | 120 |
+| `herness/_cli/_exit_codes.py` | R-46 exit-code table and mapping, private sibling of `output.py`, which re-exports it (T09-20 review round 1); `abort_error` for click's `Abort` (T09-26, M-5) | `EXIT_CODES`, `exit_code_for`, `exit_code_for_class_name`, `abort_error` | L5 | none | 120 |
 | `herness/_cli/identity.py` | CLI actor, command→role table, elevation check | `cli_actor`, `COMMAND_ROLES`, `DENIED_ALLOWED`, `WRITE_COMMANDS`, `ELEVATED_COMMANDS`, `check_command_role`, `guarded` | L5 | none | 220 |
 | `herness/_cli/term.py` | Terminal-safe text | `safe_terminal_text` | L5 | none | 60 |
 | `herness/_cli/wait.py` | Enqueue, follow and inline-run jobs | `submit_job`, `follow_job`, `FollowOutcome`, `run_job_inline` | L5 | `rich` | 300 |
@@ -2314,6 +2314,8 @@ The exit codes are those of R-46 (corrected): design 09 §5.8 plus 14 for a fail
 | 130 | Interrupted by Ctrl+C (detached; the job keeps running) | U09-84, U09-91, U09-103 |
 
 `exit_code_for(exc: BaseException) -> int`: `KeyboardInterrupt` → 130; `click.exceptions.UsageError` or `UserInputError` → 2; otherwise the first matching row of the table above, checked with `isinstance` in table order from code 3 to 13 (so a subclass maps with its parent); every other exception → 1. `exit_code_for_class_name(name: str, *, key: str | None = None) -> int` applies the same table to a job's `last_error["class"]` (and `last_error["key"]` for `CircuitOpen`), because a failed job carries the class name, not the exception; an unknown name → 1. The error class stays visible to automation as `error.type` in the JSON envelope (U09-86).
+
+T09-26 spec note (2026-10-11, T09-20 review M-5): Typer's `main` turns an `EOFError` that escapes a command, and click's prompts turn end of input or Ctrl+C at a prompt, into `Abort` (Ctrl+C in a command body is already `Exit(130)`). `herness._cli._exit_codes.abort_error(exc)` classifies it: `None` when the `Abort`'s cause or context is a `KeyboardInterrupt` (exit 130, no output, R-46), otherwise `UserInputError("input ended before the prompt was answered", hint="Run the command in a terminal and answer the prompt.")`; `exit_code_for` maps an `Abort` the same way (130, else 2). U09-84 step 6 handles `KeyboardInterrupt` and `Abort` together: 130 for an interrupt, else `emit_error` with that `UserInputError` (exit 2, Error/Fix lines or the JSON error envelope); neither logs `cli.command.failed`. Tests: UT09-63, IT09-15.
 
 | Field | Content |
 |-------|---------|
