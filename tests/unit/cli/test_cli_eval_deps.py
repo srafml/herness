@@ -58,6 +58,13 @@ class Pool:
         return SimpleNamespace(cursor=lambda: f"cursor:{build_id}")
 
 
+class _Config(SimpleNamespace):
+    """A client config fake with pydantic's `model_copy` (ScriptedRegistry.config, T11-32)."""
+
+    def model_copy(self, *, update: dict[str, Any] | None = None) -> _Config:
+        return _Config(**{**vars(self), **(update or {})})
+
+
 class Registry:
     def __init__(self, cfg: object, *, profile: str) -> None:
         self.profile = profile
@@ -65,8 +72,8 @@ class Registry:
     def client(self, name: str) -> str:
         return f"client:{name}"
 
-    def config(self, name: str) -> SimpleNamespace:
-        return SimpleNamespace(name=name, model="judge-model")
+    def config(self, name: str) -> _Config:
+        return _Config(name=name, model="judge-model")
 
 
 @dataclasses.dataclass
