@@ -11,12 +11,14 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from decimal import Decimal
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
 import pytest
 from tests.support.ops_store import OpsStoreHandle
 from tests.unit.eval import _runner_env as env
+from tests.unit.eval._judge_fixtures import MODEL, FakeJudgeClient, make_judge
 from tests.unit.eval._runner_env import (
     AnswerChat,
     chat_q,
@@ -375,6 +377,30 @@ def test_cv_t11_31_set_baseline_refused_before_the_run(
         _run(runner_store, con, suite, chat=chat, mock=True, set_baseline="synthetic-42-small")
     assert chat.calls == []
     assert not (_repo(runner_store) / "tests").exists()
+
+
+def test_cv_t11_31_judge_model_and_seed_in_summary(
+    runner_store: OpsStoreHandle, con: Any, tmp_path: Path
+) -> None:
+    """CV-T11-31 the summary names the real judge's model (`RubricJudge.model`) and the
+    dataset seed; without a judge `judge_model` is null."""
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01")])
+    judge = make_judge(FakeJudgeClient(), tmp_path / "judge-cache")
+    assert judge.model == MODEL
+    deps = make_deps(runner_store.data_root, con, judge=lambda: judge)
+    run = run_golden(load_suite(suite), "local", "fast", deps=deps, options=EvalOptions())
+    assert (run.summary["judge_model"], run.summary["dataset_seed"]) == (MODEL, 42)
+    bare = _run(runner_store, con, suite)
+    assert bare.summary["judge_model"] is None
+
+
+def test_cv_t11_31_template_ships_as_package_data() -> None:
+    """CV-T11-31 the HTML template is package data next to the module (PackageLoader)."""
+    template = resources.files("herness.eval").joinpath("templates/report.html.j2")
+    assert template.is_file()
+    body = template.read_text(encoding="utf-8").lower()
+    assert "<script" not in body
+    assert "http" not in body.replace("http-equiv", "")
 
 
 def test_cv_t11_31_report_module_public_names() -> None:
