@@ -506,3 +506,33 @@ def test_cv_t10_08_credential_value_group_covers_token(text: str, kind: str) -> 
     The detectors alone yield it; U10-41 step 1 (protected TOKEN_PATTERN ranges) drops it.
     """
     assert [h[0] for h in _hits_token(text)] == [kind]
+
+
+_BUILD_ID_TEXT = (
+    "build: 20260925-101500-ABCDEF",
+    "builds 20260925-101500-ABCDEF and 20261001-000000-0123HJ, done",
+    "(20260925-101500-ABCDEF)",
+    "- Build: 20260926-100000-000001",  # all-digit suffix
+)
+_PHONES_NEAR_BUILD_IDS = (
+    ("build: 20260925-101500-ABCDEF\ncall 415-555-0134", "415-555-0134"),
+    ("call +1 415 555 0134 about 20260925-101500-ABCDEF", "+1 415 555 0134"),
+    ("20260925-101500-ABCDEFG", "20260925-101500"),  # 7 letters: not a build id
+    ("20260925-101500-abcdef", "20260925-101500"),  # lower case: not a build id
+    ("20260925-101500", "20260925-101500"),  # no suffix: not a build id
+)
+
+
+@pytest.mark.parametrize("text", _BUILD_ID_TEXT)
+def test_ut10_91_build_ids_are_not_phones(text: str) -> None:
+    """UT10-91 a build id (8 digits, 6 digits, 6 Crockford letters or digits: T09-15d's
+    verbatim-safe shape) is never a PHONE (T06-29 gap A): no PHONE span in text holding them."""
+    assert [kind for kind, _ in _detect(text)] == []
+
+
+@pytest.mark.parametrize(("text", "phone"), _PHONES_NEAR_BUILD_IDS)
+def test_ut10_91_real_phones_near_build_ids_are_still_masked(text: str, phone: str) -> None:
+    """UT10-91 precision: a real phone beside a build id, and a 14-digit run that is not a
+    full build id, are still PHONE; the build-id exclusion is exact."""
+    assert ("PHONE", phone) in _detect(text)
+    assert redact.Redactor(_CFG, b"k" * 32).redact(text).text.count("[PHONE_") == 1
