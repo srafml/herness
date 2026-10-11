@@ -187,9 +187,10 @@ def test_ft11_02_refused_skeptic_call_falls_back_once(
     assert [(t.spec.model_role, t.status) for t in skeptics] == [("skeptic_final", "done")]
     assert run.res.status == "done"
     # exactly one `fallback` trace event, from the refused head to the next chain entry
-    assert _fallbacks() == [
-        {"from_profile": "claude-opus", "to_profile": "local-30b", "reason": "refusal"}
-    ]
+    assert _fallbacks() == [  # the bound tracer adds the task and role (T06-29 gap D)
+        {"task_id": skeptics[0].task_id, "role": "skeptic", "from_profile": "claude-opus",
+         "to_profile": "local-30b", "reason": "refusal"}
+    ]  # fmt: skip
     [row] = read_all("SELECT target, task_id FROM resilience_event WHERE kind = 'fallback'", ())
     assert (row["target"], row["task_id"]) == ("claude-opus", skeptics[0].task_id)
     assert run.wires() == ["openai"]  # the refused head never reached the wire
