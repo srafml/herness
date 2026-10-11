@@ -10,6 +10,7 @@ import pytest
 import streamlit as st
 
 from app.common import _pages_05_07 as shared
+from app.common._metric_view import chart_spec
 from app.common.wh import QueryResult
 
 pytestmark = pytest.mark.unit
@@ -95,3 +96,20 @@ def test_ut09_120_cached_value_holds_no_raw_text(fake: Fake) -> None:
     assert [r["metric"] for r in view.records] == ["m", "m"]
     assert [metric for metric, _ in view.charts] == ["m"]
     assert set(view.records[0]) == set(shared.METRIC_COLUMNS)
+
+
+def test_ut09_120_chart_spec_shape_and_hostile_labels_stay_in_data() -> None:
+    """UT09-120 the chart spec is a line of period_start by value per entity; labels stay data."""
+    hostile = '"}<script>$schema'
+    series = [{"period_start": "2026-01-01", "value": 1.0, "entity": hostile}]
+    spec = chart_spec(series)
+    encoding = spec["encoding"]
+    assert spec["mark"]["type"] == "line"
+    assert encoding["x"]["field"] == "period_start"
+    assert encoding["x"]["type"] == "temporal"
+    assert encoding["y"]["field"] == "value"
+    assert encoding["color"]["field"] == "entity"
+    assert next(iter(spec["datasets"].values())) == series
+    outside = repr({k: v for k, v in spec.items() if k != "datasets"})
+    assert hostile not in outside
+    assert "<script>" not in outside

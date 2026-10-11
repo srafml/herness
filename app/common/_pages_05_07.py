@@ -104,4 +104,4 @@ def metrics_block(domain: str, period_: str, **filters: str | None) -> None:
     st.dataframe(view.records, hide_index=True)
     for metric, spec in view.charts:
         st.caption(safe_markdown(metric))
-        st.vega_lite_chart(spec, use_container_width=True)
+        st.vega_lite_chart(spec, width="stretch")
