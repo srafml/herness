@@ -105,6 +105,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The split of `render.py` h
 | `herness/_cli/cmd_admin.py` | `config`, `secrets`, `deploy` (including `install`), `eval`, `distill`, `laya`, `privacy`, `maintenance`; thin wrappers over `herness.admin` (R-07) | `register` | L5 | none | 380 |
 | `herness/_cli/cmd_chat.py` | Terminal chat | `register` | L5 | `rich` | 300 |
 | `herness/_cli/_chat_turn.py` | Private helper of `cmd_chat.py` (T09-25 split for the line budget): the terminal-safe printer, history, one question turn with the `defer` poll | `Term`, `Answerer`, `Services`, `ask`, `answer`, `history`, `show_row`, `policy`, `PROMPT`, `COMMANDS` | L5 | `rich` | 200 |
+| `herness/_cli/_worker_boot.py` | Private sibling of `cli.py` (T09-27, budget split): the body of `worker_bootstrap` (U09-104): environment, socket guard, config, ports, start-up validation, owner handler registration, lazy `llm_factory`, `memory_purge` | `boot`, `cached_handlers`, `llm_factory`, `memory_purge`, `overrides_from_env` | L5 | none | 200 |
 
 Import rules beyond ENG §2.1: `herness/_cli/*` and `herness/cli.py` import `duckdb`, `streamlit`, `jinja2`, `weasyprint`, `torch`, `herness.admin` and any L2–L4 package only inside command functions (lazy), so `herness --help` stays under 1 s (BT09-07). `app/` imports `herness.*` freely (L5) but never `herness._cli` or `herness.admin`. `herness.reports.settings` imports only the standard library, `pydantic`, `herness.core.types` and `herness.core.errors` (settings exception, R-03). `herness.core.types.reports` imports nothing from `herness` except `herness.core.errors` and `herness.core.ids` (ENG §2.1).
 
@@ -2767,6 +2768,8 @@ Signature: `worker_bootstrap() -> None`. Referenced by impl 08 (`run_worker(...,
 | Complexity and limits | < 2 s. |
 | Security notes | TH09-28 (socket guard before any handler import). |
 | Tests | UT09-101 |
+
+T09-27 spec note: (1) the body lives in `herness/_cli/_worker_boot.py` (§2 row); `cli.worker_bootstrap` imports it lazily and passes `_bootstrap` and `run_startup_validation`. (2) Idempotence: a module flag keyed on the process `ProcessState` returns early on a second call; the `build_pipeline` and `distill` handlers are built once per process (`cached_handlers`), so a re-registration after a state reset sees the same objects. (3) `memory_purge` is the module-level `_worker_boot.memory_purge`, calling `get_memory_store().purge(record_id=...)`. (4) `review` registers through `herness.harness.swarm.handler.register_handlers`, `eval` through `herness.eval.runner.register_handlers`. (5) eval deps factory → T09-24: `set_deps_factory` is NOT installed here (the deps need Swarm, ChatService, a judge and a warehouse opener per profile; more than the 40-line limit of `_eval_deps.py`), so an `eval` job fails with `ConfigError("eval dependencies not bound")` until T09-24 installs it. (6) The step-6 memory registration builds the process `MemoryStore` at bootstrap; with the shipped `local` profile (egress off) `LLMRegistry` raises `ConfigError` for the off-network fallback client (T07-23 note 4), so a worker in that profile does not start; the CV test uses the `hybrid` profile. The `llm_factory` itself is lazy.
 
 #### U09-105 herness._cli.output.CommandResult
 

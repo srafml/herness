@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from herness.core.config_view import ConfigIssue
     from herness.reports.rules import Actor
 
-__all__ = ["GlobalOptions", "app", "main", "run_startup_validation"]
+__all__ = ["GlobalOptions", "app", "main", "run_startup_validation", "worker_bootstrap"]
 
 _log = get_logger("cli")
 _SET_RE: Final = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)+=.*$")
@@ -294,6 +294,13 @@ def _run(opts: GlobalOptions, args: list[str]) -> int:
     except Exception as exc:  # noqa: BLE001 - the CLI error boundary (ENG §3.4)
         _log.error("cli.command.failed", command=opts.command, error_type=type(exc).__name__)
         return emit_error(opts, opts.command, exc)
+
+
+def worker_bootstrap() -> None:
+    """Composition root of every job-running process (U09-104); idempotent, see ``_worker_boot``."""
+    from herness._cli import _worker_boot  # noqa: PLC0415 - lazy (BT09-07)
+
+    _worker_boot.boot(_bootstrap, run_startup_validation)
 
 
 def main(argv: Sequence[str] | None = None) -> NoReturn:
