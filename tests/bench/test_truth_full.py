@@ -256,6 +256,7 @@ def test_bt11_05_small_t3_link_recall(small_records: Mapping[str, BenchRecord]) 
 
 
 @pytest.mark.xfail(
+    raises=AssertionError,
     strict=True,
     reason="product gap T11-34 fixture: the HashEncoder stand-in merges 99k incidents into two "
     "clusters whose cluster_fix candidates (ranks 1, 2) outrank the T2 epic (rank 3); the "
@@ -267,6 +268,7 @@ def test_bt11_05_small_t2_epic_funding_rank_1(small_records: Mapping[str, BenchR
 
 
 @pytest.mark.xfail(
+    raises=AssertionError,
     strict=True,
     reason="product gap T11-34 fixture: the cluster that holds the T2c members is one of the "
     "two HashEncoder mega-clusters (purity ~0.00), so its cluster_fix rank 1 is not the plant",
@@ -276,11 +278,17 @@ def test_bt11_05_small_t2c_cluster_fix_is_the_plant(
 ) -> None:
     """BT11-05 small scale: the T2c cluster_fix is in the top 10 and the cluster is mostly T2c
     (purity >= 0.5; the spec row checks the rank only, which a mega-cluster satisfies)."""
-    assert not _failed(small_records, ["t2c_cluster_fix_rank"])
-    assert small_records["t2c_cluster_purity"].value >= MIN_PURITY
+    rank = small_records["t2c_cluster_fix_rank"]
+    assert rank.passed, (
+        f"t2c_cluster_fix_rank {rank.value:g}: the cluster holding the T2c members ranks below 10 "
+        "or is not a funding cluster_fix candidate (a rank one past the list means not ranked)"
+    )
+    purity = small_records["t2c_cluster_purity"].value
+    assert purity >= MIN_PURITY, f"T2c cluster purity {purity:.4f} < {MIN_PURITY} (mega-cluster)"
 
 
 @pytest.mark.xfail(
+    raises=AssertionError,
     strict=True,
     reason="product gap T03-26 (link_changes): on the seed 42 small build 4,985 of 5,289 links "
     "at score >= 0.5 come from the time_ci_window band, precision measures ~0.03 (< 0.80)",
