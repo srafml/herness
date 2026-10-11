@@ -357,6 +357,18 @@ def test_it09_21_decide_every_kind_via_page(
     ]  # fmt: skip
 
 
+def test_it09_21_label_check_reject_with_note_via_page(env: SimpleNamespace) -> None:
+    """IT09-21 page: rejecting a label check with a note stores the JSON object {"reason"}."""
+    del env
+    label = _label()
+    at = _press(_run(QUEUE), label, "reject", "Wrong label")
+    assert not at.exception
+    assert not at.error, [e.value for e in at.error]
+    item = review_of(label)
+    assert item.status == "rejected"
+    assert json.loads(item.note or "") == {"reason": "Wrong label"}
+
+
 def test_it09_21_reject_needs_a_note(env: SimpleNamespace) -> None:
     """IT09-21 page: Reject without a note → error card next to the form; item stays pending."""
     mapping = _mapping()

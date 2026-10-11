@@ -1478,7 +1478,7 @@ Returns `list[ReviewItem]`. Order: by `created_at`, then `item_id`, ascending; w
 | `item_id` | `str` | — | positional | |
 | `status` | `Literal["approved", "rejected"]` | — | positional | |
 | `decided_by` | `str` | — | keyword-only | `^[0-9a-f]{32}$` (spec 09 `user_ref`) or `system` |
-| `note` | `str \| None` | `None` | keyword-only | ≤ 2,000 characters; for `label_check` a JSON object string per spec 03 §4.6 |
+| `note` | `str \| None` | `None` | keyword-only | ≤ 2,000 characters; for `label_check` a JSON object string per spec 03 §4.6 (keys `answer` on approval, read by impl 03; optional `reason`; built by impl 09) |
 | `now` | `datetime` | — | keyword-only | UTC |
 | `conn` | `sqlite3.Connection \| None` | `None` | keyword-only | when given, the caller is inside its own `run_write` callback (impl 07 `MemoryStore.approve` / `MemoryStore.reject`, R-33; unblocks T07-09) |
 

@@ -22,7 +22,6 @@ from herness.core import time as clock
 from herness.core.audit import audit
 from herness.core.config import get_config
 from herness.core.errors import NotFound, PolicyViolation, SchemaViolation
-from herness.core.ids import canonical_json
 from herness.core.jobs.status import FINISHED_RUN
 from herness.core.logging import get_logger
 from herness.core.redact import redact_text
@@ -37,6 +36,7 @@ from herness.reports._actions_audit import (
     failed,
     memory_decide,
 )
+from herness.reports._review_notes import stored_review_note
 from herness.reports.contract import RUN_ID_RE
 from herness.reports.render import Format, render_run
 from herness.reports.rules import Actor, UserInputError
@@ -258,16 +258,6 @@ def decide_recommendation(
 # --- U09-38 decide_review, U09-101 decide_memory ----------------------------------------------
 
 
-def _stored_note(kind: str, approve: bool, note: str | None, answer: str | None) -> str | None:
-    """The note impl 02 stores; a label_check approval stores ``{"answer": ...}`` (spec 03)."""
-    if kind != "label_check" or not approve:
-        return note
-    if not (answer or "").strip():
-        text = "Choose the correct answer to approve a label check."
-        raise UserInputError(text)
-    return canonical_json({"answer": r.validate_answer(answer or "")})
-
-
 def decide_review(  # noqa: PLR0913 - keyword parameters fixed by U09-38
     actor: Actor,
     *,
@@ -298,7 +288,7 @@ def decide_review(  # noqa: PLR0913 - keyword parameters fixed by U09-38
         refusal = f"Item {item_id} is no longer pending."
         status = memory_decide(memory, memory_id, actor, clean, approve=approve, refusal=refusal)
     else:
-        stored = _stored_note(item.kind, approve, clean, answer)
+        stored = stored_review_note(item.kind, approve=approve, note=clean, answer=answer)
         status = "approved" if approve else "rejected"
         try:
             retry_call("sqlite_write", decide_review_item, item_id, status,
