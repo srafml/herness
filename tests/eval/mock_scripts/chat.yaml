@@ -1,0 +1,400 @@
+# Mock chat answers for the golden suite (impl 11 U11-75; R-65 script format).
+# Every chat call of a run has the dedup key `chat` (design 11 §5.2), so the turns are
+# served in suite order: one tool call, the final text and the JSON answer the loop asks
+# for, then the correction classifier's reply. The numbers come from the real tool result
+# (`numbers_from: last_tool_result`); entity names come from `{{row.<column>}}`.
+# Answer text holds no numeral outside a [[n<k>]] marker (count_unsupported, TH11-12).
+# Order: G01 … G23 (suite order). A run filtered with --ids that skips a chat question
+# needs its own script directory. After each answer the spec 07 correction classifier
+# (`session_save_turn`, role `chat`, no task) asks once more under the same key, so each
+# question takes four turns.
+- match: {role: chat, dedup_key: chat}
+  turns:
+    # G01 P1 incidents in the most recent quarter
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: P1 incidents opened in the most recent quarter
+            sql: >-
+              SELECT count(*) AS p1_incidents FROM metrics.incident_fact
+              WHERE NOT excluded AND priority = 1
+              AND opened_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+              AND opened_at < (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week')
+    - final: {text: "In the most recent quarter [[n1]] P1 incidents were opened."}
+    - final:
+        output:
+          text: "In the most recent quarter [[n1]] P1 incidents were opened."
+          numbers_from: last_tool_result
+    - &not_a_correction  # the spec 07 correction classifier after each answer (U07-95)
+      final:
+        output:
+          is_correction: false
+          statement: ""
+          entities: []
+          effective_date: null
+          suggested_action: none
+          confidence: 0.0
+    # G02 mttr_hours of P2 incidents on the top funding candidate's service, last 90 days
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: mean restore time of P2 incidents on the service
+            sql: >-
+              SELECT avg(resolve_h) AS mttr_hours FROM metrics.incident_fact
+              WHERE NOT excluded AND priority = 2 AND resolve_h IS NOT NULL
+              AND service_id = (SELECT service_id FROM core.work_item WHERE record_id =
+              (SELECT candidate_id FROM score.funding ORDER BY rank, candidate_id LIMIT 1))
+              AND opened_at >= (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week') - INTERVAL 90 DAY
+    - final: {text: "P2 incidents on that service took [[n1]] hours to restore on average."}
+    - final:
+        output:
+          text: "P2 incidents on that service took [[n1]] hours to restore on average."
+          numbers_from: last_tool_result
+    - *not_a_correction
+    # G03 group with the highest median MTTR
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: assignment group with the highest median restore time
+            sql: >-
+              SELECT t.name AS team_name FROM metrics.incident_fact f JOIN core.team t ON t.team_id = f.team_id
+              WHERE NOT f.excluded AND f.resolve_h IS NOT NULL
+              AND f.opened_at >= (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week') - INTERVAL 12 MONTH
+              GROUP BY t.team_id, t.name HAVING count(*) >= 20
+              ORDER BY median(f.resolve_h) DESC, t.team_id LIMIT 1
+    - final: {text: "{{row.team_name}} has the highest median restore time."}
+    - final:
+        output:
+          text: "{{row.team_name}} has the highest median restore time."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G04 change_failure_rate of the largest org
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: change failure rate of the largest org
+            sql: >-
+              SELECT value AS change_failure_rate FROM metrics.metric_value
+              WHERE metric = 'change_failure_rate' AND period = 't12m' AND entity_type = 'org'
+              AND entity_id = (SELECT org_id FROM metrics.incident_fact WHERE NOT excluded AND org_id IS NOT NULL
+              GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1)
+    - final: {text: "The org's change failure rate is [[n1]]."}
+    - final:
+        output:
+          text: "The org's change failure rate is [[n1]]."
+          numbers_from: last_tool_result
+    - *not_a_correction
+    # G05 top orgs by emergency_change_ratio
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: orgs ranked by emergency change ratio
+            sql: >-
+              SELECT string_agg(o.name, ', ' ORDER BY m.value DESC, m.entity_id) AS orgs
+              FROM (SELECT entity_id, value FROM metrics.metric_value
+              WHERE metric = 'emergency_change_ratio' AND period = 't12m' AND entity_type = 'org' AND value IS NOT NULL
+              ORDER BY value DESC, entity_id LIMIT 3) m JOIN core.org o ON o.org_id = m.entity_id
+    - final: {text: "By emergency change ratio the leading orgs are {{row.orgs}}."}
+    - final:
+        output:
+          text: "By emergency change ratio the leading orgs are {{row.orgs}}."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G06 service with the highest alert_noise_ratio
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: noisiest service
+            sql: >-
+              SELECT s.name AS service_name FROM metrics.metric_value m JOIN core.service s ON s.service_id = m.entity_id
+              WHERE m.metric = 'alert_noise_ratio' AND m.period = 't12m' AND m.entity_type = 'service' AND m.denominator >= 20
+              ORDER BY m.numerator / m.denominator DESC, m.entity_id LIMIT 1
+    - final: {text: "{{row.service_name}} has the noisiest alerting."}
+    - final:
+        output:
+          text: "{{row.service_name}} has the noisiest alerting."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G07 that service's alert_noise_ratio
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: alert noise ratio of the noisiest service
+            sql: >-
+              SELECT numerator / denominator AS alert_noise_ratio FROM metrics.metric_value
+              WHERE metric = 'alert_noise_ratio' AND period = 't12m' AND entity_type = 'service' AND denominator >= 20
+              ORDER BY numerator / denominator DESC, entity_id LIMIT 1
+    - final: {text: "Its alert noise ratio is [[n1]]."}
+    - final:
+        output:
+          text: "Its alert noise ratio is [[n1]]."
+          numbers_from: last_tool_result
+    - *not_a_correction
+    # G08 incidents linked to the changes of the team behind the change-caused cluster
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: incidents linked to the team's changes
+            sql: >-
+              SELECT count(DISTINCT l.incident_id) AS linked_incidents FROM enrich.incident_change_link l
+              JOIN core.change c ON c.record_id = l.change_id
+              WHERE l.score >= 0.5 AND c.team_id = (SELECT c2.team_id FROM enrich.incident_change_link l2
+              JOIN core.change c2 ON c2.record_id = l2.change_id WHERE l2.score >= 0.5 AND c2.team_id IS NOT NULL
+              GROUP BY c2.team_id ORDER BY count(DISTINCT l2.incident_id) DESC, c2.team_id LIMIT 1)
+    - final: {text: "[[n1]] incidents are linked to that team's changes."}
+    - final:
+        output:
+          text: "[[n1]] incidents are linked to that team's changes."
+          numbers_from: last_tool_result
+    - *not_a_correction
+    # G09 reopen_rate of the largest org in the most recent quarter
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: reopen rate of the largest org
+            sql: >-
+              SELECT value AS reopen_rate FROM metrics.metric_value
+              WHERE metric = 'reopen_rate' AND period = 'quarter' AND entity_type = 'org'
+              AND period_start = (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+              AND entity_id = (SELECT org_id FROM metrics.incident_fact WHERE NOT excluded AND org_id IS NOT NULL
+              GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1)
+    - final: {text: "The org's reopen rate is [[n1]]."}
+    - final:
+        output:
+          text: "The org's reopen rate is [[n1]]."
+          numbers_from: last_tool_result
+    - *not_a_correction
+    # G10 recurring clusters by customer impact
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: recurring clusters by customer impact
+            sql: >-
+              SELECT string_agg(label, ', ') AS clusters FROM (SELECT c.label FROM metrics.incident_fact f
+              JOIN enrich.cluster c ON c.cluster_id = f.cluster_id WHERE NOT f.excluded
+              GROUP BY c.cluster_id, c.label ORDER BY sum(coalesce(f.impact_h, 0)) DESC, c.cluster_id LIMIT 5)
+    - final: {text: "The recurring clusters with the most customer impact are {{row.clusters}}."}
+    - final:
+        output:
+          text: "The recurring clusters with the most customer impact are {{row.clusters}}."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G11 epics in progress for the top funding candidate's service
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: epics in progress for the service
+            sql: >-
+              SELECT string_agg(key, ', ' ORDER BY key) AS epics FROM core.work_item
+              WHERE type = 'epic' AND status_category = 'in_progress'
+              AND service_id = (SELECT service_id FROM core.work_item WHERE record_id =
+              (SELECT candidate_id FROM score.funding ORDER BY rank, candidate_id LIMIT 1))
+    - final: {text: "The epics in progress are {{row.epics}}."}
+    - final:
+        output:
+          text: "The epics in progress are {{row.epics}}."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G12 mean cycle_time_days in the busiest project of the most recent quarter
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: mean cycle time of the project
+            sql: >-
+              SELECT avg(f.cycle_days) AS cycle_time_days FROM metrics.work_item_fact f JOIN core.work_item w USING (record_id)
+              WHERE f.done_at IS NOT NULL AND f.cycle_days IS NOT NULL
+              AND f.done_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+              AND w.project = (SELECT w2.project FROM metrics.work_item_fact f2 JOIN core.work_item w2 USING (record_id)
+              WHERE f2.done_at IS NOT NULL AND f2.cycle_days IS NOT NULL
+              AND f2.done_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+              GROUP BY w2.project ORDER BY count(*) DESC, w2.project LIMIT 1)
+    - final: {text: "Work items in that project took [[n1]] days on average."}
+    - final:
+        output:
+          text: "Work items in that project took [[n1]] days on average."
+          numbers_from: last_tool_result
+    - *not_a_correction
+    # G13 teams with the oldest open backlog
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: teams by mean age of open work items
+            sql: >-
+              SELECT string_agg(t.name, ', ' ORDER BY b.age DESC, b.team_id) AS teams FROM (
+              SELECT team_id, avg(date_diff('day', created_at, (SELECT max(period_start) + INTERVAL 7 DAY
+              FROM metrics.metric_value WHERE period = 'week'))) AS age FROM metrics.work_item_fact
+              WHERE done_at IS NULL AND team_id IS NOT NULL GROUP BY team_id HAVING count(*) >= 3
+              ORDER BY age DESC, team_id LIMIT 3) b JOIN core.team t ON t.team_id = b.team_id
+    - final: {text: "The oldest open backlog sits with {{row.teams}}."}
+    - final:
+        output:
+          text: "The oldest open backlog sits with {{row.teams}}."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G14 P1 SLA breaches in the most recent month
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: P1 incidents that breached the SLA
+            sql: >-
+              SELECT count(*) AS breached_incidents FROM metrics.incident_fact
+              WHERE NOT excluded AND priority = 1 AND sla_breached
+              AND opened_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'month')
+              AND opened_at < (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week')
+    - final: {text: "In the most recent month [[n1]] P1 incidents breached their SLA."}
+    - final:
+        output:
+          text: "In the most recent month [[n1]] P1 incidents breached their SLA."
+          numbers_from: last_tool_result
+    - *not_a_correction
+    # G15 the team whose recent incident share rose most (the seasonal confounder)
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: team whose incidents rose most in the last month
+            sql: >-
+              SELECT t.name AS team_name FROM metrics.incident_fact f JOIN core.team t ON t.team_id = f.team_id
+              WHERE NOT f.excluded
+              AND f.opened_at < (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week')
+              GROUP BY t.team_id, t.name HAVING count(*) >= 20
+              ORDER BY count(*) FILTER (WHERE f.opened_at >= (SELECT max(period_start) - INTERVAL 23 DAY
+              FROM metrics.metric_value WHERE period = 'week')) * 1.0 / count(*) DESC, t.team_id LIMIT 1
+    - final: {text: "{{row.team_name}} handles a seasonal rise in request volume; its restore times stay flat."}
+    - final:
+        output:
+          text: "{{row.team_name}} handles a seasonal rise in request volume; its restore times stay flat."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G16 why incidents on the confounder's service spiked
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: service whose incidents rose most in the last month
+            sql: >-
+              SELECT s.name AS service_name FROM metrics.incident_fact f JOIN core.service s ON s.service_id = f.service_id
+              WHERE NOT f.excluded
+              AND f.opened_at < (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week')
+              GROUP BY s.service_id, s.name HAVING count(*) >= 20
+              ORDER BY count(*) FILTER (WHERE f.opened_at >= (SELECT max(period_start) - INTERVAL 23 DAY
+              FROM metrics.metric_value WHERE period = 'week')) * 1.0 / count(*) DESC, s.service_id LIMIT 1
+    - final: {text: "Incidents rose with request volume during the seasonal peak."}
+    - final:
+        output:
+          text: "Incidents rose with request volume during the seasonal peak."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G17 team whose changes caused the most incidents in the last six months
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: team whose changes are linked to the most incidents
+            sql: >-
+              SELECT t.name AS team_name FROM enrich.incident_change_link l
+              JOIN core.change c ON c.record_id = l.change_id JOIN core.team t ON t.team_id = c.team_id
+              WHERE l.score >= 0.5
+              AND c.actual_end >= (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week') - INTERVAL 6 MONTH
+              GROUP BY t.team_id, t.name ORDER BY count(DISTINCT l.incident_id) DESC, t.team_id LIMIT 1
+    - final: {text: "The changes of {{row.team_name}} caused the most incidents."}
+    - final:
+        output:
+          text: "The changes of {{row.team_name}} caused the most incidents."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G18 a service that does not exist
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: look the service up
+            sql: "SELECT service_id FROM core.service WHERE name = 'Quantum Ledger'"
+    - final: {text: "A service named Quantum Ledger was not found, so there is no restore time to report."}
+    - final:
+        output:
+          text: "A service named Quantum Ledger was not found, so there is no restore time to report."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G19 a year without data
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: incidents opened in that year
+            sql: "SELECT count(*) AS incidents FROM metrics.incident_fact WHERE year(opened_at) = 2019"
+    - final: {text: "There is no data for 2019 in this build."}
+    - final:
+        output:
+          text: "There is no data for 2019 in this build."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G20 weekly changes of the team with the most changes, last twelve weeks
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: changes per week of the team
+            sql: >-
+              SELECT count(*) / 12.0 AS changes_per_week FROM metrics.change_fact
+              WHERE actual_end >= (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week') - INTERVAL 84 DAY
+              AND actual_end < (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week')
+              AND team_id = (SELECT team_id FROM metrics.change_fact WHERE team_id IS NOT NULL
+              GROUP BY team_id ORDER BY count(*) DESC, team_id LIMIT 1)
+    - final: {text: "The team made [[n1]] changes per week."}
+    - final:
+        output:
+          text: "The team made [[n1]] changes per week."
+          numbers_from: last_tool_result
+    - *not_a_correction
+    # G21 share of incidents without a mapped service
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: share of incidents without a service
+            sql: >-
+              SELECT avg(CASE WHEN service_id IS NULL THEN 1.0 ELSE 0.0 END) AS unmapped_service_ratio
+              FROM metrics.incident_fact WHERE NOT excluded
+    - final: {text: "The share of incidents without a mapped service is [[n1]]."}
+    - final:
+        output:
+          text: "The share of incidents without a mapped service is [[n1]]."
+          numbers_from: last_tool_result
+    - *not_a_correction
+    # G22 team with the highest reassignment_rate
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: team with the highest reassignment rate
+            sql: >-
+              SELECT t.name AS team_name FROM metrics.metric_value m JOIN core.team t ON t.team_id = m.entity_id
+              WHERE m.metric = 'reassignment_rate' AND m.period = 't12m' AND m.entity_type = 'team' AND m.value IS NOT NULL
+              ORDER BY m.value DESC, m.entity_id LIMIT 1
+    - final: {text: "{{row.team_name}} reassigns the most incidents."}
+    - final:
+        output:
+          text: "{{row.team_name}} reassigns the most incidents."
+          numbers: []
+          query_ids: ["{{last.query_id}}"]
+    - *not_a_correction
+    # G23 mtta_minutes of P1 incidents in the most recent quarter
+    - tool_calls:
+        - name: run_sql
+          arguments:
+            purpose: mean time to acknowledge P1 incidents
+            sql: >-
+              SELECT avg(date_diff('second', i.opened_at, i.acknowledged_at)) / 60.0 AS mtta_minutes
+              FROM core.incident i JOIN metrics.incident_fact f USING (record_id)
+              WHERE NOT f.excluded AND f.priority = 1 AND i.acknowledged_at IS NOT NULL
+              AND f.opened_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
+    - final: {text: "P1 incidents were acknowledged after [[n1]] minutes on average."}
+    - final:
+        output:
+          text: "P1 incidents were acknowledged after [[n1]] minutes on average."
+          numbers_from: last_tool_result
+    - *not_a_correction

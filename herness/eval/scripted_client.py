@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import threading
 from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
 from typing import Final
@@ -99,6 +100,10 @@ class ScriptedLLMClient:
         self.name = name
         self._book = book
         self._resolver = dedup_key_resolver
+
+    def renamed(self, name: str) -> ScriptedLLMClient:
+        """The same script book and resolver under another client name."""
+        return ScriptedLLMClient(self._book, name=name, dedup_key_resolver=self._resolver)
 
     def dedup_key(self, meta: RequestMeta) -> str:
         """The script key of a call (U11-40 step 2; DD11-02 default)."""
@@ -197,15 +202,22 @@ class ScriptedRegistry:
     def __init__(self, inner: LLMRegistry, client: ScriptedLLMClient) -> None:
         self._inner = inner
         self._client = client
+        self._named: dict[str, ScriptedLLMClient] = {client.name: client}
+        self._lock = threading.Lock()
 
     def client(self, name: str) -> LLMClient:
-        """The scripted client, whatever `name` is."""
-        del name
-        return self._client
+        """The scripted client under the key `name` (spec 05 `run_agent` checks that a
+        client's name equals its config's); every key shares one script book (T11-32)."""
+        with self._lock:
+            named = self._named.get(name)
+            if named is None:
+                named = self._client.renamed(name)
+                self._named[name] = named
+            return named
 
     def config(self, name: str) -> ClientConfig:
-        """Delegates to the inner registry."""
-        return self._inner.config(name)
+        """The inner config without a GPU class: a mock run holds no GPU (T11-32)."""
+        return self._inner.config(name).model_copy(update={"gpu_class": None})
 
     def model_for(self, model_role: str, depth: str) -> str:
         """Delegates to the inner registry."""
