@@ -193,8 +193,55 @@ def test_cv_t11_38_set_baseline_once_and_baseline_in_both_reports(
     outcome = handle_eval(FakeCtx(_payload(suite, baseline="cmp-base")))  # type: ignore[arg-type]
     md = _read(runner_store.data_root / "reports" / "eval" / str(outcome.result["compare_run_id"]),
                "report.md")  # fmt: skip
-    assert "## Baseline diff" in md
+    # The named baseline (taken at local-fast) is the primary's; the hybrid compare run is
+    # not comparable with it (T11-31 comparability rule), so only the primary diffs it.
+    assert "## Baseline diff" not in md
     assert "## Comparison" in md
+    primary = _read(runner_store.data_root / "reports" / "eval" / str(outcome.result["run_id"]),
+                    "report.md")  # fmt: skip
+    assert "## Baseline diff" in primary
+    assert outcome.result["exit_code"] == 0
+
+
+def test_cv_t11_38_compare_run_uses_a_comparable_default_baseline(
+    runner_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T11-38 the `eval.baseline` default taken at hybrid-fast applies to the hybrid
+    compare run only: its re-rendered report has both sections, the primary none."""
+    con = make_root(runner_store.data_root)
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01")])
+    _bind(monkeypatch, lambda c: make_deps(runner_store.data_root, con, job=c))
+    seed = build_eval_payload(
+        suite=str(suite), profile="hybrid", depth="fast", no_judge=True,
+        set_baseline="synthetic-42-small", settings=env.settings(),
+    )  # fmt: skip
+    handle_eval(FakeCtx(seed))  # type: ignore[arg-type]
+    outcome = handle_eval(FakeCtx(_payload(suite)))  # type: ignore[arg-type]
+    eval_dir = runner_store.data_root / "reports" / "eval"
+    second = _read(eval_dir / str(outcome.result["compare_run_id"]), "report.md")
+    assert "## Baseline diff" in second
+    assert "## Comparison" in second
+    assert "## Baseline diff" not in _read(eval_dir / str(outcome.result["run_id"]), "report.md")
+
+
+@pytest.mark.parametrize("after", [1, 3])
+def test_cv_t11_38_cancel_in_either_run_closes_the_job(
+    after: int, runner_store: OpsStoreHandle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T11-38 a cancel in the primary (after 1) or the compare run (after 3) ends the job
+    `done` with `canceled` (exit 1) and the primary run id; no comparison is written."""
+    con = make_root(runner_store.data_root)
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01"), chat_q("G02")])
+    _bind(monkeypatch, lambda c: make_deps(runner_store.data_root, con, job=c))
+    ctx = FakeCtx(_payload(suite), yield_after=after)
+    ctx.stop_reason = "cancel"
+    outcome = handle_eval(ctx)  # type: ignore[arg-type]
+    assert outcome.status == "done"
+    assert outcome.result == {"run_id": ctx.state["eval_run_id"], "canceled": True}
+    assert exit_code(outcome.model_dump()) == 1
+    statuses = [r["status"] for r in _eval_rows()]
+    assert statuses == (["canceled"] if after == 1 else ["done", "canceled"])
+    assert not list((runner_store.data_root / "reports").rglob("comparison.json"))
 
 
 def test_cv_t11_38_compare_job_context_delegates(tmp_path: Path) -> None:
