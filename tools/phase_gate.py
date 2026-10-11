@@ -9,10 +9,12 @@ and `HERNESS_BENCH_DIR=<out dir>/data/bench` (U11-51); `cli`: the selector as ar
 (`herness eval` with `--inline`, R-45). `{out}` stands for the out dir; `$VAR` is expanded from
 the environment (`PHASE_GATE_COMPARE_*`: no `HERNESS_` prefix, which impl 10 reads as config).
 Before running, the test IDs are resolved by one `--collect-only --collect-test-ids` pass; a
-check with an unknown ID or an unset `$VAR` fails without running (exit code 3, listed by
-`--dry-run`). `--check-coverage JSON PREFIX...` applies U11-32 to the groups of the prefixes.
-Exit codes (R-73): 0 every check passed, 1 a check failed or the report could not be written,
-2 usage error (including an unknown phase).
+check with an unknown ID, an unset `$VAR` or a cli `--ids a,b,...` naming a question the golden
+suite lacks fails without running (exit code 3, listed by `--dry-run`; `herness eval` itself
+is not needed). `--check-coverage JSON PREFIX...` applies U11-32 to the groups of the prefixes.
+Exit codes (R-73): 0 every check passed (or `--dry-run`), 1 a check failed or the report could
+not be written, 2 usage error (including an unknown phase). Per-check codes in the report: the
+command's own, 3 unresolved, 124 timeout, 127 cannot start.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 UNRESOLVED_EXIT: Final = 3
 TIMEOUT_EXIT: Final = 124
 NOT_FOUND_EXIT: Final = 127
+_GOLDEN: Final = "tests/eval/golden.yaml"  # what `--suite golden` resolves to (config/eval.yaml)
 _TEST_ID: Final = re.compile(r"^[A-Z]{2,3}\d{2}-\d{2,3}$")
 _VAR: Final = re.compile(r"\$(\w+)")
 _BENCH_ENV: Final = {"HERNESS_BENCH_GATE": "1", "HERNESS_BENCH_FULL": "1"}
@@ -99,9 +102,31 @@ def collect_test_ids(
         return None
 
 
+def _golden_ids() -> frozenset[str]:
+    """The question ids of the golden suite (`tests/eval/golden.yaml`); none if unreadable."""
+    from herness.core.errors import ConfigError  # noqa: PLC0415
+    from herness.eval.golden import load_suite  # noqa: PLC0415
+
+    try:
+        return frozenset(q.id for q in load_suite(REPO_ROOT / _GOLDEN).questions)
+    except (ConfigError, OSError):
+        return frozenset()
+
+
+def _question_problems(check: GateCheck) -> list[str]:
+    """A cli check with `--ids a,b,...` names only questions of the golden suite."""
+    if check.kind != "cli" or "--ids" not in check.selector[:-1]:
+        return []
+    named = check.selector[check.selector.index("--ids") + 1].split(",")
+    golden = _golden_ids()
+    return [f"unknown question id {name}" for name in named if name not in golden]
+
+
 def problems(check: GateCheck, known: frozenset[str] | None) -> list[str]:
-    """Why `check` cannot run: unset `$VAR`s and test IDs no collected test carries."""
+    """Why `check` cannot run: unset `$VAR`s, unknown golden question ids and test IDs no
+    collected test carries."""
     found = [f"unset {v}" for v in _VAR.findall(" ".join(check.selector)) if v not in os.environ]
+    found += _question_problems(check)
     ids = [entry for entry in check.selector if _TEST_ID.fullmatch(entry)]
     if ids and known is None:
         found.append("test-ID collection failed")

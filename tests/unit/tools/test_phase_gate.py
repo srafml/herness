@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -277,3 +278,54 @@ def test_ut11_112_dry_run_lists_phase_1(
     assert "UNRESOLVED: unknown test ID BT02-01" in out
     assert "--select-test-ids=BT11-01,BT11-02,BT11-03,BT11-07,IT11-01,IT11-02" in out
     assert "HERNESS_BENCH_GATE=1" in out
+
+
+def test_ut11_112_phase_5_dry_run_lists_g5_1_and_g5_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """UT11-112 `--phase 5 --dry-run` lists G5.1 (bench and cli) and G5.2; the cli check
+    carries the explicit comma list G01..G23, all golden ids, so no problem is reported once
+    the test IDs resolve; exit 0."""
+    known = {c for check in GATES[5] for c in check.selector if _TEST_ID.fullmatch(c)}
+    monkeypatch.setattr(phase_gate, "collect_test_ids", lambda *_, **__: frozenset(known))
+    assert phase_gate.main(["--phase", "5", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    listed = [line.split()[0] for line in out.splitlines() if line.startswith("G")]
+    assert listed == ["G5.1", "G5.1", "G5.2"]
+    assert "UNRESOLVED" not in out
+    ids = ",".join(f"G{n:02d}" for n in range(1, 24))
+    assert f"--inline --ids {ids}" in out
+    assert "G01..G23" not in out
+
+
+def test_ut11_112_phase_5_dry_run_subprocess_exits_0() -> None:
+    """UT11-112 `uv run python -m tools.phase_gate --phase 5 --dry-run` lists G5.1 and G5.2
+    and exits 0 (an ID owned by a later card may be listed as unresolved)."""
+    done = subprocess.run(
+        ["uv", "run", "python", "-m", "tools.phase_gate", "--phase", "5", "--dry-run"],  # noqa: S607
+        cwd=Path(__file__).resolve().parents[3],
+        capture_output=True, text=True, timeout=600, check=False,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    assert "G5.1 [bench" in done.stdout
+    assert "G5.1 [cli" in done.stdout
+    assert "G5.2 [pytest" in done.stdout
+    assert "unknown question id" not in done.stdout
+
+
+def test_ut11_112_unknown_golden_id_in_a_cli_ids_selector_is_unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT11-112 a cli check whose `--ids` names a question id the golden suite lacks fails
+    with exit code 3 and `unknown question id` without running; known ids resolve."""
+    ok = GateCheck("G99.1", 99, "x", "cli", ("echo", "--ids", "G01,F01,O07"), 60)
+    bad = GateCheck("G99.2", 99, "x", "cli", ("echo", "--ids", "G01,G99,X1"), 60)
+    assert phase_gate.problems(ok, frozenset()) == []
+    assert phase_gate.problems(bad, frozenset()) == [
+        "unknown question id G99",
+        "unknown question id X1",
+    ]
+    monkeypatch.setitem(GATES, 99, (bad, _py("G99.3", "pass")))
+    report = phase_gate.run_gate(99, repo_root=tmp_path, out_dir=tmp_path)
+    assert [r.exit_code for r in report.results] == [3, 0]
+    assert report.results[0].problems == ("unknown question id G99", "unknown question id X1")

@@ -125,7 +125,9 @@ def latency_check(
         notes.append(_NO_BASELINE)
     elif base is not None and base < settings.latency_baseline_floor_s:
         notes.append("baseline latency below floor")  # a mock baseline (T11-32 note)
-    elif base is not None:
+    elif base is None:
+        notes.append("no baseline latency")  # T11-37: never a silent skip
+    else:
         limits.append(settings.latency_p95_ratio_max * base)
     if profile == "local" and depth == "standard":
         limits.append(_CHAT_P95_LOCAL_STANDARD_S)

@@ -8,6 +8,7 @@ thresholds:
   correctness_floor: {local-standard: 0.80, local-deep: 0.85, hybrid: 0.88, premium: 0.90}
   tool_success_min: {local: 0.90, hybrid: 0.95, premium: 0.95}
   latency_p95_ratio_max: 1.25
+  latency_baseline_floor_s: 1.0
   cost_ratio_max: 1.20
   bench_regression_max: 0.20
 classifier: {gate_recompute_tolerance: 0.005, synthetic_sample: 5000, bootstrap: 1000}

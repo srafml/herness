@@ -59,3 +59,16 @@ def test_cv_t11_32_latency_ratio_skipped_below_baseline_floor() -> None:
         _latency(_metrics(2.5), near_zero, _settings(latency_baseline_floor_s=0.001)).passed
         is False
     )
+
+
+def test_cv_t11_37_missing_baseline_latency_is_noted_not_silent() -> None:
+    """CV-T11-37 a baseline whose chat p95 is None skips the ratio part with `no baseline
+    latency` in `detail`; the 30 s local-standard cap still applies."""
+    no_latency = EvalMetrics.model_validate({
+        "question_status": {}, "answer_correctness": 0.95, "unsupported_number_rate": 0.0,
+        "tool_call_success_rate": 0.99, "chat_latency_p95_s": None, "cost_usd": Decimal(10),
+    })  # fmt: skip
+    row = _latency(_metrics(2.5), no_latency, _settings())
+    assert row.passed is True
+    assert "no baseline latency" in row.detail
+    assert row.limit == 30.0
