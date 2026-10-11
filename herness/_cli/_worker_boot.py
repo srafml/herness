@@ -23,7 +23,14 @@ if TYPE_CHECKING:
     from herness.core.jobs.handlers import Handler
     from herness.enrich.distill import LlmFactory
 
-__all__ = ["boot", "cached_handlers", "llm_factory", "memory_purge", "overrides_from_env"]
+__all__ = [
+    "boot",
+    "cached_handlers",
+    "llm_factory",
+    "memory_purge",
+    "overrides_from_env",
+    "owner_steps",
+]
 
 _ROLES: Final = ("enrich_decider", "cluster_namer")
 _HANDLERS: dict[str, Handler] = {}  # built once per process: register_handler needs identity
@@ -111,8 +118,8 @@ def _configure(
     return cfg, config_dir
 
 
-def _register_all(config_dir: Path) -> None:
-    """Step 6: every owner registers its own handlers; ``eval`` with its deps (T09-24)."""
+def owner_steps(config_dir: Path) -> tuple[tuple[str, tuple[str, ...], Callable[[], None]], ...]:
+    """Step 6: ``(owner, kinds, register)`` for every owner; ``eval`` with its deps (T09-24)."""
     import herness.admin  # noqa: PLC0415 - lazy: after the socket guard (TH09-28)
     import herness.connectors.jobs  # noqa: PLC0415
     import herness.harness.memory  # noqa: PLC0415
@@ -122,16 +129,32 @@ def _register_all(config_dir: Path) -> None:
     from herness.harness.pipelines.chat import chat_job_handler  # noqa: PLC0415
     from herness.harness.tools import tool_registry  # noqa: PLC0415
 
-    herness.admin.register_handlers(memory_purge=memory_purge)
-    herness.connectors.jobs.register_job_handlers()
-    herness.harness.memory.register_memory_components(
-        tool_registry(), herness.harness.memory.get_memory_store()
+    def pipelines() -> None:
+        for kind, handler in cached_handlers().items():
+            register_handler(cast("Literal['build_pipeline', 'distill']", kind), handler)
+
+    def admin() -> None:
+        herness.admin.register_handlers(memory_purge=memory_purge)
+
+    def memory() -> None:
+        herness.harness.memory.register_memory_components(
+            tool_registry(), herness.harness.memory.get_memory_store()
+        )
+
+    return (
+        ("admin", ("maintenance",), admin),
+        ("connectors", ("sync", "reconcile"), herness.connectors.jobs.register_job_handlers),
+        ("memory", ("outcome_measure", "memory_maintenance"), memory),
+        ("pipelines", ("build_pipeline", "distill"), pipelines),
+        ("swarm", ("review",), herness.harness.swarm.handler.register_handlers),
+        ("chat", ("chat",), lambda: register_handler("chat", chat_job_handler)),
+        ("eval", ("eval",), lambda: _eval_deps.bind(config_dir)),  # set_deps_factory, register
     )
-    for kind, handler in cached_handlers().items():
-        register_handler(cast("Literal['build_pipeline', 'distill']", kind), handler)
-    herness.harness.swarm.handler.register_handlers()
-    register_handler("chat", chat_job_handler)
-    _eval_deps.bind(config_dir)  # set_deps_factory, then register_handlers
+
+
+def _register_all(config_dir: Path) -> None:
+    for _owner, _kinds, register in owner_steps(config_dir):
+        register()
 
 
 def boot(

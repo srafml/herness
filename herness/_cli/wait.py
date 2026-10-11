@@ -235,8 +235,12 @@ def follow_job(opts: GlobalOptions, job_id: str, *, poll_s: float) -> FollowOutc
 
 
 def run_job_inline(opts: GlobalOptions, actor: Actor, job_id: str) -> FollowOutcome:
-    """``--inline`` (admin only, R-45): run the queued job in this process (U09-103)."""
+    """``--inline`` (admin only, R-45): bootstrap this process (handlers, T09-29), then run the
+    queued job in it (U09-103)."""
     require_role(actor, "job_inline")
+    from herness._cli._inline_boot import boot_inline  # noqa: PLC0415 - lazy (BT09-07)
+
+    boot_inline(opts.config_dir)  # T09-29: a fresh process has no handlers yet
     _log.info("cli.job.inline_started", job_id=job_id)
     outcome = jobs.run_inline(job_id)
     job = jobs.get(job_id)

@@ -252,11 +252,6 @@ def test_st09_19_pilot_path_end_to_end_no_sentinel_no_egress(
     assert "Session ses_" in "\n".join(pilot.outputs)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="product gap T09-29 (inline helper does not call worker_bootstrap; no handlers in a "
-    "fresh process): `--inline` fails with ConfigError 'no handler for <kind>' (exit 3)",
-)
 def test_st09_19_inline_job_runs_without_test_registered_handlers(pilot: Pilot) -> None:
     """ST09-19 pilot stage ``sync files --inline`` as a fresh CLI process runs it: the CLI
     itself registers the owners' handlers (here the test registers none for ``sync``)."""
