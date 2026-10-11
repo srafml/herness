@@ -16,7 +16,7 @@ is `llm.call error:ModelRefused count=1 role=skeptic`.
 With one finding challenged the row passes: the refused head falls back to `local-30b`.
 With two, the un-faulted Skeptic call must reach `claude-opus`; two product gaps stop it, each
 pinned by its own strict xfail (probes: fixing either turns exactly its xfail into XPASS):
-gap E (new; `route_task` keeps the role spec's model role `skeptic`, so the request's
+T06-29 gap E (`route_task` keeps the role spec's model role `skeptic`, so the request's
 egress purpose is `reasoning`, refused in hybrid) and T06-29 gap A (the build id in the role
 context line reads as a phone number to the guard's re-scan).
 """
@@ -203,7 +203,7 @@ def test_ft11_02_refused_skeptic_call_falls_back_once(
     strict=True,
     raises=AssertionError,
     reason=(
-        "product gap (new, T11-33 gap E; owner impl 06 U06-101 route_task): the route's role "
+        "product gap T06-29 (gap E; impl 06 U06-101 route_task): the route's role "
         "spec keeps model_role 'skeptic' for a skeptic_final task (get_role without "
         "model_role), so its off-network requests carry egress purpose 'reasoning', which "
         "hybrid refuses (purpose_not_allowed); the spec 05 run_agent precheck would refuse "

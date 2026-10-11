@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,8 @@ from tests.unit.harness._blackboard_env import test_redactor
 from tests.unit.harness.memory import _lora_env as lora_env
 from tests.unit.harness.memory._write_env import PATTERNS, make_writer
 
+from herness.core import time as clock
+from herness.core.ids import query_id as compute_query_id
 from herness.core.types import MemoryRunContext
 from herness.eval.golden import load_suite
 from herness.eval.runner import EvalDeps, build_eval_payload, exit_code
@@ -39,7 +42,7 @@ from herness.harness.pipelines import _review_common
 from herness.harness.swarm import _plan_ctx, _run_steps, writer
 from herness.harness.swarm.run import Swarm
 from herness.store import ops
-from herness.store.ops import core, get_run, query_findings, record_evidence
+from herness.store.ops import core, get_evidence, get_run, query_findings, record_evidence
 
 pytestmark = pytest.mark.integration
 
@@ -86,6 +89,40 @@ def _with_memory_context(monkeypatch: pytest.MonkeyPatch, agent: e.Agents) -> li
 
     monkeypatch.setattr(writer, "run_agent", recording)
     return seen
+
+
+def _assert_seeded_sides(prior: seed_ops.SeededPriorRun, plant: Any, build_id: str) -> None:
+    """Per side: the evidence row, the verified finding, the rec row and its decision hold
+    the exact U11-49 values."""
+    findings = {f.finding_id: f for f in query_findings(prior.run_id, statuses={"verified"},
+                                                        limit=10)}  # fmt: skip
+    recs = {r["rec_id"]: r for r in ops.run_recommendations(prior.run_id)}
+    decisions = ops.latest_decisions(list(recs))
+    effective = clock.format_utc(plant.effective_at)
+    for rank, name in enumerate(seed_ops.SIDES, start=1):
+        side = getattr(plant, name)
+        params = {"service_id": side.service_id, "effective_at": effective}
+        qid = compute_query_id(seed_ops.INCIDENT_SQL, params, build_id)
+        ev = get_evidence(qid)
+        assert ev is not None
+        assert (ev.query_id, ev.run_id, ev.build_id, ev.params) == (qid, prior.run_id, build_id,
+                                                                    params)  # fmt: skip
+        assert re.fullmatch(r"[0-9a-f]{64}", ev.result_hash)
+        count = ev.result_sample[0]["incident_count"]
+        f = findings[prior.finding_ids[name]]
+        assert f.claim == f"Epic {side.epic_key} targets [[n1]] incidents on its service"
+        assert [(n.id, n.unit, n.value, n.query_id) for n in f.numbers] == [
+            ("n1", "count", count, qid)
+        ]
+        assert (f.author_role, f.confidence) == ("analyst", 0.7)
+        rec = recs[prior.rec_ids[name]]
+        assert rec["confidence_basis"]["rank"] == rank
+        assert rec["summary"] == f"Fund {side.epic_key} to reduce incidents"
+        assert rec["finding_ids"] == [f.finding_id]
+        decision = decisions[prior.rec_ids[name]]
+        assert decision["effective_at"] == effective
+        assert decision["reason"] == seed_ops.DECISION_REASON
+        assert decision["decided_by"] == seed_ops.SEED_USER_REF
 
 
 def test_it11_23_seed_prior_run_then_f05_writer_sees_both_rec_ids(
@@ -147,6 +184,7 @@ def test_it11_23_seed_prior_run_then_f05_writer_sees_both_rec_ids(
     }
     decisions = ops.latest_decisions(list(recs))
     assert {d["decision"] for d in decisions.values()} == {"accepted"}
+    _assert_seeded_sides(prior, eval_env.build.truth.plants.T6_outcomes, eval_env.build.build_id)
     # both rec ids reach the Writer; F05 is graded
     assert writer_inputs  # every Writer turn of the funding review got the prior recs
     for writer_input in writer_inputs:

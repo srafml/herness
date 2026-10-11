@@ -51,6 +51,7 @@ def test_ut11_115_valid_plan_written_as_faults_json(tmp_path: Path) -> None:
     path = faults.write_fault_plan(tmp_path, rules)
     assert path == tmp_path / "faults.json"
     assert json.loads(path.read_text(encoding="utf-8")) == rules
+    assert path.read_text(encoding="utf-8") == json.dumps(rules, sort_keys=True)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["faults.json"]  # tmp replaced
     assert [r.point for r in load_fault_plan(path).rules] == ["job.before_complete", "sql.query"]
 

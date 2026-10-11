@@ -97,11 +97,14 @@ def test_ft11_07_sql_query_error_every_call_tasks_dead_run_partial(
     eval_env: EvalEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """FT11-07 X7 `sql.query error:QueryError role=analyst` on every call: the analyst tasks
-    are `dead`, `ReportDraft.dead_tasks` lists them, and the run is `partial` because a
-    must-cover task died ("after `max_attempts`" is pinned by the strict xfail below)."""
+    are `dead` on the first attempt (U08-62: `QueryError` is not a `RetryableError`; the
+    attempt is counted once), `ReportDraft.dead_tasks` lists them, and the run is `partial`
+    because a must-cover task died (T11-33 spec note amending the FT11-07 row)."""
     res, analysts, errors = _x7_run(eval_env, tmp_path, monkeypatch)
     assert analysts
-    assert {t.status for t in analysts} == {"dead"}
+    assert eval_env.drv.hcfg.pipelines.swarm.max_task_attempts > 1  # a retry was allowed
+    assert {(t.status, t.attempts) for t in analysts} == {("dead", 1)}
+    assert len(errors) == len(analysts)  # one injected QueryError per task, no retry
     assert any(t.spec.must_cover for t in analysts)  # team t1 is must-cover
     assert set(errors) == {"QueryError: fault: injected"}  # the injected error, every time
     plan = process_state().fault_plan
@@ -119,28 +122,6 @@ def test_ft11_07_sql_query_error_every_call_tasks_dead_run_partial(
     assert all("QueryError" in str(d["last_error"]) for d in draft.dead_tasks)
     assert draft.coverage.dead_tasks == len(analysts)
     assert draft.coverage.must_cover_done < draft.coverage.must_cover_total
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "spec conflict (controller ruling): X7 expects analyst tasks dead after max_attempts, "
-        "but a task failing with QueryError (a RecoverableError) is dead on its first attempt "
-        "by design 08 §5.2 'Task' (T08 U08-62 fail_task retries RetryableError only); "
-        "owners impl 11 §11.4 X7 vs impl 08 U08-62"
-    ),
-)
-def test_ft11_07_dead_only_after_max_attempts(
-    eval_env: EvalEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """FT11-07 X7 the analyst tasks die only after `swarm.max_task_attempts` attempts, each
-    attempt meeting the injected `QueryError`."""
-    _, analysts, errors = _x7_run(eval_env, tmp_path, monkeypatch)
-    max_attempts = eval_env.drv.hcfg.pipelines.swarm.max_task_attempts
-    assert max_attempts > 1
-    assert {(t.status, t.attempts) for t in analysts} == {("dead", max_attempts)}
-    assert len(errors) == len(analysts) * max_attempts
 
 
 def test_ft11_07_control_without_plan_queries_succeed_run_not_partial_for_dead_tasks(
