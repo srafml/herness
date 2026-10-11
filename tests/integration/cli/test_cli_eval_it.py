@@ -16,6 +16,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import jsonschema
 import pytest
 from tests.integration.eval._eval_it_env import EvalEnv, eval_env, question
 from tests.integration.harness import _swarm_run_env as e
@@ -31,6 +32,11 @@ pytestmark = pytest.mark.integration
 drv = e.drv  # fixtures
 __all__ = ["drv", "eval_env", "test_redactor"]
 
+CLI1_SCHEMA = json.loads(
+    (
+        Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "cli" / "cli1.schema.json"
+    ).read_text(encoding="utf-8")
+)
 JUDGE_SCRIPT = "- match: {model_role: eval_judge}\n  turns:\n    - final: {text: ok}\n"
 
 
@@ -122,6 +128,21 @@ def test_cv_t09_24_eval_cli_threshold_fail_exit_14(admin_cli: Cli) -> None:
     assert payload["data"]["passed"] is False
     assert payload["ok"] is False
     assert admin_cli.jobs() == [("eval", "reasoning", "done")]
+
+
+def test_it09_15_eval_gate_failed_exit_14(admin_cli: Cli) -> None:
+    """IT09-15 ``herness --json eval`` whose gate fails (a ``suite_error`` question): exit 14
+    (R-46, U09-87), ``ok`` false with the job data; the envelope is valid ``cli/1``
+    (``tests/fixtures/cli/cli1.schema.json``, IT09-16) and ``error`` stays null."""
+    env = admin_cli.env
+    bad_sql = question("G05", expected={"numeric": {
+        "reference_sql": "SELECT n FROM core.missing_table", "unit": "count"}})  # fmt: skip
+    code, payload = admin_cli.run(env.suite([bad_sql]), "--ids", "G05")
+    assert code == 14, payload
+    jsonschema.Draft202012Validator(CLI1_SCHEMA).validate(payload)
+    assert (payload["ok"], payload["error"]) == (False, None)
+    assert payload["data"]["passed"] is False
+    assert payload["data"]["status"] == "done"
 
 
 def test_cv_t09_24_eval_cli_bad_suite_path_exit_3(admin_cli: Cli) -> None:
