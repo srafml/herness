@@ -110,6 +110,12 @@ def _cost_left(run: RunRow, route: Route, ledger: RunBudget) -> Decimal:
     return max(Decimal(0), ledger.cost_cap - ledger.cost_used).quantize(_CENT, ROUND_DOWN)
 
 
+def with_cost_left(ctx: ToolContext, run: RunRow, route: Route, ledger: RunBudget) -> ToolContext:
+    """`ctx` with `max_cost_usd` taken from the ledger now (each Writer pass, T06-29 I-1)."""
+    budgets = ctx.budgets.model_copy(update={"max_cost_usd": _cost_left(run, route, ledger)})
+    return ctx.model_copy(update={"budgets": budgets})
+
+
 def build_tool_context(
     env: RunEnv,
     spec: TaskSpec,

@@ -520,6 +520,10 @@ _PHONES_NEAR_BUILD_IDS = (
     ("20260925-101500-ABCDEFG", "20260925-101500"),  # 7 letters: not a build id
     ("20260925-101500-abcdef", "20260925-101500"),  # lower case: not a build id
     ("20260925-101500", "20260925-101500"),  # no suffix: not a build id
+    # review M-1: a phone merged with the next token into > 15 digits is cut back at a space
+    ("call 4155550134 20260925-101500-ABCDEF", "4155550134"),
+    ("call 415-555-0134 20260926-100000-000001", "415-555-0134"),
+    ("call 415 555 0134 20260925-101500-ABCDEF", "415 555 0134"),
 )
 
 

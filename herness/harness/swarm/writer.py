@@ -31,6 +31,7 @@ from herness.harness.swarm import hybrid
 from herness.harness.swarm import scheduler as sch
 from herness.harness.swarm._challenge_gate1 import insert, plain_result
 from herness.harness.swarm._draft_checks import Failure
+from herness.harness.swarm._routing_ctx import with_cost_left
 from herness.harness.swarm._writer_input import (
     WriterInput,
     entry_state,
@@ -127,6 +128,8 @@ class _Writer:
         """One pass: run the agent, restore and validate its output, fill the draft (steps 5-6)."""
         spec, route, env = self.row.spec, self.route, self.env
         resume = sch._resume_from(self.row.checkpoint) if first else None
+        # Every pass may spend only what the passes before it left of the cost cap (I-1).
+        self.ctx = with_cost_left(self.ctx, env.run, route, env.writer)
         try:
             async with asyncio.timeout(spec.budget.wall_clock_s + sch.WALL_CLOCK_GRACE_S):
                 res = await run_agent(

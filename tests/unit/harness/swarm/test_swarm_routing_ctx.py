@@ -707,6 +707,25 @@ def test_ut06_97_no_cost_cap_or_cap_spent_leaves_zero() -> None:
         assert ctx.budgets.max_cost_usd == 0
 
 
+def test_ut06_97_each_writer_pass_gets_only_what_is_left() -> None:
+    """UT06-97 (review I-1) the Writer refreshes its context before every pass: pass 1 may
+    spend only what pass 0 left of the writer ledger's cap, and nothing once it is spent, so
+    the passes together stay within the cap; the deadline and the rest are unchanged."""
+    reg = _hybrid()
+    env = _env(_run(profile="hybrid"), reg)
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    ledger = _spent("writer", "4.50", "1")
+    ctx = build_tool_context(env, _spec("writer"), opus, task_tools={}, ledger=ledger, now=NOW)
+    assert ctx.budgets.max_cost_usd == Decimal("3.50")  # pass 0
+    ledger.charge(10, 10, Decimal("2.255"))  # pass 0 spent
+    again = _routing_ctx.with_cost_left(ctx, env.run, opus, ledger)
+    assert again.budgets.max_cost_usd == Decimal("1.24")  # pass 1
+    assert again.budgets.model_copy(update={"max_cost_usd": Decimal("3.50")}) == ctx.budgets
+    assert (again.tracer, again.ledger, again.task_id) == (ctx.tracer, ctx.ledger, ctx.task_id)
+    ledger.charge(10, 10, Decimal("1.30"))  # pass 1 spent past the cap
+    assert _routing_ctx.with_cost_left(again, env.run, opus, ledger).budgets.max_cost_usd == 0
+
+
 # --- UT06-98 (T06-29 gap C)
 
 
