@@ -52,5 +52,5 @@ def test_ut11_119_fingerprint_carries_the_pinned_date(
     (tmp_path / "config" / "profiles").mkdir(parents=True)
     (tmp_path / "config" / "profiles" / "synth.yaml").write_text("v1", encoding="utf-8")
     base = fingerprint(tmp_path, "sha256:p")
-    monkeypatch.setattr(_build_cache, "DEFAULT_END", DEFAULT_END + datetime.timedelta(days=1))
+    monkeypatch.setattr(_build_cache, "PIN", _PIN + datetime.timedelta(days=1))
     assert fingerprint(tmp_path, "sha256:p") != base

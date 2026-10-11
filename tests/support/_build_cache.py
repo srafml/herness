@@ -28,11 +28,11 @@ import shutil
 import socket
 import time
 from collections.abc import Iterator
-from datetime import timedelta
 from pathlib import Path
 from typing import Final, Literal
 
 import psutil
+from tests.support._build_clock import PIN
 
 from herness.core import config as herness_config
 from herness.core.errors import HernessError, SchemaViolation
@@ -217,8 +217,7 @@ def generate_root(seed: int, scale: Scale, root: Path) -> None:
 
 
 def fingerprint(repo_root: Path, phash: str) -> str:
-    """SHA-256 over the generator version, params hash, `FIXTURE_REV`, the pinned build date
-    (`DEFAULT_END` + 1 day) and fingerprinted files."""
+    """SHA-256 over generator version, params hash, `FIXTURE_REV`, `_build_clock.PIN`, files."""
     files = [
         *repo_root.glob("herness/model/sql/*.sql"),
         *repo_root.glob("herness/model/sql/*.jinja"),
@@ -229,8 +228,7 @@ def fingerprint(repo_root: Path, phash: str) -> str:
         f"{p.relative_to(repo_root).as_posix()} {hashlib.sha256(p.read_bytes()).hexdigest()}"
         for p in files
     )
-    pin = f"clock {DEFAULT_END + timedelta(days=1)}"  # `_build_clock.PIN`: the day builds read
-    text = "\n".join([GENERATOR_VERSION, phash, f"rev {FIXTURE_REV}", pin, *entries])
+    text = "\n".join([GENERATOR_VERSION, phash, f"rev {FIXTURE_REV} clock {PIN.date()}", *entries])
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
