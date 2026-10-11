@@ -20,7 +20,7 @@ from structlog.testing import capture_logs
 from tests.support.fake_clock import FakeClock
 
 import herness.enrich
-from herness._cli import wait
+from herness._cli import _inline_boot, wait
 from herness._cli.output import exit_code_for, json_default
 from herness.cli import GlobalOptions
 from herness.core import errors as e
@@ -117,6 +117,14 @@ def runs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(ops, "get_run", get_run)
     monkeypatch.setattr(ops, "ui_task_status_counts", counts)
     return state
+
+
+@pytest.fixture(autouse=True)
+def boots(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """``boot_inline`` replaced by a recorder: no owner is imported by these unit tests."""
+    seen: list[Path] = []
+    monkeypatch.setattr(_inline_boot, "boot_inline", seen.append)
+    return seen
 
 
 @pytest.fixture
@@ -531,3 +539,18 @@ def test_ut09_100_inline_failed_and_not_terminal(
     install(FakeJobs(_row("running")))
     assert wait.run_job_inline(GlobalOptions(), ADMIN, JOB).exit_code == 1
     assert "failed (StoreBusy): busy" in capsys.readouterr().err
+
+
+def test_ut09_115_boot_before_run_inline_after_role_check(
+    install: Callable[[FakeJobs], FakeJobs], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UT09-115 the inline helper bootstraps the process with the CLI's config dir before
+    ``run_inline``; a refused reviewer boots nothing."""
+    fake = install(FakeJobs(_row("done")))
+    monkeypatch.setattr(_inline_boot, "boot_inline", lambda _dir: fake.calls.append("boot"))
+    opts = GlobalOptions(config_dir=tmp_path / "cfg")
+    with pytest.raises(e.PermissionDenied):
+        wait.run_job_inline(opts, REVIEWER, JOB)
+    assert fake.calls == []
+    wait.run_job_inline(opts, ADMIN, JOB)
+    assert fake.calls == ["boot", "run_inline", "get"]
