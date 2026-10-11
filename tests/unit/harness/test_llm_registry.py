@@ -78,6 +78,14 @@ def _cfg() -> ModelsConfig:
     return ModelsConfig.model_validate(_config())
 
 
+def _head_cfg() -> ModelsConfig:
+    """`_config()` with the ``writer`` role HEAD on the off-network client (T07-25: heads fail)."""
+    data = _config()
+    data["models"]["roles"]["writer"] = "claude-opus"
+    data["models"]["fallback"]["writer"][0] = "claude-opus"  # settings: chain head == role
+    return ModelsConfig.model_validate(data)
+
+
 @pytest.fixture(autouse=True)
 def _fake_llm_client() -> None:
     """A stand-in ``llm_client`` so ``client()``/``client_for`` never build a real SDK client."""
@@ -100,18 +108,18 @@ def _fake_llm_client() -> None:
 # --- UT05-18 -------------------------------------------------------------------------------
 
 
-def test_ut05_18_off_network_in_fallback_egress_off_raises() -> None:
-    """UT05-18 config with a Claude (off-network) role, egress off -> ConfigError."""
+def test_ut05_18_off_network_role_head_egress_off_raises() -> None:
+    """UT05-18 config with a Claude (off-network) role head, egress off -> ConfigError."""
     with pytest.raises(
         ConfigError, match="claude-opus is off-network but egress is disabled in profile local"
     ):
-        LLMRegistry(_cfg(), profile="local", egress_enabled=False)
+        LLMRegistry(_head_cfg(), profile="local", egress_enabled=False)
 
 
 def test_ut05_18_logs_config_invalid_error() -> None:
     """UT05-18 construction failure logs harness.llm.config_invalid at ERROR, no secrets."""
     with capture_logs() as logs, pytest.raises(ConfigError):
-        LLMRegistry(_cfg(), profile="local", egress_enabled=False)
+        LLMRegistry(_head_cfg(), profile="local", egress_enabled=False)
     events = [e for e in logs if e["event"] == "harness.llm.config_invalid"]
     assert len(events) == 1
     assert events[0]["log_level"] == "error"
@@ -130,7 +138,7 @@ def test_ut05_18_reads_get_config_when_egress_enabled_omitted(
     stub = SimpleNamespace(security=SimpleNamespace(egress=SimpleNamespace(enabled=False)))
     monkeypatch.setattr(reg, "get_config", lambda: stub)
     with pytest.raises(ConfigError, match="egress is disabled"):
-        LLMRegistry(_cfg(), profile="local")
+        LLMRegistry(_head_cfg(), profile="local")
 
 
 # --- UT05-40 -------------------------------------------------------------------------------

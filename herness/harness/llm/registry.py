@@ -7,6 +7,9 @@ composition root uses outside the agent loop, because L3 never imports ``herness
 ``cfg.off_network`` or ``cfg.kind == "anthropic"``. Construction fails closed when an
 off-network client is in use and egress is disabled; ``health`` makes a bounded loopback call
 per local client and never calls an off-network one when egress is disabled (TH05-13).
+Fallback TAILS (chain entries after the head) that are off-network are dropped when egress is
+disabled, with a WARNING (T07-25, DD R-81); role heads, depth-override heads and chain heads
+still fail closed.
 """
 
 from __future__ import annotations
@@ -20,8 +23,9 @@ from herness.core import registry as _registry
 from herness.core.config import get_config
 from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
+from herness.harness.llm._fallback import is_off_network, reachable_fallback, used_client_names
 from herness.harness.llm.base import BASE_ROLE, LLMClient
-from herness.harness.llm.settings import ClientConfig, ModelsConfig, ModelsSection, RoleParams
+from herness.harness.llm.settings import ClientConfig, ModelsConfig, RoleParams
 
 __all__ = ["LLMRegistry", "client_for"]
 
@@ -30,21 +34,6 @@ _HEALTH_MAX_RESPONSE_BYTES: Final = 1_048_576
 _HTTP_OK: Final = 200
 
 _log = get_logger("harness.llm.registry")
-
-
-def _is_off_network(cfg: ClientConfig) -> bool:
-    """T05-04 M-2: off-network is ``cfg.off_network`` widened to every anthropic client."""
-    return cfg.off_network or cfg.kind == "anthropic"
-
-
-def _used_client_names(models: ModelsSection) -> set[str]:
-    """Every client key named by ``roles``, ``fallback`` or ``depth_overrides``."""
-    names = set(models.roles.values())
-    for chain in models.fallback.values():
-        names.update(chain)
-    for override in models.depth_overrides.values():
-        names.update(override.roles.values())
-    return names
 
 
 def _loopback_root(base_url: str) -> str:
@@ -79,9 +68,12 @@ class LLMRegistry:
         )
         self._lock = threading.Lock()
         self._clients: dict[str, LLMClient] = {}
-        for name in _used_client_names(cfg.models):
+        self._fallback = reachable_fallback(
+            cfg.models, egress_enabled=self._egress_enabled, profile=profile
+        )
+        for name in used_client_names(cfg.models, self._fallback):
             client_cfg = cfg.models.clients[name]
-            if _is_off_network(client_cfg) and not self._egress_enabled:
+            if is_off_network(client_cfg) and not self._egress_enabled:
                 _log.error("harness.llm.config_invalid", client=name, profile=profile)
                 msg = f"client {name} is off-network but egress is disabled in profile {profile}"
                 raise ConfigError(msg, client=name, profile=profile)
@@ -123,7 +115,7 @@ class LLMRegistry:
     def chain_for(self, model_role: str, depth: str) -> list[str]:
         """``model_for``'s head, followed by its fallback chain, deduplicated (algorithm 4)."""
         head = self.model_for(model_role, depth)
-        fallback = self._cfg.models.fallback
+        fallback = self._fallback
         rest = fallback.get(model_role)
         if rest is None:
             base = BASE_ROLE.get(model_role)
@@ -146,11 +138,11 @@ class LLMRegistry:
 
     def health(self) -> dict[str, str]:
         """``"ok"``, ``"down"`` or ``"down: <reason>"`` per client key in use (algorithm 6)."""
-        names = _used_client_names(self._cfg.models)
+        names = used_client_names(self._cfg.models, self._fallback)
         return {name: self._health_one(self.config(name)) for name in names}
 
     def _health_one(self, cfg: ClientConfig) -> str:
-        if _is_off_network(cfg):
+        if is_off_network(cfg):
             return "ok" if self._egress_enabled else "down: egress disabled"
         try:
             return self._health_local(cfg)
