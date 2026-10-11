@@ -209,10 +209,11 @@ def render_metric_query(  # noqa: PLR0913 - keyword-only signature fixed by U04-
     entity_ids: Sequence[str] | None,
     catalog: "MetricCatalog",
     weights: WeightsConfig,
+    env: ImmutableSandboxedEnvironment | None = None,
 ) -> RenderedQuery:
     """Render one metric for one grain, period and window into the wrapped SELECT (U04-38)."""
     _check_request(entity_type, window.period, filters.keys())
-    env = make_environment()
+    env = env or make_environment()  # shared by validate_catalog only
     rs = RenderState()
     ctx: dict[str, object] = {
         "entity_type": entity_type,

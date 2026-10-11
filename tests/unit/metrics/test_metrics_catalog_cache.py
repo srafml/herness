@@ -1,5 +1,6 @@
 """Tests for the per-process catalog memo (impl 04 UT04-124, T04-24)."""
 
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -10,7 +11,9 @@ import pytest
 import yaml
 from tests.support.metrics_render import ROOT, metric, weights
 
+from herness.core.config import reset_config
 from herness.core.errors import ConfigError
+from herness.metrics import _catalog_cache as cache
 from herness.metrics import catalog as cat
 from herness.metrics._catalog_cache import reset_catalog_cache
 from herness.metrics.catalog import load_catalog
@@ -97,3 +100,37 @@ def test_ut04_124_concurrent_loads_share_one_object(catalog_file: Path) -> None:
         t.join()
     assert len(results) == 8
     assert all(r is results[0] for r in results)
+
+
+def test_ut04_124_template_edit_reloads(
+    catalog_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT04-124 an edit of a SQL template the render reads changes the key and reloads."""
+    sql_copy = tmp_path / "sql"
+    shutil.copytree(cache._SQL_DIR, sql_copy)
+    monkeypatch.setattr(cache, "_SQL_DIR", sql_copy)
+    first = load_catalog(catalog_file)
+    assert load_catalog(catalog_file) is first
+    macros = sql_copy / "_macros.sql.j2"
+    macros.write_text(macros.read_text(encoding="utf-8") + "{# edited #}", encoding="utf-8")
+    assert load_catalog(catalog_file) is not first
+
+
+def test_ut04_124_reset_config_clears_memo(catalog_file: Path) -> None:
+    """UT04-124 `reset_config()` (the autouse reset path) drops the memo."""
+    first = load_catalog(catalog_file)
+    reset_config()
+    assert load_catalog(catalog_file) is not first
+
+
+def test_ut04_124_path_variants(catalog_file: Path, tmp_path: Path) -> None:
+    """UT04-124 equal bytes at two paths share one entry; other content at a second path reloads."""
+    first = load_catalog(catalog_file)
+    twin = tmp_path / "twin.yaml"
+    twin.write_bytes(catalog_file.read_bytes())
+    assert load_catalog(twin) is first
+    other = tmp_path / "other.yaml"
+    other.write_text(yaml.safe_dump(_raw(min_sample_size=9)), encoding="utf-8")
+    second = load_catalog(other)
+    assert second is not first
+    assert second.get("mttr_hours").min_sample_size == 9

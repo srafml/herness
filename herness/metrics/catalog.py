@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 import yaml
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import ValidationError
 
 from herness.core.config import ConfigIssue, HernessConfig, config_hash, get_config
@@ -23,8 +24,13 @@ from herness.core.errors import ConfigError, ToolInputError
 from herness.core.ids import canonical_json, sha256_hex
 from herness.core.logging import get_logger
 from herness.metrics._catalog_cache import cached_catalog
-from herness.metrics._catalog_checks import raw_sql_problems, sql_problems, template_problems
-from herness.metrics.render import render_metric_query
+from herness.metrics._catalog_checks import (
+    parse_catalog_bytes,
+    raw_sql_problems,
+    sql_problems,
+    template_problems,
+)
+from herness.metrics.render import make_environment, render_metric_query
 from herness.metrics.settings import (
     EntityType,
     FilterKey,
@@ -203,22 +209,13 @@ def load_catalog(path: Path = Path("config/metrics.yaml"), /) -> MetricCatalog:
         msg = f"catalog file {path} missing or too large"
         raise ConfigError(msg)
     weights = get_config().weights
-    return cached_catalog(path, weights.model_dump_json(), lambda: _load_uncached(path, weights))
+    key_part = weights.model_dump_json()
+    return cached_catalog(path, key_part, lambda data: _load_uncached(data, path, weights))
 
 
-def _load_uncached(path: Path, weights: WeightsConfig) -> MetricCatalog:
-    try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        msg = f"catalog file {path} is not valid UTF-8 YAML"
-        raise ConfigError(msg) from exc
-    try:
-        cfg = MetricsCatalogConfig.model_validate(raw)
-    except ValidationError as exc:
-        errors = exc.errors(include_url=False, include_input=False, include_context=False)
-        fields = sorted({".".join(str(p) for p in e["loc"]) or "<root>" for e in errors})
-        msg = f"catalog file {path} invalid at: {', '.join(fields)}"
-        raise ConfigError(msg) from None
+def _load_uncached(data: bytes, path: Path, weights: WeightsConfig) -> MetricCatalog:
+    """Parse and validate the file bytes the cache key was computed from (no second read)."""
+    cfg = parse_catalog_bytes(data, path)
     issues = validate_catalog(cfg, weights=weights)
     errors_found = [i for i in issues if i.severity == "error"]
     if errors_found:
@@ -249,8 +246,13 @@ def _raw_sql_issues(m: MetricDef, weights: WeightsConfig) -> list[ConfigIssue]:
     return issues
 
 
-def _grain_issues(m: MetricDef, catalog: MetricCatalog, weights: WeightsConfig) -> list[str]:
-    """Steps 4-6 for every grain of `m`: render, parse and check; problems deduplicated."""
+def _grain_issues(
+    m: MetricDef, catalog: MetricCatalog, weights: WeightsConfig, env: ImmutableSandboxedEnvironment
+) -> list[str]:
+    """Steps 4-6 for every grain of `m`: render, parse and check; problems deduplicated.
+
+    `env` is one environment per `validate_catalog` call, so `_macros.sql.j2` compiles once.
+    """
     counts = {str(k): v for k, v in catalog.defaults.windows.items()}
     window = default_window("week", _VALIDATION_AS_OF, weights.business_timezone, counts)
     filters: dict[FilterKey, list[object]] = {
@@ -267,6 +269,7 @@ def _grain_issues(m: MetricDef, catalog: MetricCatalog, weights: WeightsConfig) 
                 entity_ids=["x"],
                 catalog=catalog,
                 weights=weights,
+                env=env,
             )
         except ConfigError as exc:
             problems.append(f"grain {grain} not supported: {exc.message}")
@@ -279,12 +282,12 @@ def _grain_issues(m: MetricDef, catalog: MetricCatalog, weights: WeightsConfig) 
 
 
 def _metric_issues(
-    m: MetricDef, catalog: MetricCatalog, weights: WeightsConfig
+    m: MetricDef, catalog: MetricCatalog, weights: WeightsConfig, env: ImmutableSandboxedEnvironment
 ) -> Iterator[ConfigIssue]:
     raw = _raw_sql_issues(m, weights)
     yield from raw
     if not raw:  # never render SQL that failed the raw checks
-        for problem in _grain_issues(m, catalog, weights):
+        for problem in _grain_issues(m, catalog, weights, env):
             yield _issue("error", f"metrics.{m.name}.sql", problem)
     if m.usd_model is not None and m.better != "lower":
         yield _issue("error", f"metrics.{m.name}.better", "usd_model needs better lower")
@@ -312,7 +315,8 @@ def _lever_issues(scoring: ScoringConfig) -> Iterator[ConfigIssue]:
 def validate_catalog(cfg: MetricsCatalogConfig, /, *, weights: WeightsConfig) -> list[ConfigIssue]:
     """All catalog rules of design 04 §4.1, §5.8, §5.9 and §10.5 (U04-26); empty iff valid."""
     catalog = MetricCatalog(cfg)
-    issues = [i for m in cfg.metrics for i in _metric_issues(m, catalog, weights)]
+    env = make_environment()
+    issues = [i for m in cfg.metrics for i in _metric_issues(m, catalog, weights, env)]
     issues.extend(_scorecard_issues(catalog))
     issues.extend(_lever_issues(cfg.scoring))
     return issues

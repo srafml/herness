@@ -10,9 +10,20 @@ from collections.abc import Iterator
 from typing import Final
 
 import sqlglot
+import yaml
+from pydantic import ValidationError
 from sqlglot import exp
 
-__all__ = ["LEVER_PLACEHOLDERS", "raw_sql_problems", "sql_problems", "template_problems"]
+from herness.core.errors import ConfigError
+from herness.metrics.settings import MetricsCatalogConfig
+
+__all__ = [
+    "LEVER_PLACEHOLDERS",
+    "parse_catalog_bytes",
+    "raw_sql_problems",
+    "sql_problems",
+    "template_problems",
+]
 
 # U04-71 single source of truth: herness.metrics.levers re-exports this set (levers imports the
 # step modules, which import the catalog, so the catalog checks cannot import levers).
@@ -127,3 +138,19 @@ def template_problems(template: str, /) -> list[str]:
         if conversion is not None or spec:
             problems.append(f"placeholder {field[:40]!r} has a conversion or format spec")
     return problems
+
+
+def parse_catalog_bytes(data: bytes, path: object) -> MetricsCatalogConfig:
+    """Parse the catalog file bytes (UTF-8 YAML) into the model; ConfigError names fields only."""
+    try:
+        raw = yaml.safe_load(data.decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        msg = f"catalog file {path} is not valid UTF-8 YAML"
+        raise ConfigError(msg) from exc
+    try:
+        return MetricsCatalogConfig.model_validate(raw)
+    except ValidationError as exc:
+        errors = exc.errors(include_url=False, include_input=False, include_context=False)
+        fields = sorted({".".join(str(p) for p in e["loc"]) or "<root>" for e in errors})
+        msg = f"catalog file {path} invalid at: {', '.join(fields)}"
+        raise ConfigError(msg) from None
