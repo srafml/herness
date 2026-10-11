@@ -64,7 +64,8 @@ def correctness_check(
     floor = settings.correctness_floor.get(f"{profile}-{depth}" if profile == "local" else profile)
     actual = m.answer_correctness
     if actual is None:
-        return _row("correctness", [], ["no graded questions"], None, floor)
+        changed = [_SUITE_CHANGED] if baseline is not None and baseline.suite_changed else []
+        return _row("correctness", [], ["no graded questions", *changed], None, floor)
     fails = (
         [f"{actual:.3f} below floor {floor:.2f}"] if floor is not None and actual < floor else []
     )

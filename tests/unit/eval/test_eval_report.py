@@ -9,7 +9,6 @@ migrated tmp ops store) with the baselines root (`EvalDeps.repo_root`) in a tmp 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from decimal import Decimal
 from importlib import resources
 from pathlib import Path
@@ -19,8 +18,20 @@ import pytest
 from tests.support.ops_store import OpsStoreHandle
 from tests.unit.eval import _runner_env as env
 from tests.unit.eval._judge_fixtures import MODEL, FakeJudgeClient, make_judge
+from tests.unit.eval._report_env import (
+    PROVENANCE,
+    ROWS,
+    RUN_ID,
+    SUITE_SHA,
+    baseline_summary,
+    eval_run,
+    keys_anywhere,
+    result,
+    summary,
+)
 from tests.unit.eval._runner_env import (
     AnswerChat,
+    FakeCtx,
     chat_q,
     make_deps,
     make_root,
@@ -31,69 +42,14 @@ from tests.unit.eval._runner_env import (
 from herness.core.errors import ConfigError
 from herness.eval import report
 from herness.eval.golden import load_suite
-from herness.eval.grading import GradeResult
 from herness.eval.metrics import EvalMetrics, ThresholdResult, check_thresholds
 from herness.eval.report import load_baseline, save_baseline, write_report
-from herness.eval.results import QuestionResult
 from herness.eval.runner import EvalOptions, EvalRun, run_golden
 from herness.store.ops import get_run
+from herness.store.ops.core import read_all
 
 pytestmark = pytest.mark.unit
 __all__ = ["runner_store", "test_redactor"]  # fixtures
-
-RUN_ID = "run_" + "0" * 25 + "A"
-SUITE_SHA = "a" * 64
-PROVENANCE = ("git_sha", "config_hash", "suite_sha256", "judge_model", "judge_prompt_sha256")
-
-
-def summary(**over: Any) -> dict[str, Any]:
-    """A complete run summary (the §4.2 keys) without metrics and thresholds."""
-    base: dict[str, Any] = {
-        "schema": 1, "run_id": RUN_ID, "profile": "local", "depth": "standard",
-        "build_id": "bld_tiny", "dataset_kind": "synthetic", "dataset_seed": 42,
-        "dataset_scale": "small", "git_sha": "0123456789ab", "config_hash": "c" * 16,
-        "suite_version": 3, "suite_sha256": SUITE_SHA, "judge_model": "judge-model-1",
-        "judge_prompt_sha256": "d" * 16, "mock": False, "baseline": None,
-        "started_at": "2026-10-10T08:00:00Z", "finished_at": "2026-10-10T08:05:00Z",
-        "passed": False, "exit_code": 14,
-    }  # fmt: skip
-    base.update(over)
-    return base
-
-
-def result(qid: str, status: str, text: str = "All good.", error: str | None = None
-           ) -> QuestionResult:  # fmt: skip
-    check = "passed" if status == "passed" else "failed"
-    return QuestionResult.model_validate({
-        "id": qid, "repeat": 1, "status": status,
-        "checks": [GradeResult(check="numeric", status=check, detail={"value": 2})],
-        "reference": {}, "final_text": text, "numbers": [], "unsupported": None,
-        "tokens_in": 1, "tokens_out": 2, "cost_usd": "0", "latency_s": 1.5, "retries": 0,
-        "fallbacks": 0, "repairs": 0, "pipeline_run_id": None, "draft_mode": None,
-        "trace_path": None, "error": error,
-    })  # fmt: skip
-
-
-ROWS = [
-    ThresholdResult(check="unsupported_numbers", passed=True, actual=0.0, limit=0.0, detail="ok"),
-    ThresholdResult(check="correctness", passed=False, actual=0.5, limit=0.8,
-                    detail="0.500 below floor 0.80"),
-]  # fmt: skip
-
-
-def eval_run(out: Path, **over: Any) -> EvalRun:
-    return EvalRun(run_id=RUN_ID, out_dir=out, summary=summary(**over), passed=False)
-
-
-def keys_anywhere(value: object) -> Iterator[str]:
-    """Every mapping key at any depth of a JSON value."""
-    if isinstance(value, dict):
-        for key, item in value.items():
-            yield str(key)
-            yield from keys_anywhere(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from keys_anywhere(item)
 
 
 # --- UT11-110 write_report ----------------------------------------------------------------------
@@ -175,17 +131,6 @@ def test_ut11_110_missing_provenance_is_config_error(tmp_path: Path) -> None:
 
 
 # --- UT11-111 save_baseline, load_baseline ------------------------------------------------------
-
-
-def baseline_summary(**over: Any) -> dict[str, Any]:
-    data = summary(
-        metrics=EvalMetrics(answer_correctness=0.9, question_status={"G01": "passed"}).model_dump(
-            mode="json"
-        ),
-        thresholds=[r.model_dump() for r in ROWS],
-    )
-    data.update(over)
-    return data
 
 
 def test_ut11_111_aggregates_only_round_trip(tmp_path: Path) -> None:
@@ -299,10 +244,12 @@ def con(runner_store: OpsStoreHandle) -> Any:
     return make_root(runner_store.data_root)
 
 
-def _run(store: OpsStoreHandle, con: Any, suite: Path, *, chat: AnswerChat | None = None,
+def _run(  # noqa: PLR0913 - test helper with keyword-only knobs
+    store: OpsStoreHandle, con: Any, suite: Path, *, chat: AnswerChat | None = None,
+         profile: str = "local", resume: str | None = None, job: Any = None,
          **options: Any) -> EvalRun:  # fmt: skip
-    deps = make_deps(store.data_root, con, chat=chat)
-    return run_golden(load_suite(suite), "local", "fast", deps=deps,
+    deps = make_deps(store.data_root, con, chat=chat, job=job)
+    return run_golden(load_suite(suite), profile, "fast", deps=deps, resume_run_id=resume,
                       options=EvalOptions(**options))  # fmt: skip
 
 
@@ -326,7 +273,7 @@ def test_cv_t11_31_all_error_run_fails_once_a_baseline_exists(
     assert row.meta["baseline"] is None
 
     sha = load_suite(suite).sha256
-    save_baseline("synthetic-42-small", baseline_summary(suite_sha256=sha),
+    save_baseline("synthetic-42-small", baseline_summary(suite_sha256=sha, depth="fast"),
                   repo_root=_repo(runner_store))  # fmt: skip
     second = _run(runner_store, con, suite, chat=chat)
     assert second.passed is False
@@ -408,3 +355,143 @@ def test_cv_t11_31_report_module_public_names() -> None:
     ComparisonTable are T11-38's)."""
     assert {"write_report", "save_baseline", "load_baseline"} <= set(report.__all__)
     assert report.BASELINE_NAME_RE.pattern == "^[a-z0-9][a-z0-9-]{0,63}$"
+
+
+# --- fix round 1: comparability (I1), M1-M4 -----------------------------------------------------
+
+
+def _row(run: EvalRun, check: str) -> dict[str, Any]:
+    return next(r for r in run.summary["thresholds"] if r["check"] == check)
+
+
+def _save_default(store: OpsStoreHandle, suite: Path, **over: Any) -> None:
+    body = baseline_summary(suite_sha256=load_suite(suite).sha256, **over)
+    save_baseline(over.pop("name", "synthetic-42-small"), body, repo_root=_repo(store))
+
+
+def test_cv_t11_31_premium_run_ignores_local_default(
+    runner_store: OpsStoreHandle, con: Any, tmp_path: Path
+) -> None:
+    """CV-T11-31 a premium run with a local-standard default baseline (cost about 0) is not
+    compared: no cost failure, a visible `not comparable` detail, no `run.meta.baseline`."""
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01")])
+    _save_default(runner_store, suite)  # local-standard, cost 0
+    run = _run(runner_store, con, suite, profile="premium")
+    note = (
+        "baseline synthetic-42-small not comparable: taken at local-standard, run is premium-fast"
+    )
+    assert _row(run, "cost") == {**_row(run, "cost"), "passed": True, "detail": note}
+    assert note in _row(run, "correctness")["detail"]
+    assert note in _row(run, "latency")["detail"]
+    assert run.passed is True
+    assert run.summary["baseline"] is None
+    row = get_run(run.run_id)
+    assert row is not None
+    assert row.meta["baseline"] is None
+
+
+def test_cv_t11_31_real_build_ignores_synthetic_default(
+    runner_store: OpsStoreHandle, tmp_path: Path
+) -> None:
+    """CV-T11-31 a real build is never compared with a (synthetic) default baseline."""
+    real = make_root(runner_store.data_root, kind="real")
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01")])
+    _save_default(runner_store, suite, depth="fast")
+    run = _run(runner_store, real, suite)
+    assert _row(run, "correctness")["detail"] == (
+        "baseline synthetic-42-small not comparable: run is not synthetic"
+    )
+    assert run.summary["baseline"] is None
+
+
+def test_cv_t11_31_mock_and_non_mock_baselines(
+    runner_store: OpsStoreHandle, con: Any, tmp_path: Path
+) -> None:
+    """CV-T11-31 a mock run ignores a non-`-mock` default; an explicit `-mock` baseline on a
+    non-mock run, or an explicit baseline of another profile or depth, is `ConfigError`."""
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01")])
+    _save_default(runner_store, suite, depth="fast")
+    run = _run(runner_store, con, suite, mock=True)
+    assert _row(run, "correctness")["detail"] == (
+        "baseline synthetic-42-small not comparable: mock runs use -mock baselines only"
+    )
+    _save_default(runner_store, suite, depth="fast", name="local-fast-mock", mock=True)
+    with pytest.raises(ConfigError, match="a -mock baseline needs a mock run"):
+        _run(runner_store, con, suite, baseline="local-fast-mock")
+    mocked = _run(runner_store, con, suite, mock=True, baseline="local-fast-mock")
+    assert mocked.summary["baseline"] == "local-fast-mock"
+    _save_default(runner_store, suite, name="local-standard")
+    with pytest.raises(ConfigError, match="not comparable: taken at local-standard"):
+        _run(runner_store, con, suite, baseline="local-standard")
+    rows = read_all("SELECT run_id FROM run WHERE kind = 'eval'", ())
+    assert sorted(r["run_id"] for r in rows) == sorted([run.run_id, mocked.run_id])
+
+
+def test_cv_t11_31_suite_changed_without_graded_questions(tmp_path: Path) -> None:
+    """CV-T11-31 (M1) with no graded question the correctness row still says `suite changed`."""
+    save_baseline("synthetic-42-small", baseline_summary(), repo_root=tmp_path)
+    base = load_baseline("synthetic-42-small", repo_root=tmp_path, suite_sha256="b" * 64)
+    rows = check_thresholds(
+        EvalMetrics(), profile="local", depth="standard", baseline=base, results=[],
+        dataset_kind="synthetic", dataset_scale="small", settings=env.settings().thresholds,
+    )  # fmt: skip
+    correctness = next(r for r in rows if r.check == "correctness")
+    assert correctness.detail == "no graded questions; suite changed"
+
+
+def test_cv_t11_31_stored_suite_changed_key_refused(tmp_path: Path) -> None:
+    """CV-T11-31 (M2) a baseline file cannot carry `suite_changed` to switch the drop check
+    off; `read_baseline` exposes the stored profile, depth and scale."""
+    path = save_baseline("synthetic-42-small", baseline_summary(), repo_root=tmp_path)
+    found = report.read_baseline("synthetic-42-small", repo_root=tmp_path)
+    assert found is not None
+    assert (found.profile, found.depth, found.dataset_scale) == ("local", "standard", "small")
+    body = json.loads(path.read_text(encoding="utf-8"))
+    body["metrics"]["suite_changed"] = True
+    path.write_text(json.dumps(body), encoding="utf-8")
+    with pytest.raises(ConfigError, match="baseline is not valid"):
+        load_baseline("synthetic-42-small", repo_root=tmp_path)
+
+
+def test_cv_t11_31_resume_records_the_baseline_compared(
+    runner_store: OpsStoreHandle, con: Any, tmp_path: Path
+) -> None:
+    """CV-T11-31 (M3) a default baseline that appears between a yield and the resume: the
+    run row's `meta.baseline` is patched at the end to match `summary.json`."""
+    suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01"), chat_q("G02")])
+    ctx = FakeCtx({"profile": "local", "repeat": 1}, yield_after=1)
+    first = _run(runner_store, con, suite, job=ctx)
+    assert first.yielded is True
+    row = get_run(first.run_id)
+    assert row is not None
+    assert row.meta["baseline"] is None
+    _save_default(runner_store, suite, depth="fast")
+    done = _run(runner_store, con, suite, resume=first.run_id)
+    assert done.summary["baseline"] == "synthetic-42-small"
+    row = get_run(first.run_id)
+    assert row is not None
+    assert row.meta["baseline"] == "synthetic-42-small"
+
+
+def test_cv_t11_31_write_closes_fd_when_fdopen_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CV-T11-31 (M4) when `os.fdopen` fails the temp file's descriptor is closed and the
+    temp file removed."""
+    closed: list[int] = []
+    real_close = report.os.close
+
+    def fail(*args: object, **kwargs: object) -> Any:
+        msg = "no fdopen"
+        raise OSError(msg)
+
+    def close(fd: int) -> None:
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(report.os, "fdopen", fail)
+    monkeypatch.setattr(report.os, "close", close)
+    with pytest.raises(OSError, match="no fdopen"):
+        report._write(tmp_path / "x.json", "{}")
+    assert len(closed) == 1
+    assert list(tmp_path.iterdir()) == []

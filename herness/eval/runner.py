@@ -29,6 +29,7 @@ from herness.core.ids import IdKind, new_id
 from herness.core.jobs import register_handler
 from herness.core.logging import get_logger
 from herness.core.types import Depth, JobOutcome
+from herness.eval._runner_baseline import BaselineChoice, resolve_baseline
 from herness.eval._runner_finish import (
     RunMeta,
     close_run,
@@ -36,7 +37,6 @@ from herness.eval._runner_finish import (
     insert_eval_run,
     mark_failed,
     reopen_run,
-    resolve_baseline,
     suite_label,
 )
 from herness.eval._runner_payload import (
@@ -58,7 +58,6 @@ from herness.eval._runner_support import (
 )
 from herness.eval.golden import EvalQuestion, Suite, load_suite
 from herness.eval.invoke import ReviewCache
-from herness.eval.metrics import EvalMetrics
 from herness.eval.report import check_baseline_target, save_baseline, write_report
 from herness.eval.results import ResultsLog
 from herness.eval.scripted import load_scripts
@@ -208,22 +207,23 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
         raise ConfigError(msg)
     selected = _select(suite, options)
     repo_root = deps.repo_root or Path.cwd()
-    named = (options.baseline, deps.settings.baseline)  # --baseline, else eval.baseline
-    base_name, baseline = resolve_baseline(*named, repo_root=repo_root, suite_sha256=suite.sha256)
     plan = _plan(deps, resume_run_id)
     con = deps.warehouse_for(plan.build_id)
     kind = dataset_kind(con)
     if options.set_baseline is not None:  # refused before any question runs (TH11-14)
         check_baseline_target(options.set_baseline, dataset_kind=kind, mock=options.mock)
+    named = (options.baseline, deps.settings.baseline)  # --baseline, else eval.baseline
+    choice = resolve_baseline(*named, repo_root=repo_root, suite_sha256=suite.sha256,
+                              run=(profile, depth, kind, options.mock))  # fmt: skip
     truth = load_truth(truth_dir_for(deps.data_root)) if kind == "synthetic" else None
     out_dir = deps.data_root / "reports" / "eval" / plan.run_id
-    finish = _Finish(out_dir, baseline, options.set_baseline, repo_root)
+    finish = _Finish(out_dir, choice, options.set_baseline, repo_root)
     meta = RunMeta(
         run_id=plan.run_id, profile=profile, depth=depth, build_id=plan.build_id,
         dataset_kind=kind, dataset_scale=truth.scale if truth is not None else "full",
         suite=options.suite, suite_version=suite.version, suite_sha256=suite.sha256,
         mock=options.mock, started_at=plan.started_at,
-        dataset_seed=truth.seed if truth is not None else None, baseline=base_name,
+        dataset_seed=truth.seed if truth is not None else None, baseline=choice.name,
     )  # fmt: skip
     if not plan.resumed:
         job_id = deps.job.job_id if deps.job is not None else None
@@ -255,7 +255,7 @@ class _Finish:
     """Where the run's files go and what it is compared with or saved as (steps 11-12)."""
 
     out_dir: Path
-    baseline: EvalMetrics | None
+    choice: BaselineChoice
     set_baseline: str | None
     repo_root: Path
 
@@ -278,11 +278,11 @@ def _run(
     results = [r for r in log.read_all() if r.id in wanted and r.repeat <= repeat]
     questions = {q.id: q for q in selected}
     outcome = finish_run(meta, env, results, questions=questions,
-                         thresholds=deps.settings.thresholds, baseline=finish.baseline)  # fmt: skip
+                         thresholds=deps.settings.thresholds, baseline=finish.choice)  # fmt: skip
     run = EvalRun(run_id=meta.run_id, out_dir=out_dir, summary=outcome.summary,
                   passed=outcome.passed)  # fmt: skip
     write_report(run, out_dir, results=results, metrics=outcome.metrics, thresholds=outcome.rows,
-                 baseline=finish.baseline, classifier=None)  # fmt: skip
+                 baseline=finish.choice.metrics, classifier=None)  # fmt: skip
     if finish.set_baseline is not None:
         save_baseline(finish.set_baseline, outcome.summary, repo_root=finish.repo_root)
     close_run(meta, outcome, results, questions)
