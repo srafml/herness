@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Sequence
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -34,6 +33,7 @@ from herness.eval._runner_classifier import classifier_outcome
 from herness.eval._runner_compare import compare_runs_outcome, run_eval
 from herness.eval._runner_finish import (
     RunMeta,
+    cancel_run,
     close_run,
     finish_run,
     insert_eval_run,
@@ -50,7 +50,7 @@ from herness.eval._runner_payload import (
     exit_code,
     validate_payload,
 )
-from herness.eval._runner_question import QuestionEnv, run_question
+from herness.eval._runner_question import QuestionEnv, execute
 from herness.eval._runner_support import (
     current_build,
     dataset_kind,
@@ -63,6 +63,7 @@ from herness.eval.invoke import ReviewCache
 from herness.eval.report import check_baseline_target, save_baseline, write_report
 from herness.eval.results import ResultsLog
 from herness.eval.scripted import load_scripts
+from herness.eval.settings import MAX_REPEAT
 from herness.eval.truth import load_truth, truth_dir_for
 
 if TYPE_CHECKING:
@@ -82,7 +83,6 @@ __all__ = [
 ]  # fmt: skip
 
 PREMIUM_WORKERS: Final = 8  # TH11-13
-MAX_REPEAT: Final = 10
 
 _log = get_logger("eval.runner")
 
@@ -127,6 +127,7 @@ class EvalRun(BaseModel):
     summary: dict[str, Any]
     passed: bool
     yielded: bool = False
+    canceled: bool = False
 
 
 def _check(repeat: int, options: EvalOptions) -> None:
@@ -234,8 +235,8 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
         run_id=plan.run_id, profile=profile, depth=cast("Depth", depth),
         build_id=plan.build_id, dataset_kind=kind, truth=truth, con=con,
         judge=deps.judge_for() if judge else None, chat=_lazy(lambda: deps.chat_for(profile)),
-        swarm=_lazy(lambda: deps.swarm_for(profile)),
-        traces_dir=deps.data_root / "traces", open_session=open_session_for(deps.clock),
+        swarm=_lazy(lambda: deps.swarm_for(profile)), traces_dir=deps.data_root / "traces",
+        reports_root=deps.data_root / "reports", open_session=open_session_for(deps.clock),
         names=name_index(con), numerals=numerals(),
     )  # fmt: skip
     try:
@@ -267,8 +268,12 @@ def _run(
         _log.info("eval.run.resumed", run_id=meta.run_id, done=len(done), remaining=len(pending))
     caches = {r: ReviewCache() for r in range(1, repeat + 1)}  # the cache key has no repeat
     workers = PREMIUM_WORKERS if meta.profile == "premium" else 1
-    if _execute(env, pending, caches, log, (deps.job, workers)):
-        return EvalRun(run_id=meta.run_id, out_dir=out_dir, summary={}, passed=False, yielded=True)
+    stop = execute(env, pending, caches, log, (deps.job, workers))
+    if stop is not None:
+        if stop == "cancel":
+            cancel_run(meta.run_id, deps.clock())
+        return EvalRun(run_id=meta.run_id, out_dir=out_dir, summary={}, passed=False,
+                       yielded=stop == "yield", canceled=stop == "cancel")  # fmt: skip
     wanted = {q.id for q in selected}
     results = [r for r in log.read_all() if r.id in wanted and r.repeat <= repeat]
     questions = {q.id: q for q in selected}
@@ -282,41 +287,6 @@ def _run(
         save_baseline(finish.set_baseline, outcome.summary, repo_root=finish.repo_root)
     close_run(meta, outcome, results, questions)
     return run
-
-
-def _record(env: QuestionEnv, question: EvalQuestion, repeat: int, cache: ReviewCache,
-            log: ResultsLog) -> None:  # fmt: skip
-    result = run_question(env, question, repeat, cache)
-    log.append(result)  # a write error fails the job; resume continues later (step 8)
-    _log.info("eval.question.graded", run_id=env.run_id, question_id=question.id, repeat=repeat,
-              status=result.status, latency_s=result.latency_s)  # fmt: skip
-
-
-def _execute(
-    env: QuestionEnv,
-    pending: Sequence[tuple[EvalQuestion, int]],
-    caches: dict[int, ReviewCache],
-    log: ResultsLog,
-    control: tuple[JobContext | None, int],
-) -> bool:
-    """Run `pending` with at most `workers` in flight; poll `should_yield` before each
-    question (step 9). True when the job asked to yield."""
-    job, workers = control
-    inflight: set[Future[None]] = set()
-    yielded = False
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="eval-q") as pool:
-        for question, repeat in pending:
-            while len(inflight) >= workers:
-                finished, inflight = wait(inflight, return_when=FIRST_COMPLETED)
-                for future in finished:
-                    future.result()
-            if job is not None and job.should_yield():
-                yielded = True
-                break
-            inflight.add(pool.submit(_record, env, question, repeat, caches[repeat], log))
-        for future in wait(inflight).done:
-            future.result()
-    return yielded
 
 
 # --- U11-68 handle_eval, set_deps_factory -----------------------------------------------------
@@ -373,6 +343,8 @@ def handle_eval(ctx: JobContext) -> JobOutcome:
         raise
     if run.yielded:
         return JobOutcome(status="yield", result={"run_id": run.run_id})
+    if run.canceled:  # the run row is closed `canceled`; exit_code maps this result to 1
+        return JobOutcome(status="done", result={"run_id": run.run_id, "canceled": True})
     code, second = run.summary.get("exit_code"), run.summary.get("compare_run_id")
     return JobOutcome(
         status="done",

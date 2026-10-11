@@ -94,7 +94,10 @@ def test_it11_21_error_and_suite_error_exit_14(eval_env: EvalEnv) -> None:
 
 def test_it11_22_premium_shared_review_and_concurrency(eval_env: EvalEnv) -> None:
     """IT11-22 premium with three org questions: one shared org review run; at most 8 chat
-    calls at once (stub counter), more than one in parallel."""
+    calls at once (stub counter), more than one in parallel. The premium profile is set
+    through the payload only: the deps ignore the profile and the reviews run on the drv
+    scripted agents, not a premium scripted registry (T11-32 fixture ruling: golden content
+    and mock scripts are T11-32's)."""
     orgs = [question(f"O0{i}", "org") for i in (1, 2, 3)]
     chats = [question(f"G{i:02d}") for i in range(1, 13)]
     suite = eval_env.suite(orgs + chats)
