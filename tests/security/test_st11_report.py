@@ -16,6 +16,13 @@ from typing import Any
 import pytest
 from tests.support.ops_store import OpsStoreHandle
 from tests.unit.eval import _runner_env as env
+from tests.unit.eval._report_env import (
+    ROWS,
+    SUITE_SHA,
+    baseline_summary,
+    eval_run,
+    result,
+)
 from tests.unit.eval._runner_env import (
     FakeCtx,
     chat_q,
@@ -23,13 +30,6 @@ from tests.unit.eval._runner_env import (
     make_root,
     runner_store,
     test_redactor,
-)
-from tests.unit.eval.test_eval_report import (
-    ROWS,
-    SUITE_SHA,
-    baseline_summary,
-    eval_run,
-    result,
 )
 
 from herness.core.errors import ConfigError
@@ -99,7 +99,8 @@ def test_st11_11_suite_changed_disables_drop_check(
     """ST11-11 a baseline with a different `suite_sha256`: the drop check reports
     `detail = "suite changed"` instead of comparing (TH11-03)."""
     repo = runner_store.data_root.parent
-    save_baseline("synthetic-42-small", baseline_summary(suite_sha256=SUITE_SHA), repo_root=repo)
+    stored = baseline_summary(suite_sha256=SUITE_SHA, depth="fast")
+    save_baseline("synthetic-42-small", stored, repo_root=repo)
     con = make_root(runner_store.data_root)
     suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01")])
     assert load_suite(suite).sha256 != SUITE_SHA

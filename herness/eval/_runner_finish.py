@@ -1,10 +1,10 @@
 """Run row, baseline, metrics, thresholds and the summary of a golden eval run.
 
 Private sibling of `herness.eval.runner` (§2 module map): flow F11-07 step 3 (run row),
-steps 10-11 (aggregate, `skeptic_catch`, the baseline, thresholds, the `summary.json` body
-with its provenance: `git_sha`, `config_hash`, suite SHA-256, judge model and prompt hash,
-TH11-11) and step 13 (finish the row, log `eval.run.completed`, metric samples through
-`record_metric_samples`, R-12). The runner writes the report files (step 12,
+steps 10-11 (aggregate, `skeptic_catch`, thresholds against the chosen baseline, the
+`summary.json` body with its provenance: `git_sha`, `config_hash`, suite SHA-256, judge
+model and prompt hash, TH11-11) and step 13 (finish the row, log `eval.run.completed`,
+metric samples through `record_metric_samples`, R-12). The runner writes the report files (step 12,
 `herness.eval.report`) between `finish_run` and `close_run`. The run row is written through
 `herness.store.ops.runs` inside `run_write` (R-08, R-10). The summary holds run metadata,
 metrics and threshold rows only, never question or answer text.
@@ -25,6 +25,7 @@ from herness.core.config import config_hash, get_config
 from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
 from herness.core.types import MetricSample
+from herness.eval._runner_baseline import BaselineChoice
 from herness.eval._runner_question import required_rubric_skipped
 from herness.eval.judge import judge_prompt_hash
 from herness.eval.metrics import (
@@ -34,7 +35,6 @@ from herness.eval.metrics import (
     check_thresholds,
     skeptic_catch,
 )
-from herness.eval.report import load_baseline
 from herness.model.meta import git_sha
 from herness.store.ops.core import run_write
 from herness.store.ops.metrics import record_metric_samples
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from herness.eval.settings import Thresholds
 
 __all__ = ["Outcome", "RunMeta", "close_run", "finish_run", "insert_eval_run", "mark_failed",
-           "reopen_run", "resolve_baseline", "suite_label"]  # fmt: skip
+           "reopen_run", "suite_label"]  # fmt: skip
 
 SUMMARY_SCHEMA: Final = 1
 _COMPONENT: Final = "eval"
@@ -143,29 +143,20 @@ def _metrics(env: QuestionEnv, results: Sequence[QuestionResult],
     return aggregate_metrics(results, traces, runs, skeptic=skeptic, questions=questions)
 
 
-def resolve_baseline(
-    named: str | None, default: str, *, repo_root: Path, suite_sha256: str
-) -> tuple[str | None, EvalMetrics | None]:
-    """F11-07 step 11: `--baseline NAME` (missing → `ConfigError`), else the `eval.baseline`
-    default (missing → no baseline); returns the name compared against and its metrics."""
-    name = named if named is not None else default
-    baseline = load_baseline(name, repo_root=repo_root, suite_sha256=suite_sha256)
-    if baseline is None and named is not None:
-        msg = f"baseline not found: name={named}"
-        raise ConfigError(msg)
-    return (name, baseline) if baseline is not None else (None, None)
-
-
 def finish_run(
     meta: RunMeta, env: QuestionEnv, results: Sequence[QuestionResult], *,
-    questions: Mapping[str, EvalQuestion], thresholds: Thresholds, baseline: EvalMetrics | None,
+    questions: Mapping[str, EvalQuestion], thresholds: Thresholds, baseline: BaselineChoice,
 ) -> Outcome:  # fmt: skip
-    """Steps 10-11: metrics, thresholds against `baseline`, the `summary.json` body."""
+    """Steps 10-11: metrics, thresholds against the baseline, the `summary.json` body; a
+    non-comparable default replaces the rows' `no baseline` with its note."""
     m = _metrics(env, results, questions)
     rows = check_thresholds(
-        m, profile=meta.profile, depth=meta.depth, baseline=baseline, results=results,
+        m, profile=meta.profile, depth=meta.depth, baseline=baseline.metrics, results=results,
         dataset_kind=meta.dataset_kind, dataset_scale=meta.dataset_scale, settings=thresholds,
     )  # fmt: skip
+    if baseline.note is not None:
+        rows = [r.model_copy(update={"detail": r.detail.replace("no baseline", baseline.note)})
+                for r in rows]  # fmt: skip
     for row in rows:
         if not row.passed:
             _log.error("eval.threshold.failed", run_id=meta.run_id, check=row.check,
@@ -184,16 +175,19 @@ def close_run(
 ) -> None:  # fmt: skip
     """Step 13: run row `done` (tokens, cost), metric samples, `eval.run.completed`."""
     m, finished = outcome.metrics, outcome.finished
-    run_write(lambda conn: _close(conn, meta.run_id, m, finished), op="eval_run_finish")
+    run_write(lambda conn: _close(conn, meta, m, finished), op="eval_run_finish")
     _samples(meta, m, outcome.rows, results, questions, finished)
     _log.info("eval.run.completed", run_id=meta.run_id, passed=outcome.passed,
               exit_code=outcome.exit_code, answer_correctness=m.answer_correctness,
               unsupported_number_rate=m.unsupported_number_rate)  # fmt: skip
 
 
-def _close(conn: Any, run_id: str, m: EvalMetrics, now: datetime) -> None:  # noqa: ANN401 - sqlite3.Connection
+def _close(conn: Any, meta: RunMeta, m: EvalMetrics, now: datetime) -> None:  # noqa: ANN401 - sqlite3.Connection
+    run_id, baseline = meta.run_id, meta.baseline
     usage = {"eval": {"tokens_in": m.tokens_in, "tokens_out": m.tokens_out}}
-    update_run_fields(conn, run_id, token_usage=usage, cost_usd=m.cost_usd)
+    update_run_fields(
+        conn, run_id, token_usage=usage, cost_usd=m.cost_usd, meta_patch={"baseline": baseline}
+    )  # the one compared at the end (resume)
     set_run_status(conn, run_id, "done", _ACTIVE, now=now)
 
 
