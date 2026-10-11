@@ -44,7 +44,6 @@ from herness.harness.swarm import RunRequest
 from herness.store.ops import get_run
 
 if TYPE_CHECKING:
-    from herness.core.jobs import JobContext
     from herness.eval.judge import RubricJudge
     from herness.eval.truth import TruthManifest
     from herness.harness.pipelines.chat import ChatService
@@ -75,7 +74,6 @@ class QuestionEnv:
     judge: RubricJudge | None
     chat: Callable[[], ChatService]
     swarm: Callable[[], Swarm]
-    job: JobContext | None
     traces_dir: Path
     open_session: Callable[[str], str]
     names: Mapping[str, str]
@@ -169,7 +167,7 @@ def _invoke(env: QuestionEnv, resolved: ResolvedQuestion, cache: ReviewCache) ->
     framing = question.id if question.framing else None
 
     def review() -> PipelineOutput:
-        out = invoke_review(env.swarm(), req, job=env.job, now=clock.monotonic)
+        out = invoke_review(env.swarm(), req, job=None, now=clock.monotonic)
         if question.pipeline == "org":
             env.org_outputs.append(out)
         return out

@@ -85,8 +85,9 @@ def suite_label(suite: str) -> str:
     return "golden" if suite == "golden" else "custom"
 
 
-def insert_eval_run(meta: RunMeta, *, data_root: Path, job_id: str | None) -> None:
-    """Insert the `run` row (`kind = eval`, `status = running`; F11-07 step 3)."""
+def insert_eval_run(meta: RunMeta, *, data_root: Path) -> None:
+    """Insert the `run` row (`kind = eval`, `status = running`; F11-07 step 3). No
+    `meta.job_id`: `find_run_by_job` names review runs (U06-79)."""
     row = RunRow(
         run_id=meta.run_id, kind="eval", depth=meta.depth, profile=meta.profile,
         build_id=meta.build_id, status="running", started_at=meta.started_at, finished_at=None,
@@ -95,7 +96,7 @@ def insert_eval_run(meta: RunMeta, *, data_root: Path, job_id: str | None) -> No
             "suite": meta.suite, "suite_version": meta.suite_version,
             "suite_sha256": meta.suite_sha256, "baseline": None, "compare_profile": None,
             "mock": meta.mock, "dataset_kind": meta.dataset_kind,
-            "dataset_root": data_root.as_posix(), "resume_of": None, "job_id": job_id,
+            "dataset_root": data_root.as_posix(), "resume_of": None,
         },
     )  # fmt: skip
     run_write(lambda conn: insert_run(conn, row), op="eval_run_insert")

@@ -121,10 +121,14 @@ def suite_file(path: Path, questions: list[dict[str, Any]]) -> Path:
     return write_suite(path, questions)
 
 
-def final(value: int = 2, *, text: str = ANSWER, run_id: str | None = None) -> FinalEvent:
-    ref = NumberRef(id="n1", value=value, unit="count", query_id=NUMERIC_QID, column="value",
+def final(
+    value: int = 2, *, text: str = ANSWER, query_id: str = NUMERIC_QID, column: str = "value",
+    run_id: str | None = None,
+) -> FinalEvent:  # fmt: skip
+    """A final answer citing `[[n1]]` = `value` of `query_id`'s `column`."""
+    ref = NumberRef(id="n1", value=value, unit="count", query_id=query_id, column=column,
                     row_key=None)  # fmt: skip
-    answer = ChatAnswer(text=text, numbers=[ref], query_ids=[NUMERIC_QID])
+    answer = ChatAnswer(text=text, numbers=[ref], query_ids=[query_id])
     return FinalEvent(answer=answer, run_id=run_id or new_id(IdKind.RUN))
 
 
@@ -135,8 +139,12 @@ class AnswerChat:
 
     value: int = 2
     errors: frozenset[str] = frozenset()
+    query_id: str = NUMERIC_QID
+    column: str = "value"
+    text: str = ANSWER
     delay_s: float = 0.0
     calls: list[tuple[str, str]] = field(default_factory=list)
+    modes: list[ChatMode] = field(default_factory=list)
     running: int = 0
     max_running: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -147,6 +155,7 @@ class AnswerChat:
         del user_ref
         with self._lock:
             self.calls.append((session_id, text))
+            self.modes.append(mode)
             self.running += 1
             self.max_running = max(self.max_running, self.running)
         try:
@@ -155,7 +164,7 @@ class AnswerChat:
             if text in self.errors:
                 yield ErrorEvent(error_type="ModelUnavailable", message="down", hint=None)
             else:
-                yield final(self.value)
+                yield final(self.value, text=self.text, query_id=self.query_id, column=self.column)
         finally:
             with self._lock:
                 self.running -= 1

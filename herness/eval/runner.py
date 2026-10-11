@@ -214,7 +214,7 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
     )  # fmt: skip
     if not plan.resumed:
         job_id = deps.job.job_id if deps.job is not None else None
-        insert_eval_run(meta, data_root=deps.data_root, job_id=job_id)
+        insert_eval_run(meta, data_root=deps.data_root)
         if deps.job is not None:
             deps.job.save_state({"eval_run_id": plan.run_id})  # a retried job resumes the run
         _log.info("eval.run.started", run_id=plan.run_id, job_id=job_id,
@@ -225,7 +225,7 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
         run_id=plan.run_id, profile=profile, depth=cast("Depth", depth),
         build_id=plan.build_id, dataset_kind=kind, truth=truth, con=con,
         judge=deps.judge_for() if judge else None, chat=_lazy(lambda: deps.chat_for(profile)),
-        swarm=_lazy(lambda: deps.swarm_for(profile)), job=deps.job,
+        swarm=_lazy(lambda: deps.swarm_for(profile)),
         traces_dir=deps.data_root / "traces", open_session=open_session_for(deps.clock),
         names=name_index(con), numerals=numerals(),
     )  # fmt: skip
