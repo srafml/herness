@@ -2090,6 +2090,8 @@ Test note (T09-15): the Home AppTests (IT09-10, IT09-11, FT09-05) run on a real 
 
 Tests: IT09-10, UT09-79, BT09-01. Security notes: TH09-11 (titles redacted), TH09-02.
 
+T04-24 spec note (2026-10-11): `metric_names` (`app/common/_pages_05_07.py`) no longer sits behind `st.cache_data`; it reads the catalog through `load_catalog`, which is memoised per process (impl 04 U04-24), so clearing Streamlit caches never forces the 2-3 s reload and pages 06 and 07 meet the BT09-01 cold-render target (the T09-26 strict xfail is removed).
+
 Note (T09-16 ruling): no row selected -> detail and evidence show the top row.
 
 #### U09-74 app/pages/02_Portfolio.py (viewer)

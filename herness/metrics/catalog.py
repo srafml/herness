@@ -22,6 +22,7 @@ from herness.core.config_validate import OwnerValidator
 from herness.core.errors import ConfigError, ToolInputError
 from herness.core.ids import canonical_json, sha256_hex
 from herness.core.logging import get_logger
+from herness.metrics._catalog_cache import cached_catalog
 from herness.metrics._catalog_checks import raw_sql_problems, sql_problems, template_problems
 from herness.metrics.render import render_metric_query
 from herness.metrics.settings import (
@@ -194,10 +195,18 @@ def catalog_from_config(cfg: HernessConfig | None = None, /) -> MetricCatalog:
 
 
 def load_catalog(path: Path = Path("config/metrics.yaml"), /) -> MetricCatalog:
-    """Read, parse and validate a catalog file (U04-24); ConfigError on any error issue."""
+    """Read, parse and validate a catalog file (U04-24); ConfigError on any error issue.
+
+    Memoised per process on the file, template and weights digest (T04-24); failures never cached.
+    """
     if not path.is_file() or path.stat().st_size > _MAX_CATALOG_BYTES:
         msg = f"catalog file {path} missing or too large"
         raise ConfigError(msg)
+    weights = get_config().weights
+    return cached_catalog(path, weights.model_dump_json(), lambda: _load_uncached(path, weights))
+
+
+def _load_uncached(path: Path, weights: WeightsConfig) -> MetricCatalog:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
@@ -210,7 +219,7 @@ def load_catalog(path: Path = Path("config/metrics.yaml"), /) -> MetricCatalog:
         fields = sorted({".".join(str(p) for p in e["loc"]) or "<root>" for e in errors})
         msg = f"catalog file {path} invalid at: {', '.join(fields)}"
         raise ConfigError(msg) from None
-    issues = validate_catalog(cfg, weights=get_config().weights)
+    issues = validate_catalog(cfg, weights=weights)
     errors_found = [i for i in issues if i.severity == "error"]
     if errors_found:
         _log.error("metrics.catalog.rejected", errors=len(errors_found))

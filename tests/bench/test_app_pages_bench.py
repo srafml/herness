@@ -202,15 +202,7 @@ def _gate(recorder: BenchRecorder, target: BenchTarget, values: list[float]) -> 
     return record_value(recorder, target, value).passed
 
 
-T04_24_GAP: Final = pytest.mark.xfail(
-    strict=True, reason="product gap T04-24 (load_catalog ~2.2 s)"
-)
-SLOW_CATALOG_PAGES: Final = frozenset({"06_Change_Health", "07_Delivery_Health"})
-PAGE_PARAMS: Final = [
-    pytest.param(spec, id=spec.path.stem,
-                 marks=[T04_24_GAP] if spec.path.stem in SLOW_CATALOG_PAGES else [])
-    for spec in APP_PAGES
-]  # fmt: skip
+PAGE_PARAMS: Final = [pytest.param(spec, id=spec.path.stem) for spec in APP_PAGES]
 
 
 @pytest.mark.parametrize("spec", PAGE_PARAMS)

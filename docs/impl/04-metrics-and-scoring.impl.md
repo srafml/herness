@@ -71,6 +71,7 @@ All paths are repo-relative. Layer L3 per ENG §2.1. `herness.metrics` MUST NOT 
 | `herness/metrics/__init__.py` | Package marker; docstring only; no re-exports | — | L3 | — | 10 |
 | `herness/metrics/settings.py` | Pydantic section models for `metrics.yaml` and `weights.yaml`; literals; weight-confirmation gate; `weight_change` payload | `Period`, `EntityType`, `Unit`, `Better`, `Aggregation`, `UsdModel`, `MetricDef`, `MetricsDefaults`, `ScoringConfig`, `MetricsCatalogConfig`, `WeightsConfig`, `WeightChangePayload`, `WeightIssue`, `check_weight_confirmations`, `unconfirmed_blocks`, `WEIGHT_USES` | L3 (imported by L0 `herness.core.config` under the settings exception, R-03) | only the standard library, pydantic, `herness.core.types` and `herness.core.errors` (R-03); no duckdb, jinja2, sqlglot, and no `herness.core.config` | 390 |
 | `herness/metrics/catalog.py` | Catalog object, loader, validator, units and flag vocabularies | `MetricCatalog`, `load_catalog`, `catalog_from_config`, `validate_catalog`, `metrics_owner_validator`, `SCORE_UNITS`, `METRIC_FLAGS`, `SOURCE_FILTERS`; re-exports `Period`, `EntityType`, `Unit`, `MetricDef` | L3 | `sqlglot`, `yaml` | 380 |
+| `herness/metrics/_catalog_cache.py` | Private sibling of `catalog.py` (T04-24): per-process memo of the loaded, validated catalog, keyed by the digest of the catalog file, the SQL templates and the weights; lock-guarded, in memory only, cleared by `reset_config` | `cached_catalog`, `reset_catalog_cache` | L3 | none | 60 |
 | `herness/metrics/_encode.py` | Type-driven cell encoding, row digests, streaming and batch hashing (worker-safe top-level functions) | `encode_cell`, `row_digest`, `HashAccumulator`, `hash_arrow_batch` | L3 | `pyarrow` | 280 |
 | `herness/metrics/evidence.py` | Shared `result_hash`, samples, tolerance compare, recorded execution into `meta.evidence` | `result_hash`, `result_sample`, `rows_equivalent`, `iter_batch_rows`, `canonical_params`, `RecordedQuery`, `IntoSpec`, `run_recorded`, `RESULT_SAMPLE_LIMIT`, `MAX_RESULT_ROWS`, `WRITABLE_TABLES` | L3 | `duckdb`, `pyarrow` | 390 |
 | `herness/metrics/_recorded.py` | Private: DuckDB execution for `run_recorded` (CTAS/INSERT…SELECT into `meta.evidence`, timeout, row invariant) — split from evidence.py for budget (T04-05 ruling) | none public (imported by evidence.py only) | L3 | `duckdb` | 260 |
@@ -571,7 +572,7 @@ Conventions for this section:
 | Side effects | File read; log. |
 | Errors | `ConfigError`. |
 | Concurrency | Thread-safe. |
-| Complexity and limits | < 2 s. |
+| Complexity and limits | A first load costs about 3 s (T04-24 profile: 97 metric/grain renders each recompile `_macros.sql.j2` in a fresh Jinja environment, about 70% of it; sqlglot parsing about 20%; file read, YAML parse and pydantic < 25 ms). The result is memoised per process (T04-24, `herness/metrics/_catalog_cache.py`): the key is the SHA-256 of the catalog file bytes, of every `herness/metrics/sql/*.j2` template and of the weights JSON (the only config input of U04-26), recomputed from the files on every call (not mtime), so an edit can never be served stale; a second call takes about 1 ms and returns the identical object. One lock serialises loads, so concurrent callers get one object. A failing load raises `ConfigError` and stores nothing; only the latest entry is kept; nothing is shared across processes or written to disk; `reset_config` clears it. `catalog_from_config` is unchanged and still never cached. |
 | Security notes | TH04-02, TH04-04. |
 | Tests | UT04-13, UT04-14 |
 
@@ -2124,6 +2125,7 @@ Markers per design 11 §4.1. Property tests use Hypothesis profiles `commit`/`ni
 | UT04-121 | U04-56 | read-only connection; call without `con` | `run_scoring` | `ConfigError` for the read-only connection; a call without `con` is a `TypeError` (required keyword); an import scan of `herness/metrics/` finds no `herness.store._warehouse_rw` import (C12) |
 | UT04-122 | U04-80 | `persist=True`, `build_id` given, no `con` | `optimize_portfolio` | `ConfigError("persist=True needs the build writer's connection")`; no file opened |
 | UT04-123 | U04-35, U04-48 | four `error_rate`/`request_count` pairs whose Σ v·rc lies on a `.9g` halfway point (748.43336150), loaded in two orders, one DuckDB thread | `error_rate` at quarter | plain sequential and DuckDB `sum` give tokens 748.433362 vs 748.433361; the catalog (`dsum`/`davg`) gives the same numerator token, value and `result_hash` for both orders (T04-23). Second case (T04-23b): three stories under one epic with points 0.000025, 0.000075, 0.000175 (sums 0.00027499999999999996 vs 0.000275 by order) give `score.funding.effort_cost_usd` 0.16 on every row order and run with `dsum` in `funding_score`, where plain `sum` gives 0.16 or 0.17 run to run |
+| UT04-124 | U04-24 | a one-metric catalog file; `get_config()` reduced to the shipped weights (T04-24) | `load_catalog` twice; after a file rewrite; after a weights change; on a broken file; from eight threads at once | the second load takes < 50 ms and returns the same object; a rewritten file or changed weights give a new catalog; a broken file raises `ConfigError` on every call and caches nothing; eight concurrent loads return one object |
 
 ### 11.2 Property tests (`unit`, Hypothesis)
 
@@ -2228,8 +2230,8 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Goal | `MetricCatalog`, loaders, validator, `SCORE_UNITS`, flags and filter matrix. |
 | Depends on | T04-02, T04-04 (render used by the validator is stubbed until then; validator tests run after T04-04), T10-03 (herness.core.config.get_config), T10-03 (herness.core.config.ConfigIssue), T00-05 (herness.core.ids.canonical_json), T00-05 (herness.core.ids.sha256_hex), T10-12 (herness.core.config_validate.OwnerValidator), T10-05 (herness.core.audit.record_config_change) (snapshot files), T02-07 (herness.store.ops.shared.list_review_items) |
 | Units | U04-23…U04-28, U04-83 |
-| Files | `herness/metrics/catalog.py` |
-| Tests | UT04-13, UT04-14, UT04-16…UT04-18, UT04-21, UT04-22, UT04-117, UT04-120, ST04-02, ST04-04, ST04-10 |
+| Files | `herness/metrics/catalog.py`, `herness/metrics/_catalog_cache.py` (T04-24) |
+| Tests | UT04-13, UT04-14, UT04-16…UT04-18, UT04-21, UT04-22, UT04-117, UT04-120, UT04-124, ST04-02, ST04-04, ST04-10 |
 | Threats | TH04-02, TH04-04, TH04-10 |
 | Acceptance checks | Tests pass; `herness metrics list` (spec 09) prints `describe()` output once wired |
 | Blocked by | none |
