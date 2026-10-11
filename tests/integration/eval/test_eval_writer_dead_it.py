@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
-from tests.support.eval_golden import REPO, WRITER_DEAD_SCRIPTS
+from tests.support.eval_golden import MOCK_SCRIPTS, REPO, WRITER_DEAD_SCRIPTS
 from tests.support.eval_golden_run import GoldenRun, cached_build, golden_payload, run_golden_job
 
 from herness.core.types import ReportDraft
@@ -90,8 +90,17 @@ def test_it11_32_writer_script_faults_every_call() -> None:
     book = load_scripts(WRITER_DEAD_SCRIPTS)
     writer = next(s for s in book.scripts if s.match.role == "writer")
     assert [(f.at, f.kind, f.count) for f in writer.faults] == [(0, "http_500", 100)]
-    roles = {s.match.role for s in book.scripts}
-    assert {"planner", "skeptic", "analyst_ops", "analyst_org"} <= roles
+    committed = load_scripts(MOCK_SCRIPTS)
+
+    def others(scripts: Any) -> list[dict[str, Any]]:  # every non-Writer review script
+        skip = {"writer", "chat"}
+        return [s.model_dump(exclude={"source"}) for s in scripts
+                if s.match.role not in skip and s.match.model_role != "eval_judge"]  # fmt: skip
+
+    assert others(book.scripts) == others(committed.scripts)
+    assert {"planner", "skeptic", "analyst_ops", "analyst_org"} <= {
+        s.match.role for s in book.scripts
+    }
 
 
 def _shape(draft: dict[str, Any]) -> dict[str, Any]:

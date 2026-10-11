@@ -20,6 +20,8 @@ questions:
           WHERE NOT excluded AND priority = 1
             AND opened_at >= (SELECT max(period_start) FROM metrics.metric_value WHERE period = 'quarter')
             AND opened_at < (SELECT max(period_start) + INTERVAL 7 DAY FROM metrics.metric_value WHERE period = 'week')
+  # G02 and G11 find the T2 service as the service of the top funding candidate (reference
+  # SQL takes no truth placeholder); F01's truth_ref (T2 epic = funding rank 1) guards it.
   - id: G02
     pipeline: chat
     datasets: [synthetic]
@@ -102,6 +104,8 @@ questions:
           SELECT numerator / denominator AS value FROM metrics.metric_value
           WHERE metric = 'alert_noise_ratio' AND period = 't12m' AND entity_type = 'service' AND denominator >= 20
           ORDER BY numerator / denominator DESC, entity_id LIMIT 1
+  # G08 names {T3.owning_team}; its reference counts for the team with the most linked
+  # incidents. G17's truth_ref (that team = T3's owning team) guards the two agreeing.
   - id: G08
     pipeline: chat
     datasets: [synthetic]
@@ -432,7 +436,8 @@ questions:
     tags: [org, noise]
     expected:
       rules:
-        must_mention: ["alert noise"]
+        must_mention:  # design: "alert noise or tuning", in one sentence
+          - {entity: "alert", with_any: ["noise", "tuning"]}
   - id: O06
     pipeline: org
     datasets: [synthetic]

@@ -9,7 +9,8 @@ says `synthetic` (`metrics_synth` builds under the `local` profile, which record
 
 `golden_env(build, work)` gives a test or a script one eval setup: the build's warehouse
 file, `CURRENT` and truth copied under `work`, the full test config with `paths.data` there,
-a migrated ops store with the spec 08 backends, a fixed-key redactor and the warehouse and
+a migrated ops store with the spec 08 backends, a fixed-key redactor (an in-memory keyring
+holding the key; `get_redactor` builds it from config) and the warehouse and
 memory tools. `GoldenEnv.handle(payload)` binds `deps` (the composition the `herness eval`
 factory of T09-24 will do) and runs `handle_eval` in-process (the `--inline` path, R-45).
 
@@ -29,7 +30,9 @@ from pathlib import Path
 from typing import Any, Final
 
 import duckdb
+import keyring
 from tests.support.dispatch_standin import use_test_config
+from tests.support.fake_keyring import MemoryKeyring
 from tests.support.metrics_synth import SynthEnv, generate_root, release
 from tests.support.metrics_synth import scored_build as _scored_build
 from tests.unit.eval._runner_env import FakeCtx
@@ -38,9 +41,7 @@ from herness.core import config as herness_config
 from herness.core import redact as r
 from herness.core import time as clock
 from herness.core.config import HernessConfig
-from herness.core.redact_directory import NameDirectory
 from herness.core.resilience import bind_chain_registry
-from herness.core.settings import RedactionConfig
 from herness.eval import runner
 from herness.eval.judge import RubricJudge
 from herness.eval.runner import EvalDeps
@@ -76,7 +77,7 @@ SUITE: Final = REPO / "tests" / "eval" / "golden.yaml"
 MOCK_SCRIPTS: Final = REPO / "tests" / "eval" / "mock_scripts"
 WRITER_DEAD_SCRIPTS: Final = REPO / "tests" / "eval" / "mock_scripts_writer_dead"
 FUNDING_WINDOW_DAYS: Final = 1095  # SN-1 of IT04-08 (CO-T04-22a): E2 links sit at start + 30 d
-_KEY: Final = bytes(range(32))
+_KEY_HEX: Final = bytes(range(32)).hex()  # the redaction key, as `tests.support.builds`
 
 
 @dataclasses.dataclass(frozen=True)
@@ -222,9 +223,11 @@ def golden_env(
     _copy_build(build, work)
     data = (work / "data").as_posix()
     cfg = use_test_config(work / "cfgroot", (f"paths.data={data}",))
-    previous = r._State.redactor
-    directory = NameDirectory.from_files(None, (), None)
-    r._State.redactor = r.Redactor(RedactionConfig(directory_file=None), _KEY, directory)
+    previous = keyring.get_keyring()
+    secrets = MemoryKeyring()  # the redactor's HMAC key; get_redactor() builds it from config
+    secrets.store[("herness", "redact.hmac_key")] = _KEY_HEX
+    keyring.set_keyring(secrets)
+    r.reset_redactor()
     ops.reset_connections(path=work / "data" / "ops.sqlite")
     env = GoldenEnv(build, work, cfg, EvalConfig.model_validate(_eval_section()),
                     repo_root or work, chat_verifier)  # fmt: skip
@@ -237,7 +240,8 @@ def golden_env(
         for pool in env.pools:
             pool.close_all()
         runner.set_deps_factory(None)  # type: ignore[arg-type]
-        r._State.redactor = previous
+        r.reset_redactor()
+        keyring.set_keyring(previous)
         ops.reset_connections()
         herness_config.reset_config()
 

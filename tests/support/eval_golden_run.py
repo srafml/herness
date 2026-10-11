@@ -4,13 +4,19 @@
 (`eval_golden.scored_build` under a session tmp dir). `run_golden_job(build, work, ...)` runs
 one `eval` job in-process through `golden_env` and returns its `GoldenRun`: the job
 outcome and exit code, `summary.json`, the `results.jsonl` lines and the wall time.
-`pinned_gaps(build)` names the known gaps that make threshold rows fail on a build, each
-with its owner, so the tests can mark them as conditional strict xfails (w49-s11e rulings):
+`pinned_gaps(build)` names the known gaps of this base, each with its owner card, so the
+tests mark exactly the affected assertion as a conditional strict xfail (w49-s11e rulings):
 
-* `seed_prior_run` (F05) is a `suite_error` until T11-33 wires `tests/support/seed_ops.py`;
-* the T5 confounder team ranks inside the `score.org` top five at `tiny` scale, so the org
-  review's ranked entities hold it and `skeptic_catch` is false (design 11 §5.1.5 expects it
-  outside the top five; seen on the seed 42 `tiny` scored build, not on `small`).
+* `suite_errors`: `seed_prior_run` (F05) is a `suite_error` until T11-33 wires
+  `tests/support/seed_ops.py`;
+* `t5_caught` (only the T5 part of the planted-truth row): at `tiny` scale the generator's
+  90-day span holds no prior-year peak (design 11 §5.1.1, §5.1.5 "every prior year shows the
+  same peak"), so spec 04 scoring cannot discount T5's seasonal rise, T5 ranks inside the
+  `score.org` top five and `skeptic_catch` is false; owner T11-17 (tiny-scale question). It
+  holds on `small`.
+
+`EXPECTED_FAILED` is the exact set of questions the committed static scripts fail, each with
+its owner (T11-32 spec note point 6).
 """
 
 from __future__ import annotations
@@ -18,21 +24,25 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Final
 
-import duckdb
 import pytest
+import yaml
 from tests.support.eval_golden import MOCK_SCRIPTS, SUITE, GoldenBuild, golden_env, scored_build
 
 from herness.core.resilience import ProcessState, reset_process_state
 from herness.eval.runner import exit_code
 
 __all__ = [
+    "EXPECTED_FAILED",
+    "PLANTED",
     "GoldenRun",
     "PinnedGap",
     "cached_build",
+    "chat_answer_patterns",
     "golden_payload",
     "pinned_gaps",
     "run_golden_job",
@@ -40,6 +50,17 @@ __all__ = [
 
 SEED_OPS: Final = "tests.support.seed_ops"
 T5_DETAIL: Final = "T5 confounder not caught"
+PLANTED: Final = ("G03", "G06", "F01", "O01")  # design 11 §5.3.6 planted-truth questions
+# Questions the committed static scripts fail, and who owns each cause (spec note point 6).
+EXPECTED_FAILED: Final = {
+    "G05": "T11-30: the chat name index resolves team names before org names, and the org "
+    "names are also team names",
+    "G10": "T11-30: cluster labels are not in the name index; T11-17: two planted clusters "
+    "cannot meet topk_contains:5:4",
+    "F03": "static script: the Writer cannot cite a run-time finding id, so no number",
+    "O04": "static script: the Writer cannot name the T5 team",
+    "O06": "static script: the Writer cannot cite a run-time finding id, so no trend_slope",
+}
 _BUILDS: dict[tuple[int, str], GoldenBuild] = {}
 
 
@@ -124,27 +145,32 @@ def run_golden_job(
         reset_process_state()
 
 
-def _t5_rank(build: GoldenBuild) -> int | None:
-    team = build.truth.plants.T5_confounder.team_id
-    con = duckdb.connect(str(build.warehouse), read_only=True)
-    try:
-        row = con.execute(
-            "SELECT min(rank) FROM score.org WHERE entity_type = 'team' AND entity_id = ?", [team]
-        ).fetchone()
-    finally:
-        con.close()
-    return None if row is None or row[0] is None else int(row[0])
-
-
 def pinned_gaps(build: GoldenBuild) -> list[PinnedGap]:
-    """The known gaps that fail threshold rows on `build` on this base (module doc)."""
+    """The known gaps of this base on `build`, with their owner cards (module doc)."""
     gaps: list[PinnedGap] = []
     if importlib.util.find_spec(SEED_OPS) is None:
         gaps.append(PinnedGap("suite_errors", "F05 setup seed_prior_run is not wired", "T11-33"))
-    rank = _t5_rank(build)
-    if rank is not None and rank <= 5:
-        gaps.append(PinnedGap(
-            "planted_truth", f"T5 team ranks {rank} in score.org (tiny-scale plant)",
-            "controller (T5 plant at tiny scale: T11-10 generator / T04 scoring)",
-        ))  # fmt: skip
+    if build.truth.scale == "tiny":
+        reason = "tiny has a 90-day span, no prior-year peak: T5 ranks in the org top five"
+        gaps.append(PinnedGap("t5_caught", reason, "T11-17"))
     return gaps
+
+
+TURNS_PER_CHAT_QUESTION: Final = 4  # tool call, final text, JSON answer, correction classifier
+_TEMPLATE: Final = re.compile(r"\\\{\\\{.*?\\\}\\\}")
+
+
+def chat_answer_patterns() -> dict[str, re.Pattern[str]]:
+    """Question id -> the committed chat answer of that question as a regex (its
+    `{{row.*}}` templates match any text), in suite order: a shifted chat script (one call
+    more or less than scripted) shows up as the wrong answer on the first shifted question."""
+    from herness.eval.golden import load_suite  # noqa: PLC0415 - only here
+
+    doc = yaml.safe_load((MOCK_SCRIPTS / "chat.yaml").read_text(encoding="utf-8"))
+    turns = doc[0]["turns"]
+    chat_ids = [q.id for q in load_suite(SUITE).questions if q.pipeline == "chat"]
+    out: dict[str, re.Pattern[str]] = {}
+    for i, qid in enumerate(chat_ids):
+        text = turns[i * TURNS_PER_CHAT_QUESTION + 2]["final"]["output"]["text"]
+        out[qid] = re.compile(_TEMPLATE.sub(".+", re.escape(text)))
+    return out
