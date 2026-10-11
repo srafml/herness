@@ -23,6 +23,7 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -54,7 +55,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BASELINES_DIR", "BASELINE_NAME_RE", "PROVENANCE_KEYS", "ComparisonTable",
-    "check_baseline_target", "compare", "load_baseline", "save_baseline", "write_report",
+    "StoredBaseline", "baseline_mismatch", "check_baseline_target", "compare",
+    "load_baseline", "read_baseline", "save_baseline", "write_report",
 ]  # fmt: skip
 
 BASELINE_NAME_RE: Final = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -245,7 +247,12 @@ def _write(path: Path, text: str) -> Path:
     """Write `text` atomically: a temp file in the same directory, then `os.replace`."""
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+        except BaseException:
+            os.close(fd)
+            raise
+        with handle:
             handle.write(text)
         os.replace(tmp, path)
     finally:
@@ -313,11 +320,22 @@ def save_baseline(name: str, summary: Mapping[str, Any], *, repo_root: Path) -> 
     return path
 
 
-def load_baseline(
+@dataclass(frozen=True)
+class StoredBaseline:
+    """A loaded baseline: its name, the run it was taken on and its metrics (U11-72)."""
+
+    name: str
+    profile: object
+    depth: object
+    dataset_scale: object
+    metrics: EvalMetrics
+
+
+def read_baseline(
     name: str, *, repo_root: Path, suite_sha256: str | None = None
-) -> EvalMetrics | None:
-    """The stored baseline metrics, or None when the file is missing; with `suite_sha256`
-    (the current suite) a baseline of another suite has `suite_changed` set (TH11-03)."""
+) -> StoredBaseline | None:
+    """`load_baseline` plus the stored profile, depth and scale (comparability, T11-31
+    note 7). A `suite_changed` key in the stored metrics is refused: only the loader sets it."""
     path = _baseline_path(name, repo_root)
     try:
         raw = path.read_text(encoding="utf-8")
@@ -325,11 +343,36 @@ def load_baseline(
         return None
     try:
         data = json.loads(raw)
+        if "suite_changed" in data["metrics"]:
+            raise ValueError(name)  # noqa: TRY301 - reported as an invalid baseline below
         metrics = EvalMetrics.model_validate(data["metrics"])
         stored = data.get("suite_sha256")
+        head = (data.get("profile"), data.get("depth"), data.get("dataset_scale"))
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         msg = f"baseline is not valid: name={name}"
         raise ConfigError(msg) from exc
     if suite_sha256 is not None and stored != suite_sha256:
-        return metrics.model_copy(update={"suite_changed": True})
-    return metrics
+        metrics = metrics.model_copy(update={"suite_changed": True})
+    return StoredBaseline(name, *head, metrics=metrics)
+
+
+def load_baseline(
+    name: str, *, repo_root: Path, suite_sha256: str | None = None
+) -> EvalMetrics | None:
+    """The stored baseline metrics, or None when the file is missing; with `suite_sha256`
+    (the current suite) a baseline of another suite has `suite_changed` set (TH11-03)."""
+    found = read_baseline(name, repo_root=repo_root, suite_sha256=suite_sha256)
+    return found.metrics if found is not None else None
+
+
+def baseline_mismatch(
+    base: StoredBaseline, *, profile: str, depth: str, dataset_kind: str, mock: bool
+) -> str | None:
+    """Why `base` is not comparable with the run, or None (T11-31 note 7)."""
+    if dataset_kind != "synthetic":
+        return "run is not synthetic"
+    if (base.profile, base.depth) != (profile, depth):
+        return f"taken at {base.profile}-{base.depth}, run is {profile}-{depth}"
+    if mock != base.name.endswith("-mock"):
+        return "mock runs use -mock baselines only" if mock else "a -mock baseline needs a mock run"
+    return None
