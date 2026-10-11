@@ -139,6 +139,7 @@ class GoldenEnv:
     cfg: HernessConfig
     settings: EvalConfig
     repo_root: Path
+    chat_verifier: Any | None = None  # ST11-05: a Verifier that lets every answer through
     pools: list[WarehousePool] = dataclasses.field(default_factory=list)
 
     @property
@@ -178,6 +179,8 @@ class GoldenEnv:
             "verifier": Verifier(evidence, pool, self.cfg.models.harness.verifier),
         }
         chat_deps = dataclasses.replace(ChatDeps.from_config(self.cfg), **shared)
+        if self.chat_verifier is not None:
+            chat_deps = dataclasses.replace(chat_deps, verifier=self.chat_verifier)
         chat = ChatService(self.cfg.pipelines, llms, memory, deps=chat_deps)
         swarm_deps = dataclasses.replace(SwarmDeps.from_config(self.cfg), render=_no_render,
                                          **shared)  # fmt: skip
@@ -212,8 +215,9 @@ def _copy_build(build: GoldenBuild, work: Path) -> None:
 
 @contextlib.contextmanager
 def golden_env(
-    build: GoldenBuild, work: Path, *, repo_root: Path | None = None
-) -> Iterator[GoldenEnv]:
+    build: GoldenBuild, work: Path, *, repo_root: Path | None = None,
+    chat_verifier: Any | None = None,
+) -> Iterator[GoldenEnv]:  # fmt: skip
     """One eval setup under `work` (module doc); process state is restored afterwards."""
     _copy_build(build, work)
     data = (work / "data").as_posix()
@@ -223,7 +227,7 @@ def golden_env(
     r._State.redactor = r.Redactor(RedactionConfig(directory_file=None), _KEY, directory)
     ops.reset_connections(path=work / "data" / "ops.sqlite")
     env = GoldenEnv(build, work, cfg, EvalConfig.model_validate(_eval_section()),
-                    repo_root or work)  # fmt: skip
+                    repo_root or work, chat_verifier)  # fmt: skip
     try:
         migrate()
         bind_core_backends()
