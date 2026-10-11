@@ -43,9 +43,11 @@ def script(role: str, turns: Sequence[Mapping[str, Any]]) -> LLMScript:
 
 
 def use_real_loop(
-    drv: Drv, monkeypatch: pytest.MonkeyPatch, scripts: Sequence[LLMScript], roles: set[str]
-) -> FakeLLMClient:
-    """The real `run_agent` for `roles` on one scripted client; other roles stay scripted."""
+    drv: Drv, monkeypatch: pytest.MonkeyPatch, scripts: Sequence[LLMScript], roles: set[str],
+    *, seen: list[tuple[str, Any]] | None = None,
+) -> FakeLLMClient:  # fmt: skip
+    """The real `run_agent` for `roles` on one scripted client; other roles stay scripted.
+    `seen` receives `(role, task_input)` of every agent call (real or scripted)."""
     client = FakeLLMClient(ScriptBook(list(scripts)))
     scripted = drv.agents
 
@@ -53,6 +55,8 @@ def use_real_loop(
         role_spec: Any, task_input: Any, ctx: Any, routed: Any, config: Any, hooks: Any,
         *, resume_from: Any = None,
     ) -> Any:  # fmt: skip
+        if seen is not None:
+            seen.append((str(ctx.role), task_input))
         if ctx.role not in roles:
             return await scripted(role_spec, task_input, ctx, routed, config, hooks,
                                   resume_from=resume_from)  # fmt: skip
