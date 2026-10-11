@@ -1,13 +1,9 @@
 """Run row, baseline, metrics, thresholds and the summary of a golden eval run.
 
-Private sibling of `herness.eval.runner` (§2 module map): flow F11-07 step 3 (run row),
-steps 10-11 (aggregate, `skeptic_catch`, thresholds against the chosen baseline, the
-`summary.json` body with its provenance: `git_sha`, `config_hash`, suite SHA-256, judge
-model and prompt hash, TH11-11) and step 13 (finish the row, log `eval.run.completed`,
-metric samples through `record_metric_samples`, R-12). The runner writes the report files (step 12,
-`herness.eval.report`) between `finish_run` and `close_run`. The run row is written through
-`herness.store.ops.runs` inside `run_write` (R-08, R-10). The summary holds run metadata,
-metrics and threshold rows only, never question or answer text.
+Private sibling of `herness.eval.runner` (§2 module map): F11-07 step 3 (run row), steps
+10-11 (metrics, `skeptic_catch`, thresholds against the chosen baseline, the `summary.json`
+body with its TH11-11 provenance) and step 13 (finish the row, metric samples, R-12); the
+runner writes the report files (step 12) in between. No question or answer text.
 """
 
 from __future__ import annotations
@@ -27,6 +23,7 @@ from herness.core.logging import get_logger
 from herness.core.types import MetricSample
 from herness.eval._runner_baseline import BaselineChoice
 from herness.eval._runner_question import required_rubric_skipped
+from herness.eval.invoke import PipelineOutput, review_output
 from herness.eval.judge import judge_prompt_hash
 from herness.eval.metrics import (
     EvalMetrics,
@@ -35,6 +32,7 @@ from herness.eval.metrics import (
     check_thresholds,
     skeptic_catch,
 )
+from herness.harness.swarm.writer import draft_path
 from herness.model.meta import git_sha
 from herness.store.ops.core import run_write
 from herness.store.ops.metrics import record_metric_samples
@@ -48,8 +46,8 @@ if TYPE_CHECKING:
     from herness.eval.results import QuestionResult
     from herness.eval.settings import Thresholds
 
-__all__ = ["Outcome", "RunMeta", "close_run", "finish_run", "insert_eval_run", "mark_failed",
-           "reopen_run", "suite_label"]  # fmt: skip
+__all__ = ["Outcome", "RunMeta", "cancel_run", "close_run", "finish_run", "insert_eval_run",
+           "mark_failed", "reopen_run", "suite_label"]  # fmt: skip
 
 SUMMARY_SCHEMA: Final = 1
 _COMPONENT: Final = "eval"
@@ -131,14 +129,48 @@ def mark_failed(run_id: str, now: datetime) -> None:
               op="eval_run_failed")  # fmt: skip
 
 
+def cancel_run(run_id: str, now: datetime) -> None:
+    """Close the row as `canceled` when the job was canceled between questions."""
+    run_write(lambda conn: set_run_status(conn, run_id, "canceled", _ACTIVE, now=now),
+              op="eval_run_canceled")  # fmt: skip
+
+
+def _org_outputs(
+    env: QuestionEnv, results: Sequence[QuestionResult], questions: Mapping[str, EvalQuestion]
+) -> tuple[list[PipelineOutput], list[str]]:
+    """The org review outputs of every graded org result: this process's, else rebuilt
+    from the run's stored draft and findings (a resumed run, F11-10); notes name the runs
+    whose output could not be rebuilt."""
+    here = {out.run_id: out for out in env.org_outputs}
+    run_ids = sorted({
+        r.pipeline_run_id for r in results
+        if r.pipeline_run_id and r.status != "error"
+        and (q := questions.get(r.id)) is not None and q.pipeline == "org"
+    })  # fmt: skip
+    outputs: list[PipelineOutput] = []
+    notes: list[str] = []
+    for rid in run_ids:
+        out = here.get(rid) or review_output(rid, draft_path(rid, env.reports_root))
+        if out.error is None:
+            outputs.append(out)
+        else:
+            notes.append(f"org output missing: {rid}")
+    return outputs, notes
+
+
 def _metrics(env: QuestionEnv, results: Sequence[QuestionResult],
              questions: Mapping[str, EvalQuestion]) -> EvalMetrics:  # fmt: skip
-    """F11-07 step 10: traces and run rows of the distinct pipeline runs, skeptic catch."""
+    """F11-07 step 10: traces and run rows of the distinct pipeline runs, skeptic catch.
+    An org result whose output is gone fails the skeptic part: it never passes vacuously."""
     run_ids = sorted({r.pipeline_run_id for r in results if r.pipeline_run_id is not None})
     traces = {rid: trace for rid in run_ids if (trace := env.trace(rid)) is not None}
     runs = {rid: row for rid in run_ids if (row := get_run(rid)) is not None}
-    skeptic = skeptic_catch(env.truth, env.org_outputs)
-    return aggregate_metrics(results, traces, runs, skeptic=skeptic, questions=questions)
+    outputs, missing = _org_outputs(env, results, questions)
+    skeptic = skeptic_catch(env.truth, outputs)
+    if missing and env.truth is not None:
+        skeptic = False
+    m = aggregate_metrics(results, traces, runs, skeptic=skeptic, questions=questions)
+    return m.model_copy(update={"notes": [*m.notes, *missing]}) if missing else m
 
 
 def finish_run(
@@ -181,17 +213,14 @@ def close_run(
 
 
 def _close(conn: Any, meta: RunMeta, m: EvalMetrics, now: datetime) -> None:  # noqa: ANN401 - sqlite3.Connection
-    run_id, baseline = meta.run_id, meta.baseline
     usage = {"eval": {"tokens_in": m.tokens_in, "tokens_out": m.tokens_out}}
-    update_run_fields(
-        conn, run_id, token_usage=usage, cost_usd=m.cost_usd, meta_patch={"baseline": baseline}
-    )  # the one compared at the end (resume)
-    set_run_status(conn, run_id, "done", _ACTIVE, now=now)
+    patch = {"baseline": meta.baseline}  # the baseline compared at the end (a resume)
+    update_run_fields(conn, meta.run_id, token_usage=usage, cost_usd=m.cost_usd, meta_patch=patch)
+    set_run_status(conn, meta.run_id, "done", _ACTIVE, now=now)
 
 
 def run_config_hash(run_id: str) -> str:
-    """The `config_hash` of the run row (so `summary.json` matches it, ST11-14); the loaded
-    config's hash when the row is gone."""
+    """The run row's `config_hash` (matches `summary.json`, ST11-14), else the loaded one."""
     row = get_run(run_id)
     return row.config_hash if row is not None else config_hash(get_config())
 

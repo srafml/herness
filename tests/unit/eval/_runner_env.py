@@ -190,13 +190,14 @@ class FakeCtx:
         self.polls = 0
         self.yield_after = yield_after
         self.state: dict[str, JsonValue] = {}
+        self.beats: list[str | None] = []
 
     def should_yield(self) -> bool:
         self.polls += 1
         return self.yield_after is not None and self.polls > self.yield_after
 
     def heartbeat(self, note: str | None = None) -> None:
-        del note
+        self.beats.append(note)
 
     def save_state(self, state: dict[str, JsonValue]) -> None:
         self.state = dict(state)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -38,24 +39,32 @@ from herness.eval.grading import (
     grade_rubric,
     grade_rules,
 )
-from herness.eval.invoke import PipelineOutput, ReviewCache, _exc_text, invoke_chat, invoke_review
-from herness.eval.results import QuestionResult, ResultStatus
+from herness.eval.invoke import (
+    PipelineOutput,
+    ReviewCache,
+    exception_text,
+    invoke_chat,
+    invoke_review,
+)
+from herness.eval.results import QuestionResult, ResultsLog, ResultStatus
 from herness.harness.swarm import RunRequest
 from herness.store.ops import get_run
 
 if TYPE_CHECKING:
+    from herness.core.jobs import JobContext
     from herness.eval.judge import RubricJudge
     from herness.eval.truth import TruthManifest
     from herness.harness.pipelines.chat import ChatService
     from herness.harness.swarm import Swarm
 
-__all__ = ["QuestionEnv", "required_rubric_skipped", "run_question"]
+__all__ = ["HEARTBEAT_S", "QuestionEnv", "execute", "required_rubric_skipped", "run_question"]
 
 SETUP_UNAVAILABLE: Final = "setup seed_prior_run is not available until T11-33"
 _PLACEHOLDER_RE: Final = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\}")
 _COUNTED: Final = {"retry": "retries", "fallback": "fallbacks", "repair": "repairs"}
 _REVIEW_KINDS: Final = {"funding": "funding_review", "org": "org_review"}
 _SKIPPED_JUDGE: Final = frozenset({"judge_unavailable", "judge_egress_blocked"})
+HEARTBEAT_S: Final = 60.0  # well inside the supervisor stall timeout (1800 s)
 
 _log = get_logger("eval.runner")
 
@@ -75,6 +84,7 @@ class QuestionEnv:
     chat: Callable[[], ChatService]
     swarm: Callable[[], Swarm]
     traces_dir: Path
+    reports_root: Path
     open_session: Callable[[str], str]
     names: Mapping[str, str]
     numerals: tuple[tuple[re.Pattern[str], ...], float]
@@ -123,7 +133,7 @@ def run_question(
     except Exception as exc:  # noqa: BLE001 - question-level failures never raise (U11-66)
         _log.warning("eval.question.errored", run_id=env.run_id, question_id=question.id,
                      error_type=type(exc).__name__)  # fmt: skip
-        return base.result("error", error=_exc_text(exc))
+        return base.result("error", error=exception_text(exc))
     return _from_output(env, base.with_ref(resolved), _status(checks), checks, out, unsupported)
 
 
@@ -277,3 +287,64 @@ def _from_output(
         pipeline_run_id=run_id, draft_mode=out.draft_mode, trace_path=trace_path,
         error=out.error,
     )  # fmt: skip
+
+
+# --- execution (F11-07 steps 5-9) -------------------------------------------------------------
+
+
+def _record(env: QuestionEnv, question: EvalQuestion, repeat: int, cache: ReviewCache,
+            log: ResultsLog) -> None:  # fmt: skip
+    result = run_question(env, question, repeat, cache)
+    log.append(result)  # a write error fails the job; resume continues later (step 8)
+    _log.info("eval.question.graded", run_id=env.run_id, question_id=question.id, repeat=repeat,
+              status=result.status, latency_s=result.latency_s)  # fmt: skip
+
+
+@dataclass
+class _Flight:
+    """Questions in flight; heartbeats the job while it waits (reviews run without it)."""
+
+    job: JobContext | None
+    inflight: set[Future[None]] = field(default_factory=set)
+    graded: int = 0
+
+    def beat(self) -> None:
+        if self.job is not None:
+            self.job.heartbeat(f"eval graded {self.graded}")
+
+    def settle(self, limit: int) -> None:
+        """Wait until at most `limit` questions are in flight, heartbeating every
+        `HEARTBEAT_S`; a question's exception propagates."""
+        while len(self.inflight) > limit:
+            done, self.inflight = wait(self.inflight, timeout=HEARTBEAT_S,
+                                       return_when=FIRST_COMPLETED)  # fmt: skip
+            for future in done:
+                future.result()
+            self.graded += len(done)
+            self.beat()
+
+
+def execute(
+    env: QuestionEnv,
+    pending: Sequence[tuple[EvalQuestion, int]],
+    caches: Mapping[int, ReviewCache],
+    log: ResultsLog,
+    control: tuple[JobContext | None, int],
+) -> Literal["yield", "cancel"] | None:
+    """Run `pending` with at most `workers` in flight (step 9): heartbeat and poll
+    `should_yield` on the job thread before each question; `yield` or `cancel` (the job's
+    stop reason) when the job asked to stop, else None."""
+    job, workers = control
+    flight = _Flight(job)
+    stop: Literal["yield", "cancel"] | None = None
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="eval-q") as pool:
+        for question, repeat in pending:
+            flight.settle(workers - 1)
+            flight.beat()
+            if job is not None and job.should_yield():
+                stop = "cancel" if job.stop_reason == "cancel" else "yield"
+                break
+            future = pool.submit(_record, env, question, repeat, caches[repeat], log)
+            flight.inflight.add(future)
+        flight.settle(0)
+    return stop
