@@ -323,6 +323,13 @@ class _Flight:
             self.graded += len(done)
             self.beat()
 
+    def drain(self) -> None:
+        """After a question raised: wait for the rest in flight, heartbeating every
+        `HEARTBEAT_S` (their results are dropped; the first error propagates)."""
+        while self.inflight:
+            _, self.inflight = wait(self.inflight, timeout=HEARTBEAT_S)
+            self.beat()
+
 
 def execute(
     env: QuestionEnv,
@@ -338,13 +345,17 @@ def execute(
     flight = _Flight(job)
     stop: Literal["yield", "cancel"] | None = None
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="eval-q") as pool:
-        for question, repeat in pending:
-            flight.settle(workers - 1)
-            flight.beat()
-            if job is not None and job.should_yield():
-                stop = "cancel" if job.stop_reason == "cancel" else "yield"
-                break
-            future = pool.submit(_record, env, question, repeat, caches[repeat], log)
-            flight.inflight.add(future)
-        flight.settle(0)
+        try:
+            for question, repeat in pending:
+                flight.settle(workers - 1)
+                flight.beat()
+                if job is not None and job.should_yield():
+                    stop = "cancel" if job.stop_reason == "cancel" else "yield"
+                    break
+                future = pool.submit(_record, env, question, repeat, caches[repeat], log)
+                flight.inflight.add(future)
+            flight.settle(0)
+        except BaseException:
+            flight.drain()  # the pool shutdown would otherwise wait without heartbeats
+            raise
     return stop

@@ -4,7 +4,8 @@ U11-69; flows F11-07 and F11-10).
 `run_golden` pins the `CURRENT` build, inserts (or, on resume, reopens) the ops `run` row,
 runs every question x repeat not yet in `results.jsonl` (sequentially, or up to 8 at a time
 on `premium`, TH11-13), polls `should_yield` between questions, then aggregates metrics,
-checks thresholds, writes `summary.json` and closes the row. `handle_eval` is the one-argument
+checks thresholds against the baseline, writes the report files (`herness.eval.report`),
+saves a `--set-baseline` and closes the row. `handle_eval` is the one-argument
 job handler (R-42) over the deps factory bound by the composition root with
 `set_deps_factory` (R-04). The payload model, GPU class and exit code live in the private
 sibling `_runner_payload`, the per-question step in `_runner_question` and the run end in
@@ -27,9 +28,11 @@ from herness.core.ids import IdKind, new_id
 from herness.core.jobs import register_handler
 from herness.core.logging import get_logger
 from herness.core.types import Depth, JobOutcome
+from herness.eval._runner_baseline import BaselineChoice, resolve_baseline
 from herness.eval._runner_finish import (
     RunMeta,
     cancel_run,
+    close_run,
     finish_run,
     insert_eval_run,
     mark_failed,
@@ -55,6 +58,7 @@ from herness.eval._runner_support import (
 )
 from herness.eval.golden import EvalQuestion, Suite, load_suite
 from herness.eval.invoke import ReviewCache
+from herness.eval.report import check_baseline_target, save_baseline, write_report
 from herness.eval.results import ResultsLog
 from herness.eval.scripted import load_scripts
 from herness.eval.settings import MAX_REPEAT
@@ -85,7 +89,8 @@ _log = get_logger("eval.runner")
 @dataclass(frozen=True)
 class EvalDeps:
     """Collaborators of one eval run (U11-66); the ops store is reached through module
-    functions (R-10). `open_session` is derived from it (`clock`), not a field."""
+    functions (R-10). `open_session` is derived from it (`clock`), not a field. `repo_root`
+    holds `tests/eval/baselines/` (U11-72); None means the working directory."""
 
     warehouse_for: Callable[[str], duckdb.DuckDBPyConnection]
     swarm_for: Callable[[str], Swarm]
@@ -96,6 +101,7 @@ class EvalDeps:
     clock: Callable[[], datetime]
     data_root: Path
     settings: EvalConfig
+    repo_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -132,8 +138,6 @@ def _check(repeat: int, options: EvalOptions) -> None:
     if not 1 <= repeat <= MAX_REPEAT:
         msg = f"repeat must be 1..{MAX_REPEAT}"
         raise ConfigError(msg)
-    if options.baseline is not None or options.set_baseline is not None:
-        _not_built("baseline comparison", "T11-31")
     if options.compare_profile is not None:
         _not_built("profile comparison", "T11-38")
 
@@ -203,16 +207,24 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
         msg = "depth must be fast, standard or deep"
         raise ConfigError(msg)
     selected = _select(suite, options)
+    repo_root = deps.repo_root or Path.cwd()
     plan = _plan(deps, resume_run_id)
     con = deps.warehouse_for(plan.build_id)
     kind = dataset_kind(con)
+    if options.set_baseline is not None:  # refused before any question runs (TH11-14)
+        check_baseline_target(options.set_baseline, dataset_kind=kind, mock=options.mock)
+    named = (options.baseline, deps.settings.baseline)  # --baseline, else eval.baseline
+    choice = resolve_baseline(*named, repo_root=repo_root, suite_sha256=suite.sha256,
+                              run=(profile, depth, kind, options.mock))  # fmt: skip
     truth = load_truth(truth_dir_for(deps.data_root)) if kind == "synthetic" else None
     out_dir = deps.data_root / "reports" / "eval" / plan.run_id
+    finish = _Finish(out_dir, choice, options.set_baseline, repo_root)
     meta = RunMeta(
         run_id=plan.run_id, profile=profile, depth=depth, build_id=plan.build_id,
         dataset_kind=kind, dataset_scale=truth.scale if truth is not None else "full",
         suite=options.suite, suite_version=suite.version, suite_sha256=suite.sha256,
         mock=options.mock, started_at=plan.started_at,
+        dataset_seed=truth.seed if truth is not None else None, baseline=choice.name,
     )  # fmt: skip
     if not plan.resumed:
         job_id = deps.job.job_id if deps.job is not None else None
@@ -233,16 +245,27 @@ def run_golden(  # noqa: PLR0913 - U11-66 signature (DD11-10 keyword-only deps a
         names=name_index(con), numerals=numerals(),
     )  # fmt: skip
     try:
-        return _run(env, meta, selected, repeat, deps, out_dir)
+        return _run(env, meta, selected, repeat, deps, finish)
     except BaseException:
         mark_failed(plan.run_id, deps.clock())
         raise
 
 
+@dataclass(frozen=True)
+class _Finish:
+    """Where the run's files go and what it is compared with or saved as (steps 11-12)."""
+
+    out_dir: Path
+    choice: BaselineChoice
+    set_baseline: str | None
+    repo_root: Path
+
+
 def _run(
     env: QuestionEnv, meta: RunMeta, selected: Sequence[EvalQuestion], repeat: int,
-    deps: EvalDeps, out_dir: Path,
+    deps: EvalDeps, finish: _Finish,
 ) -> EvalRun:  # fmt: skip
+    out_dir = finish.out_dir
     log = ResultsLog(out_dir / "results.jsonl")
     done = log.done_keys()
     pending = [(q, r) for r in range(1, repeat + 1) for q in selected if (q.id, r) not in done]
@@ -260,9 +283,15 @@ def _run(
     results = [r for r in log.read_all() if r.id in wanted and r.repeat <= repeat]
     questions = {q.id: q for q in selected}
     outcome = finish_run(meta, env, results, questions=questions,
-                         thresholds=deps.settings.thresholds, out_dir=out_dir)  # fmt: skip
-    return EvalRun(run_id=meta.run_id, out_dir=out_dir, summary=outcome.summary,
-                   passed=outcome.passed)  # fmt: skip
+                         thresholds=deps.settings.thresholds, baseline=finish.choice)  # fmt: skip
+    run = EvalRun(run_id=meta.run_id, out_dir=out_dir, summary=outcome.summary,
+                  passed=outcome.passed)  # fmt: skip
+    write_report(run, out_dir, results=results, metrics=outcome.metrics, thresholds=outcome.rows,
+                 baseline=finish.choice.metrics, classifier=None)  # fmt: skip
+    if finish.set_baseline is not None:
+        save_baseline(finish.set_baseline, outcome.summary, repo_root=finish.repo_root)
+    close_run(meta, outcome, results, questions)
+    return run
 
 
 # --- U11-68 handle_eval, set_deps_factory -----------------------------------------------------

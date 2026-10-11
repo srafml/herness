@@ -216,12 +216,13 @@ def make_deps(
     swarm: object | None = None, job: object | None = None,
     judge: Callable[[], Any] | None = None,
 ) -> EvalDeps:  # fmt: skip
-    """`EvalDeps` over the fixture warehouse and the given fakes."""
+    """`EvalDeps` over the fixture warehouse and the given fakes; baselines live under the
+    tmp `data_root.parent` (never the checkout's `tests/eval/baselines/`)."""
     return EvalDeps(
         warehouse_for=lambda build_id: con, swarm_for=lambda profile: cast("Any", swarm),
         chat_for=lambda profile: cast("Any", chat or AnswerChat()),
         judge_for=judge or (lambda: None), memory=None, job=cast("Any", job), clock=clock.now,
-        data_root=data_root, settings=settings(),
+        data_root=data_root, settings=settings(), repo_root=data_root.parent,
     )  # fmt: skip
 
 

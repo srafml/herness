@@ -17,7 +17,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from herness.eval._metrics_checks import (
     ThresholdResult,
@@ -83,6 +83,8 @@ class EvalMetrics(BaseModel):
     judge_mean: float | None = None
     skeptic_catch: bool | None = None
     notes: list[str] = []
+    # Set by `load_baseline` on a baseline of another suite (TH11-03); never dumped.
+    suite_changed: bool = Field(default=False, exclude=True)
 
 
 # --- aggregate_metrics (U11-64) -------------------------------------------------------------

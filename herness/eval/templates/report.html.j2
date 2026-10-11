@@ -1,0 +1,87 @@
+{#- Eval report (U11-70, TH11-05). Rendered by herness.eval.report with autoescape=True:
+    every value is escaped, model text sits in <pre> as plain text, nothing external loads. -#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>Eval report {{ run_id }}</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+table { border-collapse: collapse; margin-bottom: 1.5rem; }
+th, td { border: 1px solid #ccc; padding: 0.25rem 0.5rem; text-align: left; vertical-align: top; }
+th { background: #f2f2f2; }
+.fail { color: #a40000; font-weight: bold; }
+.pass { color: #006400; }
+pre { background: #f7f7f7; border: 1px solid #ddd; padding: 0.5rem; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Eval report {{ run_id }}</h1>
+<p>Result:
+{% if passed %}
+<span class="pass">PASSED</span>
+{% else %}
+<span class="fail">FAILED</span>
+{% endif %}
+(exit code {{ exit_code }})</p>
+
+<h2>Run</h2>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+{% for key, value in meta %}
+<tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+{% endfor %}
+</table>
+
+<h2>Thresholds</h2>
+<table>
+<tr><th>Check</th><th>Passed</th><th>Actual</th><th>Limit</th><th>Detail</th></tr>
+{% for t in thresholds %}
+<tr>
+<td>{{ t.check }}</td>
+<td class="{{ 'pass' if t.passed else 'fail' }}">{{ 'yes' if t.passed else 'no' }}</td>
+<td>{{ t.actual }}</td><td>{{ t.limit }}</td><td>{{ t.detail }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<h2>Metrics</h2>
+<table>
+<tr><th>Metric</th><th>Value</th></tr>
+{% for name, value in metrics %}
+<tr><td>{{ name }}</td><td>{{ value }}</td></tr>
+{% endfor %}
+</table>
+
+{% if baseline is not none %}
+<h2>Baseline diff</h2>
+{% if baseline.suite_changed %}
+<p class="fail">The baseline was taken on another suite: the correctness drop check is off.</p>
+{% endif %}
+<table>
+<tr><th>Metric</th><th>Baseline</th><th>This run</th><th>Delta</th></tr>
+{% for name, before, after, delta in baseline.rows %}
+<tr><td>{{ name }}</td><td>{{ before }}</td><td>{{ after }}</td><td>{{ delta }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<h2>Questions</h2>
+{% for q in questions %}
+<section>
+<h3>{{ q.id }} (repeat {{ q.repeat }}):
+<span class="{{ 'pass' if q.status == 'passed' else 'fail' }}">{{ q.status }}</span></h3>
+<p>Checks: {{ q.checks }}</p>
+{% if q.error %}
+<p>Error:</p>
+<pre>{{ q.error }}</pre>
+{% endif %}
+{% if q.text %}
+<p>Final text:</p>
+<pre>{{ q.text }}</pre>
+{% endif %}
+</section>
+{% endfor %}
+</body>
+</html>
