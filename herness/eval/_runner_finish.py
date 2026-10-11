@@ -70,8 +70,8 @@ class RunMeta:
     dataset_kind: str
     dataset_scale: str
     suite: str
-    suite_version: int
-    suite_sha256: str
+    suite_version: int | None  # None for the classifier suite (T11-35)
+    suite_sha256: str | None  # the gold digest for the classifier suite (T11-35)
     mock: bool
     started_at: datetime
     dataset_seed: int | None = None

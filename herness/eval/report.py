@@ -1,7 +1,8 @@
 """Eval report files and baselines (U11-70, U11-72; design 11 §4.6, flow F11-07 step 12).
 
-`write_report` writes `summary.json`, `report.md` and `report.html` (plus `classifier.json`
-when given) into the run directory, each atomically (temp file + `os.replace`). Model text is
+`write_report` writes `summary.json`, `report.md` and `report.html` into the run directory,
+each atomically (temp file + `os.replace`); given a `ClassifierReport` it also writes
+`classifier.json` and a classifier section (private sibling `_classifier_report`). Model text is
 scrubbed of known secrets, capped, and shown as plain text: a code fence in Markdown and an
 autoescaped `<pre>` in HTML (TH11-05); the HTML loads nothing external. Baselines under
 `tests/eval/baselines/<name>.json` hold aggregates only and are refused on real builds
@@ -26,11 +27,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 import jinja2
-from pydantic import BaseModel
 
 from herness.core.errors import ConfigError
 from herness.core.logging import get_logger
 from herness.core.secrets import scrub_secrets
+from herness.eval._classifier_report import classifier_lines, classifier_view
 from herness.eval._report_compare import (
     DIFF_FIELDS,
     ComparisonTable,
@@ -45,6 +46,7 @@ from herness.eval._report_compare import (
 from herness.eval.metrics import EvalMetrics
 
 if TYPE_CHECKING:
+    from herness.eval.classifier import ClassifierReport
     from herness.eval.metrics import ThresholdResult
     from herness.eval.results import QuestionResult
     from herness.eval.runner import EvalRun
@@ -89,11 +91,13 @@ def write_report(  # noqa: PLR0913 - signature fixed by U11-70 (keyword-only aft
     metrics: EvalMetrics,
     thresholds: Sequence[ThresholdResult],
     baseline: EvalMetrics | None,
-    classifier: BaseModel | Mapping[str, Any] | None,
+    classifier: ClassifierReport | None,
     comparison: ComparisonTable | None = None,
 ) -> list[Path]:
     """Write the run's report files atomically; returns their paths in write order. With
-    `comparison` (`--compare`) both reports end with the comparison section."""
+    `classifier` (`--suite classifier`) both reports gain the classifier section and
+    `classifier.json` is written; with `comparison` (`--compare`) they end with the
+    comparison section."""
     summary: dict[str, Any] = {
         **eval_run.summary,
         "metrics": metrics.model_dump(mode="json"),
@@ -105,6 +109,7 @@ def write_report(  # noqa: PLR0913 - signature fixed by U11-70 (keyword-only aft
         raise ConfigError(msg)
     view = _view(summary, results, metrics, thresholds, baseline)
     view["comparison"] = None if comparison is None else comparison_view(comparison)
+    view["classifier"] = None if classifier is None else classifier_view(classifier)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = [
         _write(out_dir / "summary.json", _json(summary)),
@@ -112,10 +117,7 @@ def write_report(  # noqa: PLR0913 - signature fixed by U11-70 (keyword-only aft
         _write(out_dir / "report.html", _environment().get_template(_TEMPLATE).render(view)),
     ]
     if classifier is not None:
-        body = (
-            classifier.model_dump(mode="json") if isinstance(classifier, BaseModel) else classifier
-        )
-        paths.append(_write(out_dir / "classifier.json", _json(body)))
+        paths.append(_write(out_dir / "classifier.json", _json(classifier.model_dump(mode="json"))))
     return paths
 
 
@@ -220,6 +222,8 @@ def _markdown(view: Mapping[str, Any]) -> str:
             out += ["The baseline was taken on another suite: the correctness drop check is off.",
                     ""]  # fmt: skip
         out += _table(("Metric", "Baseline", "This run", "Delta"), view["baseline"]["rows"])
+    if view["classifier"] is not None:
+        out += classifier_lines(view["classifier"])
     out += ["## Questions", ""]
     for q in view["questions"]:
         out += [f"### {q['id']} (repeat {q['repeat']}): {q['status']}", "",
