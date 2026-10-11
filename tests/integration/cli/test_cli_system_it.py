@@ -25,8 +25,28 @@ from tests.support.report_env import BUILD_ID, FUND_RUN, ReportEnv
 from herness import cli
 from herness._cli import _status
 from herness.core import time as clock
+from herness.core.config import load_config
+from herness.core.errors import ConfigError
+from herness.harness.llm.registry import LLMRegistry
 
 pytestmark = pytest.mark.integration
+
+SHIPPED_CONFIG = Path(__file__).resolve().parents[3] / "config"
+
+
+def _local_chains_refused() -> bool:
+    """True while the shipped `local` profile cannot build its model clients (T07-25): the
+    chain registry `status` binds raises ConfigError. Hermetic: files only, an empty env, no
+    config cache; a config-load failure is not caught (it would hide a broken template)."""
+    cfg = load_config("local", (), SHIPPED_CONFIG, env={})
+    try:
+        LLMRegistry(cfg.models, profile=cfg.profile)
+    except ConfigError:
+        return True
+    return False
+
+
+LOCAL_CHAINS_REFUSED = _local_chains_refused()
 
 
 def _main(args: list[str]) -> int:
@@ -49,11 +69,19 @@ def viewer(cli_env: CliEnv, report_env: ReportEnv) -> ReportEnv:
 
 
 def test_it09_25_status_without_current(
-    viewer: ReportEnv, capsys: pytest.CaptureFixture[str]
+    viewer: ReportEnv, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """IT09-25 `herness status` with no CURRENT: "No promoted warehouse yet." and every
-    other section from the fixture ops store. The `local` profile cannot build its model
-    clients with egress off (T07-25), so the jobs and chat sections are null with a warning."""
+    other section from the fixture ops store. The model clients are forced to refuse (a fake
+    `LLMRegistry` raising ConfigError, as the `local` profile did before T07-25), so the jobs
+    and chat sections are null with a warning."""
+    from herness.harness.llm import registry  # noqa: PLC0415 - patched where `status` reads it
+
+    def refuse(models: object, profile: str) -> None:
+        msg = "off-network fallback client with egress off"
+        raise ConfigError(msg)
+
+    monkeypatch.setattr(registry, "LLMRegistry", refuse)
     assert _main(["status"]) == 0
     captured = capsys.readouterr()
     out = captured.out
@@ -62,6 +90,22 @@ def test_it09_25_status_without_current(
     for section in ("last_build_job:", "dq_warnings:", "jobs:", "runs:", "chat_mode:"):
         assert section in out
     assert FUND_RUN in out
+
+
+@pytest.mark.skipif(LOCAL_CHAINS_REFUSED, reason="T07-25 pending")
+def test_it09_25_status_full_on_local_profile(
+    viewer: ReportEnv, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """IT09-25 on the `local` profile `herness --json status` carries the jobs snapshot and
+    the chat mode with no warning (skipped while T07-25 is pending on this base)."""
+    del viewer
+    assert _main(["--profile", "local", "--json", "status"]) == 0
+    envelope = _json(capsys)
+    assert envelope["warnings"] == []
+    data = envelope["data"]
+    assert set(data["jobs"]) == {"workers", "running", "queue", "planned_rekey", "breakers",
+                                 "faults_enabled"}  # fmt: skip
+    assert data["chat_mode"] in {"live", "small_model", "defer", "cloud"}
 
 
 def test_it09_25_status_with_current_build(
@@ -74,7 +118,7 @@ def test_it09_25_status_with_current_build(
     assert _main(["--profile", "hybrid", "--json", "status"]) == 0
     data = _json(capsys)["data"]
     assert data["current_build"]["build_id"] == BUILD_ID
-    assert data["current_build"]["age_h"] is None or data["current_build"]["age_h"] >= 0
+    assert data["current_build"]["age_h"] >= 0  # tiny_build's meta.build has finished_at
     assert all("check_name" in row for row in data["dq_warnings"])
     assert FUND_RUN in {run["run_id"] for run in data["runs"]}
     assert len(data["runs"]) <= 5
@@ -91,7 +135,8 @@ def test_it09_25_current_build_reader_on_real_build(viewer: ReportEnv) -> None:
     view = _status.current_build(clock.now())
     assert view is not None
     assert view.build_id == BUILD_ID
-    assert view.age_h is None or view.age_h >= 0
+    assert view.age_h is not None
+    assert view.age_h >= 0
     failures = _status.dq_failures(BUILD_ID)
     assert isinstance(failures, list)
     assert all(set(row) == {"check_name", "severity", "value", "threshold"} for row in failures)
