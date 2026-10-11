@@ -24,7 +24,7 @@ This spec turns design 08 into build instructions for `herness/core/resilience/`
 | 2.8 | Fault hooks for spec 11 (JSON plans, `HERNESS_ENV=test` only, R-40) | 3.8 | U08-33, U08-34 | T08-08 | UT08-46–UT08-50, UT08-105, FT08-01–FT08-12 |
 | 3.1 | `policy`, `retrying`, `retry_call`, `aretry_call`, `retry_page`, `guard`, `call_with_timeout`, `classify`, `CircuitBreaker`, `breaker` | 3.4, 3.6, 3.7 | U08-11–U08-32 | T08-04–T08-07 | UT08-06–UT08-28 |
 | 3.2 | `ModelChain`, `complete_validated`, `DeciderChain`, `loop_signal_policy` | 3.9 | U08-35–U08-40 | T08-09, T08-10 | UT08-33–UT08-45 |
-| 3.3 | `fault_point` | 3.8 | U08-34 | T08-08 | UT08-46, UT08-49, UT08-105 |
+| 3.3 | `fault_point` | 3.8 | U08-34 | T08-08 | UT08-46, UT08-49, UT08-105, UT08-113 |
 | 3.4 | Jobs API, `JobSpec`, `JobOutcome`, `ServiceControl`, `JobContext` (R-01, R-02, R-41, R-42) | 3.1, 3.10, 3.16 | U08-01–U08-04, U08-41–U08-56, U08-84–U08-86 | T08-01, T08-03, T08-12, T08-20 | UT08-01, UT08-02, UT08-51–UT08-65, UT08-97–UT08-99, UT08-106 |
 | 3.5 | `GpuStateReader`, `gpu_state`, supervisor performs swaps, requested class | 3.15 | U08-08, U08-81, U08-83, U08-102 | T08-18 | UT08-91–UT08-94, UT08-108 |
 | 3.6 | `chat_policy`, `chat_model_profile`, `chat_next_live_at` | 3.14 | U08-75–U08-77 | T08-19 | UT08-84–UT08-86 |
@@ -813,7 +813,7 @@ Errors:
 
 Spec note (T01-27): a source probe is claimed and counted through the sync path by the request-level guard only. `SyncRunner._incremental_stream`, the backfill slice and `reconcile_entity` run `herness.connectors._breaker_gate.guard` first, which calls `retry_at()` and never `allow()`, so it cannot take the half-open claim; the first `retry_page` attempt (`guard` then `allow()`) after the cooldown wins the claim (`breaker_half_open`), sends exactly one request and `record_success`/`record_failure` closes or re-opens the breaker. A caller that claims the probe and does not send a request leaves the breaker `half_open` until the stale limit (`HALF_OPEN_STALE_S`, 600 s), so a pre-flight check must not call `allow()`. No `source` probe function is registered with `register_probe`, so `run_due_probes` never recovers a source breaker: sources recover through this caller-probe path.
 
-Spec note (T01-27, for the impl 08/11 owner): `herness.core.resilience.faults._stub_url` parses `HERNESS_STUB_SERVICES` as a JSON object, while `tests/support/stub_http.py` (`_register_service`, the `stub_services` fixture; DD11-04) treats it as the path of a JSON file. Not aligned here because it is not a one-line change (the two sides would have to agree on file-or-JSON); FT08-01 sets the JSON object directly.
+Spec note (T01-27, resolved by T08-25): `herness.core.resilience.faults._stub_url` parses `HERNESS_STUB_SERVICES` as an inline JSON object (service name → loopback base URL); `tests/support/stub_http.py` (`_register_service`, the `stub_services` fixture; DD11-04) now merges into that same inline JSON in the test process's environment, and `tests/support.faults.fault_env(stub_services=Mapping)` serialises the same form. Impl 08 owns the format (DECISIONS DD11-04); `faults.py` is unchanged. UT08-113 proves a URL set by the fixture resolves through `_stub_url`.
 
 #### U08-25 `herness.core.resilience.breaker`
 
@@ -2375,7 +2375,7 @@ All keys come from `config/resilience.yaml` unless stated. Every key is read thr
 | `models.yaml: models.*` (through `ChainRegistry`) | spec 05 | spec 05 | spec 05 | yes | internal |
 | env `HERNESS_FAULTS` | path to a `.json` plan | unset | U08-33; honoured only with `HERNESS_ENV=test` (R-40) | yes (read once per process) | internal |
 | env `HERNESS_ENV` | str | unset | `test` enables fault plans (R-40); any other value or unset ignores them | yes (read once per process) | internal |
-| env `HERNESS_STUB_SERVICES` | JSON object, service name → loopback base URL | unset | read only by the `kill_service:` fault action under `HERNESS_ENV=test` (impl 11 DD11-04) | yes | internal |
+| env `HERNESS_STUB_SERVICES` | JSON object, service name → loopback base URL | unset | read only by the `kill_service:` fault action under `HERNESS_ENV=test` (DECISIONS DD11-04, resolved by T08-25); set in-process by the `tests/support` stub fixture | yes | internal |
 
 T06-22b spec note (2026-10-10, ruling): the `review` payloads of `schedule.jobs` use the design shape `{pipeline, depth}` (one pipeline per payload); the scheduler adds `schedule`, `fire_at`, `step` (U08-73) and the handler of impl 06 U06-85 accepts exactly this scheduled form (an unknown or plural key is a `ConfigError`). The design row `weekly_deep` with `payload: {pipelines: [funding_review, org_review], depth: deep}` is shipped as a chain, `job` funding_review `deep` and `then` org_review `deep` (a job runs and yields one run); the design text in `docs/specs/08` is unchanged and its multi-pipeline payload is not accepted by the handler. UT06-96 loads `config/resilience.yaml` and checks every review payload.
 
@@ -2519,6 +2519,7 @@ Layout: unit tests in `tests/unit/core/resilience/` and `tests/unit/core/jobs/`,
 | UT08-110 | U08-100, U08-101 | `ops_db` | `record_metric_samples` with 1 201 samples (counter, gauge, histogram); again inside a caller's `run_write` with `conn`; a sample with 1 100-byte labels; `MetricSample` with a free-text label value; `purge_metric_samples(now − 90 d)` | 1 201 rows in 3 transactions; `conn` rows commit with the caller; labels → `ConfigError`; free text → `ValidationError`; purge removes only older rows | unit |
 | UT08-111 | U08-103, U08-22 | `ops_db`, fake clock | `record_gauge("herness_jobs_queue_depth_count", 5, component="jobs", labels={"gpu_class": "none"})`, then 3 for the same key, then 1 001 distinct keys; `flush_metrics()` | one `gauge` row with value 3 for the first key; negative value accepted; `_total` name and NaN → `ConfigError`; key 1 001 dropped and counted | unit |
 | UT08-112 | U08-17 | fixed `now`; headers `Retry-After: 120`, `Retry-After: 1.5`, `Retry-After: <HTTP date now + 60 s>`, `<date now − 60 s>`, `<date with no zone>`, `Retry-After: soon`, `Retry-After: 999999`, `X-RateLimit-Reset` in epoch seconds and in epoch milliseconds; `max_s = 3600` | parse | 120; `None` (not RFC 9110 delay-seconds); 60; 0; `None`; `None`; 3600 (clamped); both epoch forms give the delay to `now` | unit |
+| UT08-113 | U08-34 | `stub_services` fixture; two `StubHTTPServer(service_name=...)` (`openjev`, `other`); `fault_env` plan `gpu.after_start` → `kill_service:openjev` | `faults._stub_url` for both names, then `fault_point("gpu.after_start")` | both URLs resolve to the stubs' base URLs (none before they start); only the `openjev` stub is killed through `POST /__control/kill` and the compose hook is not used | unit |
 
 ### 11.2 Property tests (hypothesis)
 
@@ -2712,7 +2713,7 @@ All cards are Phase 3. "Acceptance" always also includes: `ruff check` and `ruff
 | Depends on | T08-04 |
 | Units | U08-33, U08-34 |
 | Files | `herness/core/resilience/faults.py` |
-| Tests | UT08-46–UT08-50, UT08-105, ST08-06 |
+| Tests | UT08-46–UT08-50, UT08-105, UT08-113, ST08-06 |
 | Threats | TH08-06 |
 | Acceptance checks | UT08-46 proves zero file access without the variable; UT08-105 proves a plan is ignored outside `HERNESS_ENV=test` (R-40); no `pyyaml` import in `herness/core/resilience/faults.py` |
 | Blocked by | none |
@@ -2987,7 +2988,7 @@ Cross-spec rulings are recorded in [`DECISIONS.md`](DECISIONS.md) (R-01 to R-76)
 | D08-21 | 08 §7, 10 §3.1 | All `config/resilience.yaml` models in `herness.core.resilience.settings`; week coverage and cron parsing move to `validate_resilience_config`, run through impl 10's owner validator hook (R-71) and at worker start | a settings module may not import `herness.core.jobs.cron` | U08-06, U08-07, U08-99 | Accepted (R-03, R-71) |
 | D08-22 | 08 §3.7, §4.3 | Checkpoint envelope `{schema_version, loop, state, scratchpad}` and key-scoped `save_checkpoint(task_id, key, value)` | a whole-object replace erased other owners' keys (impl 05 D05-04) | U08-59, U08-60 | Accepted (R-21) |
 | D08-23 | 08 §3.8 | `herness worker` exit codes 0 and 1 only (was 2 for a start `ConfigError` and 3 for the store-unavailable shutdown) | one exit-code scheme | U08-87 | Resolved by R-46 |
-| D08-24 | 08 §5.13 | `kill_service:<name>` first looks up `HERNESS_STUB_SERVICES` under `HERNESS_ENV=test` and posts `/__control/kill` to the stub | impl 11 DD11-04 needs it for FT11-03 | U08-34 | Still open |
+| D08-24 | 08 §5.13 | `kill_service:<name>` first looks up `HERNESS_STUB_SERVICES` under `HERNESS_ENV=test` and posts `/__control/kill` to the stub | impl 11 DD11-04 needs it for FT11-03 | U08-34 | Resolved by T08-25 (format: inline JSON, DECISIONS DD11-04) |
 | D08-25 | 08 §5.10 | Chat `cloud` mode in the `hybrid` profile only with the `chat` data-policy approval | D5 data policy | U08-75 | Accepted (R-38) |
 | D08-26 | 08 §5.10 | Escalation under `small_model` is enqueued for the next live window, not refused | impl 06 D06-17 | U08-77 purpose, F08-15 | Resolved by R-35 |
 | D08-27 | 08 §5.2, §7 | `parse_retry_after` is the single Retry-After parser (impl 01 U01-61 switches to it); new key `resilience.retry.retry_after_max_s` (default 86 400 s) clamps its result | one parser; bounded reschedule times | U08-17, U08-06 | Accepted (R-70) |

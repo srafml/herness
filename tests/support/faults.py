@@ -57,9 +57,9 @@ def write_fault_plan(tmp_path: Path, rules: Sequence[Mapping[str, object]]) -> P
     return path
 
 
-def fault_env(plan: Path, *, stub_services: Path | None = None) -> dict[str, str]:
-    """`HERNESS_ENV=test`, `HERNESS_FAULTS=<plan>` and, when given, `HERNESS_STUB_SERVICES`."""
+def fault_env(plan: Path, *, stub_services: Mapping[str, str] | None = None) -> dict[str, str]:
+    """`HERNESS_ENV=test`, `HERNESS_FAULTS=<plan>`, and inline-JSON `HERNESS_STUB_SERVICES`."""
     env = {"HERNESS_ENV": "test", "HERNESS_FAULTS": str(plan)}
     if stub_services is not None:
-        env["HERNESS_STUB_SERVICES"] = str(stub_services)
+        env["HERNESS_STUB_SERVICES"] = json.dumps(dict(stub_services), sort_keys=True)
     return env

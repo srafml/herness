@@ -4,8 +4,9 @@ Every stub binds ``127.0.0.1`` only (checked before the socket exists; the serve
 handler live in the private sibling ``_stub_http_core``). Handler threads are daemons with
 a per-connection socket timeout, bodies over 8 MB get 413 unread, and the counters and
 open-connection set live under one lock. With ``service_name`` set, ``start`` merges
-``{name: base_url}`` into the JSON file named by ``HERNESS_STUB_SERVICES`` (delta DD11-04),
-which the ``stub_services`` fixture creates.
+``{name: base_url}`` into the inline JSON object held by ``HERNESS_STUB_SERVICES`` in this
+process's environment (DD11-04, resolved by T08-25; read by ``faults._stub_url`` under
+``HERNESS_ENV=test``), which the ``stub_services`` fixture starts as ``{}``.
 """
 
 from __future__ import annotations
@@ -14,8 +15,8 @@ import json
 import os
 import socket
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from types import TracebackType
 from typing import ClassVar, Final, Literal, Self
 
@@ -42,7 +43,9 @@ __all__ = [
 
 SERVICES_ENV: Final = "HERNESS_STUB_SERVICES"
 _POLL_S: Final = 0.05
-_SERVICES_LOCK: Final = threading.Lock()  # one service file shared by every stub in-process
+_SERVICES_LOCK: Final = (
+    threading.Lock()
+)  # the inline services object shared by every stub in-process
 
 type StubFaultKind = Literal["http_429", "http_529", "malformed_json", "kill"]
 
@@ -183,24 +186,30 @@ class StubHTTPServer:
 
 
 def _register_service(name: str, base_url: str) -> None:
-    """Merge ``{name: base_url}`` into the ``HERNESS_STUB_SERVICES`` file (DD11-04)."""
-    path = os.environ.get(SERVICES_ENV)
-    if not path:
-        return
-    file = Path(path)
+    """Merge ``{name: base_url}`` into the inline JSON in ``HERNESS_STUB_SERVICES`` (DD11-04)."""
     with _SERVICES_LOCK:
-        text = file.read_text(encoding="utf-8") if file.exists() else ""
-        services = json.loads(text) if text.strip() else {}
+        raw = os.environ.get(SERVICES_ENV)
+        if raw is None:
+            return  # no `stub_services` fixture: nothing is registered, nothing leaks
+        try:
+            services = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            msg = f"{SERVICES_ENV} must hold a JSON object, got {raw!r}"
+            raise ValueError(msg) from None
         services[name] = base_url
-        tmp = file.with_name(f".{file.name}.{os.getpid()}.tmp")  # same dir: atomic replace
-        tmp.write_text(json.dumps(services, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, file)  # readers in other processes never see a partial file
+        os.environ[SERVICES_ENV] = json.dumps(services, sort_keys=True)
 
 
 @pytest.fixture
-def stub_services(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """An empty service file named by ``HERNESS_STUB_SERVICES`` for this test."""
-    path = tmp_path / "stub_services.json"
-    path.write_text("{}", encoding="utf-8")
-    monkeypatch.setenv(SERVICES_ENV, str(path))
-    return path
+def stub_services(monkeypatch: pytest.MonkeyPatch) -> Callable[[], dict[str, str]]:
+    """Start ``HERNESS_STUB_SERVICES`` as ``{}`` (restored at teardown) for this test.
+
+    Returns a callable giving the currently registered ``{name: base_url}`` mapping.
+    """
+    monkeypatch.setenv(SERVICES_ENV, "{}")
+
+    def registered() -> dict[str, str]:
+        parsed: dict[str, str] = json.loads(os.environ[SERVICES_ENV])
+        return parsed
+
+    return registered

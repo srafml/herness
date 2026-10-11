@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import socket
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -261,10 +262,10 @@ def test_ut11_75_binds_127_0_0_1_only() -> None:
         _Wide("hash")
 
 
-def test_ut11_75_registers_the_openjev_service(stub_services: Path) -> None:
+def test_ut11_75_registers_the_openjev_service(stub_services: Callable[[], dict[str, str]]) -> None:
     """UT11-75 service_name defaults to openjev (FT11-03 kill_service:openjev)."""
     with StubDeciderServer("hash") as server:
-        assert json.loads(stub_services.read_text("utf-8")) == {"openjev": server.base_url}
+        assert stub_services() == {"openjev": server.base_url}
 
 
 # --- UT11-76: hash mode and faults ------------------------------------------------------------
