@@ -345,8 +345,9 @@ def handle_eval(ctx: JobContext) -> JobOutcome:
             set_baseline=payload.set_baseline, compare_profile=payload.compare_profile,
             suite=payload.suite,
         )  # fmt: skip
-        run = run_eval(run_golden, suite, payload, resume_run_id=run_id, deps=deps,
-                       options=options)  # step 4, also for --compare (T11-38)  # fmt: skip
+        run = run_eval(
+            run_golden, suite, payload, resume_run_id=run_id, deps=deps, options=options
+        )  # step 4, also --compare (T11-38)
     except ConfigError:
         _log.error("eval.run.failed", run_id=run_id, error_type="ConfigError")
         raise
