@@ -21,7 +21,8 @@ _Fraction = Annotated[float, Field(ge=0, le=1)]
 _NonNegFloat = Annotated[float, Field(ge=0)]
 _PosFloat = Annotated[float, Field(gt=0)]
 _NonEmptyStr = Annotated[str, Field(min_length=1)]
-_RepeatCount = Annotated[int, Field(ge=1, le=10)]
+MAX_REPEAT: Final = 10  # TH11-13: eval.yaml repeat, the job payload and run_golden
+_RepeatCount = Annotated[int, Field(ge=1, le=MAX_REPEAT)]
 
 
 def _require(ok: bool, msg: str) -> None:

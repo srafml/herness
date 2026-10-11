@@ -29,7 +29,7 @@ from herness.metrics.settings import Unit
 __all__ = [
     "ClaimRule", "EntitiesExpected", "EvalQuestion", "Expected", "MentionRule", "NumericExpected",
     "ReferenceResult", "ResolvedQuestion", "RubricExpected", "RulesExpected", "SignRule", "Suite",
-    "SuiteDefaults", "SuiteError", "Tolerance", "load_suite", "resolve",
+    "SuiteDefaults", "SuiteError", "Tolerance", "load_suite", "reference_guard", "resolve",
 ]  # fmt: skip
 
 MAX_SUITE_BYTES: Final = 1_000_000
@@ -278,7 +278,7 @@ def _run_sql(cur: duckdb.DuckDBPyConnection, sql: str) -> tuple[list[str], list[
     return columns, rows
 
 
-def _guard(cur: duckdb.DuckDBPyConnection) -> SqlGuard:
+def reference_guard(cur: duckdb.DuckDBPyConnection) -> SqlGuard:
     """A `SqlGuard` over the build's allowed schemas with the default blocked columns."""
     schema: dict[str, dict[str, dict[str, str]]] = {}  # no empty schema: sqlglot needs depth
     for db, table, column, kind in cur.execute(_SCHEMA_SQL, [sorted(ALLOWED_SCHEMAS)]).fetchall():
@@ -383,7 +383,7 @@ def resolve(
     cur = con.cursor()  # per-thread cursor
     try:
         manifest = truth if dataset_kind == "synthetic" else None
-        ctx = _Resolver(question.id, cur, manifest, build_id, cache, _guard(cur))
+        ctx = _Resolver(question.id, cur, manifest, build_id, cache, reference_guard(cur))
         reference = {name: ctx.reference(sql) for name, sql, _ in blocks}
         truth_values: dict[str, str] = {}
         for name, _sql, ref in blocks:  # truth_ref must equal reference row 1, column 1
