@@ -35,6 +35,7 @@ from tests.support.dispatch_standin import use_test_config
 from tests.support.fake_keyring import MemoryKeyring
 from tests.support.metrics_synth import SynthEnv, generate_root, release
 from tests.support.metrics_synth import scored_build as _scored_build
+from tests.support.seed_ops import seed_prior_run
 from tests.unit.eval._runner_env import FakeCtx
 
 from herness.core import config as herness_config
@@ -196,7 +197,7 @@ class GoldenEnv:
             swarm_for=lambda profile: swarm,
             chat_for=lambda profile: chat, judge_for=lambda: judge, memory=memory, job=ctx,
             clock=clock.now, data_root=self.data_root, settings=self.settings,
-            repo_root=self.repo_root,
+            repo_root=self.repo_root, seed_prior_run=seed_prior_run,
         )  # fmt: skip
 
     def handle(self, payload: dict[str, Any]) -> tuple[FakeCtx, Any]:
