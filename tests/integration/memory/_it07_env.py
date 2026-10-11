@@ -25,16 +25,18 @@ from herness.harness.memory.store import Embedder
 from herness.store.ops import core, record_evidence
 
 if TYPE_CHECKING:
+    import duckdb
     import pytest
     from tests.integration.harness._swarm_run_env import Drv
     from tests.support.builds import BuildHandle
 
+    from herness.core.types import Evidence
     from herness.harness.swarm.lifecycle import RunResult
     from herness.harness.swarm.run import Swarm
 
 __all__ = [
     "Mem", "memory_store", "pin_build", "pin_tiny", "real_prior_context", "record_portfolio",
-    "run_review", "run_summaries", "swarm_for",
+    "record_query", "run_review", "run_summaries", "swarm_for",
 ]  # fmt: skip
 
 
@@ -99,6 +101,39 @@ def run_summaries(run_id: str) -> list[dict[str, Any]]:
         " AND json_extract(provenance, '$.run_id') = ?", (run_id,),
     )  # fmt: skip
     return [dict(r) for r in rows]
+
+
+def record_query(con: duckdb.DuckDBPyConnection, sql: str, params: dict[str, Any],
+                 build_id: str) -> Evidence:  # fmt: skip
+    """Run `sql` on the build and record its evidence row with the real result hash and the
+    full result as sample (what the spec 05 recording path stores; the Verifier re-runs it)."""
+    from herness.core import time as clock  # noqa: PLC0415
+    from herness.core.ids import query_id  # noqa: PLC0415
+    from herness.core.types import Evidence  # noqa: PLC0415
+    from herness.metrics.evidence import result_hash  # noqa: PLC0415
+
+    cur = con.cursor()
+    try:
+        cur.execute(sql, params)
+        types = [(str(d[0]), str(d[1])) for d in cur.description or ()]
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+    sample = [{name: _json_cell(v) for (name, _), v in zip(types, row, strict=True)}
+              for row in rows]  # fmt: skip
+    ev = Evidence(
+        query_id=query_id(sql, params, build_id), run_id=None, build_id=build_id, sql=sql,
+        params=params, result_hash=result_hash(types, rows), row_count=len(rows),
+        result_sample=sample, executed_at=clock.now(), duration_ms=1,
+    )  # fmt: skip
+    assert record_evidence(ev)
+    return ev
+
+
+def _json_cell(value: object) -> object:
+    from decimal import Decimal  # noqa: PLC0415
+
+    return str(value) if isinstance(value, Decimal) else value
 
 
 def pin_build(drv: Drv, build_id: str, monkeypatch: pytest.MonkeyPatch) -> None:
