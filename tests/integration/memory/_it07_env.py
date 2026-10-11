@@ -15,8 +15,9 @@ import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
+from pydantic import JsonValue
 from tests.unit.harness.memory._write_env import PATTERNS, Env, FakeEmbed, make_writer
 
 from herness.harness.memory import MemoryStore
@@ -119,8 +120,9 @@ def record_query(con: duckdb.DuckDBPyConnection, sql: str, params: dict[str, Any
         rows = cur.fetchall()
     finally:
         cur.close()
-    sample = [{name: _json_cell(v) for (name, _), v in zip(types, row, strict=True)}
-              for row in rows]  # fmt: skip
+    sample: list[dict[str, JsonValue]] = [
+        {name: _json_cell(v) for (name, _), v in zip(types, row, strict=True)} for row in rows
+    ]
     ev = Evidence(
         query_id=query_id(sql, params, build_id), run_id=None, build_id=build_id, sql=sql,
         params=params, result_hash=result_hash(types, rows), row_count=len(rows),
@@ -130,10 +132,10 @@ def record_query(con: duckdb.DuckDBPyConnection, sql: str, params: dict[str, Any
     return ev
 
 
-def _json_cell(value: object) -> object:
+def _json_cell(value: object) -> JsonValue:
     from decimal import Decimal  # noqa: PLC0415
 
-    return str(value) if isinstance(value, Decimal) else value
+    return str(value) if isinstance(value, Decimal) else cast("JsonValue", value)
 
 
 def pin_build(drv: Drv, build_id: str, monkeypatch: pytest.MonkeyPatch) -> None:

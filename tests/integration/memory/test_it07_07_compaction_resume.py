@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from tests.integration.harness import _swarm_run_env as e
@@ -101,7 +101,7 @@ def _kill_after_compaction(client: Any, monkeypatch: pytest.MonkeyPatch) -> list
             seen[0] += 1
             if seen[0] == 2:
                 raise SimulatedKill
-        return await real(req)
+        return cast("LLMResponse", await real(req))
 
     monkeypatch.setattr(client, "acomplete", acomplete)
     return seen

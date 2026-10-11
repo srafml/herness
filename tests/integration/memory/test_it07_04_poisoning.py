@@ -17,7 +17,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import duckdb
 import pytest
@@ -144,10 +144,11 @@ def _poisoned(drv: Drv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pois
         numbers=[], entities=[{"type": "team", "id": "T2"}], finding_ids=[], confidence=0.6,
         rationale=None,
     )  # fmt: skip
-    memory_id = str(proposed.data["memory_id"])  # type: ignore[index, call-overload]
+    memory_id = str(cast("dict[str, Any]", proposed.data)["memory_id"])
     [row] = core.read_all("SELECT status, data FROM memory_item WHERE memory_id = ?", (memory_id,))
     assert row["status"] == "pending_approval"  # flagged pending
-    assert "instruction_like" in core.load_json(row["data"], field="data")["flags"]
+    data = cast("dict[str, Any]", core.load_json(row["data"], field="data"))
+    assert "instruction_like" in data["flags"]
     core.run_write(lambda c: ops.update_memory_item(memory_id, status="active", conn=c),
                    op="test_force_active")  # fmt: skip
     mem.env.vectors.set_status([memory_id], "active")

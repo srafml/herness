@@ -21,7 +21,7 @@ import asyncio
 import json
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import duckdb
 import pytest
@@ -121,7 +121,8 @@ def test_it07_01_prior_no_effect_reaches_planner_and_lowers_new_rec_confidence(
     _no_effect(rec_id, outcome_qid)
     real_prior_context(monkeypatch)
     monkeypatch.setattr(e, "writer_output", _same_target_output(t6.unpaid.epic_record_id))
-    turns = [{"final": {"text": "Plan drafted."}}, {"final": {"output": _plan()}}]
+    turns: list[dict[str, Any]] = [{"final": {"text": "Plan drafted."}},
+                                   {"final": {"output": _plan()}}]  # fmt: skip
     use_real_loop(drv, monkeypatch, [script("planner", turns)], {"planner"})
 
     swarm = swarm_for(drv, mem.store, tracer_factory=full_tracer)
@@ -142,7 +143,7 @@ def test_it07_01_prior_no_effect_reaches_planner_and_lowers_new_rec_confidence(
         "work_item",
         t6.unpaid.epic_record_id,
     )
-    basis = new["confidence_basis"]
+    basis = cast("dict[str, Any]", new["confidence_basis"])
     assert new["confidence"] < basis["base"]
     assert basis["delta"] < 0
     similar = {s["rec_id"]: s for s in basis["similar"]}

@@ -68,7 +68,7 @@ class Recorder:
 
 def _argv(drv: Drv, tmp_path: Path, mode: str) -> list[str]:
     return [sys.executable, "-m", "tests.support._f07_children", "recs", str(drv.cfg_root),
-            drv.hcfg.paths.data, str(tmp_path / "mem"), mode]  # fmt: skip
+            str(drv.hcfg.paths.data), str(tmp_path / "mem"), mode]  # fmt: skip
 
 
 def _env(extra: dict[str, str]) -> dict[str, str]:

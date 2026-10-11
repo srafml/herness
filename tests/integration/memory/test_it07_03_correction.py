@@ -99,7 +99,8 @@ def _session_a(mem: Mem) -> tuple[str, dict[str, Any], ReviewItem]:
 def _session_b(mem: Mem, memory_id: str, item: dict[str, Any]) -> str:
     """Session B of the same user: `recall_memory` returns the item marked UNCONFIRMED.
     Returns the query, embedded as the item's own text (U07-58) so the ANN similarity is 1."""
-    meta = {"session_id": session(AUTHOR), "user_ref": AUTHOR, "message_id": "msg_b"}
+    meta: dict[str, object] = {"session_id": session(AUTHOR), "user_ref": AUTHOR,
+                               "message_id": "msg_b"}  # fmt: skip
     chat_ctx = make_tool_ctx().model_copy(update={"role": "chat", "run_id": seed_run("chat", meta)})
     query = "What changed for team t1 in May?"
     mem.embed.overrides[query] = mem.embed(f"user_correction: {item['content']}")

@@ -17,9 +17,10 @@ import dataclasses
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from pydantic import JsonValue
 from tests.integration.memory._it07_env import Mem, memory_store
 from tests.support.dispatch_standin import use_test_config
 from tests.support.metrics_tiny import BUILD_ID
@@ -65,7 +66,7 @@ def _accepted(mem: Mem, target: str) -> str:
                  build_id=BUILD_ID, status="done", started_at=at, finished_at=at, token_usage={},
                  cost_usd=Decimal(0), config_hash="h", meta={})  # fmt: skip
     run_write(lambda c: insert_run(c, row), op="test_seed")
-    params = {"s": target}
+    params: dict[str, JsonValue] = {"s": target}
     ev = Evidence(query_id=query_id(SQL, params, BUILD_ID), run_id=run_id, build_id=BUILD_ID,
                   sql=SQL, params=params, result_hash="0" * 64, row_count=1,
                   result_sample=[{"mttr": 10.0}], executed_at=at, duration_ms=1)  # fmt: skip
@@ -109,7 +110,7 @@ def _jobs(rec_id: str) -> dict[int, str]:
     rows = core.read_all("SELECT job_id, payload FROM job WHERE kind = 'outcome_measure'", ())
     found = {}
     for row in rows:
-        payload = core.load_json(row["payload"], field="payload")
+        payload = cast("dict[str, Any]", core.load_json(row["payload"], field="payload"))
         if payload.get("rec_id") == rec_id:
             found[int(payload["measurement"])] = str(row["job_id"])
     return found

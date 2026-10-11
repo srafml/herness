@@ -14,6 +14,7 @@ orphan vector, a vector still `active` for the rejected item) and runs the
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -75,7 +76,7 @@ def test_it07_10_desync_after_a_run_then_queued_maintenance_repairs(
     outcome = run_inline(job_id)
 
     assert outcome.status == "done"
-    counts = outcome.result
+    counts = cast("dict[str, Any]", outcome.result)
     assert counts["vectors"]["deleted"] == 1
     assert counts["vectors"]["restatused"] == 1
     assert counts["vectors"]["flagged"] == 2

@@ -54,7 +54,8 @@ def cite_literal_sql(drv: Drv, monkeypatch: pytest.MonkeyPatch) -> Callable[[str
 
     def qid(team: str) -> str:
         calls[team] += 1
-        return compute_query_id(sql_for(team, (calls[team] - 1) % PER_TEAM + 1), {}, e.BUILD_ID)
+        k = (calls[team] - 1) % PER_TEAM + 1
+        return compute_query_id(sql_for(team, k), {}, vars(e)["BUILD_ID"])
 
     monkeypatch.setattr(e, "incident_qid", qid)
     drv.set_pipeline(t1=PER_TEAM, t2=PER_TEAM, t2_must=True)
