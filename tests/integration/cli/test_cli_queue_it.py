@@ -129,18 +129,15 @@ def test_it09_21_decide_every_kind_via_cli(
     assert review_of(label).status == "pending"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="product gap T09-12 (herness.reports.actions._stored_note keeps a plain note for a "
-    "label_check reject; impl 02 decide_review_item needs a JSON object note: ConfigError)",
-)
 def test_cv_t09_24_label_check_reject_via_cli(env: SimpleNamespace) -> None:
     """CV-T09-24 `review-queue reject` of a label check with a note decides it (exit 0)."""
     label = _item("label_check", {"record_id": "servicenow:incident:INC0002",
                                   "question": "root_cause", "answer": "code"})  # fmt: skip
     env.cli.user = REVIEWER
     assert _main(["review-queue", "reject", label, "--note", "Wrong label"]) == 0
-    assert review_of(label).status == "rejected"
+    item = review_of(label)
+    assert item.status == "rejected"
+    assert json.loads(item.note or "") == {"reason": "Wrong label"}
 
 
 def test_it09_21_memory_item_id_and_review_id_are_not_interchangeable(

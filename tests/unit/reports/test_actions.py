@@ -35,6 +35,7 @@ from herness.harness.memory.types import MemoryNotFound
 from herness.reports import _actions_audit as aa
 from herness.reports import actions as a
 from herness.reports import rules
+from herness.reports._review_notes import stored_review_note
 from herness.reports.rules import Actor, UiRole, UserInputError
 from herness.store import ops
 from herness.store.errors import NotFoundError, ReviewItemConflict
@@ -531,6 +532,48 @@ def test_ut09_75_decide_review_label_check_answer(env: Env) -> None:
     )
     assert status == "approved"
     assert env.changes()[-1][3]["note"] == '{"answer":"yes"}'
+
+
+def test_ut09_114_label_check_reject_note_is_json_reason(env: Env) -> None:
+    """UT09-114 decide_review: a label_check reject stores canonical JSON {"reason": <note>}."""
+    mem: Any = env.memory
+    env.item = _item("label_check")
+    with pytest.raises(UserInputError, match="A note is required to reject"):
+        a.decide_review(actor("reviewer"), item_id=ITEM, approve=False, memory=mem, now=NOW)
+    status = a.decide_review(
+        actor("reviewer"), item_id=ITEM, approve=False, note="  Wrong label ", memory=mem, now=NOW
+    )
+    assert status == "rejected"
+    assert json.loads(env.changes()[-1][3]["note"]) == {"reason": "Wrong label"}
+
+
+def test_ut09_115_label_check_approve_with_note_keeps_answer_and_reason(env: Env) -> None:
+    """UT09-115 decide_review: a label_check approval with a note stores answer and reason."""
+    mem: Any = env.memory
+    env.item = _item("label_check")
+    a.decide_review(actor("reviewer"), item_id=ITEM, approve=True, answer=" yes ",
+                    note="Checked ticket", memory=mem, now=NOW)  # fmt: skip
+    assert env.changes()[-1][3]["note"] == '{"answer":"yes","reason":"Checked ticket"}'
+
+
+def test_ut09_116_label_check_approve_answer_only_is_unchanged(env: Env) -> None:
+    """UT09-116 decide_review: a label_check approval without a note stores exactly {"answer"}."""
+    mem: Any = env.memory
+    env.item = _item("label_check")
+    a.decide_review(
+        actor("reviewer"), item_id=ITEM, approve=True, answer="yes", memory=mem, now=NOW
+    )
+    assert env.changes()[-1][3]["note"] == '{"answer":"yes"}'
+
+
+def test_ut09_117_other_kinds_keep_the_plain_note() -> None:
+    """UT09-117 stored_review_note: other kinds keep the plain note; an oversize note is refused."""
+    plain = stored_review_note("mapping_suggestion", approve=False, note="Wrong", answer=None)
+    assert plain == "Wrong"
+    assert stored_review_note("weight_change", approve=True, note=None, answer="x") is None
+    with pytest.raises(UserInputError, match="too long") as err:
+        stored_review_note("label_check", approve=False, note='"' * 1000, answer=None)
+    assert '"' * 10 not in str(err.value)
 
 
 def test_ut09_75_decide_review_memory_write_routes_to_memory_store(env: Env) -> None:
