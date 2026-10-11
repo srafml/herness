@@ -32,6 +32,7 @@ from herness.core.types import ReportDraft
 from herness.harness.llm.anthropic_client import AnthropicClient
 from herness.harness.llm.registry import LLMRegistry
 from herness.harness.swarm import _run_env
+from herness.harness.swarm.lifecycle import RunResult
 from herness.harness.swarm.run import Swarm
 from herness.store.ops import query_findings, select_tasks
 
@@ -52,20 +53,24 @@ def _trace(drv: Drv, run_id: str) -> list[dict[str, Any]]:
 API: Final = "https://api.anthropic.com/v1/messages"
 ENTITY_ID: Final = re.compile(r"(?<![A-Za-z0-9_])t[12](?![A-Za-z0-9_])")
 BUILD_ID_GAP = (
-    "product gap (T06-26): every off-network request carries the spec 05 role context line"
-    " 'build: <build_id>' (herness/harness/roles/base.py); a build id (8 digits, 6 digits,"
-    " 6 letters, e.g. 20260925-101500-ABCDEF) has 14 digits and matches the PHONE pattern of"
-    " herness/core/redact_patterns.py, so the egress guard re-scan refuses every hybrid Writer"
-    " and final-Skeptic call (pii_detected, PHONE) and hybrid always falls back locally; with"
-    " that fixed, the Writer still stops at its first paid call (stop_reason task_budget):"
-    " routing.role_budget('writer') leaves TaskBudget.max_cost_usd at 0 and the spec 05 loop"
-    " stops once cost_usd > max_cost_usd"
+    "product gap T06-29 (gap A): every off-network request carries the spec 05 role context"
+    " line 'build: <build_id>' (herness/harness/roles/base.py); a build id (8 digits, 6"
+    " digits, 6 letters, e.g. 20260925-101500-ABCDEF) has 14 digits and matches the PHONE"
+    " pattern of herness/core/redact_patterns.py, so the egress guard re-scan refuses every"
+    " hybrid Writer and final-Skeptic call (pii_detected, PHONE) and hybrid always falls back"
+    " locally"
+)
+COST_GAP = (
+    "product gap T06-29 (gap B): routing.role_budget('writer') leaves TaskBudget.max_cost_usd"
+    " at 0 and the spec 05 loop stops once cost_usd > max_cost_usd, so an off-network Writer"
+    " stops at its first paid call (stop_reason task_budget), the task is dead and the run"
+    " ends partial"
 )
 BANNER_GAP = (
-    "product gap (T06-26): the Writer sets banner hybrid_fallback only for the cost-cap route"
-    " fallback (route.fallback_local, writer.py); a spec 08 chain fallback after EgressBlocked"
-    " inside run_agent is not reported to the Writer, so the draft has no banner (impl 06"
-    " §6 table 'Hybrid egress refused', design T13)"
+    "product gap T06-29 (gap C): the Writer sets banner hybrid_fallback only for the cost-cap"
+    " route fallback (route.fallback_local, writer.py); a spec 08 chain fallback after"
+    " EgressBlocked inside run_agent is not reported to the Writer, so the draft has no banner"
+    " (impl 06 §6 table 'Hybrid egress refused', design T13)"
 )
 
 
@@ -103,15 +108,20 @@ def hybrid(
     return Hybrid(hcfg, llms, guard, wire, AnthropicClient(llms.config("claude-opus")))
 
 
-def _hybrid_run(drv: Drv, hy: Hybrid, monkeypatch: pytest.MonkeyPatch, name: str) -> ReportDraft:
+def _start(drv: Drv, hy: Hybrid, monkeypatch: pytest.MonkeyPatch, name: str) -> RunResult:
     """A standard hybrid funding run (every role local and scripted except the Writer) whose
-    Skeptics write `name` into every check note."""
+    Skeptics write `name` into every check note; its result, whatever the status."""
     scripts = f6.TaskScripts(skeptic_note=f"Confirmed with {name}.")
     f6.use_real_agents(drv, monkeypatch, scripts, llms=hy.llms, real={"claude-opus": hy.opus})
     deps = replace(drv.deps, hcfg=hy.hcfg)
     swarm = Swarm(hy.hcfg.pipelines, hy.llms, drv.memory, deps=deps)  # type: ignore[arg-type]
     drv.swarms.append(swarm)
-    res = asyncio.run(swarm.start(drv.request(depth="standard")))
+    return asyncio.run(swarm.start(drv.request(depth="standard")))
+
+
+def _hybrid_run(drv: Drv, hy: Hybrid, monkeypatch: pytest.MonkeyPatch, name: str) -> ReportDraft:
+    """`_start`, required to end `done`; its draft."""
+    res = _start(drv, hy, monkeypatch, name)
     assert res.status == "done"
     assert res.draft_path is not None
     return ReportDraft.model_validate_json(Path(res.draft_path).read_bytes())
@@ -135,7 +145,13 @@ def test_st06_06_hybrid_pack_has_no_sample_or_ticket_text_and_pseudonymized_enti
     the run's findings with entity tokens (`team_001`) and no entity id or catalog name, no
     `result_sample`, none of the ticket text planted in every evidence sample, and the
     personal name planted in the Skeptic notes only as its redaction token, so the guard found
-    no PERSON in it. The draft is restored to real ids."""
+    no PERSON in it. The draft is restored to real ids.
+
+    Depends on T06-29 gap A: today every Writer call is refused (build id read as PHONE) and
+    the run is done through the local fallback. Fixing gap A without gap B makes this test
+    fail at `_hybrid_run` (the off-network Writer stops on task_budget, run partial), and once
+    no call is refused the PERSON check over the refusal lines is vacuous (the body checks
+    above still hold)."""
     draft = _hybrid_run(drv, hybrid, monkeypatch, PLANTED_NAME)
     sent = _writer_calls(hybrid)
     assert sent
@@ -157,15 +173,36 @@ def test_st06_06_hybrid_pack_has_no_sample_or_ticket_text_and_pseudonymized_enti
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=BUILD_ID_GAP)
-def test_st06_06_clean_hybrid_writer_call_is_allowed_and_sent(
+def test_st06_06_clean_hybrid_writer_call_is_not_refused(
     drv: Drv, hybrid: Hybrid, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ST06-06 (T13) without personal data in the pack the Writer's off-network calls pass
-    the guard and reach the (scripted) Anthropic endpoint; no fallback banner."""
-    draft = _hybrid_run(drv, hybrid, monkeypatch, PLANTED_NAME)
+    """ST06-06 (T13) without personal data in the pack the guard refuses no Writer call: no
+    request is blocked and no refusal carries a PHONE hit (the run's status is not checked,
+    so gap B does not mask this gap)."""
+    _start(drv, hybrid, monkeypatch, PLANTED_NAME)
     sent = _writer_calls(hybrid)
+    assert sent
+    assert all("PHONE" not in line["scan_hits"] for line in _refusals(hybrid))
+    assert [s.blocked for s in sent] == [None] * len(sent)
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=COST_GAP)
+def test_st06_06_allowed_off_network_writer_finishes_its_draft(
+    drv: Drv, hybrid: Hybrid, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ST06-06 (T13) a Writer call the guard lets out is answered by the (scripted)
+    Anthropic endpoint and the off-network Writer finishes the draft: the run is done, the
+    Writer task is not stopped by its budget, no fallback banner. Gap A is sidestepped on
+    the test side only: this guard's re-scan does not block PHONE."""
+    monkeypatch.setattr(hybrid.guard, "_blocking", hybrid.guard._blocking - {"PHONE"})
+    res = _start(drv, hybrid, monkeypatch, PLANTED_NAME)
+    sent = _writer_calls(hybrid)
+    assert sent
     assert [s.blocked for s in sent] == [None] * len(sent)
     assert len(hybrid.wire.router.requests) == len(sent)
+    (writer_task,) = select_tasks(res.run_id, roles={"writer"})
+    assert (res.status, writer_task.status) == ("done", "done")
+    draft = ReportDraft.model_validate_json(Path(str(res.draft_path)).read_bytes())
     assert "hybrid_fallback" not in draft.banners
 
 
@@ -214,8 +251,8 @@ def test_st06_06_planted_pii_fallback_draft_has_hybrid_fallback_banner(
 # --- ST06-09 -----------------------------------------------------------------------------------
 
 LLM_TRACE_GAP = (
-    "product gap (T06-26): herness/harness/swarm/_routing_ctx.py build_tool_context hands the"
-    " loop the unbound run tracer (tracer=env.tracer, not env.tracer.bind(task_id=, role=)), so"
+    "product gap T06-29 (gap D): herness/harness/swarm/_routing_ctx.py build_tool_context hands"
+    " the loop the unbound run tracer (tracer=env.tracer, not env.tracer.bind(task_id=, role=)), so"
     " the spec 05 llm_call and tool_call events of swarm tasks carry task_id null and role null;"
     " no ops row records an analyst task's model either (task.result has none)"
 )
@@ -283,8 +320,9 @@ def test_st06_09_findings_verdicts_and_spawns_trace_to_task_and_model(
 def test_st06_09_finding_model_traceable_through_llm_call_traces(
     drv: Drv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ST06-09 the model behind every finding is traceable: its task has `llm_call` trace
-    events bound to that task id, each naming the client and model."""
+    """ST06-09 the model behind every finding and every spawn is traceable: the finding's task
+    and the spawning parent task have `llm_call` trace events bound to their task ids, each
+    naming the client and model."""
     run_id, events = _full_run(drv, monkeypatch)
     models: dict[str, set[tuple[str, str]]] = {}
     for ev in events:
@@ -295,3 +333,8 @@ def test_st06_09_finding_model_traceable_through_llm_call_traces(
     for f in findings:
         assert models[f.task_id]
         assert all(client and model for client, model in models[f.task_id])
+    parents = {ev["parent_task_id"] for ev in events if ev["type"] == "spawn_decision"}
+    assert parents
+    for parent in parents:
+        assert models[parent]
+        assert all(client and model for client, model in models[parent])

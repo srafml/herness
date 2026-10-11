@@ -258,6 +258,9 @@ def test_ft06_04_store_busy_beyond_retries_exits_non_zero_then_resume_continues(
     _as_review_job(drv, monkeypatch)
     attempts = policy("sqlite_write").attempts
     fault_env([
+        # The plan schema has no "skip the first n calls" selector (nth fires on one call only),
+        # so this count-based rule is a pass-through: it consumes the first usage write (the
+        # planning one) with a no-op delay, and the StoreBusy rule counts from the second call.
         {"point": "sqlite.write", "action": "delay:0.001", "kind": "swarm_run_usage", "count": 1},
         {"point": "sqlite.write", "action": "error:StoreBusy", "kind": "swarm_run_usage",
          "count": attempts},
