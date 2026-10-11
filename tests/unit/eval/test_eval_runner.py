@@ -213,7 +213,7 @@ def test_ut11_116_register_handlers_idempotent() -> None:
     [
         ({"repeat": 11}, "repeat"),  # TH11-13
         ({"compare_runs": [_RESUME]}, "at least two distinct runs"),  # T11-38
-        ({"suite": "classifier"}, "classifier eval is not available until T11-35"),
+        ({"suite": "classifier"}, "laya CURRENT missing or invalid"),  # T11-35, no model
         ({"compare_runs": [_RESUME, "run_x"]}, "run ids must be run_<ulid>"),  # T11-38
         ({"baseline": "synthetic-42-small"}, "baseline not found: name=synthetic-42-small"),
         ({"set_baseline": "Bad_Name"}, "set_baseline"),
@@ -225,8 +225,9 @@ def test_cv_t11_30_config_errors(
     extra: dict[str, Any], message: str, runner_store: OpsStoreHandle, tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:  # fmt: skip
-    """CV-T11-30 payload, the unbuilt classifier (T11-35), bad `--compare-runs` ids (T11-38),
-    a missing named baseline (T11-31), unknown ids and a bad mock dir are `ConfigError`."""
+    """CV-T11-30 payload, the classifier without a Laya model (T11-35), bad `--compare-runs`
+    ids (T11-38), a missing named baseline (T11-31), unknown ids and a bad mock dir are
+    `ConfigError`."""
     con = make_root(runner_store.data_root)
     suite = env.suite_file(tmp_path / "suite.yaml", [chat_q("G01")])
     payload = {"suite": str(suite), "profile": "local", "depth": "fast", "repeat": 1} | extra

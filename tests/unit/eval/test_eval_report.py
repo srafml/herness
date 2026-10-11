@@ -41,6 +41,7 @@ from tests.unit.eval._runner_env import (
 
 from herness.core.errors import ConfigError
 from herness.eval import report
+from herness.eval.classifier import ClassifierReport, GateMetricCheck
 from herness.eval.golden import load_suite
 from herness.eval.metrics import EvalMetrics, ThresholdResult, check_thresholds
 from herness.eval.report import load_baseline, save_baseline, write_report
@@ -78,22 +79,24 @@ def test_ut11_110_three_files_and_provenance(tmp_path: Path) -> None:
 
 
 def test_ut11_110_classifier_json_when_given(tmp_path: Path) -> None:
-    """UT11-110 `classifier.json` is written when a classifier report is given (a mapping
-    or a pydantic model)."""
+    """UT11-110 `classifier.json` (the `ClassifierReport` dump) is written when a classifier
+    report is given, and both reports gain the classifier section (T11-35)."""
     out = tmp_path / "run"
+    check = GateMetricCheck(check="gold_sha256", passed=True, stored="a" * 64,
+                            recomputed="a" * 64)  # fmt: skip
+    report = ClassifierReport(version="laya-20261004-1", question_set_version="qs-2026-10-01.1",
+                              gate_check=[check], deciders={}, synthetic=None,
+                              passed=True)  # fmt: skip
     paths = write_report(
         eval_run(out), out, results=[], metrics=EvalMetrics(), thresholds=[],
-        baseline=None, classifier={"checks": [{"name": "gate", "passed": True}]},
+        baseline=None, classifier=report,
     )  # fmt: skip
     assert [p.name for p in paths] == ["summary.json", "report.md", "report.html",
                                        "classifier.json"]  # fmt: skip
     body = json.loads((out / "classifier.json").read_text(encoding="utf-8"))
-    assert body == {"checks": [{"name": "gate", "passed": True}]}
-    write_report(eval_run(out), out, results=[], metrics=EvalMetrics(), thresholds=[],
-                 baseline=None, classifier=ROWS[0])  # fmt: skip
-    assert json.loads((out / "classifier.json").read_text(encoding="utf-8"))["check"] == (
-        "unsupported_numbers"
-    )
+    assert body == report.model_dump(mode="json")
+    assert "## Classifier" in (out / "report.md").read_text(encoding="utf-8")
+    assert "<h2>Classifier</h2>" in (out / "report.html").read_text(encoding="utf-8")
 
 
 def test_ut11_110_failures_first_and_baseline_diff(tmp_path: Path) -> None:

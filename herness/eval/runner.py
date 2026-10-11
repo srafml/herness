@@ -18,7 +18,7 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import duckdb
 from pydantic import BaseModel, ConfigDict
@@ -29,6 +29,7 @@ from herness.core.jobs import register_handler
 from herness.core.logging import get_logger
 from herness.core.types import Depth, JobOutcome
 from herness.eval._runner_baseline import BaselineChoice, resolve_baseline
+from herness.eval._runner_classifier import classifier_outcome
 from herness.eval._runner_compare import compare_runs_outcome, run_eval
 from herness.eval._runner_finish import (
     RunMeta,
@@ -82,7 +83,6 @@ __all__ = [
 ]  # fmt: skip
 
 PREMIUM_WORKERS: Final = 8  # TH11-13
-_NOT_BUILT: Final = "{feature} is not available until {card}"
 
 _log = get_logger("eval.runner")
 
@@ -129,11 +129,6 @@ class EvalRun(BaseModel):
     passed: bool
     yielded: bool = False
     canceled: bool = False
-
-
-def _not_built(feature: str, card: str) -> NoReturn:
-    msg = _NOT_BUILT.format(feature=feature, card=card)
-    raise ConfigError(msg)
 
 
 def _check(repeat: int, options: EvalOptions) -> None:
@@ -314,11 +309,6 @@ def register_handlers() -> None:
     register_handler("eval", handle_eval)
 
 
-def _refuse_unbuilt(payload: EvalPayload) -> None:
-    if payload.suite == CLASSIFIER_SUITE:
-        _not_built("classifier eval", "T11-35")
-
-
 def _suite_path(name: str, settings: EvalConfig) -> Path:
     return Path(settings.suite if name == "golden" else name)
 
@@ -332,10 +322,11 @@ def handle_eval(ctx: JobContext) -> JobOutcome:
     run_id: str | None = None
     try:
         payload = validate_payload(ctx.job.payload)
-        _refuse_unbuilt(payload)
         deps = factory(ctx)
         if payload.compare_runs:  # step 2: compare stored runs only (T11-38)
             return compare_runs_outcome(payload.compare_runs, deps)
+        if payload.suite == CLASSIFIER_SUITE:  # step 3: run_classifier (T11-35)
+            return classifier_outcome(payload, deps)
         if payload.mock_llm_dir is not None:
             load_scripts(Path(payload.mock_llm_dir))  # the factory wraps the registries
         suite = load_suite(_suite_path(payload.suite, deps.settings))

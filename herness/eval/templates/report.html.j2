@@ -67,6 +67,27 @@ pre { background: #f7f7f7; border: 1px solid #ddd; padding: 0.5rem; white-space:
 </table>
 {% endif %}
 
+{% if classifier is not none %}
+{% set c = classifier %}
+<h2>Classifier</h2>
+<p>Laya {{ c.version }} on question set {{ c.question_set_version }}: gate cross-check
+<span class="{{ 'pass' if c.passed else 'fail' }}">{{ 'passed' if c.passed else 'FAILED' }}</span></p>
+<h3>Gate checks</h3>
+<table>
+<tr><th>Check</th><th>Question</th><th>Metric</th><th>Stored</th><th>Recomputed</th><th>Passed</th><th>Detail</th></tr>
+{% for check, q, metric, stored, recomputed, ok, detail in c.checks %}
+<tr><td>{{ check }}</td><td>{{ q }}</td><td>{{ metric }}</td><td>{{ stored }}</td><td>{{ recomputed }}</td><td class="{{ 'pass' if ok else 'fail' }}">{{ 'yes' if ok else 'no' }}</td><td>{{ detail }}</td></tr>
+{% endfor %}
+</table>
+{% for title, head, rows in [("Deciders", ["Decider", "Question", "Status", "Version"], c.deciders), ("Synthetic truth check (informational)", ["Question", "Status"], c.synthetic)] if rows is not none %}
+<h3>{{ title }}</h3>
+<table>
+<tr>{% for h in head + c.head|list %}<th>{{ h }}</th>{% endfor %}</tr>
+{% for row in rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}
+</table>
+{% endfor %}
+{% endif %}
+
 <h2>Questions</h2>
 {% for q in questions %}
 <section>

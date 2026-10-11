@@ -20,11 +20,14 @@ import re
 from pathlib import Path
 from typing import Annotated, Final, Literal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
 from herness.core.errors import ConfigError, RecoverableError
 
 MAX_TRUTH_BYTES: Final = 1_000_000  # design Table F: truth.json cap (U11-28)
+PLANTED_ANSWER_COLUMNS: Final = ("record_id", "content_hash", "question", "answer")
 
 _PLANT_PATH_RE: Final = re.compile(r"^(plants\.[A-Za-z0-9_]+|T[0-9]c?)(\.[a-z_]+)+$")
 
@@ -156,6 +159,17 @@ def load_truth(truth_dir: Path) -> TruthManifest:
     except ValidationError as exc:
         msg = "truth manifest failed validation"
         raise ConfigError(msg, hint=str(exc), path=str(path)) from exc
+
+
+def load_planted_answers(truth_dir: Path) -> pa.Table:
+    """`<truth_dir>/truth_labels.parquet` without `pii_spans` (T11-35, F11-09 step 6): the
+    planted answers, read only to score stored decisions. `ConfigError` when unreadable."""
+    path = truth_dir / "truth_labels.parquet"
+    try:
+        return pq.read_table(path, columns=list(PLANTED_ANSWER_COLUMNS))
+    except (OSError, pa.ArrowException) as exc:
+        msg = "cannot read truth labels"
+        raise ConfigError(msg, path=str(path)) from exc
 
 
 def _resolve_short_key(token: str) -> str:
