@@ -20,7 +20,7 @@ import herness.harness.swarm.handler
 import herness.harness.tools
 import herness.store.ops.resilience
 from herness import cli
-from herness._cli import _worker_boot
+from herness._cli import _eval_deps, _worker_boot
 from herness.core.config import get_config
 from herness.core.errors import ConfigError
 from herness.harness import memory
@@ -58,7 +58,9 @@ def boot_env(cli_env: CliEnv, monkeypatch: pytest.MonkeyPatch) -> tuple[CliEnv, 
     monkeypatch.setattr(cli, "run_startup_validation", spy("validate"))
     monkeypatch.setattr(herness.admin, "register_handlers", spy("admin"))
     monkeypatch.setattr(herness.connectors.jobs, "register_job_handlers", spy("connectors"))
-    monkeypatch.setattr(herness.eval.runner, "register_handlers", spy("eval"))
+    monkeypatch.setattr(herness.eval.runner, "register_handlers", spy("eval-owner"))
+    monkeypatch.setattr(herness.eval.runner._Binding, "factory", None)  # bound by T09-24
+    monkeypatch.setattr(_eval_deps._Root, "path", None)
     monkeypatch.setattr(herness.harness.memory, "register_memory_components", spy("memory"))
     monkeypatch.setattr(herness.harness.swarm.handler, "register_handlers", spy("review"))
     monkeypatch.setattr(herness.harness.memory, "get_memory_store", object)
@@ -76,11 +78,13 @@ def test_ut09_101_worker_bootstrap_order_and_idempotence(
     first = list(events)
     assert first[0] == "guard"
     assert first.index("ports") < first.index("validate") < first.index("admin")
-    for kind in ("build_pipeline", "distill", "chat"):
+    for kind in ("build_pipeline", "distill", "chat", "eval"):  # eval: T09-24 run_eval_job
         assert first.count(f"register:{kind}") == 1
-    for owner in ("admin", "connectors", "memory", "review", "eval"):
+    for owner in ("admin", "connectors", "memory", "review"):
         assert first.count(owner) == 1
     assert "purge" in first
+    assert "eval-owner" not in first  # replaced by run_eval_job (T09-24 ruling r2)
+    assert herness.eval.runner._Binding.factory is _eval_deps.make_deps  # T09-24
     cli.worker_bootstrap()
     assert events == first  # the second call changes nothing
 

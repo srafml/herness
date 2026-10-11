@@ -251,7 +251,12 @@ def _register_groups(root: typer.Typer) -> None:
     # --- end T09-22 commands ---
     cmd_data.register(scratch)  # T09-23
     cmd_review.register(scratch)  # T09-23
-    # T09-24: cmd_queue.register(scratch); cmd_admin.register(scratch)
+    # T09-24 commands
+    from herness._cli import cmd_admin, cmd_queue  # noqa: PLC0415 - lazy (BT09-07)
+
+    cmd_queue.register(scratch)
+    cmd_admin.register(scratch)
+    # end T09-24 commands
     cmd_chat.register(scratch)  # T09-25
     have = {_entry_name(c) for c in root.registered_commands}
     have |= {_entry_name(g) for g in root.registered_groups}
