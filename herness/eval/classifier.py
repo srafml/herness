@@ -53,10 +53,11 @@ from herness.eval.truth import load_planted_answers
 if TYPE_CHECKING:
     from duckdb import DuckDBPyConnection
 
+    from herness.core.config import HernessConfig
     from herness.eval.settings import ClassifierSettings
 
-__all__ = ["ClassifierReport", "DeciderMetrics", "GateMetricCheck", "ReliabilityBin",
-           "default_deciders", "run_classifier"]  # fmt: skip
+__all__ = ["ClassifierInputs", "ClassifierReport", "DeciderMetrics", "GateMetricCheck",
+           "ReliabilityBin", "classifier_inputs", "run_classifier"]  # fmt: skip
 
 REPORT_VERSION: Final = 1
 MAX_EVAL_BYTES: Final = 4 * 1024 * 1024
@@ -130,19 +131,27 @@ class _EvalDoc(BaseModel):
     questions: dict[str, _EvalEntry]
 
 
-def default_deciders() -> list[str]:
-    """F11-09 step 5: laya, openjev, jev (when enabled), llm, ensemble, human."""
-    jev = get_config().models.deciders.jev.enabled
-    return [_LAYA, "openjev", *(["jev"] if jev else []), "llm", "ensemble", "human"]
+@dataclass(frozen=True)
+class ClassifierInputs:
+    """What the classifier eval takes from the loaded config, read once per run: the question
+    set (types, thresholds, fingerprints), the enrichment paths under the data root and the
+    default deciders of F11-09 step 5 (laya, openjev, jev when enabled, llm, ensemble, human)."""
+
+    questions: QuestionSet
+    paths: EnrichPaths
+    deciders: tuple[str, ...]
 
 
-def _paths(data_root: Path) -> EnrichPaths:
-    cfg = get_config()
-    return EnrichPaths(
+def classifier_inputs(cfg: HernessConfig, data_root: Path) -> ClassifierInputs:
+    """`ClassifierInputs` of `cfg` (the caller's one `get_config()` of the run)."""
+    paths = EnrichPaths(
         data_root=data_root.resolve(),
         embedding_path=cfg.decisions.embedding.path,
         laya_current_file=cfg.models.deciders.laya.current_file,
     )
+    jev = ("jev",) if cfg.models.deciders.jev.enabled else ()
+    deciders = (_LAYA, "openjev", *jev, "llm", "ensemble", "human")
+    return ClassifierInputs(load_question_set(cfg.decisions), paths, deciders)
 
 
 def _read_eval(paths: EnrichPaths, version: str) -> _EvalDoc:
@@ -161,14 +170,6 @@ def _read_eval(paths: EnrichPaths, version: str) -> _EvalDoc:
     except (ValueError, ValidationError):
         msg = f"{version}: eval.json malformed"
         raise ConfigError(msg, version=version) from None
-
-
-def _question_set(qset_version: str) -> QuestionSet:
-    qs = load_question_set(get_config().decisions)
-    if qs.version != qset_version:
-        msg = f"question set {qset_version} is not the configured one"
-        raise ConfigError(msg, question_set_version=qset_version)
-    return qs
 
 
 def _gold(store: LabelStore, qsv: str) -> pa.Table | None:
@@ -273,7 +274,7 @@ def _question_checks(
                    metric=name, stored=stored, recomputed=recomputed)  # fmt: skip
     t = entry.laya.get("temperature")
     checks.add("calibration", _close(t, stored_t, gate.tolerance), question=q.id,
-               metric="temperature", stored=stored_t, recomputed=t,
+               metric="temperature", stored=t, recomputed=stored_t,
                detail="" if stored_t is not None else "no calibration.json entry")  # fmt: skip
 
 
@@ -322,10 +323,15 @@ def run_classifier(  # noqa: PLR0913 - U11-67 signature
     truth_dir: Path | None,
     settings: ClassifierSettings,
     rng_seed: int = 20261001,
+    inputs: ClassifierInputs | None = None,
 ) -> ClassifierReport:
-    """Classifier eval (U11-67, flow F11-09 steps 1-6); the caller writes the files (step 7)."""
-    qs = _question_set(qset_version)
-    paths = _paths(data_root)
+    """Classifier eval (U11-67, flow F11-09 steps 1-6); the caller writes the files (step 7).
+    `inputs` (extra, T11-35) carries the run's config values; None reads the config once."""
+    inputs = inputs or classifier_inputs(get_config(), data_root)
+    qs, paths = inputs.questions, inputs.paths
+    if qs.version != qset_version:
+        msg = f"question set {qset_version} is not the configured one"
+        raise ConfigError(msg, question_set_version=qset_version)
     version = read_current(paths)  # step 1
     manifest = verify_model_dir(paths, version)
     doc = _read_eval(paths, version)

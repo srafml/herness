@@ -54,7 +54,7 @@ __all__ = ["Outcome", "RunMeta", "close_run", "finish_run", "insert_eval_run", "
 SUMMARY_SCHEMA: Final = 1
 _COMPONENT: Final = "eval"
 _ACTIVE: Final = frozenset({"running"})
-_CODE_DIR: Final = Path(__file__).resolve().parents[2]  # the checkout the code runs from
+CODE_DIR: Final = Path(__file__).resolve().parents[2]  # the checkout the code runs from
 
 _log = get_logger("eval.runner")
 
@@ -213,7 +213,7 @@ def _summary(  # noqa: PLR0913 - the summary's parts, keyword-only after the met
         "schema": SUMMARY_SCHEMA, "run_id": meta.run_id, "profile": meta.profile,
         "depth": meta.depth, "build_id": meta.build_id, "dataset_kind": meta.dataset_kind,
         "dataset_seed": meta.dataset_seed, "dataset_scale": meta.dataset_scale,
-        "git_sha": git_sha(env=os.environ, repo_dir=_CODE_DIR),
+        "git_sha": git_sha(env=os.environ, repo_dir=CODE_DIR),
         "config_hash": run_config_hash(meta.run_id), "suite_version": meta.suite_version,
         "suite_sha256": meta.suite_sha256,
         "judge_model": env.judge.model if env.judge is not None else None,

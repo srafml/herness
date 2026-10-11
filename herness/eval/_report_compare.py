@@ -31,7 +31,7 @@ from herness.eval.results import QuestionResult, ResultsLog
 __all__ = [
     "DIFF_FIELDS", "RUN_ID_RE", "ComparisonDelta", "ComparisonRow", "ComparisonTable", "Flip",
     "build_comparison", "comparison_lines", "comparison_view", "delta_text", "fmt",
-    "load_summary", "md_cell", "md_table",
+    "load_summary", "md_cell", "md_code", "md_table",
 ]  # fmt: skip
 
 RUN_ID_RE: Final = re.compile(r"^run_[0-9A-HJKMNP-TV-Z]{26}$")
@@ -298,7 +298,7 @@ def md_table(head: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
     return [*lines, ""]
 
 
-def _code(value: str) -> str:
+def md_code(value: str) -> str:
     """`value` as an inline code span, so stored text is never read as markup."""
     longest = max((len(run) for run in re.findall(r"`+", value)), default=0)
     ticks = "`" * (longest + 1)
@@ -343,7 +343,7 @@ def comparison_lines(view: Mapping[str, Any], *, level: int) -> list[str]:
                 "the questions present in both runs.", ""]  # fmt: skip
     out += [f"{h}# Runs", ""]
     out += md_table(("#", "Run", "Profile", "Depth", "Build"),
-                    [(n, *map(_code, rest)) for n, *rest in view["runs"]])  # fmt: skip
+                    [(n, *map(md_code, rest)) for n, *rest in view["runs"]])  # fmt: skip
     if view["harness_defects"]:
         out += [
             f"{h}# Harness defects",
@@ -351,7 +351,7 @@ def comparison_lines(view: Mapping[str, Any], *, level: int) -> list[str]:
             "Numeric questions that disagree on the same build (spec 00 principle 1):",
             "",
         ]
-        out += [f"- {_code(q)}" for q in view["harness_defects"]] + [""]
+        out += [f"- {md_code(q)}" for q in view["harness_defects"]] + [""]
     labels = view["labels"]
     out += [f"{h}# Metrics", ""]
     out += md_table(("Metric", *labels, *(f"Δ {label}" for label in labels[1:])),
@@ -359,6 +359,6 @@ def comparison_lines(view: Mapping[str, Any], *, level: int) -> list[str]:
     out += [f"{h}# Flips", ""]
     if not view["flips"]:
         return [*out, "None.", ""]
-    rows = [(_code(q), rep, _code(a), _code(b), _code(x), _code(y))
+    rows = [(md_code(q), rep, md_code(a), md_code(b), md_code(x), md_code(y))
             for q, rep, a, b, x, y in view["flips"]]  # fmt: skip
     return out + md_table(("Question", "Repeat", "From", "To", "Before", "After"), rows)
