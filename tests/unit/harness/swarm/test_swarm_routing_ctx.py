@@ -1,8 +1,10 @@
-"""UT06-63, UT06-65-UT06-67, UT06-92: result mapping, routing, tool context, hooks, task input."""
+"""UT06-63, UT06-65-UT06-67, UT06-92, UT06-97-UT06-100: result mapping, routing, tool context,
+hooks, task input; the T06-29 cost budget, fallback watch and bound task tracer."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -28,13 +30,15 @@ from herness.core.types import (
 )
 from herness.harness.budget import RunBudget
 from herness.harness.findings import compute_dedup_key
+from herness.harness.llm.base import egress_purpose_for
 from herness.harness.llm.registry import LLMRegistry
-from herness.harness.llm.settings import ClientConfig, ModelsConfig, SqlSettings
+from herness.harness.llm.settings import ClientConfig, ModelsConfig, SqlSettings, TraceSettings
 from herness.harness.loop import HarnessHooks
 from herness.harness.pipelines.settings import PipelinesConfig, resolve_knobs
 from herness.harness.roles.base import get_role
 from herness.harness.swarm import _routing_ctx, routing
 from herness.harness.swarm.routing import (
+    AnsweredClients,
     Route,
     RunEnv,
     build_hooks,
@@ -45,6 +49,7 @@ from herness.harness.swarm.routing import (
     route_task,
 )
 from herness.harness.tools import wrap_untrusted
+from herness.harness.tracing import Tracer
 from herness.store.ops import RunRow
 
 pytestmark = pytest.mark.unit
@@ -417,7 +422,8 @@ def test_ut06_66_chain_none_after_fallback(monkeypatch: pytest.MonkeyPatch) -> N
     assert isinstance(hooks, HarnessHooks)
     assert hooks._chain is None
     assert hooks._stop is env.stop
-    assert hooks.tracer is env.tracer
+    assert hooks.tracer.task_id == spec.task_id  # the run tracer bound to the task (UT06-99)
+    assert hooks.tracer.events is env.tracer.events  # type: ignore[attr-defined]
     assert hooks._registry is reg
     assert hooks._gates is env.gates
     assert (hooks._task_id, hooks._phase) == (spec.task_id, "analysis")
@@ -472,7 +478,8 @@ def test_ut06_67_hybrid_off_network_writer() -> None:
     assert ctx.ops is env.ops
     assert ctx.vectors is env.vectors
     assert ctx.ledger is env.writer
-    assert ctx.tracer is env.tracer
+    assert ctx.tracer.task_id == spec.task_id  # the run tracer bound to the task (UT06-99)
+    assert ctx.tracer.events is env.tracer.events  # type: ignore[attr-defined]
     assert ctx.budgets.deadline == NOW + timedelta(seconds=600)
     assert ctx.budgets.max_tokens == spec.budget.max_tokens
     assert ctx.sql_limits.timeout_s == 30.0
@@ -624,3 +631,183 @@ def test_ut06_92_tuples_are_walked_and_kept() -> None:
     out = build_task_input("analyst", {"task_id": "t", "items": ("x", {"notes": "n"})})
     wrapped = wrap_untrusted("n", source="task_notes", record_id="t")
     assert out["items"] == ("x", {"notes": wrapped})
+
+
+# --- UT06-100 (T06-29 gap E)
+
+
+def test_ut06_100_hybrid_final_skeptic_role_carries_skeptic_final() -> None:
+    """UT06-100 a hybrid final Skeptic (model role `skeptic_final`, routed to claude-opus)
+    gets the skeptic `RoleSpec` with model role `skeptic_final`, so the role's egress purpose
+    is `reasoning_final` and equals its tool context's (the guard allows it and the spec 05
+    `run_agent` precheck passes); a non-final Skeptic and a local final Skeptic keep their
+    model roles and local routing (T06-29 gap E)."""
+    reg = _hybrid()
+    env = _env(_run(profile="hybrid"), reg)
+    final = _spec("skeptic", model_role="skeptic_final")
+    route = route_task(final, llms=reg, depth="standard", profile="hybrid", ledger=env.analysis)
+    assert (route.client_key, route.off_network) == ("claude-opus", True)
+    assert (route.role_spec.name, route.role_spec.model_role) == ("skeptic", "skeptic_final")
+    purpose = egress_purpose_for(route.role_spec.model_role)
+    assert purpose == _ctx(env, final, route).egress_purpose == "reasoning_final"
+    plain = route_task(_spec("skeptic"), llms=reg, depth="standard", profile="hybrid",
+                       ledger=env.analysis)  # fmt: skip
+    assert (plain.role_spec.model_role, plain.client_key, plain.off_network) == (
+        "skeptic", "local-30b", False,
+    )  # fmt: skip
+    local = route_task(final, llms=_registry(_models()), depth="standard", profile="local",
+                       ledger=env.analysis)  # fmt: skip
+    assert (local.role_spec.model_role, local.client_key, local.off_network) == (
+        "skeptic_final", "local-30b", False,
+    )  # fmt: skip
+    assert _ctx(env, final, local).egress_purpose is None
+
+
+# --- UT06-97 (T06-29 gap B)
+
+
+def _spent(name: str, cap: str | None, used: str) -> RunBudget:
+    cost_cap = None if cap is None else Decimal(cap)
+    ledger = RunBudget(name, 1_000_000, cost_cap, cost_cap_raises=False, run_id="run_x")  # type: ignore[arg-type]
+    ledger.charge(10, 10, Decimal(used))
+    return ledger
+
+
+def test_ut06_97_off_network_hybrid_task_gets_the_ledger_cost_left() -> None:
+    """UT06-97 a hybrid off-network Writer or final Skeptic may spend what its phase ledger
+    has left of `hybrid.max_cost_usd_per_run` (rounded down to cents); a local task keeps
+    `max_cost_usd` 0 (T06-29 gap B)."""
+    reg = _hybrid()
+    env = _env(_run(profile="hybrid"), reg)
+    writer = _spec("writer")
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    ledger = _spent("writer", "4.50", "1.255")
+    ctx = build_tool_context(env, writer, opus, task_tools={}, ledger=ledger, now=NOW)
+    assert ctx.budgets.max_cost_usd == Decimal("3.24")
+    assert writer.budget.max_cost_usd == 0  # the stored task spec is unchanged
+    skeptic = _spec("skeptic", model_role="skeptic_final")
+    final = _route(reg, "claude-opus", model_role="skeptic_final", role="skeptic", off_network=True)
+    analysis = _spent("analysis", "10.50", "0")
+    ctx = build_tool_context(env, skeptic, final, task_tools={}, ledger=analysis, now=NOW)
+    assert ctx.budgets.max_cost_usd == Decimal("10.50")
+    local = _route(reg, "local-30b", model_role="analyst", role="analyst_general")
+    ctx = build_tool_context(env, _spec(), local, task_tools={}, ledger=analysis, now=NOW)
+    assert ctx.budgets.max_cost_usd == 0
+
+
+def test_ut06_97_no_cost_cap_or_cap_spent_leaves_zero() -> None:
+    """UT06-97 an off-network route under a ledger without a cost cap (not hybrid) or with
+    the cap already spent keeps `max_cost_usd` 0."""
+    reg = _hybrid()
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    cases = (("premium", _spent("writer", None, "1")), ("hybrid", _spent("writer", "2", "3")))
+    for profile, ledger in cases:
+        env = _env(_run(profile=profile), reg)
+        ctx = build_tool_context(env, _spec("writer"), opus, task_tools={}, ledger=ledger, now=NOW)
+        assert ctx.budgets.max_cost_usd == 0
+
+
+def test_ut06_97_each_writer_pass_gets_only_what_is_left() -> None:
+    """UT06-97 (review I-1) the Writer refreshes its context before every pass: pass 1 may
+    spend only what pass 0 left of the writer ledger's cap, and nothing once it is spent, so
+    the passes together stay within the cap; the deadline and the rest are unchanged."""
+    reg = _hybrid()
+    env = _env(_run(profile="hybrid"), reg)
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    ledger = _spent("writer", "4.50", "1")
+    ctx = build_tool_context(env, _spec("writer"), opus, task_tools={}, ledger=ledger, now=NOW)
+    assert ctx.budgets.max_cost_usd == Decimal("3.50")  # pass 0
+    ledger.charge(10, 10, Decimal("2.255"))  # pass 0 spent
+    again = _routing_ctx.with_cost_left(ctx, env.run, opus, ledger)
+    assert again.budgets.max_cost_usd == Decimal("1.24")  # pass 1
+    assert again.budgets.model_copy(update={"max_cost_usd": Decimal("3.50")}) == ctx.budgets
+    assert (again.tracer, again.ledger, again.task_id) == (ctx.tracer, ctx.ledger, ctx.task_id)
+    ledger.charge(10, 10, Decimal("1.30"))  # pass 1 spent past the cap
+    assert _routing_ctx.with_cost_left(again, env.run, opus, ledger).budgets.max_cost_usd == 0
+
+
+# --- UT06-98 (T06-29 gap C)
+
+
+def _answered(*clients: str) -> tuple[AnsweredClients, RecordingTracer]:
+    inner = RecordingTracer("run_x", task_id="task_w")
+    watch = AnsweredClients(inner)
+    for client in clients:
+        watch.emit("llm_call", step=0, client=client, model="m")
+    watch.emit("tool_call", step=0, client="not-a-model-call")
+    return watch, inner
+
+
+def test_ut06_98_chain_fallback_to_local_is_seen() -> None:
+    """UT06-98 the Writer's `AnsweredClients` forwards every event to the task tracer and
+    reports a local fallback when an off-network route was answered by a local client (the
+    spec 08 chain after `EgressBlocked`), so the draft gets banner `hybrid_fallback` (T06-29
+    gap C)."""
+    reg = _hybrid()
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    watch, inner = _answered("claude-opus", "local-30b")
+    assert [(kind, f.get("client")) for kind, _span, f in inner.events] == [
+        ("llm_call", "claude-opus"), ("llm_call", "local-30b"), ("tool_call", "not-a-model-call"),
+    ]  # fmt: skip
+    assert (watch.run_id, watch.task_id) == ("run_x", "task_w")
+    assert watch.clients == {"claude-opus", "local-30b"}
+    assert watch.fell_back_local(opus, reg) is True
+
+
+def test_ut06_98_no_fallback_no_banner() -> None:
+    """UT06-98 an off-network route answered only off-network, a local route (a plain local
+    run, or the cost-cap `fallback_local` route) and no call at all report no chain
+    fallback."""
+    reg = _hybrid()
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    local = _route(reg, "local-30b", model_role="writer")
+    assert _answered("claude-opus")[0].fell_back_local(opus, reg) is False
+    assert _answered("local-30b")[0].fell_back_local(local, reg) is False
+    assert _answered()[0].fell_back_local(opus, reg) is False
+
+
+# --- UT06-99 (T06-29 gap D)
+
+
+def test_ut06_99_task_tracer_is_bound_to_task_and_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT06-99 the tool context and the hooks of a swarm task carry the run tracer bound to
+    the task's id and role, so every `llm_call`, `tool_call` and chain `fallback` event the
+    loop emits names the task (TH06-09, T06-29 gap D); the run tracer itself stays unbound."""
+    gpu = _Gpu()
+    monkeypatch.setattr(_routing_ctx, "gpu_state", lambda: gpu)
+    reg = _registry(_models())
+    run = _run()
+    root = Tracer(
+        run.run_id, build_id=BUILD, run_kind="review", traces_dir=tmp_path,
+        settings=TraceSettings(payload_sample_rate={"eval": 1.0, "chat": 1.0, "review": 1.0}),
+    )  # fmt: skip
+    env = _env(run, reg, tracer=root)
+    spec = _spec()
+    route = _route(reg, "local-30b", model_role="analyst", role="analyst_general")
+    ctx = _ctx(env, spec, route)
+    hooks = build_hooks(env, spec, route, ctx)
+    assert (ctx.tracer.task_id, hooks.tracer.task_id, root.task_id) == (
+        spec.task_id, spec.task_id, None,
+    )  # fmt: skip
+    ctx.tracer.emit("guard_stop", step=1, cause="max_steps")
+    hooks.tracer.emit("guard_stop", step=2, cause="no_progress")
+    root.close()
+    lines = (tmp_path / f"{run.run_id}.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line) for line in lines]
+    assert [(ev["task_id"], ev["role"], ev["step"]) for ev in events] == [
+        (spec.task_id, "analyst", 1), (spec.task_id, "analyst", 2),
+    ]  # fmt: skip
+
+
+def test_ut06_99_recording_tracer_views_share_events() -> None:
+    """UT06-99 the `RecordingTracer` fake binds like `Tracer.bind`: a view records into the
+    run's events with the bound task id and role."""
+    reg = _registry(_models())
+    env = _env(_run(), reg)
+    spec = _spec()
+    route = _route(reg, "local-30b", model_role="analyst", role="analyst_general")
+    _ctx(env, spec, route).tracer.emit("guard_stop", step=1, cause="max_steps")
+    [(kind, _span, fields)] = env.tracer.events  # type: ignore[attr-defined]
+    assert (kind, fields["task_id"], fields["role"]) == ("guard_stop", spec.task_id, "analyst")

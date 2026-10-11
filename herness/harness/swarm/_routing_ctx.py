@@ -11,6 +11,7 @@ import asyncio
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from decimal import ROUND_DOWN, Decimal
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from herness.core.errors import ConfigError
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
 __all__ = ["RunEnv", "build_hooks", "build_tool_context"]
 
 _OFF_NETWORK_TOOLS: Final = frozenset({"get_metric", "get_scores", "list_findings"})
+_CENT: Final = Decimal("0.01")
 
 
 class _MetricSink(Protocol):
@@ -100,6 +102,20 @@ def _egress_purpose(spec: TaskSpec, route: Route) -> Literal["reasoning", "reaso
     return "reasoning_final" if final else "reasoning"
 
 
+def _cost_left(run: RunRow, route: Route, ledger: RunBudget) -> Decimal:
+    """`max_cost_usd` of one task: 0, or for a hybrid off-network route what its phase ledger
+    has left of `hybrid.max_cost_usd_per_run`, rounded down to cents (T06-29 gap B)."""
+    if run.profile != "hybrid" or not route.off_network or ledger.cost_cap is None:
+        return Decimal(0)
+    return max(Decimal(0), ledger.cost_cap - ledger.cost_used).quantize(_CENT, ROUND_DOWN)
+
+
+def with_cost_left(ctx: ToolContext, run: RunRow, route: Route, ledger: RunBudget) -> ToolContext:
+    """`ctx` with `max_cost_usd` taken from the ledger now (each Writer pass, T06-29 I-1)."""
+    budgets = ctx.budgets.model_copy(update={"max_cost_usd": _cost_left(run, route, ledger)})
+    return ctx.model_copy(update={"budgets": budgets})
+
+
 def build_tool_context(
     env: RunEnv,
     spec: TaskSpec,
@@ -136,7 +152,9 @@ def build_tool_context(
         warehouse=env.warehouses.get(run.build_id),
         ops=env.ops,
         vectors=env.vectors,
-        budgets=spec.budget.to_budgets(now),
+        budgets=spec.budget.model_copy(
+            update={"max_cost_usd": _cost_left(run, route, ledger)}
+        ).to_budgets(now),
         ledger=ledger,
         sql_limits=SqlLimits(
             return_rows=sql.return_rows, scan_rows=sql.scan_rows, timeout_s=sql.timeout_s[depth]
@@ -144,7 +162,8 @@ def build_tool_context(
         text_access="redacted_only",
         egress_purpose=_egress_purpose(spec, route),
         # Tracer.emit adds typed keyword-only fields; structurally a TraceEmitter (U05-69).
-        tracer=cast("TraceEmitter", env.tracer),
+        # Bound to the task, so its llm_call and tool_call events name it (TH06-09, T06-29).
+        tracer=cast("TraceEmitter", env.tracer.bind(task_id=spec.task_id, role=spec.role)),
     )
 
 
@@ -159,7 +178,7 @@ def build_hooks(
     """The spec 05 `HarnessHooks` of one task (U06-99, design 06 §3.3).
 
     No model chain after a hybrid local fallback (the routed local client is called directly);
-    the phase is the run's current status.
+    the phase is the run's current status; the tracer is bound to the task (TH06-09).
     """
     chain = (
         None
@@ -175,5 +194,5 @@ def build_hooks(
         phase=env.run.status,
         stop=env.stop,
         on_text_delta=on_text_delta,
-        tracer=env.tracer,
+        tracer=env.tracer.bind(task_id=spec.task_id, role=spec.role),
     )

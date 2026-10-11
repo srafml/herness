@@ -5,10 +5,12 @@ implements `VectorHandle` and `RecordingTracer` implements `TraceEmitter`. Each 
 it receives in public attributes so tests can assert on it.
 """
 
+import copy
 import threading
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
+from typing import Self
 
 from pydantic import JsonValue
 
@@ -95,6 +97,7 @@ class RecordingTracer:
     def __init__(self, run_id: str = "run_test", task_id: str | None = None) -> None:
         self._run_id = run_id
         self._task_id = task_id
+        self._role: str | None = None
         self.events: list[tuple[str, str, dict[str, object]]] = []
         self._lock = threading.Lock()
 
@@ -106,7 +109,17 @@ class RecordingTracer:
     def task_id(self) -> str | None:
         return self._task_id
 
+    def bind(self, *, task_id: str, role: str) -> Self:
+        """A view like spec 05 `Tracer.bind`: it shares `events` (and the lock) and records
+        `task_id` and `role` in the fields of its events unless they are given."""
+        view = copy.copy(self)
+        view._task_id, view._role = task_id, role
+        return view
+
     def emit(self, type: str, /, **fields: object) -> str:  # noqa: A002 - protocol name
+        if self._role is not None:  # a bound view: None means "the bound default"
+            bound = {"task_id": self._task_id, "role": self._role}
+            fields = bound | {k: v for k, v in fields.items() if v is not None or k not in bound}
         with self._lock:
             span_id = f"sp_{len(self.events) + 1:06d}"
             self.events.append((type, span_id, dict(fields)))

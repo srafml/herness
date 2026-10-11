@@ -31,6 +31,7 @@ from herness.harness.swarm import hybrid
 from herness.harness.swarm import scheduler as sch
 from herness.harness.swarm._challenge_gate1 import insert, plain_result
 from herness.harness.swarm._draft_checks import Failure
+from herness.harness.swarm._routing_ctx import with_cost_left
 from herness.harness.swarm._writer_input import (
     WriterInput,
     entry_state,
@@ -54,6 +55,7 @@ from herness.harness.swarm.draft_rules import (
     fill_draft,
 )
 from herness.harness.swarm.routing import (
+    AnsweredClients,
     build_hooks,
     build_tool_context,
     route_task,
@@ -109,7 +111,8 @@ def write_draft_atomic(path: Path, draft: ReportDraft) -> None:
 
 @dataclass(slots=True)
 class _Writer:
-    """One claimed Writer task: route, tool context, hooks, pseudonyms and agent results."""
+    """One claimed Writer task: route, tool context, hooks, pseudonyms, the clients that
+    answered (`watch`, the context's tracer) and agent results."""
 
     env: RunEnv
     row: TaskRow
@@ -118,12 +121,15 @@ class _Writer:
     ctx: ToolContext
     hooks: HarnessHooks
     pseudo: hybrid.Pseudonymizer | None
+    watch: AnsweredClients
     runs: list[AgentResult] = field(default_factory=list)
 
     async def draft(self, task_input: dict[str, object], *, first: bool) -> ReportDraft:
         """One pass: run the agent, restore and validate its output, fill the draft (steps 5-6)."""
         spec, route, env = self.row.spec, self.route, self.env
         resume = sch._resume_from(self.row.checkpoint) if first else None
+        # Every pass may spend only what the passes before it left of the cost cap (I-1).
+        self.ctx = with_cost_left(self.ctx, env.run, route, env.writer)
         try:
             async with asyncio.timeout(spec.budget.wall_clock_s + sch.WALL_CLOCK_GRACE_S):
                 res = await run_agent(
@@ -144,7 +150,9 @@ class _Writer:
         except ValidationError as exc:
             msg = f"writer output invalid: task_id={spec.task_id}"
             raise FatalError(msg) from exc
-        extras = dataclasses.replace(self.wi.extras, hybrid_fallback=route.fallback_local)
+        # A cost-cap route fallback, or a chain fallback to a local client (EgressBlocked).
+        fallback = route.fallback_local or self.watch.fell_back_local(route, env.llms)
+        extras = dataclasses.replace(self.wi.extras, hybrid_fallback=fallback)
         return fill_draft(
             model, run=env.run, pipeline=env.pipeline, plan_ctx=self.wi.plan_ctx,
             findings=self.wi.by_id, extras=extras,
@@ -258,7 +266,9 @@ async def _attempt(env: RunEnv, row: TaskRow, wi: WriterInput, path: Path) -> bo
     )  # fmt: skip
     tools = build_task_tools(spec, bb=env.bb, broker=env.broker)
     ctx = build_tool_context(env, spec, route, task_tools=tools, ledger=env.writer, now=env.clock())
-    w = _Writer(env, row, wi, route, ctx, build_hooks(env, spec, route, ctx), None)
+    watch = AnsweredClients(ctx.tracer)
+    ctx = ctx.model_copy(update={"tracer": watch})
+    w = _Writer(env, row, wi, route, ctx, build_hooks(env, spec, route, ctx), None, watch)
     return await _write(env, w, path)
 
 

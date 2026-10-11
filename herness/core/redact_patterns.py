@@ -38,18 +38,9 @@ EntityType = Literal[
     "CUSTOM",
 ]
 DETECTION_ORDER: Final[tuple[EntityType, ...]] = (
-    "CREDENTIAL",
-    "URL_TOKEN",
-    "EMAIL",
-    "CARD",
-    "NATIONAL_ID",
-    "EMPLOYEE_ID",
-    "USER_ID",
-    "PHONE",
-    "IP",
-    "PERSON",
-    "CUSTOM",
-)
+    "CREDENTIAL", "URL_TOKEN", "EMAIL", "CARD", "NATIONAL_ID", "EMPLOYEE_ID", "USER_ID", "PHONE",
+    "IP", "PERSON", "CUSTOM",
+)  # fmt: skip
 TOKEN_PATTERN: Final = re.compile(
     r"\[(?:EMAIL|PHONE|IP|PERSON|EMPLOYEE_ID|USER_ID|CARD|NATIONAL_ID|CUSTOM)_[0-9a-f]{10}\]"
     r"|\[SECRET\]"
@@ -108,6 +99,8 @@ _LUHN2: Final = (0, 2, 4, 6, 8, 1, 3, 5, 7, 9)  # Luhn term of a doubled digit
 
 _PHONE: Final = re.compile(r"(?<![\w+])\+?[0-9][0-9 ().-]{7,20}[0-9](?!\w)")
 _PHONE_EXCLUDE: Final = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,3}(?:\.[0-9]{1,3}){3}")
+# A build id (impl 00 ``new_build_id``, T09-15d's verbatim-safe shape) is never PHONE (T06-29).
+_BUILD_ID: Final = re.compile(r"(?<!\w)[0-9]{8}-[0-9]{6}-[0-9A-HJKMNP-TV-Z]{6}(?!\w)")
 
 _OCTET: Final = r"(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])"
 _IPV4: Final = re.compile(rf"\b{_OCTET}(?:\.{_OCTET}){{3}}\b")
@@ -274,7 +267,14 @@ def _card_cuts(text: str) -> Found:
 
 
 def _find_phones(text: str) -> Found:
-    for start, end, value in _spans(_PHONE, text):
+    ids = [m.span() for m in _BUILD_ID.finditer(text)] if "-" in text else []
+    for start, _end, found in _spans(_PHONE, text):
+        value = found
+        while _ascii_digits(value) > _PHONE_DIGITS[-1] and " " in value:  # merged run: cut
+            value = value[: value.rindex(" ")].rstrip()
+        end = start + len(value)
+        if any(s <= start and end <= e for s, e in ids):  # inside a build id
+            continue
         if _ascii_digits(value) in _PHONE_DIGITS and not _PHONE_EXCLUDE.search(value):
             yield start, end, value
 
