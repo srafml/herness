@@ -251,13 +251,6 @@ def test_bt11_05_small_scoring_truths(small_records: Mapping[str, BenchRecord]) 
     assert not _failed(small_records, [*names, "t5_org_rank", "e2d_funding_rank"])
 
 
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=True,
-    reason="T11-39: enrichment windows read clock.now() during ensure_build; fixture build "
-    "drifts daily vs the fixed synth end date (herness/enrich/_pipeline_stages.py:341, "
-    "cluster_stage.py:167)",
-)
 def test_bt11_05_small_t1_org_rank_1(small_records: Mapping[str, BenchRecord]) -> None:
     """BT11-05 small scale: the T1 team has score.org rank 1."""
     assert not _failed(small_records, ["t1_org_rank"])
