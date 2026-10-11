@@ -28,6 +28,7 @@ import dataclasses
 import datetime
 import shutil
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
 
@@ -200,15 +201,24 @@ def plant_enrichment(con: duckdb.DuckDBPyConnection, truth: Truth) -> None:
         )
 
 
+def _durations(result: Mapping[str, Any]) -> dict[str, int]:
+    """The per-stage `durations_ms` of a `build_pipeline` job result."""
+    raw = result["durations_ms"]
+    assert isinstance(raw, Mapping)
+    return {str(name): int(ms) for name, ms in raw.items()}
+
+
 @dataclasses.dataclass(frozen=True)
 class ScoredBuild:
-    """A scored build file and the wall times of its stages (seconds)."""
+    """A scored build file and the wall times of its stages (seconds); `build_durations_ms` is
+    the `durations_ms` of the `build_pipeline` job result (T02-23)."""
 
     build_id: str
     report: ScoringReport
     build_s: float
     facts_s: float
     scoring_s: float
+    build_durations_ms: Mapping[str, int] = dataclasses.field(default_factory=dict)
 
 
 def scored_build(env: SynthEnv, *, promote: bool = True) -> ScoredBuild:
@@ -234,4 +244,5 @@ def scored_build(env: SynthEnv, *, promote: bool = True) -> ScoredBuild:
         con.close()
     if promote:
         write_current(build_id, layout=env.layout)
-    return ScoredBuild(build_id, report, build_s, facts_s, scoring_s)
+    durations = _durations(outcome.result)
+    return ScoredBuild(build_id, report, build_s, facts_s, scoring_s, durations)
