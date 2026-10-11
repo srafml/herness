@@ -624,3 +624,46 @@ def test_ut06_92_tuples_are_walked_and_kept() -> None:
     out = build_task_input("analyst", {"task_id": "t", "items": ("x", {"notes": "n"})})
     wrapped = wrap_untrusted("n", source="task_notes", record_id="t")
     assert out["items"] == ("x", {"notes": wrapped})
+
+
+# --- UT06-97 (T06-29 gap B)
+
+
+def _spent(name: str, cap: str | None, used: str) -> RunBudget:
+    cost_cap = None if cap is None else Decimal(cap)
+    ledger = RunBudget(name, 1_000_000, cost_cap, cost_cap_raises=False, run_id="run_x")  # type: ignore[arg-type]
+    ledger.charge(10, 10, Decimal(used))
+    return ledger
+
+
+def test_ut06_97_off_network_hybrid_task_gets_the_ledger_cost_left() -> None:
+    """UT06-97 a hybrid off-network Writer or final Skeptic may spend what its phase ledger
+    has left of `hybrid.max_cost_usd_per_run` (rounded down to cents); a local task keeps
+    `max_cost_usd` 0 (T06-29 gap B)."""
+    reg = _hybrid()
+    env = _env(_run(profile="hybrid"), reg)
+    writer = _spec("writer")
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    ledger = _spent("writer", "4.50", "1.255")
+    ctx = build_tool_context(env, writer, opus, task_tools={}, ledger=ledger, now=NOW)
+    assert ctx.budgets.max_cost_usd == Decimal("3.24")
+    assert writer.budget.max_cost_usd == 0  # the stored task spec is unchanged
+    skeptic = _spec("skeptic", model_role="skeptic_final")
+    final = _route(reg, "claude-opus", model_role="skeptic_final", role="skeptic", off_network=True)
+    analysis = _spent("analysis", "10.50", "0")
+    ctx = build_tool_context(env, skeptic, final, task_tools={}, ledger=analysis, now=NOW)
+    assert ctx.budgets.max_cost_usd == Decimal("10.50")
+    local = _route(reg, "local-30b", model_role="analyst", role="analyst_general")
+    ctx = build_tool_context(env, _spec(), local, task_tools={}, ledger=analysis, now=NOW)
+    assert ctx.budgets.max_cost_usd == 0
+
+
+def test_ut06_97_no_cost_cap_or_cap_spent_leaves_zero() -> None:
+    """UT06-97 an off-network route under a ledger without a cost cap (not hybrid) or with
+    the cap already spent keeps `max_cost_usd` 0."""
+    reg = _hybrid()
+    env = _env(_run(profile="premium"), reg)
+    opus = _route(reg, "claude-opus", model_role="writer", off_network=True)
+    for ledger in (_spent("writer", None, "1"), _spent("writer", "2", "3")):
+        ctx = build_tool_context(env, _spec("writer"), opus, task_tools={}, ledger=ledger, now=NOW)
+        assert ctx.budgets.max_cost_usd == 0

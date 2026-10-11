@@ -11,6 +11,7 @@ import asyncio
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from decimal import ROUND_DOWN, Decimal
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from herness.core.errors import ConfigError
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
 __all__ = ["RunEnv", "build_hooks", "build_tool_context"]
 
 _OFF_NETWORK_TOOLS: Final = frozenset({"get_metric", "get_scores", "list_findings"})
+_CENT: Final = Decimal("0.01")
 
 
 class _MetricSink(Protocol):
@@ -100,6 +102,14 @@ def _egress_purpose(spec: TaskSpec, route: Route) -> Literal["reasoning", "reaso
     return "reasoning_final" if final else "reasoning"
 
 
+def _cost_left(run: RunRow, route: Route, ledger: RunBudget) -> Decimal:
+    """`max_cost_usd` of one task: 0, or for a hybrid off-network route what its phase ledger
+    has left of `hybrid.max_cost_usd_per_run`, rounded down to cents (T06-29 gap B)."""
+    if run.profile != "hybrid" or not route.off_network or ledger.cost_cap is None:
+        return Decimal(0)
+    return max(Decimal(0), ledger.cost_cap - ledger.cost_used).quantize(_CENT, ROUND_DOWN)
+
+
 def build_tool_context(
     env: RunEnv,
     spec: TaskSpec,
@@ -136,7 +146,9 @@ def build_tool_context(
         warehouse=env.warehouses.get(run.build_id),
         ops=env.ops,
         vectors=env.vectors,
-        budgets=spec.budget.to_budgets(now),
+        budgets=spec.budget.model_copy(
+            update={"max_cost_usd": _cost_left(run, route, ledger)}
+        ).to_budgets(now),
         ledger=ledger,
         sql_limits=SqlLimits(
             return_rows=sql.return_rows, scan_rows=sql.scan_rows, timeout_s=sql.timeout_s[depth]

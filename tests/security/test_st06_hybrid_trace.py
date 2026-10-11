@@ -23,7 +23,7 @@ from tests.support import _f06_swarm as f6
 from tests.support import _f08_llm as fl
 from tests.support.egress_harness import egress_lines
 from tests.support.fake_keyring import MemoryKeyring
-from tests.unit.harness._blackboard_env import PLANTED_NAME
+from tests.unit.harness._blackboard_env import BUILD_ID, PLANTED_NAME
 
 from herness.core import config as c
 from herness.core import egress
@@ -52,20 +52,6 @@ def _trace(drv: Drv, run_id: str) -> list[dict[str, Any]]:
 
 API: Final = "https://api.anthropic.com/v1/messages"
 ENTITY_ID: Final = re.compile(r"(?<![A-Za-z0-9_])t[12](?![A-Za-z0-9_])")
-BUILD_ID_GAP = (
-    "product gap T06-29 (gap A): every off-network request carries the spec 05 role context"
-    " line 'build: <build_id>' (herness/harness/roles/base.py); a build id (8 digits, 6"
-    " digits, 6 letters, e.g. 20260925-101500-ABCDEF) has 14 digits and matches the PHONE"
-    " pattern of herness/core/redact_patterns.py, so the egress guard re-scan refuses every"
-    " hybrid Writer and final-Skeptic call (pii_detected, PHONE) and hybrid always falls back"
-    " locally"
-)
-COST_GAP = (
-    "product gap T06-29 (gap B): routing.role_budget('writer') leaves TaskBudget.max_cost_usd"
-    " at 0 and the spec 05 loop stops once cost_usd > max_cost_usd, so an off-network Writer"
-    " stops at its first paid call (stop_reason task_budget), the task is dead and the run"
-    " ends partial"
-)
 BANNER_GAP = (
     "product gap T06-29 (gap C): the Writer sets banner hybrid_fallback only for the cost-cap"
     " route fallback (route.fallback_local, writer.py); a spec 08 chain fallback after"
@@ -147,11 +133,9 @@ def test_st06_06_hybrid_pack_has_no_sample_or_ticket_text_and_pseudonymized_enti
     personal name planted in the Skeptic notes only as its redaction token, so the guard found
     no PERSON in it. The draft is restored to real ids.
 
-    Depends on T06-29 gap A: today every Writer call is refused (build id read as PHONE) and
-    the run is done through the local fallback. Fixing gap A without gap B makes this test
-    fail at `_hybrid_run` (the off-network Writer stops on task_budget, run partial), and once
-    no call is refused the PERSON check over the refusal lines is vacuous (the body checks
-    above still hold)."""
+    Since T06-29 (gaps A and B) no Writer call is refused and the off-network Writer finishes
+    the draft, so the PERSON check over the refusal lines is vacuous here (the body checks
+    above hold for every call the guard let out)."""
     draft = _hybrid_run(drv, hybrid, monkeypatch, PLANTED_NAME)
     sent = _writer_calls(hybrid)
     assert sent
@@ -172,28 +156,27 @@ def test_st06_06_hybrid_pack_has_no_sample_or_ticket_text_and_pseudonymized_enti
     assert draft.recommendations[0].target_id == "c1"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=BUILD_ID_GAP)
 def test_st06_06_clean_hybrid_writer_call_is_not_refused(
     drv: Drv, hybrid: Hybrid, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ST06-06 (T13) without personal data in the pack the guard refuses no Writer call: no
-    request is blocked and no refusal carries a PHONE hit (the run's status is not checked,
-    so gap B does not mask this gap)."""
+    request is blocked and no refusal carries a PHONE hit, although every request holds the
+    run's build id (T06-29 gap A; the run's status is checked by the next test)."""
     _start(drv, hybrid, monkeypatch, PLANTED_NAME)
     sent = _writer_calls(hybrid)
     assert sent
+    assert all(BUILD_ID in s.text() for s in sent)
     assert all("PHONE" not in line["scan_hits"] for line in _refusals(hybrid))
     assert [s.blocked for s in sent] == [None] * len(sent)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=COST_GAP)
 def test_st06_06_allowed_off_network_writer_finishes_its_draft(
     drv: Drv, hybrid: Hybrid, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """ST06-06 (T13) a Writer call the guard lets out is answered by the (scripted)
     Anthropic endpoint and the off-network Writer finishes the draft: the run is done, the
-    Writer task is not stopped by its budget, no fallback banner. Gap A is sidestepped on
-    the test side only: this guard's re-scan does not block PHONE."""
+    Writer task is not stopped by its budget, no fallback banner (T06-29 gap B). PHONE is
+    still taken out of this guard's blocking set, so the row isolates gap B from gap A."""
     monkeypatch.setattr(hybrid.guard, "_blocking", hybrid.guard._blocking - {"PHONE"})
     res = _start(drv, hybrid, monkeypatch, PLANTED_NAME)
     sent = _writer_calls(hybrid)
