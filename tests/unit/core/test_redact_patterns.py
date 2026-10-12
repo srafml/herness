@@ -17,7 +17,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from herness.core import redact, redact_patterns
+from herness.core import _redact_find, redact, redact_patterns
 from herness.core.redact import DETECTION_ORDER, RedactionResult, Span
 from herness.core.redact_patterns import (
     TOKEN_PATTERN,
@@ -294,7 +294,7 @@ _JWT_SPEC = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-
 
 
 def _jwt_spans(text: str) -> list[tuple[int, int]]:
-    return [(s, e) for s, e, _ in redact_patterns._find_jwts(text)]
+    return [(s, e) for s, e, _ in _redact_find._find_jwts(text)]
 
 
 def test_ut10_36_jwt_long_segment() -> None:

@@ -50,6 +50,7 @@ _KEY_HEX: Final = re.compile(r"[0-9A-Fa-f]{64}")
 _SECRET: Final = "[SECRET]"  # noqa: S105 - the replacement token, not a secret
 _MASK: Final = "\x00"  # blanks held ranges in the detector view
 _SECRET_TYPES: Final = frozenset({"CREDENTIAL", "URL_TOKEN"})
+_MEMO_MAX: Final = 65_536  # pseudonyms remembered per redactor (T10-11b), then cleared
 _log = get_logger("core.redact")
 
 
@@ -120,7 +121,7 @@ def _records_failed_total() -> int:
 class Redactor:
     """Detect and replace PII and secrets; immutable after construction (U10-40)."""
 
-    __slots__ = ("_cfg", "_detectors", "_directory", "_key", "_ner", "_ner_lock", "key_id")
+    __slots__ = ("_cfg", "_detectors", "_directory", "_key", "_memo", "_ner", "_ner_lock", "key_id")
 
     def __init__(
         self, cfg: RedactionConfig, hmac_key: bytes, directory: NameDirectory | None = None
@@ -141,15 +142,24 @@ class Redactor:
         self._detectors = tuple(by_type[kind] for kind in DETECTION_ORDER)
         self._ner: Any = None
         self._ner_lock = threading.Lock()
+        # A pure-function cache: names, hosts and addresses repeat across records. Under the
+        # GIL each dict operation is atomic, so a concurrent clear only costs recomputation.
+        self._memo: dict[tuple[str, str], str] = {}
 
     def __repr__(self) -> str:
         return f"Redactor(key_id={self.key_id!r})"
 
     def pseudonym(self, type: EntityType, value: str) -> str:  # noqa: A002 - spec signature
         """Stable ``[<TYPE>_<10 hex>]`` token: HMAC-SHA256 of the normalized value (U10-44)."""
-        message = (type + ":" + normalize_value(type, value)).encode("utf-8")
-        digest = hmac.new(self._key, message, hashlib.sha256).hexdigest()[:10]
-        return "[" + type + "_" + digest + "]"
+        token = self._memo.get((type, value))
+        if token is None:
+            message = (type + ":" + normalize_value(type, value)).encode("utf-8")
+            digest = hmac.digest(self._key, message, "sha256").hex()[:10]  # one-shot C path
+            token = "[" + type + "_" + digest + "]"
+            if len(self._memo) >= _MEMO_MAX:
+                self._memo.clear()
+            self._memo[type, value] = token
+        return token
 
     def _replacement(self, kind: EntityType, value: str) -> str:
         return _SECRET if kind in _SECRET_TYPES else self.pseudonym(kind, value)
@@ -178,9 +188,9 @@ class Redactor:
         view = taken.masked(text)  # a detector cannot swallow a token or accepted neighbour
         for detector in self._detectors:
             found = self._detect(detector, view, taken)
-            if found:
-                spans.extend(found)
-                view = taken.masked(text)
+            spans += found
+            for span in found:  # blank the newly held ranges (same as taken.masked(text))
+                view = view[: span.start] + _MASK * (span.end - span.start) + view[span.end :]
         if ner and self._cfg.ner == "presidio":
             spans.extend(self._ner_spans(text, protected, spans, taken))
         spans.sort()
