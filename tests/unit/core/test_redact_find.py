@@ -65,12 +65,16 @@ def _accepted(found: Iterable[tuple[int, int, str]]) -> list[tuple[int, int]]:
     return sorted(held)
 
 
+def _in_id(text: str, start: int, end: int) -> bool:
+    return any(s <= start and end <= e for s, e in (b.span() for b in rp._BUILD_ID.finditer(text)))
+
+
 def _reference_cards(text: str) -> Found:
     for m in rp._CARD.finditer(text):
         digits = m.group().replace(" ", "").replace("-", "")
-        if len(digits) in rp.CARD_DIGITS and rp.luhn_valid(digits):
+        if len(digits) in rp.CARD_DIGITS and rp.luhn_valid(digits) and not _in_id(text, *m.span()):
             yield m.start(), m.end(), m.group()
-    yield from rp._card_cuts(text, 0, len(text), [])
+    yield from (c for c in rp._card_cuts(text, 0, len(text), []) if not _in_id(text, c[0], c[1]))
     for m in rp._ACCOUNT.finditer(text):
         if not rp._after_minus(text, m.start()):
             yield m.start(), m.end(), m.group()
@@ -82,8 +86,7 @@ def _reference_phones(text: str) -> Found:
         while rf.ascii_digits(value) > rp.PHONE_DIGITS[-1] and " " in value:
             value = value[: value.rindex(" ")].rstrip()
         end = start + len(value)
-        ids = [b.span() for b in rp._BUILD_ID.finditer(text)]
-        if any(s <= start and end <= e for s, e in ids):
+        if _in_id(text, start, end):
             continue
         if rf.ascii_digits(value) in rp.PHONE_DIGITS and not rp._PHONE_EXCLUDE.search(value):
             yield start, end, value

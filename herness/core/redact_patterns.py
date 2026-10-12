@@ -212,10 +212,13 @@ def find_cards(text: str) -> Found:
         found: list[tuple[int, int]] = []
         for match in _CARD.finditer(text, pos, endpos):
             digits = match.group().replace(" ", "").replace("-", "")
-            if len(digits) in CARD_DIGITS and luhn_valid(digits):
+            valid = len(digits) in CARD_DIGITS and luhn_valid(digits)
+            if valid and not _in_build_id(text, *match.span()):
                 found.append(match.span())
                 yield match.start(), match.end(), match.group()
-        yield from _card_cuts(text, pos, endpos, found)
+        for start, end, value in _card_cuts(text, pos, endpos, found):
+            if not _in_build_id(text, start, end):
+                yield start, end, value
         for match in _ACCOUNT.finditer(text, pos, endpos):
             if not _after_minus(text, match.start()):
                 yield match.start(), match.end(), match.group()
@@ -255,7 +258,11 @@ def _card_cuts(text: str, pos: int, endpos: int, found: Sequence[tuple[int, int]
 
 
 def _in_build_id(text: str, start: int, end: int) -> bool:
-    """True when ``[start, end)`` lies inside a build-id span of ``text``."""
+    """True when ``[start, end)`` lies inside a build-id span of ``text`` (T06-29; CARD too
+    since T10-11b: the 14 digits of one build id in ten pass Luhn). A build id has at most
+    8 digits between dashes, so a 9+ digit span inside one holds a dash."""
+    if "-" not in text[start:end]:
+        return False
     window = _BUILD_ID.finditer(text, max(0, end - _BUILD_ID_LEN), start + _BUILD_ID_LEN + 1)
     return any(m.start() <= start and end <= m.end() for m in window)
 
@@ -271,8 +278,7 @@ def find_phones(text: str) -> Found:
                 value = value[: value.rindex(" ")].rstrip()
                 digits = len(value.translate(_PHONE_MARKS))
             end = start + len(value)
-            # A build id has at most 8 digits between dashes: one inside it holds a dash.
-            if "-" in value and _in_build_id(text, start, end):
+            if _in_build_id(text, start, end):
                 continue
             if digits in PHONE_DIGITS and not _PHONE_EXCLUDE.search(value):
                 yield start, end, value
