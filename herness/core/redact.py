@@ -165,10 +165,9 @@ class Redactor:
         return _SECRET if kind in _SECRET_TYPES else self.pseudonym(kind, value)
 
     def _detect(self, detector: Detector, text: str, taken: _Taken) -> list[Span]:
-        """Accepted spans of one detector; any exception becomes ``RedactionFailed(<type>)``."""
+        """Accepted spans of one detector whose prefilter passed (``scan``); any exception
+        becomes ``RedactionFailed(<type>)``."""
         try:
-            if not detector.prefilter(text):
-                return []
             return [
                 Span(start, end, detector.type, self._replacement(detector.type, value))
                 for start, end, value in detector.find(text)
@@ -182,11 +181,18 @@ class Redactor:
         if len(text) > MAX_TEXT_CHARS:
             msg = "text too long"
             raise RedactionFailed(msg)
-        protected = [match.span() for match in TOKEN_PATTERN.finditer(text)]
+        tokens = TOKEN_PATTERN.finditer(text) if "[" in text else ()  # every token opens "["
+        protected = [match.span() for match in tokens]
         taken = _Taken(protected)
         spans: list[Span] = []
-        view = taken.masked(text)  # a detector cannot swallow a token or accepted neighbour
+        view = taken.masked(text) if protected else text  # tokens and accepted spans blanked
         for detector in self._detectors:
+            try:
+                wanted = detector.prefilter(view)
+            except Exception as exc:
+                raise RedactionFailed(detector.type) from exc
+            if not wanted:
+                continue
             found = self._detect(detector, view, taken)
             spans += found
             for span in found:  # blank the newly held ranges (same as taken.masked(text))

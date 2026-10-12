@@ -78,6 +78,9 @@ _JWT_RUN: Final = re.compile(r"[A-Za-z0-9_-]+")
 _JWT_MIN_SEGMENT: Final = 5
 _JWT_SEGMENTS: Final = 3
 
+_FOLD_KEYS: Final = tuple(k for c in (*_CREDENTIAL, _ACCOUNT_KEY) if c[3] for k in c[2])
+_KEYS: Final = ("-----", "eyJ", *(k for c in _CREDENTIAL if not c[3] for k in c[2]))
+
 _URL: Final = re.compile(r"\bhttps?://[^\s<>\"']+", _I)
 _URL_KEYS: Final = frozenset(
     {"token", "access_token", "key", "sig", "signature", "code", "password", "sv", "se"}
@@ -113,11 +116,13 @@ def has_decimal(text: str) -> bool:
     return _ANY_DECIMAL.search(text) is not None
 
 
-def _occurrences(hay: str, key: str) -> Iterator[int]:
+def _occurrences(hay: str, key: str) -> list[int]:
+    found: list[int] = []
     at = hay.find(key)
     while at >= 0:
-        yield at
+        found.append(at)
         at = hay.find(key, at + 1)
+    return found
 
 
 def _matches(pattern: re.Pattern[str], text: str, starts: Iterable[int]) -> Iterator[re.Match[str]]:
@@ -163,11 +168,13 @@ def folded(text: str) -> str:
     return text.lower()
 
 
-def _keyed(text: str, low: str, keyed: _Keyed) -> Found:
+def _keyed(text: str, low: str, keyed: _Keyed) -> list[tuple[int, int, str]]:
     pattern, group, keys, fold = keyed
     hay = low if fold else text
-    starts = sorted({at for key in keys for at in _occurrences(hay, key)})
-    return _group(_matches(pattern, text, starts), text, group)
+    starts = [at for key in keys if key in hay for at in _occurrences(hay, key)]
+    if not starts:  # the common case: no keyword at all
+        return []
+    return list(_group(_matches(pattern, text, sorted(starts)), text, group))
 
 
 def _find_pem(text: str) -> Found:
@@ -220,17 +227,21 @@ def _find_jwts(text: str) -> Found:
 def find_credentials(text: str) -> Found:
     """CREDENTIAL (a)-(f) in spec order; a value inside a URL query value that URL_TOKEN
     takes is left to URL_TOKEN, so the type is right (T10-11b, SN-1; both are [SECRET])."""
-    schemes = list(_occurrences(text, "://"))
-    taken = [(start, end) for start, end, _ in _url_tokens(text, schemes)]
-    for start, end, value in _credentials(text, schemes):
-        if not any(s <= start and end <= e for s, e in taken):
+    schemes = _occurrences(text, "://")
+    found = list(_credentials(text, schemes))
+    urls = _urls(text, schemes) if found and schemes else []
+    for start, end, value in found:
+        values = (_query_values(url, at) for at, url in urls if at <= start < at + len(url))
+        if not any(s <= start and end <= e for spans in values for s, e, _ in spans):
             yield start, end, value
 
 
 def _credentials(text: str, schemes: Sequence[int]) -> Found:
+    low = folded(text)
+    if not schemes and not any(k in low for k in _FOLD_KEYS) and not any(k in text for k in _KEYS):
+        return  # no anchor of any CREDENTIAL pattern (the common case for short values)
     if "-----" in text:
         yield from _find_pem(text)
-    low = folded(text)
     for keyed in _CREDENTIAL:
         yield from _keyed(text, low, keyed)
     if "eyJ" in text:
@@ -267,16 +278,17 @@ def _query_values(url: str, offset: int) -> Found:
         pos += len(piece) + 1
 
 
-def _url_tokens(text: str, schemes: Sequence[int]) -> Found:
+def _urls(text: str, schemes: Sequence[int]) -> list[tuple[int, str]]:
+    """``(start, url)`` of each ``http(s)://`` URL; a sentence-ending period is not part of
+    it (T10-11b, SN-3a)."""
     starts = sorted({pos for at in schemes for pos in (at - 5, at - 4) if pos >= 0})
-    for match in _matches(_URL, text, starts):
-        # A sentence-ending period is not part of the URL (T10-11b, SN-3a).
-        yield from _query_values(match.group().rstrip("."), match.start())
+    return [(m.start(), m.group().rstrip(".")) for m in _matches(_URL, text, starts)]
 
 
 def find_url_tokens(text: str) -> Found:
     """URL_TOKEN: secret-named query values of each ``http(s)://`` URL."""
-    return _url_tokens(text, list(_occurrences(text, "://")))
+    for start, url in _urls(text, _occurrences(text, "://")):
+        yield from _query_values(url, start)
 
 
 def find_emails(text: str) -> Found:
