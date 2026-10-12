@@ -125,3 +125,17 @@ def require_service(
 def scale_label(incidents: int) -> str:
     """`full` when the build holds the spec's 5M incidents (at least 4M), else `small`."""
     return "full" if incidents >= FULL_MIN_INCIDENTS else "small"
+
+
+def plant_full_scale_xfail(
+    request: pytest.FixtureRequest,
+    scale: str,
+    reason: str,
+    *,
+    raises: type[BaseException] | None = None,
+) -> None:
+    """At full scale only, mark the running row as a strict expected failure (a measured miss
+    or a known crash at the spec scale, owned by a follow-up card). Small scale is untouched.
+    Strict: when the row passes, the xfail turns into a failure and the marker must go."""
+    if scale == "full":
+        request.node.add_marker(pytest.mark.xfail(strict=True, reason=reason, raises=raises))

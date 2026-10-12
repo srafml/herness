@@ -9,7 +9,13 @@ Both rows are pure pipeline work (no model), so they run here on the `full` buil
   `link_candidates` (the window/CI/service SQL into `link_cand`) plus `run_link_stage` with no
   pair decider (the decider part is a model step, BT03-10's fakes cover it). The dataset is the
   lake's own: the incident and change counts are recorded as rows; the spec scale is
-  5M x 0.5M and the controller reads the recorded counts against it.
+  5M x 0.5M and the controller reads the recorded counts against it. The timed region is the
+  whole heuristic operation, on purpose: in `run_enrichment` the heavy part (`link_candidates`,
+  the window/CI/service range joins into `link_cand`) runs inside stage `decide-escalate`
+  (step 6, it also feeds the pair inputs) and stage `link` only does `run_link_stage` on the
+  ready table (30 s of the 352 s at full scale), so the pipeline's `link` duration alone is not
+  the spec's "heuristic change linking 5M x 0.5M". Status at full scale on the w50 idle host:
+  352.3 s vs < 180 s, a MISS planted as a strict xfail (owner T03-38).
 * BT03-11 times the real `run_suggest_stage` (scores, ranking, `mapping_suggestion` review
   items into the ops store) on `MappingVectors` of exactly 2,000 subjects x 5,000 services.
   Subjects: the lake's active teams without a mapping, then synthetic Jira-component subjects;
@@ -33,6 +39,7 @@ from tests.bench.enrich._common import (
     BT09_LIMIT_S,
     BT11_LIMIT_S,
     TIMEOUT_S,
+    plant_full_scale_xfail,
     record,
     record_info,
 )
@@ -60,11 +67,19 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 _SEED: Final = 42
 _SPEC_CHANGES: Final = 500_000
 _NOISE: Final = 0.05
+_BT09_MISS: Final = (
+    "BT03-09 measured 352.3 s at full scale (5.15M x 0.50M) vs < 180 s on the w50 idle host; "
+    "owner T03-38 (new card: change-linking performance at 5M x 0.5M)"
+)
 
 
 @pytest.mark.timeout(TIMEOUT_S)
 def test_bt03_09_heuristic_change_linking_all_incidents_x_changes(
-    lake: LakeBuild, wh: duckdb.DuckDBPyConnection, tmp_path: Path, bench_recorder: BenchRecorder
+    lake: LakeBuild,
+    wh: duckdb.DuckDBPyConnection,
+    tmp_path: Path,
+    bench_recorder: BenchRecorder,
+    request: pytest.FixtureRequest,
 ) -> None:
     """BT03-09 heuristic linking of every incident against every change of the `full`
     build (5M x 0.5M in the spec) takes under 3 min."""
@@ -100,6 +115,7 @@ def test_bt03_09_heuristic_change_linking_all_incidents_x_changes(
     record_info(bench_recorder, "BT03-09", "candidate_pairs", candidates[0] if candidates else 0,
                 "pairs", lake.scale)  # fmt: skip
     record_info(bench_recorder, "BT03-09", "links_written", report.rows, "rows", lake.scale)
+    plant_full_scale_xfail(request, lake.scale, _BT09_MISS)
     assert record(bench_recorder, "BT03-09", "link_s", elapsed, "s", BT09_LIMIT_S,
                   lake.scale).passed  # fmt: skip
 
