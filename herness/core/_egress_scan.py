@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterator
 from typing import Final
+from unicodedata import normalize
 
 import httpx
 
@@ -85,8 +85,8 @@ def _strings(text: str) -> Iterator[str]:
 
 
 def _counts(redactor: Redactor, value: str) -> Hits:
-    """Hits per type in ``value`` as-is and NFKC-folded without zero-width characters."""
-    folded = unicodedata.normalize("NFKC", value).translate(_ZERO_WIDTH)
+    """Hits in ``value`` as-is and NFKC-folded without zero-width chars (ASCII: itself)."""
+    folded = value if value.isascii() else normalize("NFKC", value).translate(_ZERO_WIDTH)
     found: Hits = {}
     for variant in (value,) if folded == value else (value, folded):
         counts: Hits = {}

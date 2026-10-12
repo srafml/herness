@@ -17,7 +17,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from herness.core import redact, redact_patterns
+from herness.core import _redact_find, redact, redact_patterns
 from herness.core.redact import DETECTION_ORDER, RedactionResult, Span
 from herness.core.redact_patterns import (
     TOKEN_PATTERN,
@@ -131,7 +131,7 @@ _POSITIVE: list[tuple[str, str, str]] = [
     ("ticket PRJ-0042", "CUSTOM", "PRJ-0042"),
     # PHONE
     ("call +1 415 555 0142", "PHONE", "+1 415 555 0142"),
-    ("call (415) 555-0142.", "PHONE", "415) 555-0142"),
+    ("call (415) 555-0142.", "PHONE", "(415) 555-0142"),
     ("tel 020 7946 0958", "PHONE", "020 7946 0958"),
     # IP
     ("host 10.1.2.3 up", "IP", "10.1.2.3"),
@@ -195,8 +195,8 @@ def test_ut10_36_prefilters() -> None:
     assert not by_type["EMAIL"].prefilter("no at sign")
     assert not by_type["CARD"].prefilter("123456789012")
     assert by_type["CARD"].prefilter("1234567890123")
-    assert not by_type["PHONE"].prefilter("12345678")
-    assert by_type["PHONE"].prefilter("123456789")
+    assert not by_type["PHONE"].prefilter("123456")
+    assert by_type["PHONE"].prefilter("555-0123")  # 7-digit local numbers (T10-11b)
     assert not by_type["IP"].prefilter("a.b and c:d")
     assert by_type["IP"].prefilter("a::b")
     assert by_type["IP"].prefilter("v1.2")
@@ -294,7 +294,7 @@ _JWT_SPEC = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-
 
 
 def _jwt_spans(text: str) -> list[tuple[int, int]]:
-    return [(s, e) for s, e, _ in redact_patterns._find_jwts(text)]
+    return [(s, e) for s, e, _ in _redact_find._find_jwts(text)]
 
 
 def test_ut10_36_jwt_long_segment() -> None:

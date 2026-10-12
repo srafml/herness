@@ -96,11 +96,11 @@ def test_ut10_37_email_inside_url_token_is_one_url_token_span() -> None:
     assert spans[0].replacement == "[SECRET]"
 
 
-def test_ut10_37_token_param_credential_wins_over_url_token_and_email() -> None:
-    """UT10-37 `token=` inside a URL is caught by CREDENTIAL first; no other span overlaps."""
+def test_ut10_37_token_param_in_url_is_one_url_token_span() -> None:
+    """UT10-37 `token=` inside a URL is one URL_TOKEN span (T10-11b SN-1); nothing overlaps."""
     text = "https://h.example/p?token=bob@example.com"
     spans = _redactor().scan(text)
-    assert [s.type for s in spans] == ["CREDENTIAL"]
+    assert [s.type for s in spans] == ["URL_TOKEN"]
     assert text[spans[0].start : spans[0].end] == "bob@example.com"
 
 
@@ -188,7 +188,7 @@ def test_ut10_40_get_redactor_builds_caches_and_logs(
     loaded = [line for line in _err_lines(capsys) if line["event"] == "redact.directory.loaded"]
     assert len(loaded) == 1
     assert loaded[0]["names"] == 1
-    assert loaded[0]["variants"] == 4
+    assert loaded[0]["variants"] == 5  # 3 name forms, `M. Garcia` (T10-11b SN-2), 1 alt
     assert isinstance(loaded[0]["duration_ms"], int)
     result = red.redact("ask Maria Garcia or M Garcia")
     assert result is not None
@@ -352,7 +352,7 @@ def test_rf_card_cuts_skip_runs_shorter_than_13_digits() -> None:
     """RF digit runs that cannot hold 13 digits are never cut (fast path); text untouched."""
     text = "12:00:05 port 8080 id 1234 5678 9012 req 4111-1111-111"
     assert rp._CARD_RUN.search(text) is None
-    assert list(rp._card_cuts(text)) == []
+    assert list(rp._card_cuts(text, 0, len(text), [])) == []
     assert [s.type for s in _redactor().scan(text) if s.type == "CARD"] == []
     assert rp._CARD_RUN.fullmatch("4111 1111 1111 1")  # exactly 13 digits still a run
 

@@ -44,7 +44,9 @@ from tools.synth._manifest import MARKER
 from tools.synth.params import SOURCES, load_params, params_hash
 
 FINGERPRINT: Final = ".fixture_build.json"
-FIXTURE_REV: Final = 4  # bump when `builds` changes how a build is made (4: pinned clock)
+# Bump when `builds` changes how a build is made (4: pinned clock; 5: T10-11b redaction
+# detectors change the redacted text of cached builds).
+FIXTURE_REV: Final = 5
 LOCK_WAIT_S: Final = 30 * 60.0
 LOCK_POLL_S: Final = 1.0
 EMPTY_LOCK_STALE_S: Final = 60.0

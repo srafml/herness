@@ -67,15 +67,21 @@ def _read_lines(path: Path | None) -> list[str]:
 
 
 def _add_display_entry(automaton: ahocorasick.Automaton, name: str) -> str | None:
-    """Add the 3 variants of a >= 2 token display name; return its canonical (step 2)."""
+    """Add the 4 variants of a >= 2 token display name; return its canonical (step 2).
+
+    ``F. Last`` (first initial, period, last name) is the fourth (T10-11b, SN-2).
+    """
     tokens = name.split()
     if len(tokens) < _MIN_DISPLAY_TOKENS:
         return None
     canonical = normalize_value("PERSON", name)
     last = tokens[-1]
     first = " ".join(tokens[:-1])
+    initial = f"{first[0]}. {last}"
     for key in (name.lower(), f"{last}, {first}".lower(), f"{last},{first}".lower()):
         automaton.add_word(key, (len(key), canonical))
+    if initial.lower() not in automaton:  # a full name or alt name keeps its own canonical
+        automaton.add_word(initial.lower(), (len(initial), canonical))
     return canonical
 
 
