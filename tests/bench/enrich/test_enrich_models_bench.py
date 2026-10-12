@@ -1,7 +1,8 @@
 """Model-service benchmarks BT03-02 ... BT03-05 (impl 03 §10, T03-36).
 
-These rows need a REAL local model or GPU service and are blocked on this host (no GPU, no
-bge-m3, no Laya/OpenJev service, no local LLM: V-09 / V-11 / V-12 / D17). They are implemented
+These rows need a REAL local model or GPU service and are blocked on this host (no bge-m3
+weights, no Laya package or accepted model, no OpenJev service, no local LLM: V-09 / V-11 /
+V-12 / D17; the CUDA device itself is present). They are implemented
 to run against the real services when `HERNESS_BENCH_FULL=1` and the service variable of the
 row are set (names in `_services.py` and below) and skip, naming the blocker and the variables
 needed, otherwise. With the variables set a row really executes: a missing CUDA device, an
@@ -61,9 +62,9 @@ _FULL_TEXTS: Final = 5_500_000  # the production corpus the bge-m3 rate is extra
 _N_OPENJEV: Final = 10_000
 _N_LLM: Final = 2_000
 _CHUNK: Final = 2_000  # the pipeline's `decide` chunk (impl 03 §10 limits)
-_BLOCKER_GPU: Final = "V-09 (no GPU / bge-m3 weights on this host)"
-_BLOCKER_LAYA: Final = "V-11 / D17 (no Laya package, GPU or accepted model on this host)"
-_BLOCKER_OPENJEV: Final = "V-09 (no GPU OpenJev service on this host)"
+_BLOCKER_GPU: Final = "V-09 (no bge-m3 weights on this host)"
+_BLOCKER_LAYA: Final = "V-11 / D17 (no Laya package or accepted model on this host)"
+_BLOCKER_OPENJEV: Final = "V-09 (no OpenJev service on this host)"
 _BLOCKER_LLM: Final = "V-12 (no local LLM service on this host)"
 
 

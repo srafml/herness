@@ -130,6 +130,9 @@ def activate_enrich(
     if cfg_dir.exists():
         shutil.rmtree(cfg_dir)
     shutil.copytree(lake.env.cfg_dir, cfg_dir)
+    herness = cfg_dir / "herness.yaml"  # the pinned OpenJev image `build_decider` parses
+    image = "razorback16/openjev@sha256:" + "b" * 64
+    herness.write_text(herness.read_text("utf-8").replace("<openjev-image>", image), "utf-8")
     for name, edits in (("decisions.yaml", decisions), ("models.yaml", models)):
         if edits:
             path = cfg_dir / name

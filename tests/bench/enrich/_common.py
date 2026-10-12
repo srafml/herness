@@ -29,7 +29,7 @@ from tests.support.bench import BenchRecord, BenchRecorder, bench_flag
 
 OWNER: Final = "03"
 SEED: Final = 42
-TIMEOUT_S: Final = 4 * 3600  # per row; the full-scale builds and primings are long
+TIMEOUT_S: Final = 24 * 3600  # per row; the full-scale builds and the BT03-10 priming are long
 
 FULL_ENV: Final = "HERNESS_BENCH_FULL"
 FULL_ROOT_ENV: Final = "HERNESS_SYNTH_FULL_ROOT"

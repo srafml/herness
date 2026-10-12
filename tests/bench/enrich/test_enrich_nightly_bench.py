@@ -1,0 +1,110 @@
+"""Nightly enrichment benchmarks BT03-06 and BT03-10 (impl 03 §10, T03-36).
+
+Run (idle host only): `HERNESS_BENCH_FULL=1 HERNESS_SYNTH_FULL_ROOT=<seed 42 full root>
+pytest -m "integration and slow" tests/bench/enrich/test_enrich_nightly_bench.py`. Needs about
+80 GB of free disk next to the lake (two build copies, the vector store, the decision cache).
+
+One module fixture (`_nightly_env.run_two_nights`) primes night 1 (the whole build minus
+5,000 records, enriched from nothing, which at the spec scale takes hours: text, 5.5M fake
+embeddings, cached decisions, a full recluster) and then runs night 2, the measured one, on the
+full build with 5,000 new and 5,000 changed records and `prev_warehouse` = night 1. See the
+module docstring of `_nightly_env` for what is real and what is faked.
+
+* BT03-10 is the wall time of the night 2 `run_enrichment` call (all stages) with the model
+  stages on fakes and stubs; the real-model figure is owed on the target PC (GPU, bge-m3,
+  Laya, OpenJev). It also checks the preconditions of the row: the cluster stage ran
+  incrementally (no recluster) and nothing failed.
+* BT03-06 measures the escalation share after acceptance: the share of the night's decided
+  (record, question) pairs, for the 10,000 new and changed records, that fell below the
+  student's gate and were answered by a teacher (`enrich.decision.escalated`). With an
+  accepted fake student that is unsure on a fixed 2 % of the texts, it checks the pipeline's
+  accounting and gating of escalation (the stage counts, the `escalated` flag, the stub's call
+  count); it does NOT measure a real student's confidence, which is calibration and ET03-01's
+  job. The `EnrichReport.escalation_share` of the whole build and the record-level share of
+  the stage reports are recorded next to it.
+"""
+
+from __future__ import annotations
+
+import shutil
+from collections.abc import Iterator
+
+import pytest
+from tests.bench.enrich._common import (
+    BT06_SHARE_MAX,
+    BT10_LIMIT_S,
+    NIGHTLY_RECORDS,
+    TIMEOUT_S,
+    record,
+    record_info,
+)
+from tests.bench.enrich._lake import LakeBuild
+from tests.bench.enrich._nightly_env import LOW_RATE, Night, run_two_nights
+from tests.support.bench import BenchRecorder
+
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
+
+@pytest.fixture(scope="module")
+def night(lake: LakeBuild, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Night]:
+    """Night 1 (priming) and night 2 (measured) on copies of the lake build."""
+    work = tmp_path_factory.mktemp("bt03-night")
+    try:
+        yield from run_two_nights(lake, work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _failed(night: Night) -> list[str]:
+    return [n for n, s in night.report2.stages.items() if s.status == "failed"]
+
+
+@pytest.mark.timeout(TIMEOUT_S)
+def test_bt03_10_nightly_enrichment_total_10k_no_recluster(
+    lake: LakeBuild, night: Night, bench_recorder: BenchRecorder
+) -> None:
+    """BT03-10 nightly enrichment of 10k new or changed records (no recluster, no backlog)
+    takes under 20 min; model stages on fakes, the real-model figure is owed on the target PC."""
+    report = night.report2
+    assert not _failed(night)
+    assert report.cluster_run == "incremental", "the night reclustered"
+    assert report.stages["text"].rows >= night.incidents  # every record has its text row
+    redacted = report.stages["text"].rows - report.stages["text"].cache_hits
+    assert 0 < redacted <= NIGHTLY_RECORDS  # only the new and changed records were redacted
+    record_info(bench_recorder, "BT03-10", "texts_redacted", redacted, "rows", lake.scale)
+    record_info(bench_recorder, "BT03-10", "embedded", report.stages["embed"].embedded, "rows",
+                lake.scale)  # fmt: skip
+    record_info(bench_recorder, "BT03-10", "night1_priming_s", night.night1_s, "s", lake.scale)
+    for name, stage in report.stages.items():
+        record_info(bench_recorder, "BT03-10", f"stage_{name}_s", stage.duration_s, "s",
+                    lake.scale)  # fmt: skip
+    assert record(bench_recorder, "BT03-10", "nightly_total_s", night.night2_s, "s",
+                  BT10_LIMIT_S, lake.scale).passed  # fmt: skip
+
+
+@pytest.mark.timeout(TIMEOUT_S)
+def test_bt03_06_escalation_share_after_acceptance(
+    lake: LakeBuild, night: Night, bench_recorder: BenchRecorder
+) -> None:
+    """BT03-06 with an accepted (fake) student the share of decided pairs escalated to the
+    teacher in a nightly run is at most 10 %."""
+    stages = night.report2.stages
+    laya_records = stages["decide-primary"].decided
+    escalated_records = stages["decide-escalate"].escalated
+    assert night.night_pairs > 0, "the night decided no pair"
+    assert not _failed(night)
+    share = night.night_escalated_pairs / night.night_pairs
+    assert night.openjev_calls > 0  # escalated pairs really reached the (stub) teacher
+    assert night.escalated_decisions <= night.decisions
+    whole = night.report2.escalation_share
+    assert whole is not None
+    scale = lake.scale
+    record_info(bench_recorder, "BT03-06", "student_unsure_rate", LOW_RATE, "ratio", scale)
+    record_info(bench_recorder, "BT03-06", "night_pairs", night.night_pairs, "pairs", scale)
+    by_record = escalated_records / max(laya_records + escalated_records, 1)
+    record_info(
+        bench_recorder, "BT03-06", "night_record_escalation_share", by_record, "ratio", scale
+    )
+    record_info(bench_recorder, "BT03-06", "build_escalation_share", whole, "ratio", scale)
+    assert record(bench_recorder, "BT03-06", "night_escalation_share", share, "ratio",
+                  BT06_SHARE_MAX, scale, inclusive=True).passed  # fmt: skip
