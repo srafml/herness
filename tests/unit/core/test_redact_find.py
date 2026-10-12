@@ -7,6 +7,7 @@ what it matches. The reference functions below are the pre-T10-11b detector bodi
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Iterable, Iterator
 
@@ -16,6 +17,8 @@ from hypothesis import strategies as st
 
 from herness.core import _redact_find as rf
 from herness.core import redact_patterns as rp
+from herness.core.redact import RedactionFailed, Redactor
+from herness.core.settings import RedactionConfig
 
 pytestmark = pytest.mark.unit
 
@@ -141,3 +144,31 @@ def test_ut10_92_at_least_digits(count: int) -> None:
     check = rf.at_least_digits(count)
     for text in ("", "a1b2c3", "1" * (count - 1), "1" * count, "x" + "9 " * count, "\u0661" * 20):
         assert check(text) == (rf.ascii_digits(text) >= count), text
+
+
+def test_ut10_92_prefilter_error_names_the_detector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT10-92 scan checks each prefilter itself; an exception there is RedactionFailed(type)."""
+    red = Redactor(RedactionConfig(directory_file=None), bytes(32))
+
+    def boom(_text: str) -> bool:
+        raise RuntimeError
+
+    detectors = tuple(
+        dataclasses.replace(d, prefilter=boom) if d.type == "CARD" else d for d in red._detectors
+    )
+    monkeypatch.setattr(red, "_detectors", detectors)
+    with pytest.raises(RedactionFailed, match=r"^CARD$"):
+        red.scan("plain text")
+
+
+def test_ut10_92_pseudonym_memo_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """UT10-92 the pseudonym memo never exceeds its bound and never changes a token."""
+    from herness.core import redact  # noqa: PLC0415 - patch the module constant
+
+    monkeypatch.setattr(redact, "_MEMO_MAX", 2)
+    red = Redactor(RedactionConfig(directory_file=None), bytes(32))
+    fresh = Redactor(RedactionConfig(directory_file=None), bytes(32))
+    values = [f"20255501{n:02d}" for n in range(5)]
+    tokens = [red.pseudonym("PHONE", v) for v in values + values]
+    assert tokens == [fresh.pseudonym("PHONE", v) for v in values + values]
+    assert len(red._memo) <= 2

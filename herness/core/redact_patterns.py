@@ -135,13 +135,11 @@ def _ip_prefilter(text: str) -> bool:
 
 
 def _lead(source: str) -> re.Pattern[str] | None:
-    """``source`` without its leading ``\\b``: it matches wherever ``source`` does (T10-11b)."""
-    if not source.startswith(r"\b"):
-        return None
-    try:
-        return re.compile(source[2:], _I)
-    except re.error:
-        return None
+    """``source`` without its leading ``\\b``: it matches wherever ``source`` does (T10-11b).
+
+    ``\\b`` is a whole atom, so the rest of a valid pattern is itself a valid pattern.
+    """
+    return re.compile(source[2:], _I) if source.startswith(r"\b") else None
 
 
 def _led_spans(pattern: re.Pattern[str], lead: re.Pattern[str] | None, text: str) -> Found:
