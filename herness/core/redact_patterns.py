@@ -74,7 +74,8 @@ _LUHN2: Final = (0, 2, 4, 6, 8, 1, 3, 5, 7, 9)  # Luhn term of a doubled digit
 _DOUBLED: Final = str.maketrans(_DIGITS, "".join(map(str, _LUHN2)))
 
 _PHONE_WINDOW: Final = re.compile(r"[(+0-9][0-9 ().+-]{7,}")  # class first: fast
-_PHONE: Final = re.compile(r"(?<![\w+])\+?[0-9][0-9 ().-]{7,20}[0-9](?!\w)")
+# `(` opens a candidate only before a 1-4 digit area code and `)` (T10-11b, SN-3b).
+_PHONE: Final = re.compile(r"(?<![\w+])(?:\+|\((?=[0-9]{1,4}\)))?[0-9][0-9 ().-]{7,20}[0-9](?!\w)")
 _PHONE_EXCLUDE: Final = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,3}(?:\.[0-9]{1,3}){3}")
 # A build id (impl 00 ``new_build_id``, T09-15d's verbatim-safe shape) is never PHONE (T06-29).
 _BUILD_ID: Final = re.compile(r"(?<!\w)[0-9]{8}-[0-9]{6}-[0-9A-HJKMNP-TV-Z]{6}(?!\w)")

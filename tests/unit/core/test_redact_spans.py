@@ -82,3 +82,31 @@ _PW = "pass" + "word"
 def test_ut10_94_trailing_period_is_not_masked(text: str, expected: list[tuple[str, str]]) -> None:
     """UT10-94 CREDENTIAL and URL_TOKEN spans end before a trailing period (SN-3a)."""
     assert _found(text) == expected
+
+
+# --- UT10-95 SN-3b: `(area) number` is masked with its opening parenthesis ----------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Contact (202) 555-0101 (desk).", [("PHONE", "(202) 555-0101")]),
+        ("call (415) 555-0142.", [("PHONE", "(415) 555-0142")]),
+        ("x((202) 555-0177", [("PHONE", "(202) 555-0177")]),
+        ("(0) 20 7946 0958", [("PHONE", "(0) 20 7946 0958")]),
+        ("tel (+1 202 555 0101)", [("PHONE", "+1 202 555 0101")]),
+        ("ref (2025550123)", [("PHONE", "2025550123")]),
+        ("id(202) 555-0101", [("PHONE", "202) 555-0101")]),
+        ("built (20260925-101500-ABCDEF)", []),
+    ],
+)
+def test_ut10_95_area_code_parenthesis_is_masked(
+    text: str, expected: list[tuple[str, str]]
+) -> None:
+    """UT10-95 `(` opens a PHONE span only before a 1-4 digit area code and `)` (SN-3b)."""
+    assert _found(text) == expected
+
+
+def test_ut10_95_parenthesis_does_not_change_the_pseudonym() -> None:
+    """UT10-95 `(202) 555-0101` and `202-555-0101` normalize to one pseudonym."""
+    assert _RED.pseudonym("PHONE", "(202) 555-0101") == _RED.pseudonym("PHONE", "202-555-0101")
