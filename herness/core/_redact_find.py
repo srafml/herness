@@ -230,10 +230,16 @@ def find_credentials(text: str) -> Found:
     schemes = _occurrences(text, "://")
     found = list(_credentials(text, schemes))
     urls = _urls(text, schemes) if found and schemes else []
+    starts = [at for at, _ in urls]  # sorted, non-overlapping: bisect finds the one URL
+    values: dict[int, list[tuple[int, int, str]]] = {}  # each URL's query parsed once
     for start, end, value in found:
-        values = (_query_values(url, at) for at, url in urls if at <= start < at + len(url))
-        if not any(s <= start and end <= e for spans in values for s, e, _ in spans):
-            yield start, end, value
+        index = bisect_right(starts, start) - 1
+        if index >= 0 and start < starts[index] + len(urls[index][1]):
+            if index not in values:
+                values[index] = list(_query_values(urls[index][1], starts[index]))
+            if any(s <= start and end <= e for s, e, _ in values[index]):
+                continue
+        yield start, end, value
 
 
 def _credentials(text: str, schemes: Sequence[int]) -> Found:

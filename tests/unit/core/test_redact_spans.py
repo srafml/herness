@@ -9,6 +9,7 @@ UT10-99 the verbatim-safe shapes that stay unmasked. Values are synthetic: reser
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -256,3 +257,31 @@ def test_ut10_99_verbatim_safe_shapes_are_not_masked(text: str) -> None:
     """UT10-99 build ids, ULIDs, dates, timestamps, times, query ids, decimals and small
     integers (T09-15d verbatim-safe set) and ticket numbers yield no span."""
     assert _found(text) == []
+
+
+# --- UT10-100 dense text: scan stays linear (T10-11b review fix round 1) ------------------
+
+_DENSE = {
+    "ip": "ip 10.1.2.3 x ",  # one IP span per 14 characters (view rebuild per detector)
+    "url": f"https://h.example/p?{_QNAME}=synthetic1 ",  # CREDENTIAL inside URL_TOKEN
+}
+
+
+def _best_seconds(text: str) -> float:
+    best = float("inf")
+    for _ in range(2):
+        started = time.perf_counter()
+        _RED.scan(text)
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
+@pytest.mark.parametrize("unit", list(_DENSE.values()), ids=list(_DENSE))
+def test_ut10_100_dense_text_scan_scales_linearly(unit: str) -> None:
+    """UT10-100 4x the text costs well under 8x the time (linear ~4x; the per-span view
+    rebuild and the per-credential URL walk were ~16x): a complexity proxy, not a wall bound."""
+    units = 64_000 // len(unit)
+    small, large = unit * units, unit * (4 * units)
+    assert len(_RED.scan(large)) == 4 * len(_RED.scan(small))
+    ratio = _best_seconds(large) / _best_seconds(small)
+    assert ratio < 8, f"x{ratio:.1f} for 4x the text"

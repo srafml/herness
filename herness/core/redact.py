@@ -194,9 +194,9 @@ class Redactor:
             if not wanted:
                 continue
             found = self._detect(detector, view, taken)
-            spans += found
-            for span in found:  # blank the newly held ranges (same as taken.masked(text))
-                view = view[: span.start] + _MASK * (span.end - span.start) + view[span.end :]
+            if found:  # one O(len) pass per detector, never one per span (T10-11b review I1)
+                spans += found
+                view = taken.masked(text)
         if ner and self._cfg.ner == "presidio":
             spans.extend(self._ner_spans(text, protected, spans, taken))
         spans.sort()
