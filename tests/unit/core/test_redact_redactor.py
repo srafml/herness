@@ -188,7 +188,7 @@ def test_ut10_40_get_redactor_builds_caches_and_logs(
     loaded = [line for line in _err_lines(capsys) if line["event"] == "redact.directory.loaded"]
     assert len(loaded) == 1
     assert loaded[0]["names"] == 1
-    assert loaded[0]["variants"] == 4
+    assert loaded[0]["variants"] == 5  # 3 name forms, `M. Garcia` (T10-11b SN-2), 1 alt
     assert isinstance(loaded[0]["duration_ms"], int)
     result = red.redact("ask Maria Garcia or M Garcia")
     assert result is not None

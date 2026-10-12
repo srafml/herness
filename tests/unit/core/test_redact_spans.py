@@ -9,9 +9,12 @@ UT10-99 the verbatim-safe shapes that stay unmasked. Values are synthetic: reser
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from herness.core.redact import Redactor
+from herness.core.redact_directory import NameDirectory
 from herness.core.settings import RedactionConfig
 
 pytestmark = pytest.mark.unit
@@ -110,3 +113,48 @@ def test_ut10_95_area_code_parenthesis_is_masked(
 def test_ut10_95_parenthesis_does_not_change_the_pseudonym() -> None:
     """UT10-95 `(202) 555-0101` and `202-555-0101` normalize to one pseudonym."""
     assert _RED.pseudonym("PHONE", "(202) 555-0101") == _RED.pseudonym("PHONE", "202-555-0101")
+
+
+# --- UT10-96 SN-2: the directory holds the `F. Last` form of each display name ------------
+
+
+_NL = chr(10)
+
+
+def _directory(tmp_path: Path, *names: str) -> NameDirectory:
+    path = tmp_path / "directory.csv"
+    lines = ["display_name,alt_names", *(f"{name}," for name in names)]
+    path.write_text("".join(line + _NL for line in lines), encoding="utf-8")
+    return NameDirectory.from_files(path, (), None)
+
+
+def test_ut10_96_initial_and_last_name_is_person(tmp_path: Path) -> None:
+    """UT10-96 `F. Last` is a variant of display name `First Last`, with its canonical name."""
+    names = _directory(tmp_path, "Kalia Bramford", "Mi Dor Quorwick")
+    text = "Reported by K. Bramford. Seen by M. Quorwick and k. bramford"
+    assert names.find(text) == [
+        (12, 23, "kalia bramford"),
+        (33, 44, "mi dor quorwick"),
+        (49, 60, "kalia bramford"),
+    ]
+    assert names.variant_count == 8  # 4 variants per display name
+
+
+def test_ut10_96_initial_variant_shares_the_person_token(tmp_path: Path) -> None:
+    """UT10-96 `F. Last`, `First Last` and `Last, First` redact to one PERSON token."""
+    red = Redactor(
+        RedactionConfig(directory_file=None), bytes(32), _directory(tmp_path, "Kalia Bramford")
+    )
+    tokens = {
+        red.redact(text).text for text in ("K. Bramford", "Kalia Bramford", "Bramford, Kalia")
+    }  # type: ignore[union-attr]
+    assert len(tokens) == 1
+
+
+def test_ut10_96_display_names_file_gets_the_initial_variant(tmp_path: Path) -> None:
+    """UT10-96 lines of the display-names cache get the `F. Last` variant as well."""
+    cache = tmp_path / "display_names.txt"
+    cache.write_text("Sela Grompell" + _NL, encoding="utf-8")
+    names = NameDirectory.from_files(None, (), cache)
+    assert names.find("by S. Grompell.") == [(3, 14, "sela grompell")]
+    assert names.find("by S Grompell") == []
