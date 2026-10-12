@@ -29,8 +29,11 @@ from tests.support.metrics_synth import SynthEnv, generate_root, release, remove
 
 from herness.core import config as herness_config
 from herness.core.config import HernessConfig
+from herness.model._build_support import db_settings
 from herness.model.build import run_build_pipeline
+from herness.model.settings import BuildSettings
 from herness.store import warehouse
+from herness.store._warehouse_rw import open_for_build
 from herness.store.ops import reset_connections
 from herness.store.ops.migrate import migrate
 
@@ -70,7 +73,17 @@ class LakeBuild:
 
     def open(self) -> duckdb.DuckDBPyConnection:
         """A writable connection of the build file (auto-commit); the caller closes it."""
-        return self.env.open_build(self.build_id)
+        return self.open_id(self.build_id)
+
+    def open_id(self, build_id: str) -> duckdb.DuckDBPyConnection:
+        """A writable connection of build `build_id` with the PRODUCTION settings: the
+        defaults of `sources.yaml: build` (memory limit 75 % of the RAM, all threads, spill
+        folder, `preserve_insertion_order` off) through `db_settings`, as the pipeline's own
+        build opens it. `SynthEnv.open_build` would cap memory at 16 GB (a harness value that
+        made the BT03-09 range joins fail with an out-of-memory error when run alone)."""
+        return open_for_build(
+            build_id, create=False, cfg=db_settings(BuildSettings()), layout=self.env.layout
+        )
 
 
 def _counts(env: SynthEnv, build_id: str) -> dict[str, int]:

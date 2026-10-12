@@ -13,9 +13,11 @@ Both rows are pure pipeline work (no model), so they run here on the `full` buil
   whole heuristic operation, on purpose: in `run_enrichment` the heavy part (`link_candidates`,
   the window/CI/service range joins into `link_cand`) runs inside stage `decide-escalate`
   (step 6, it also feeds the pair inputs) and stage `link` only does `run_link_stage` on the
-  ready table (30 s of the 352 s at full scale), so the pipeline's `link` duration alone is not
-  the spec's "heuristic change linking 5M x 0.5M". Status at full scale on the w50 idle host:
-  352.3 s vs < 180 s, a MISS planted as a strict xfail (owner T03-38).
+  ready table (30 s), so the pipeline's `link` duration alone is not the spec's
+  "heuristic change linking 5M x 0.5M". Status at full scale on the w50 idle host:
+  247.2 s vs < 180 s with the production connection settings of `LakeBuild.open_id` (an
+  earlier 352 s run used the 16 GB harness connection), a MISS planted as a strict xfail
+  (owner T03-38).
 * BT03-11 times the real `run_suggest_stage` (scores, ranking, `mapping_suggestion` review
   items into the ops store) on `MappingVectors` of exactly 2,000 subjects x 5,000 services.
   Subjects: the lake's active teams without a mapping, then synthetic Jira-component subjects;
@@ -68,7 +70,8 @@ _SEED: Final = 42
 _SPEC_CHANGES: Final = 500_000
 _NOISE: Final = 0.05
 _BT09_MISS: Final = (
-    "BT03-09 measured 352.3 s at full scale (5.15M x 0.50M) vs < 180 s on the w50 idle host; "
+    "BT03-09 measured 247.2 s at full scale (5.15M x 0.50M, production connection settings) "
+    "vs < 180 s on the w50 idle host; "
     "owner T03-38 (new card: change-linking performance at 5M x 0.5M)"
 )
 

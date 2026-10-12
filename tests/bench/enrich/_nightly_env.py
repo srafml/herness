@@ -248,7 +248,7 @@ def _copy_build(lake: LakeBuild, build_id: str) -> duckdb.DuckDBPyConnection:
     dst = warehouse.build_path(build_id, layout=lake.env.layout)
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(lake.path, dst)
-    return lake.env.open_build(build_id)
+    return lake.open_id(build_id)
 
 
 def _split_ids(con: duckdb.DuckDBPyConnection) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
