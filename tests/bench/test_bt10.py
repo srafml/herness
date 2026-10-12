@@ -92,11 +92,6 @@ def _evidence_pack(size: int = 1_000_000) -> bytes:
     return json.dumps(rows).encode()
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="BT10-05 threshold pending the bench-owner ruling (T10-10 measured a full scan at "
-    "~228-427 ms/MB on this hardware)",
-)
 def test_bt10_05_egress_rescan_per_mb(benchmark: Any) -> None:
     """BT10-05 Redactor.scan in the egress re-scan of a 1 MB JSON evidence pack: < 50 ms per MB."""
     body = _evidence_pack()
@@ -171,15 +166,15 @@ def _replay(texts: list[str], count: int, avg_bytes: int) -> list[str]:
     return out
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="BT10-03 measured ~1,200-1,300 records/s on the 32-core dev box (avg 1.5 KB, "
-    "100k-name directory, one core) against >= 5,000: pending bench-owner ruling (T10-15)",
-)
 @pytest.mark.timeout(1800)
 def test_bt10_03_redact_records_per_second(tmp_path: Path) -> None:
     """BT10-03 spec 11 corpus replayed to 100k records of ~1.5 KB, 100k-name directory, one core:
-    at least 5,000 records/s (median of three repeats)."""
+    at least 5,000 records/s (median of three repeats).
+
+    T10-11b measured ~6,100-6,400 records/s on the dev box. The replay repeats the corpus
+    values, so the redactor's pseudonym memo (U10-44) hits almost always; with the memo off
+    the rate is ~5,000-5,100 records/s, the honest margin for text with fewer repeats.
+    """
     corpus = [rec["text"] for rec in load_corpus(write_corpus(tmp_path))]
     records = _replay(corpus, BT03_RECORDS, BT03_AVG_BYTES)
     avg = sum(map(len, records)) / len(records)
