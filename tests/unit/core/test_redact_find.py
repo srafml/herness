@@ -71,6 +71,9 @@ def _reference_cards(text: str) -> Found:
         if len(digits) in rp.CARD_DIGITS and rp.luhn_valid(digits):
             yield m.start(), m.end(), m.group()
     yield from rp._card_cuts(text, 0, len(text), [])
+    for m in rp._ACCOUNT.finditer(text):
+        if not rp._after_minus(text, m.start()):
+            yield m.start(), m.end(), m.group()
 
 
 def _reference_phones(text: str) -> Found:
@@ -84,6 +87,8 @@ def _reference_phones(text: str) -> Found:
             continue
         if rf.ascii_digits(value) in rp.PHONE_DIGITS and not rp._PHONE_EXCLUDE.search(value):
             yield start, end, value
+    for m in rp._LOCAL_PHONE.finditer(text):
+        yield m.start(), m.end(), m.group()
 
 
 def _reference_ips(text: str) -> list[tuple[int, int]]:

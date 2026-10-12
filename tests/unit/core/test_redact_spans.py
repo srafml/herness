@@ -158,3 +158,98 @@ def test_ut10_96_display_names_file_gets_the_initial_variant(tmp_path: Path) -> 
     names = NameDirectory.from_files(None, (), cache)
     assert names.find("by S. Grompell.") == [(3, 14, "sela grompell")]
     assert names.find("by S Grompell") == []
+
+
+# --- UT10-97 account/card-shaped digit runs (T09-15d addendum) ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("acct 1234567890123456 closed", [("CARD", "1234567890123456")]),
+        ("acct 12345678901234567.", [("CARD", "12345678901234567")]),
+        ("iban 9876543210987654321 x", [("CARD", "9876543210987654321")]),
+        ("acct 1234567890123456 2026", [("CARD", "1234567890123456")]),
+        ("pan 4111111111111111", [("CARD", "4111111111111111")]),
+        ("ref 1234567890123", [("PHONE", "1234567890123")]),
+        ("ref 123456789012345", [("PHONE", "123456789012345")]),
+    ],
+)
+def test_ut10_97_long_digit_runs_are_masked(text: str, expected: list[tuple[str, str]]) -> None:
+    """UT10-97 a 16-19 digit run is CARD (Luhn-optional); 13-15 digit runs are PHONE."""
+    assert _found(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "id 12345678901234567890",  # 20 digits: an id or a 64-bit unsigned integer
+        "sys_id 23554300000000000000000000128668",
+        "min -9223372036854775807::BIGINT",
+        "ratio 1.1234567890123456",
+        "value 1234567890123456.5",
+        "key prometheus:0000000000000004",
+        "query q_1234567890123456",
+        "range 1234567890123456-7",
+    ],
+)
+def test_ut10_97_other_long_numbers_stay(text: str) -> None:
+    """UT10-97 longer runs, zero-padded keys, fractions, signed ints and ids are not CARD."""
+    assert _found(text) == []
+
+
+def test_ut10_97_account_pseudonym_ignores_spacing() -> None:
+    """UT10-97 an account run normalizes like a card: one token per digit string."""
+    assert _RED.pseudonym("CARD", "1234567890123456") == _RED.pseudonym(
+        "CARD", "1234 5678 9012 3456"
+    )
+
+
+# --- UT10-98 7-digit local phone numbers (T09-15d addendum) --------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("call 555-0123 now", [("PHONE", "555-0123")]),
+        ("desk (555-0199).", [("PHONE", "555-0199")]),
+        ("Contact 867-5309, then", [("PHONE", "867-5309")]),
+        ("Contact (202) 555-0101", [("PHONE", "(202) 555-0101")]),
+    ],
+)
+def test_ut10_98_local_phone_is_masked(text: str, expected: list[tuple[str, str]]) -> None:
+    """UT10-98 `NXX-XXXX` (exchange 2-9) is PHONE; a full number stays one span."""
+    assert _found(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["rows 100-2000", "PAY-555-0123", "555-01234", "1555-0123", "555-0123-4", "v1.555-0123",
+     "x555-0123", "555-0123.5", "2026-10-11"],
+)  # fmt: skip
+def test_ut10_98_other_dash_numbers_stay(text: str) -> None:
+    """UT10-98 ranges from 0/1, keys, longer groups, versions and dates are not PHONE."""
+    assert _found(text) == []
+
+
+# --- UT10-99 verbatim-safe shapes stay unmasked (T09-15d, T06-29) -------------------------
+
+_ULID = "01J9ZX3Q8K4M" + "2N6P7R5T0V1W2Y"  # built at runtime: detect-secrets keeps quiet
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "20260925-101500-ABCDEF", "20260926-100000-000001", "build 20260926-100000-000001.",
+        _ULID, "run_" + _ULID, "2026-10-11",
+        "2026-10-11T10:15:00Z", "2026-10-11T10:15:00.123Z", "2026-10-11 10:15:00",
+        "2026-10-11T10:15:00+02:00", "2026-10-11T10:15:00.123456+00:00",
+        "2026-10-11T10:15:00.123456789Z", "10:15:00", "10:15:00.5", "q_0123456789abcdef",
+        "q_1234567890123456", "1200.50", "0.75", "-0.5", "42", "7", "INC0012345", "CHG0012345",
+        "PAY-1234",
+    ],
+)  # fmt: skip
+def test_ut10_99_verbatim_safe_shapes_are_not_masked(text: str) -> None:
+    """UT10-99 build ids, ULIDs, dates, timestamps, times, query ids, decimals and small
+    integers (T09-15d verbatim-safe set) and ticket numbers yield no span."""
+    assert _found(text) == []

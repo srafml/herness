@@ -66,16 +66,22 @@ _NANP_DIGITS: Final = 10
 _CREDENTIAL_HINTS: Final = ("=", ":", "-----", "AKIA", "gh", "xox", "eyJ", "AccountKey")
 CARD_DIGITS: Final = range(13, 20)  # 13-19 digits
 PHONE_DIGITS: Final = range(9, 16)  # 9-15 digits
+LOCAL_PHONE_DIGITS: Final = 7  # `555-0123` (T10-11b, T09-15d addendum)
 _CARD_WINDOW: Final = re.compile(r"[0-9][0-9 -]{12,}")
 _CARD: Final = re.compile(r"\b(?:[0-9][ -]?){12,18}[0-9]\b")
 _CARD_RUN: Final = re.compile(r"(?<!\w)[0-9](?:[ -]?[0-9]){12,}")  # runs of >= 13 digits
 _WORD: Final = re.compile(r"\w")
+# Account/card-shaped digit-only run, Luhn-optional (T10-11b ruling on the T09-15d addendum):
+# 16-19 digits, no leading zero; 13-15 digit runs are PHONE already. Not after a word
+# character, `.` or `+`, not a minus sign's number, not before a decimal or range tail.
+_ACCOUNT: Final = re.compile(r"(?<![\w.+])[1-9][0-9]{15,18}(?!\w|[.-][0-9])")
 _LUHN2: Final = (0, 2, 4, 6, 8, 1, 3, 5, 7, 9)  # Luhn term of a doubled digit
 _DOUBLED: Final = str.maketrans(_DIGITS, "".join(map(str, _LUHN2)))
 
 _PHONE_WINDOW: Final = re.compile(r"[(+0-9][0-9 ().+-]{7,}")  # class first: fast
 # `(` opens a candidate only before a 1-4 digit area code and `)` (T10-11b, SN-3b).
 _PHONE: Final = re.compile(r"(?<![\w+])(?:\+|\((?=[0-9]{1,4}\)))?[0-9][0-9 ().-]{7,20}[0-9](?!\w)")
+_LOCAL_PHONE: Final = re.compile(r"(?<![\w+.-])[2-9][0-9]{2}-[0-9]{4}(?![\w-]|\.[0-9])")
 _PHONE_EXCLUDE: Final = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,3}(?:\.[0-9]{1,3}){3}")
 # A build id (impl 00 ``new_build_id``, T09-15d's verbatim-safe shape) is never PHONE (T06-29).
 _BUILD_ID: Final = re.compile(r"(?<!\w)[0-9]{8}-[0-9]{6}-[0-9A-HJKMNP-TV-Z]{6}(?!\w)")
@@ -93,7 +99,7 @@ _COLON_PAIR: Final = re.compile(r":[0-9A-Fa-f]*:")
 _HEX_COLON_RUN: Final = re.compile(r"[0-9A-Fa-f:]*")
 _HEX_COLON: Final = frozenset("0123456789ABCDEFabcdef:")
 _ENOUGH_CARD: Final = enough_digits(CARD_DIGITS.start)
-_ENOUGH_PHONE: Final = enough_digits(PHONE_DIGITS.start)
+_ENOUGH_PHONE: Final = enough_digits(LOCAL_PHONE_DIGITS)
 _IPV4_LOOSE: Final = re.compile(r"[0-9]{1,3}(?:\.[0-9]{1,3}){3}")
 _LAST_FIRST: Final = re.compile(r"^([^,]+),\s*(.+)$")
 _UPPER_IDS: Final = frozenset({"EMPLOYEE_ID", "USER_ID", "NATIONAL_ID", "CARD"})
@@ -191,7 +197,7 @@ def build_detectors(cfg: RedactionConfig) -> tuple[Detector, ...]:
             "EMPLOYEE_ID", ids.get("EMPLOYEE_ID", ()), needs_digit=True
         ),
         "USER_ID": _pattern_detector("USER_ID", ids.get("USER_ID", ()), needs_digit=True),
-        "PHONE": Detector("PHONE", at_least_digits(PHONE_DIGITS.start), find_phones),
+        "PHONE": Detector("PHONE", at_least_digits(LOCAL_PHONE_DIGITS), find_phones),
         "IP": Detector("IP", _ip_prefilter, find_ips),
         "CUSTOM": _pattern_detector(
             "CUSTOM", tuple(cfg.custom_patterns.values()), needs_digit=False
@@ -201,7 +207,7 @@ def build_detectors(cfg: RedactionConfig) -> tuple[Detector, ...]:
 
 
 def find_cards(text: str) -> Found:
-    """CARD per digit window: Luhn-valid spec matches, then run cuts."""
+    """CARD per digit window: Luhn-valid spec matches, run cuts, then account-shaped runs."""
     for pos, endpos in windows(_CARD_WINDOW, text, _ENOUGH_CARD):
         found: list[tuple[int, int]] = []
         for match in _CARD.finditer(text, pos, endpos):
@@ -210,6 +216,14 @@ def find_cards(text: str) -> Found:
                 found.append(match.span())
                 yield match.start(), match.end(), match.group()
         yield from _card_cuts(text, pos, endpos, found)
+        for match in _ACCOUNT.finditer(text, pos, endpos):
+            if not _after_minus(text, match.start()):
+                yield match.start(), match.end(), match.group()
+
+
+def _after_minus(text: str, start: int) -> bool:
+    """True when ``text[start - 1]`` is a minus sign (a ``-`` after no word character)."""
+    return text[start - 1 : start] == "-" and (start == 1 or _WORD.match(text, start - 2) is None)
 
 
 def _card_cuts(text: str, pos: int, endpos: int, found: Sequence[tuple[int, int]]) -> Found:
@@ -247,7 +261,8 @@ def _in_build_id(text: str, start: int, end: int) -> bool:
 
 
 def find_phones(text: str) -> Found:
-    """PHONE per digit window: spec candidates with 9-15 digits, not dates, IPv4 or build ids."""
+    """PHONE per digit window: spec candidates with 9-15 digits, not dates, IPv4 or build ids,
+    then 7-digit local numbers ``NXX-XXXX`` (T10-11b, T09-15d addendum)."""
     for pos, endpos in windows(_PHONE_WINDOW, text, _ENOUGH_PHONE):
         for match in _PHONE.finditer(text, pos, endpos):
             start, value = match.start(), match.group()
@@ -261,6 +276,8 @@ def find_phones(text: str) -> Found:
                 continue
             if digits in PHONE_DIGITS and not _PHONE_EXCLUDE.search(value):
                 yield start, end, value
+        for match in _LOCAL_PHONE.finditer(text, pos, endpos):
+            yield match.start(), match.end(), match.group()
 
 
 def _is_ipv6(value: str) -> bool:
