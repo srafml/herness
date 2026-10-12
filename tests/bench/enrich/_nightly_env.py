@@ -191,6 +191,7 @@ class Night:
     escalated_decisions: int
     night_pairs: int  # (record, question) decisions of the night's new and changed records
     night_escalated_pairs: int
+    night_new_incident_hashes: int  # distinct incident texts of the night absent from night 1
 
 
 def _shipped(lake: LakeBuild, name: str) -> dict[str, Any]:
@@ -269,6 +270,19 @@ def _ids_table(con: duckdb.DuckDBPyConnection, ids: list[str]) -> None:
     con.executemany("INSERT INTO bench_ids VALUES (?)", [[i] for i in ids])
 
 
+def _new_incident_hashes(con: duckdb.DuckDBPyConnection, prev: Path) -> tuple[int] | None:
+    """Distinct incident texts of the `bench_ids` records that night 1 did not have."""
+    con.execute(f"ATTACH '{prev.as_posix()}' AS p1 (READ_ONLY)")
+    try:
+        return cast("tuple[int] | None", con.execute(
+            "SELECT count(DISTINCT t.content_hash) FROM enrich.text_redacted AS t"
+            " WHERE t.entity = 'incident' AND t.record_id IN (SELECT record_id FROM bench_ids)"
+            " AND t.content_hash NOT IN (SELECT content_hash FROM p1.enrich.text_redacted)"
+        ).fetchone())  # fmt: skip
+    finally:
+        con.execute("DETACH p1")
+
+
 def _edit_changed(con: duckdb.DuckDBPyConnection, changed: dict[str, list[str]]) -> None:
     for _, table, _ in SPLIT:
         _ids_table(con, changed[table])
@@ -294,7 +308,7 @@ def _run(con: duckdb.DuckDBPyConnection, build_id: str, ctx: MergingContext, pre
     return report, time.perf_counter() - start
 
 
-def run_two_nights(lake: LakeBuild, work: Path) -> Iterator[Night]:
+def run_two_nights(lake: LakeBuild, work: Path) -> Iterator[Night]:  # noqa: PLR0915 - the scenario
     """Prime night 1, measure night 2, yield the result, then undo every patch and file."""
     ndata = work / "night-data"
     previous_keyring = keyring.get_keyring()
@@ -336,6 +350,7 @@ def run_two_nights(lake: LakeBuild, work: Path) -> Iterator[Night]:
                                " FROM enrich.decision").fetchone()  # fmt: skip
             incidents = con2.execute("SELECT count(*) FROM core.incident").fetchone()
             _ids_table(con2, [i for part in (new, changed) for ids in part.values() for i in ids])
+            fresh = _new_incident_hashes(con2, prev)
             mine = con2.execute(
                 "SELECT count(*), count(*) FILTER (WHERE escalated) FROM enrich.decision"
                 " WHERE record_id IN (SELECT record_id FROM bench_ids)"
@@ -344,7 +359,8 @@ def run_two_nights(lake: LakeBuild, work: Path) -> Iterator[Night]:
             yield Night(report1, report2, night1_s, night2_s, int(incidents[0] if incidents else 0),
                         sum(n for _, _, n in SPLIT) * 2, stub.calls - calls_before,
                         int(row[0]) if row else 0, int(row[1]) if row else 0,
-                        int(mine[0]) if mine else 0, int(mine[1]) if mine else 0)  # fmt: skip
+                        int(mine[0]) if mine else 0, int(mine[1]) if mine else 0,
+                        int(fresh[0]) if fresh else 0)  # fmt: skip
     finally:
         reset_process_state()
         reset_connections()

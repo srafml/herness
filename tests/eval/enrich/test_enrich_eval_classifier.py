@@ -116,11 +116,13 @@ def _check(cfg: HernessConfig, inputs: ClassifierInputs, manifest: LayaManifest,
             assert student.mae <= crit.max_mae, f"{qid}: MAE {student.mae:.4f} > {crit.max_mae}"
         assert student.ece is not None
         score = inputs.questions.get(qid).type == "score"
-        limit = min(_ECE_MAX_SCORE if score else _ECE_MAX, crit.max_ece or 1.0)
+        cap = _ECE_MAX_SCORE if score else _ECE_MAX
+        limit = cap if crit.max_ece is None else min(cap, crit.max_ece)
         assert student.ece <= limit, f"{qid}: ECE {student.ece:.4f} > {limit}"
         assert student.accuracy is not None
         assert reference.accuracy is not None
-        gap_limit = min(_GAP_MAX, crit.max_gap_to_teacher or _GAP_MAX)
+        configured = crit.max_gap_to_teacher
+        gap_limit = _GAP_MAX if configured is None else min(_GAP_MAX, configured)
         gap = reference.accuracy - student.accuracy
         assert gap <= gap_limit, f"{qid}: gap to the teacher {gap:.4f} > {gap_limit}"
         assert report.deciders["human"][qid].status in {"ok", "insufficient", "absent"}

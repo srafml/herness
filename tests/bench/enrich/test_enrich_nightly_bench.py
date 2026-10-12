@@ -33,6 +33,7 @@ import shutil
 from collections.abc import Iterator
 
 import pytest
+import yaml
 from tests.bench.enrich._common import (
     BT06_SHARE_MAX,
     BT10_LIMIT_S,
@@ -47,7 +48,11 @@ from tests.support.bench import BenchRecorder
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
-ESCALATION_CAP = 150_000  # config/decisions.yaml escalation.max_rows_per_night
+
+def _escalation_cap(lake: LakeBuild) -> int:
+    """`escalation.max_rows_per_night` of the config tree the rows run with."""
+    doc = yaml.safe_load((lake.env.cfg_dir / "decisions.yaml").read_text(encoding="utf-8"))
+    return int(doc["escalation"]["max_rows_per_night"])
 
 
 @pytest.fixture(scope="module")
@@ -80,12 +85,16 @@ def test_bt03_10_nightly_enrichment_total_10k_no_recluster(
     embed = report.stages["embed"]
     assert embed.embedded + embed.cache_hits >= floor  # texts embedded or reused by hash
     primary = report.stages["decide-primary"].decided
-    assert primary >= int(0.75 * NIGHTLY_RECORDS)  # unique hashes asked incident questions
+    assert night.night_new_incident_hashes > 0
+    # every new distinct incident text is asked the Laya-primary questions
+    assert primary >= int(0.95 * night.night_new_incident_hashes)
+    record_info(bench_recorder, "BT03-10", "new_incident_hashes", night.night_new_incident_hashes,
+                "rows", lake.scale)  # fmt: skip
     # no backlog: night 1 stayed under the nightly escalation cap and left nothing queued
     esc1, esc2 = report1.stages["decide-escalate"], report.stages["decide-escalate"]
     assert esc1.status == "done"
     assert esc2.status == "done"
-    assert esc1.escalated < ESCALATION_CAP
+    assert esc1.escalated < _escalation_cap(lake)
     assert report.stages["reasoning"].decided == 0  # no deferred item reached the LLM
     record_info(bench_recorder, "BT03-10", "texts_redacted", redacted, "rows", lake.scale)
     record_info(bench_recorder, "BT03-10", "embedded", report.stages["embed"].embedded, "rows",
