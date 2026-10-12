@@ -16,7 +16,8 @@ T11-18 recorder (`data/bench/`, gitignored) and writes one stderr line like the 
 * BT02-01 reads `durations_ms["build"]` of the `build_pipeline` job result.
 * BT02-02 times `herness.model.build.run_sql_range(con, files, 900, 999, ...)` with the
   same render context the stage builds.
-* BT02-03 is the size of the build file (plus any `.wal`) after the pipeline above.
+* BT02-03 is the size in decimal GB (1e9 bytes) of the build file (plus any `.wal`)
+  after the pipeline above.
 * BT02-04 runs the 200 queries of `QUERIES` once each (after a short warm-up) on
   `warehouse.open_readonly` of the build; p95 over the 200 wall times.
 
@@ -68,6 +69,7 @@ DQ_LIMIT_S: Final = 60.0  # BT02-02: run_sql_range(900, 999) < 60 s
 SIZE_LIMIT_GB: Final = 15.0  # BT02-03: warehouse file < 15 GB
 QUERY_P95_LIMIT_S: Final = 2.0  # BT02-04: p95 of 200 agent queries < 2 s
 QUERY_COUNT: Final = 200
+BYTES_PER_GB: Final = 10**9  # decimal GB, the unit of the BT02-03 threshold
 WARMUP: Final = 3
 FULL_MIN_INCIDENTS: Final = 4_000_000
 
@@ -129,7 +131,7 @@ def _size_gb(env: SynthEnv, build_id: str) -> float:
     wal = path.with_name(path.name + ".wal")
     if wal.exists():
         total += wal.stat().st_size
-    return total / 2**30
+    return total / BYTES_PER_GB
 
 
 @pytest.fixture(scope="module")
