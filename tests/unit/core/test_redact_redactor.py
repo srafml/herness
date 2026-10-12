@@ -96,11 +96,11 @@ def test_ut10_37_email_inside_url_token_is_one_url_token_span() -> None:
     assert spans[0].replacement == "[SECRET]"
 
 
-def test_ut10_37_token_param_credential_wins_over_url_token_and_email() -> None:
-    """UT10-37 `token=` inside a URL is caught by CREDENTIAL first; no other span overlaps."""
+def test_ut10_37_token_param_in_url_is_one_url_token_span() -> None:
+    """UT10-37 `token=` inside a URL is one URL_TOKEN span (T10-11b SN-1); nothing overlaps."""
     text = "https://h.example/p?token=bob@example.com"
     spans = _redactor().scan(text)
-    assert [s.type for s in spans] == ["CREDENTIAL"]
+    assert [s.type for s in spans] == ["URL_TOKEN"]
     assert text[spans[0].start : spans[0].end] == "bob@example.com"
 
 

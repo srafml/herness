@@ -215,8 +215,13 @@ def _find_jwts(text: str) -> Found:
 
 
 def find_credentials(text: str) -> Found:
-    """CREDENTIAL (a)-(f) in spec order."""
-    return _credentials(text, list(_occurrences(text, "://")))
+    """CREDENTIAL (a)-(f) in spec order; a value inside a URL query value that URL_TOKEN
+    takes is left to URL_TOKEN, so the type is right (T10-11b, SN-1; both are [SECRET])."""
+    schemes = list(_occurrences(text, "://"))
+    taken = [(start, end) for start, end, _ in _url_tokens(text, schemes)]
+    for start, end, value in _credentials(text, schemes):
+        if not any(s <= start and end <= e for s, e in taken):
+            yield start, end, value
 
 
 def _credentials(text: str, schemes: Sequence[int]) -> Found:
