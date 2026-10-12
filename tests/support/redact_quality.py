@@ -58,9 +58,10 @@ def load_corpus(path: Path) -> list[dict[str, Any]]:
 def build_directory(directory: Path, extra: int = 0, *, initials: bool = False) -> NameDirectory:
     """Directory CSV of the corpus names, then `extra` more deterministic invented names.
 
-    Each row is a display name (variants `First Last`, `Last, First`); with `initials` its
-    `alt_names` also lists the `F. Last` form. Extras are `Zq<n>a Xv<n>b` tokens that cannot be
-    real names.
+    Each row is a display name, from which U10-38 builds the variants `First Last`,
+    `Last, First`, `Last,First` and (T10-11b SN-2) `F. Last`; `initials` also lists `F. Last`
+    in `alt_names` (redundant since SN-2, kept for callers that test the alt channel). Extras are
+    `Zq<n>a Xv<n>b` tokens that cannot be real names.
     """
     rows = [(first, last) for first, last in build_name_list(CORPUS_SEED)]
     rows += [(f"Zq{i:06d}a", f"Xv{i:06d}b") for i in range(extra)]

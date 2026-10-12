@@ -178,7 +178,7 @@ def test_bt10_03_redact_records_per_second(tmp_path: Path) -> None:
     corpus = [rec["text"] for rec in load_corpus(write_corpus(tmp_path))]
     records = _replay(corpus, BT03_RECORDS, BT03_AVG_BYTES)
     avg = sum(map(len, records)) / len(records)
-    directory = build_directory(tmp_path, extra=BT03_NAMES - 500, initials=True)
+    directory = build_directory(tmp_path, extra=BT03_NAMES - 500)
     assert directory.size >= BT03_NAMES
     red = make_redactor(directory)
     for text in records[:200]:  # warm-up
