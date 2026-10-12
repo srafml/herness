@@ -130,9 +130,12 @@ def _matches(pattern: re.Pattern[str], text: str, starts: Iterable[int]) -> Iter
 
 
 def _group(matches: Iterable[re.Match[str]], text: str, group: int = 0) -> Found:
-    """Non-empty spans of ``group``."""
+    """Non-empty spans of ``group``; a trailing period (sentence end) is never part of one
+    (T10-11b, SN-3a)."""
     for match in matches:
         start, end = match.span(group)
+        while end - start > 1 and text[end - 1] == ".":
+            end -= 1
         if start < end:
             yield start, end, text[start:end]
 
@@ -267,7 +270,8 @@ def _query_values(url: str, offset: int) -> Found:
 def _url_tokens(text: str, schemes: Sequence[int]) -> Found:
     starts = sorted({pos for at in schemes for pos in (at - 5, at - 4) if pos >= 0})
     for match in _matches(_URL, text, starts):
-        yield from _query_values(match.group(), match.start())
+        # A sentence-ending period is not part of the URL (T10-11b, SN-3a).
+        yield from _query_values(match.group().rstrip("."), match.start())
 
 
 def find_url_tokens(text: str) -> Found:

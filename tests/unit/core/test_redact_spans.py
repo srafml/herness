@@ -55,3 +55,30 @@ def test_ut10_93_credential_wider_than_the_query_value_stays_credential() -> Non
     """UT10-93 a `key=value#frag` credential reaching past the query value keeps CREDENTIAL."""
     text = f"https://h.example/p?{_QNAME}=synthetic5#frag"
     assert _found(text) == [("CREDENTIAL", "synthetic5#frag")]
+
+
+# --- UT10-94 SN-3a: a sentence-ending period is not part of a secret value ---------------
+
+_PW = "pass" + "word"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (f"Contact {_PW}=synthetic12345678. Next", [("CREDENTIAL", "synthetic12345678")]),
+        (f"set {_PW}=synthetic1.", [("CREDENTIAL", "synthetic1")]),
+        ("Authorization: Bearer abc.DEF-1..", [("CREDENTIAL", "abc.DEF-1")]),
+        (f"keep {_PW}=a.b.c inside", [("CREDENTIAL", "a.b.c")]),
+        (
+            f"From host https://portal.example.com/x?{_QNAME}=synthetic0a1b. Next",
+            [("URL_TOKEN", "synthetic0a1b")],
+        ),
+        (
+            f"https://h.example/p?sig=AbC.&{_QNAME}=v.w.",
+            [("URL_TOKEN", "AbC."), ("URL_TOKEN", "v.w")],
+        ),
+    ],
+)
+def test_ut10_94_trailing_period_is_not_masked(text: str, expected: list[tuple[str, str]]) -> None:
+    """UT10-94 CREDENTIAL and URL_TOKEN spans end before a trailing period (SN-3a)."""
+    assert _found(text) == expected

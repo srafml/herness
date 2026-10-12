@@ -50,7 +50,9 @@ def _reference_credentials(text: str) -> list[tuple[int, int]]:
 
 def _reference_url_tokens(text: str) -> list[tuple[int, int]]:
     return [
-        (s, e) for m in rf._URL.finditer(text) for s, e, _ in rf._query_values(m.group(), m.start())
+        (s, e)
+        for m in rf._URL.finditer(text)
+        for s, e, _ in rf._query_values(m.group().rstrip("."), m.start())
     ]
 
 
