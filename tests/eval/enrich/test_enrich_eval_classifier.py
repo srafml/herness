@@ -27,8 +27,15 @@ from typing import Final
 import pytest
 
 from herness.core import config as herness_config
-from herness.enrich.laya_models import read_current, verify_model_dir
-from herness.eval.classifier import classifier_inputs, run_classifier
+from herness.core.config import HernessConfig
+from herness.enrich.laya_models import LayaManifest, read_current, verify_model_dir
+from herness.enrich.questions import acceptance_for
+from herness.eval.classifier import (
+    ClassifierInputs,
+    ClassifierReport,
+    classifier_inputs,
+    run_classifier,
+)
 
 pytestmark = [pytest.mark.eval, pytest.mark.gpu, pytest.mark.slow]
 
@@ -41,6 +48,8 @@ _BLOCKED: Final = (
 _ECE_MAX: Final = 0.05
 _ECE_MAX_SCORE: Final = 0.06
 _GAP_MAX: Final = 0.02
+_GOLD_MIN: Final = 1_000  # the row's 1-2k gold range
+_GOLD_MAX: Final = 2_000
 _CONFIG_DIR: Final = "HERNESS_EVAL_CONFIG_DIR"  # optional: the config tree of the phase 4 model
 _SHIPPED: Final = Path(__file__).resolve().parents[3] / "config"
 
@@ -71,26 +80,47 @@ def test_et03_01_phase4_student_vs_teacher_vs_human_on_gold() -> None:
     assert Path(os.environ[_GOLD]).resolve() == gold_dir, f"{_GOLD} is not {gold_dir}"
     assert manifest.accepted_questions, "the phase 4 model accepts no question"
 
-    report = run_classifier(
-        qsv, inputs.deciders, data_root=data_root, warehouse=None, truth_dir=None,
-        settings=cfg.eval.classifier, inputs=inputs,
-    )  # fmt: skip
+    try:
+        report = run_classifier(
+            qsv, inputs.deciders, data_root=data_root, warehouse=None, truth_dir=None,
+            settings=cfg.eval.classifier, inputs=inputs,
+        )  # fmt: skip
+        _check(cfg, inputs, manifest, report)
+    finally:
+        herness_config.reset_config()
 
+
+def _check(cfg: HernessConfig, inputs: ClassifierInputs, manifest: LayaManifest,
+           report: ClassifierReport) -> None:  # fmt: skip
     failed = [(c.check, c.question, c.metric, c.detail) for c in report.gate_check if not c.passed]
     assert not failed, f"gate cross-check failed: {failed}"
     laya, teacher = report.deciders["laya"], report.deciders[manifest.teacher]
     for qid in manifest.accepted_questions:
-        criteria = [c for c in report.gate_check if c.check == "accepted_criteria"
-                    and c.question == qid]  # fmt: skip
-        assert criteria, f"{qid}: no accepted_criteria check ran"
         student, reference = laya[qid], teacher[qid]
         assert student.status == "ok", f"{qid}: no student metrics on the gold"
-        assert student.ece is not None
-        limit = _ECE_MAX_SCORE if inputs.questions.get(qid).type == "score" else _ECE_MAX
-        assert student.ece <= limit, f"{qid}: ECE {student.ece:.4f} > {limit}"
+        assert _GOLD_MIN <= student.n <= _GOLD_MAX, f"{qid}: gold size {student.n} not 1-2k"
         assert reference.status == "ok", f"{qid}: no teacher metrics on the gold"
+        # the RECOMPUTED metrics against the configured design 03 section 5.5 thresholds
+        crit = acceptance_for(cfg.decisions, qid)
+        for name, value in (
+            ("min_accuracy", student.accuracy), ("min_macro_f1", student.macro_f1),
+            ("min_coverage", student.coverage_at_threshold),
+            ("min_within_one", student.within_one),
+        ):  # fmt: skip
+            floor = getattr(crit, name)
+            if floor is not None:
+                assert value is not None, f"{qid}: {name} has no recomputed metric"
+                assert value >= floor, f"{qid}: {name} {value:.4f} < {floor}"
+        if crit.max_mae is not None:
+            assert student.mae is not None
+            assert student.mae <= crit.max_mae, f"{qid}: MAE {student.mae:.4f} > {crit.max_mae}"
+        assert student.ece is not None
+        score = inputs.questions.get(qid).type == "score"
+        limit = min(_ECE_MAX_SCORE if score else _ECE_MAX, crit.max_ece or 1.0)
+        assert student.ece <= limit, f"{qid}: ECE {student.ece:.4f} > {limit}"
         assert student.accuracy is not None
         assert reference.accuracy is not None
+        gap_limit = min(_GAP_MAX, crit.max_gap_to_teacher or _GAP_MAX)
         gap = reference.accuracy - student.accuracy
-        assert gap <= _GAP_MAX, f"{qid}: gap to the teacher {gap:.4f} > {_GAP_MAX}"
+        assert gap <= gap_limit, f"{qid}: gap to the teacher {gap:.4f} > {gap_limit}"
         assert report.deciders["human"][qid].status in {"ok", "insufficient", "absent"}

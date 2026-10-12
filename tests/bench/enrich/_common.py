@@ -114,11 +114,11 @@ def require_service(
     """The values of the service variables `names`, or a skip naming `blocker` and the
     missing variables. With `HERNESS_BENCH_FULL=1` and every variable set the row must
     really execute (misconfiguration fails loudly in the row, never passes silently)."""
-    require_full(config, what)
     values = {name: bench_flag(config, name) or "" for name in names}
     missing = [name for name, value in values.items() if not value]
-    if missing:
-        pytest.skip(f"{what}: blocked by {blocker}; set {', '.join(missing)} on the target PC")
+    if not full_enabled(config) or missing:
+        need = ([] if full_enabled(config) else [FULL_ENV + "=1"]) + missing
+        pytest.skip(f"{what}: blocked by {blocker}; set {', '.join(need)} on the target PC")
     return values
 
 

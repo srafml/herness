@@ -21,6 +21,7 @@ Both rows are pure pipeline work (no model), so they run here on the `full` buil
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 from typing import Final
@@ -57,6 +58,7 @@ from herness.store.vectors import EMBEDDING_DIM
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 _SEED: Final = 42
+_SPEC_CHANGES: Final = 500_000
 _NOISE: Final = 0.05
 
 
@@ -86,6 +88,15 @@ def test_bt03_09_heuristic_change_linking_all_incidents_x_changes(
     assert report.decided == 0  # no pair decider: heuristic links only
     record_info(bench_recorder, "BT03-09", "incidents", lake.incidents, "rows", lake.scale)
     record_info(bench_recorder, "BT03-09", "changes", lake.changes, "rows", lake.scale)
+    changes_vs_spec = lake.changes / _SPEC_CHANGES
+    record_info(
+        bench_recorder, "BT03-09", "changes_vs_spec_0_5m", changes_vs_spec, "ratio", lake.scale
+    )  # below 1 means the dataset is smaller than the spec's 0.5M
+    ratio = f"{changes_vs_spec:.0%}"
+    sys.stderr.write(
+        f"BT03-09 dataset incidents={lake.incidents} changes={lake.changes} "
+        f"(spec 5M x 0.5M; changes at {ratio} of the spec)\n"
+    )
     record_info(bench_recorder, "BT03-09", "candidate_pairs", candidates[0] if candidates else 0,
                 "pairs", lake.scale)  # fmt: skip
     record_info(bench_recorder, "BT03-09", "links_written", report.rows, "rows", lake.scale)

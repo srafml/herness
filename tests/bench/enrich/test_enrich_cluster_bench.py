@@ -26,6 +26,7 @@ import shutil
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import pytest
@@ -144,18 +145,37 @@ def test_bt03_07_full_recluster_excluding_naming(
                   BT07_RECLUSTER_LIMIT_S, lake.scale).passed  # fmt: skip
 
 
+class _CountingClient:
+    """Wraps the LLM client and counts the calls the namer really makes."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner, self.calls = inner, 0
+        self.name = inner.name
+
+    def complete(self, req: Any) -> Any:
+        self.calls += 1
+        return self._inner.complete(req)
+
+    async def acomplete(self, req: Any) -> Any:
+        self.calls += 1
+        return await self._inner.acomplete(req)
+
+
 @pytest.mark.timeout(TIMEOUT_S)
 def test_bt03_07_naming_500_calls(
-    lake: LakeBuild, state: ClusterState, request: pytest.FixtureRequest,
-    bench_recorder: BenchRecorder,
-) -> None:  # fmt: skip
+    request: pytest.FixtureRequest, bench_recorder: BenchRecorder
+) -> None:
     """BT03-07 naming of up to 500 clusters with the real `cluster_namer` LLM takes under
     45 min (V-12: needs the local LLM; skipped otherwise)."""
     blocker = "V-12 (no local LLM service on this host)"
     env = require_service(request.config, "cluster naming (real LLM)", blocker, [LLM_PROFILE_ENV])
+    lake: LakeBuild = request.getfixturevalue("lake")
+    state: ClusterState = request.getfixturevalue("state")
     with pinned_clock():
         activate_enrich(lake, state.data, "cluster-naming")
-        client = llm_client(request.config, env[LLM_PROFILE_ENV], role="cluster_namer")[0]
+        client = _CountingClient(
+            llm_client(request.config, env[LLM_PROFILE_ENV], role="cluster_namer")[0]
+        )
         candidates = state.result.naming
         assert candidates, "the full recluster produced no naming candidates"
         qs = load_question_set(get_config().decisions)
@@ -166,8 +186,8 @@ def test_bt03_07_naming_500_calls(
                               max_calls=BT07_NAMING_CALLS, prompt_path=_PROMPT)  # fmt: skip
         elapsed = time.perf_counter() - start
     assert any(n.source != "auto" for n in names.values()), "no cluster was named by the LLM"
-    calls = min(len(candidates), BT07_NAMING_CALLS)
-    record_info(bench_recorder, "BT03-07", "naming_calls", calls, "calls", lake.scale)
+    assert 0 < client.calls <= BT07_NAMING_CALLS
+    record_info(bench_recorder, "BT03-07", "naming_calls", client.calls, "calls", lake.scale)
     assert record(bench_recorder, "BT03-07", "naming_s", elapsed, "s", BT07_NAMING_LIMIT_S,
                   lake.scale).passed  # fmt: skip
 

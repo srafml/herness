@@ -12,6 +12,7 @@ import duckdb
 import pytest
 from tests.bench.enrich._common import require_full
 from tests.bench.enrich._lake import LakeBuild, build_lake
+from tests.bench.enrich._services import release
 from tests.support.fake_keyring import MemoryKeyring
 
 REDACT_KEY: Final = bytes(range(32))  # built at run time: no secret literal in the tree
@@ -52,3 +53,11 @@ def wh(lake: LakeBuild) -> Iterator[duckdb.DuckDBPyConnection]:
 def redaction_key(fake_keyring: MemoryKeyring) -> None:
     """The (fake) keyring holds the redaction HMAC key: the real `redact_table` works."""
     fake_keyring.store[("herness", "redact.hmac_key")] = REDACT_KEY.hex()
+
+
+@pytest.fixture(autouse=True)
+def release_row_state() -> Iterator[None]:
+    """After every row: config cache, ops connections, resilience state and the temp data
+    folders of the service rows are dropped, so no row leaks into the next module."""
+    yield
+    release()

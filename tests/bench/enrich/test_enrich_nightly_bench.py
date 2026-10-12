@@ -20,8 +20,11 @@ module docstring of `_nightly_env` for what is real and what is faked.
   accepted fake student that is unsure on a fixed 2 % of the texts, it checks the pipeline's
   accounting and gating of escalation (the stage counts, the `escalated` flag, the stub's call
   count); it does NOT measure a real student's confidence, which is calibration and ET03-01's
-  job. The `EnrichReport.escalation_share` of the whole build and the record-level share of
-  the stage reports are recorded next to it.
+  job. The fake student's `calibration.json` has an empty `questions` map, which bypasses the
+  real rule "an uncalibrated question cannot be accepted" (TH03-17); the manifest accepts
+  every question directly. The `EnrichReport.escalation_share` of the whole build (checked
+  against the same SQL share) and the record-level share of the stage reports are recorded
+  next to it.
 """
 
 from __future__ import annotations
@@ -44,6 +47,8 @@ from tests.support.bench import BenchRecorder
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
+ESCALATION_CAP = 150_000  # config/decisions.yaml escalation.max_rows_per_night
+
 
 @pytest.fixture(scope="module")
 def night(lake: LakeBuild, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Night]:
@@ -65,12 +70,23 @@ def test_bt03_10_nightly_enrichment_total_10k_no_recluster(
 ) -> None:
     """BT03-10 nightly enrichment of 10k new or changed records (no recluster, no backlog)
     takes under 20 min; model stages on fakes, the real-model figure is owed on the target PC."""
-    report = night.report2
+    report, report1 = night.report2, night.report1
     assert not _failed(night)
     assert report.cluster_run == "incremental", "the night reclustered"
     assert report.stages["text"].rows >= night.incidents  # every record has its text row
     redacted = report.stages["text"].rows - report.stages["text"].cache_hits
-    assert 0 < redacted <= NIGHTLY_RECORDS  # only the new and changed records were redacted
+    floor = int(0.95 * NIGHTLY_RECORDS)
+    assert floor <= redacted <= NIGHTLY_RECORDS  # exactly the new and changed records
+    embed = report.stages["embed"]
+    assert embed.embedded + embed.cache_hits >= floor  # texts embedded or reused by hash
+    primary = report.stages["decide-primary"].decided
+    assert primary >= int(0.75 * NIGHTLY_RECORDS)  # unique hashes asked incident questions
+    # no backlog: night 1 stayed under the nightly escalation cap and left nothing queued
+    esc1, esc2 = report1.stages["decide-escalate"], report.stages["decide-escalate"]
+    assert esc1.status == "done"
+    assert esc2.status == "done"
+    assert esc1.escalated < ESCALATION_CAP
+    assert report.stages["reasoning"].decided == 0  # no deferred item reached the LLM
     record_info(bench_recorder, "BT03-10", "texts_redacted", redacted, "rows", lake.scale)
     record_info(bench_recorder, "BT03-10", "embedded", report.stages["embed"].embedded, "rows",
                 lake.scale)  # fmt: skip
@@ -95,9 +111,12 @@ def test_bt03_06_escalation_share_after_acceptance(
     assert not _failed(night)
     share = night.night_escalated_pairs / night.night_pairs
     assert night.openjev_calls > 0  # escalated pairs really reached the (stub) teacher
+    assert night.night_escalated_pairs > 0  # the 2 % unsure texts really escalated
     assert night.escalated_decisions <= night.decisions
     whole = night.report2.escalation_share
     assert whole is not None
+    # agreement: the report's build-wide share equals the same SQL share over all decisions
+    assert whole == pytest.approx(night.escalated_decisions / night.decisions)
     scale = lake.scale
     record_info(bench_recorder, "BT03-06", "student_unsure_rate", LOW_RATE, "ratio", scale)
     record_info(bench_recorder, "BT03-06", "night_pairs", night.night_pairs, "pairs", scale)

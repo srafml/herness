@@ -15,7 +15,6 @@ names something unusable. The variables (all `HERNESS_BENCH_*`, read through `be
 
 from __future__ import annotations
 
-import atexit
 import re
 import shutil
 import tempfile
@@ -28,7 +27,7 @@ from tests.support.bench import bench_flag
 
 from herness.core import config as herness_config
 from herness.core.config import HernessConfig
-from herness.core.resilience import bind_ops_backend
+from herness.core.resilience import bind_ops_backend, reset_process_state
 from herness.core.types import QuestionSet
 from herness.enrich.deciders.llm import CompletionClient
 from herness.enrich.questions import PAIR_QUESTIONS, load_question_set
@@ -36,10 +35,23 @@ from herness.store.ops import reset_connections
 from herness.store.ops.migrate import migrate
 from herness.store.ops.resilience import SqliteResilienceBackend
 
-__all__ = ["llm_client", "load_shipped_config", "shipped_questions"]
+__all__ = ["llm_client", "load_shipped_config", "release", "shipped_questions"]
 
 _REPO: Final = Path(__file__).resolve().parents[3]
 _VERSION_CHARS: Final = re.compile(r"[^A-Za-z0-9._:/@+-]")
+
+
+_TEMP_DIRS: list[Path] = []
+
+
+def release() -> None:
+    """Teardown of a row: drop the config cache, the ops connections, the resilience state
+    and the temp data folders `load_shipped_config` made."""
+    herness_config.reset_config()
+    reset_connections()
+    reset_process_state()
+    while _TEMP_DIRS:
+        shutil.rmtree(_TEMP_DIRS.pop(), ignore_errors=True)
 
 
 def load_shipped_config(config: pytest.Config, profile: str = "local") -> HernessConfig:
@@ -51,7 +63,7 @@ def load_shipped_config(config: pytest.Config, profile: str = "local") -> Hernes
     config_dir = Path(override) if override else _REPO / "config"
     herness_config.reset_config()
     data = Path(tempfile.mkdtemp(prefix="bt03-data-"))
-    atexit.register(shutil.rmtree, data, ignore_errors=True)
+    _TEMP_DIRS.append(data)
     cfg = herness_config.init_config(
         profile, config_dir=config_dir, env={"HERNESS_PATHS__DATA": str(data)}
     )

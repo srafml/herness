@@ -224,5 +224,4 @@ def test_bt03_05_llm_decider_three_votes_2k(
     elapsed = time.perf_counter() - start
     assert len(out) == _N_LLM
     rate = _N_LLM / elapsed
-    assert rate > 0
     record_info(bench_recorder, "BT03-05", "records_per_s", rate, "records/s", f"n{_N_LLM}")

@@ -52,12 +52,14 @@ from tests.support.fake_laya import FakeLayaAgent, fake_laya_module, write_laya_
 from tests.support.stub_decider import StubDeciderServer
 from tests.unit.enrich._fake_llm import FakeLLMClient
 
+from herness.core import config as herness_config
 from herness.core.resilience import bind_ops_backend, reset_process_state
 from herness.core.types import GpuClass, LLMRequest, ServiceName
 from herness.enrich import _pipeline_stages, decide_stage, embed
 from herness.enrich.embed import Encoder
 from herness.enrich.pipeline import EnrichReport, run_enrichment
 from herness.store import warehouse
+from herness.store.ops import reset_connections
 from herness.store.ops.resilience import SqliteResilienceBackend
 
 __all__ = ["LOW_RATE", "Night", "run_two_nights"]
@@ -345,6 +347,8 @@ def run_two_nights(lake: LakeBuild, work: Path) -> Iterator[Night]:
                         int(mine[0]) if mine else 0, int(mine[1]) if mine else 0)  # fmt: skip
     finally:
         reset_process_state()
+        reset_connections()
+        herness_config.reset_config()
         keyring.set_keyring(previous_keyring)
         shutil.rmtree(ndata, ignore_errors=True)
         for build_id in (NIGHT1, NIGHT2):
