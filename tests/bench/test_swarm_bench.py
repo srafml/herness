@@ -84,17 +84,16 @@ CHAT_QUESTIONS: Final = (
 CHAT_TURNS: Final = 20
 
 
-def _run_ids() -> set[str]:
-    return {str(r["run_id"]) for r in core.read_all("SELECT run_id FROM run", ())}
-
-
 # --- BT06-01 -----------------------------------------------------------------------------------
 
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="BT06-01 measured 6.68 % and 8.02 % (dev medians, loaded host) vs < 2 % of wall;"
-    " owner T06-08 (Blackboard post) / T06-14 (scheduler pass)",
+    " owner T06-08 (Blackboard post) / T06-14 (scheduler pass); the union-of-intervals"
+    " measure leans high (an awaited async span stays open while other tasks' agent-loop"
+    " CPU runs)",
 )
 @pytest.mark.timeout(600)
 def test_bt06_01_scheduler_and_blackboard_under_2_percent_of_wall(
@@ -224,6 +223,7 @@ def test_bt06_04_chat_answer_local_p50_p95_and_verify(monkeypatch: pytest.Monkey
         turns.append(time.perf_counter() - start)
         assert not any(isinstance(ev, ErrorEvent) for ev in events), events
         assert any(isinstance(ev, FinalEvent) for ev in events)
+    assert verify_s, "verify_answer was never called"
     p50, p95 = statistics.median(turns), statistics.quantiles(turns, n=100)[94]
     sys.stderr.write(f"BT06-04 p50 {p50:.1f} s p95 {p95:.1f} s verify max {max(verify_s):.2f} s\n")
     assert p50 <= BT06_04_P50_S
@@ -258,7 +258,11 @@ def test_bt06_07_deep_review_local_with_large_stage_6_to_12_h() -> None:
 @sb.full_gate(sb.PREMIUM_ENV, sb.PROFILE_ENV, sb.SYNTH_ENV)
 def test_bt06_08_premium_5_to_15_min_hybrid_within_local_plus_10_min_and_15_usd() -> None:
     """BT06-08 synthetic 5M, approved synth policy (manual): premium standard 5-15 min;
-    hybrid standard ≤ local + 10 min and ≤ $15."""
+    hybrid standard ≤ local + 10 min and ≤ $15. The approved policy is the process config's
+    recorded data-policy approval (`security.data_policy`), asserted before the runs."""
+    policy = c.get_config().security.data_policy
+    assert policy.premium_approved, "security.data_policy.premium_approved is not set"
+    assert policy.hybrid_approved, "security.data_policy.hybrid_approved is not set"
     premium_s, _ = _review("funding_review", "standard", "premium")
     local_s, _ = _review("funding_review", "standard", _profile())
     hybrid_s, hybrid = _review("funding_review", "standard", "hybrid")
@@ -281,7 +285,8 @@ def _sample_gpu(stop: threading.Event, out: list[tuple[str | None, float]]) -> N
 @pytest.mark.gpu
 def test_bt06_09_gpu_utilization_during_fan_out_at_least_70_percent() -> None:
     """BT06-09 the BT06-05 run with `nvidia-smi` sampled every 1 s: ≥ 70 % average GPU
-    utilization over the fan-out (samples while the run is `running`)."""
+    utilization over every 1 s sample taken while the run status is `running` (planner and
+    writer work in that status included, so the average is conservative)."""
     samples: list[tuple[str | None, float]] = []
     stop = threading.Event()
     sampler = threading.Thread(target=_sample_gpu, args=(stop, samples), daemon=True)

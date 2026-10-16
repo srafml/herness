@@ -70,7 +70,11 @@ def full_gate(*envs: str) -> pytest.MarkDecorator:
         os.environ.get(n) == "1" if n in _FLAG_ENVS else bool(os.environ.get(n)) for n in names
     )
     need = ", ".join(f"{n}=1" if n in _FLAG_ENVS else n for n in names)
-    return pytest.mark.skipif(not ok, reason=f"owed on the target PC: needs {need}")
+    reason = (
+        f"owed on the target PC: needs {need}; the process herness config must name the 5M"
+        " build (paths.data) and the profile (the variables are the documented switches)"
+    )
+    return pytest.mark.skipif(not ok, reason=reason)
 
 
 class SlowTaskClient(f6.TaskClient):
