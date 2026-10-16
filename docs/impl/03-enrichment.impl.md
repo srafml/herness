@@ -82,6 +82,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design spec's module t
 | `herness/enrich/embed_stage.py` | `embed` stage: anti-join, upsert, orphan delete, index | `run_embed_stage`, `maintain_index`, `lance_filter_in` | L3 | `lancedb`, `pyarrow` | 320 |
 | `herness/enrich/cache.py` | Decision cache read and write | `CACHE_SCHEMA`, `DecisionCache`, `CacheWriter` | L3 | `pyarrow`, `duckdb` | 360 |
 | `herness/enrich/cache_maint.py` | Cache migrate, compaction, purge | `migrate`, `compact`, `purge_hashes` | L3 | `pyarrow` | 260 |
+| `herness/enrich/_cache_compact.py` | Bounded, chunked dedupe-merge of cache parts for `migrate`/`compact` (64-bit string offsets in memory) | `merge_parts`, `OUTPUT_ROWS` | L3 | `pyarrow` | 120 |
 | `herness/enrich/calibrate.py` | Temperature scaling, ECE, cross-fit, calibration files | `apply_temperature`, `fit_temperature`, `ece`, `cross_fit`, `CalibrationStore`, `CalibrationResult` | L3 | `scipy`, `numpy` | 280 |
 | `herness/enrich/decide.py` | `Decider` protocol, primary rules, pure gate and resolution reference | `Decider`, `primary_decider_for`, `chain_after`, `gate`, `resolve_pair`, `Resolution` | L3 | — | 260 |
 | `herness/enrich/deciders/__init__.py` | Registration of backends | `register_deciders`, `build_decider` | L3 | — | 90 |
@@ -624,6 +625,7 @@ The module is the `decisions` submodule of the `herness.core.types` package (R-0
 | Complexity and limits | — |
 | Security notes | — |
 | Tests | UT03-140 |
+| UT03-141 | U03-39, U03-40 | 24 small parts of 100 rows with 1 MiB answers (> 2^31 bytes of text) plus older duplicates; 5 winners over 3 parts with `OUTPUT_ROWS = 2` | compact | no overflow; returns 24; row identity (count and digests) kept; latest `decided_at` kept across chunks; 3 output parts | unit |
 
 ### 3.5 Text (`herness/enrich/text.py`)
 
@@ -931,13 +933,13 @@ Delta DD-05 is resolved by R-18: the return type is a 1-D float32 `np.ndarray`, 
 | Preconditions | No writer is open on the partitions. |
 | Postconditions | Per partition, at most one part is smaller than `small_bytes` unless a merged part would exceed it; duplicate keys are removed (latest `decided_at` kept). |
 | Invariants | Row set after compaction = deduplicated row set before. |
-| Algorithm | Per partition: 1. List parts < `small_bytes`; if fewer than 2, skip. 2. Read them, dedupe by (`content_hash`, `question`, `question_fingerprint`) keeping max `decided_at`. 3. Write the merged part (atomic). 4. Delete the source parts. A crash between 3 and 4 leaves duplicates only, removed by the next compaction and ignored by readers' dedupe. |
+| Algorithm | Per partition: 1. List parts < `small_bytes`; if fewer than 2, skip. 2. Key pass: read only the key columns and `decided_at` of every small part and keep, per (`content_hash`, `question`, `question_fingerprint`), the row with the max `decided_at` over all of them. 3. Row pass: read one part at a time, keep its winning rows and write them in chunks of `OUTPUT_ROWS` rows (or 512 MiB) as new parts (atomic each). 4. Delete the source parts. A crash between 3 and 4 leaves duplicates only, removed by the next compaction and ignored by readers' dedupe. |
 | Side effects | rewrites parts; log `enrich.cache.compacted` |
 | Errors | as U03-38 |
 | Concurrency | single writer |
-| Complexity and limits | memory ≤ sum of small parts in one partition (≤ 64 MB × count) |
+| Complexity and limits | memory is bounded by the key table of the partition plus one source part and one output chunk, not by the sum of the small parts (T03-39). Text columns are held as `large_string` (64-bit offsets) so no array reaches the 2 GiB limit; the on-disk schema stays `CACHE_SCHEMA` (`string`), each chunk is cast back by `write_part`. `migrate` (U03-39) uses the same merge. The map keys of `distribution` stay `string` in memory (short labels; pyarrow aborts casting `map<large_string, double>` back after `take`). |
 | Security notes | — |
-| Tests | UT03-37 |
+| Tests | UT03-37, UT03-141 |
 
 #### U03-41 herness.enrich.cache_maint.purge_hashes
 
@@ -3986,7 +3988,7 @@ All cards are Phase 4. Acceptance checks always include: `ruff check herness/enr
 | Depends on | T03-08 |
 | Units | U03-39–U03-41 |
 | Files | `herness/enrich/cache_maint.py` |
-| Tests | UT03-36–UT03-38 |
+| Tests | UT03-36–UT03-38, UT03-141 |
 | Threats | TH03-12 |
 | Acceptance checks | tests pass |
 | Blocked by | none |
