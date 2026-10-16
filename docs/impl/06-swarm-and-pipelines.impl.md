@@ -2336,7 +2336,7 @@ Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `
 
 ### 11.6 Benchmarks and eval
 
-BT06-01–BT06-10 as §10. ET06-01 (T20, manual Phase 3 exit, `eval`, `gpu`): standard review on the synthetic 5M dataset with `local-30b`: ≤ 90 min, 0 unsupported numbers in `draft.json` (spec 11 `count_unsupported`).
+BT06-01–BT06-10 as §10 (T06-28 spec note: BT06-01 runs the T06-22 `drv` standard funding run at `small_build`-scale task counts (10 must-cover + 25 candidate analysts) with a 120 ms fake LLM, not `small_build`'s warehouse, whose synthetic builds have no `score.*` layer (owner T02-22 / T11-17); BT06-03 is in its own `fault` file; BT06-04–BT06-10 skip unless `HERNESS_BENCH_FULL=1` and their service variables are set). ET06-01 (T20, manual Phase 3 exit, `eval`, `gpu`): standard review on the synthetic 5M dataset with `local-30b`: ≤ 90 min, 0 unsupported numbers in `draft.json` (spec 11 `count_unsupported`).
 
 ## 12. Task cards
 
