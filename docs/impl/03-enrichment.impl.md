@@ -2256,7 +2256,7 @@ All functions take `device: Literal["cuda","cpu"]` and a `seed: int`; with the s
 | Side effects | temp table |
 | Errors | `SchemaViolation` |
 | Concurrency | build connection |
-| Complexity and limits | O(Σ keys incidents × changes in the pruned window). Full lake 5.15M × 0.50M (T03-38): the unpruned query carried 115M hit rows of which 17.7M pairs reach `min_score` 0.30 (225.7 s); the pruned query scores only matches within ~18.3 h (CI) / ~12.1 h (service) of `t_c`. BT03-09 after T03-38: confirmation run 25.17 s (full42, idle host); ×3: <pending, sub-controller>. |
+| Complexity and limits | O(Σ keys incidents × changes in the pruned window). Full lake 5.15M × 0.50M (T03-38): the unpruned query carried 115M hit rows of which 17.7M pairs reach `min_score` 0.30 (225.7 s); the pruned query scores only matches within ~18.3 h (CI) / ~12.1 h (service) of `t_c`. BT03-09 after T03-38: confirmation run 25.17 s (full42, idle host); ×3 recorded (sub-controller w50-s03c, 2026-10-16, idle host, 0 other pytest, free RAM 92.5 GB): 25.01 s, 24.33 s, 24.05 s — all < 180 s, 7,367,131 links each run. |
 | Security notes | Parameters bound (ENG §3.5). |
 | Tests | UT03-103, UT03-142, IT03-13 |
 
@@ -4402,7 +4402,7 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Acceptance checks | BT03-09 < 180 s full scale ×3; `link_cand` and `enrich.incident_change_link` identity hashes equal before/after at small and full scale |
 | Size | M |
 
-Note (T03-38). Profile of the T03-26 query at full scale (5,148,028 × 500,080, production connection settings): `link_candidates` 225.7 s, `run_link_stage` 13.3 s. The two bucketed range joins cost 14 CPU-s; the time went into the 115M hit rows of the 73 h window (+ 24 h day buckets) carried through a string-keyed `UNION` dedupe, two re-joins to the incident and change rows, scoring, a string-keyed max per pair (84.6M pairs) and the window, while only 17.7M pairs reach `min_score`. The query now prunes matches that cannot reach `min_score` (U03-108 Algorithm), buckets by 3 hours over the pruned window, scores the hit rows directly and keys them by dense ranks; `run_link_stage` is unchanged. BT03-09 confirmation run (builder, full42, idle host): 25.17 s with identical identity hashes; ×3: <pending, sub-controller>.
+Note (T03-38). Profile of the T03-26 query at full scale (5,148,028 × 500,080, production connection settings): `link_candidates` 225.7 s, `run_link_stage` 13.3 s. The two bucketed range joins cost 14 CPU-s; the time went into the 115M hit rows of the 73 h window (+ 24 h day buckets) carried through a string-keyed `UNION` dedupe, two re-joins to the incident and change rows, scoring, a string-keyed max per pair (84.6M pairs) and the window, while only 17.7M pairs reach `min_score`. The query now prunes matches that cannot reach `min_score` (U03-108 Algorithm), buckets by 3 hours over the pruned window, scores the hit rows directly and keys them by dense ranks; `run_link_stage` is unchanged. BT03-09 confirmation run (builder, full42, idle host): 25.17 s with identical identity hashes; ×3 recorded (sub-controller w50-s03c, 2026-10-16, idle host, 0 other pytest, free RAM 92.5 GB): 25.01 s, 24.33 s, 24.05 s — all < 180 s, 7,367,131 links each run.
 
 ---
 
