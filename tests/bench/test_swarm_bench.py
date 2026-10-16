@@ -93,7 +93,7 @@ def _run_ids() -> set[str]:
 
 @pytest.mark.xfail(
     strict=True,
-    reason="BT06-01 measured 6.68 % (repeats 6.68, 5.72, 9.03; loaded host) vs < 2 % of wall;"
+    reason="BT06-01 measured 6.68 % and 8.02 % (dev medians, loaded host) vs < 2 % of wall;"
     " owner T06-08 (Blackboard post) / T06-14 (scheduler pass)",
 )
 @pytest.mark.timeout(600)
