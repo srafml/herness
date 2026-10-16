@@ -90,7 +90,8 @@ CHAT_TURNS: Final = 20
 @pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
-    reason="BT06-01 measured 6.68 % and 8.02 % (dev medians, loaded host) vs < 2 % of wall;"
+    reason="BT06-01 measured 5.91 %, 5.43 % and 5.53 % (quiet-host medians x3, 2026-10-16;"
+    " 6.68 % / 8.02 % loaded) vs < 2 % of wall;"
     " owner T06-08 (Blackboard post) / T06-14 (scheduler pass); the union-of-intervals"
     " measure leans high (an awaited async span stays open while other tasks' agent-loop"
     " CPU runs)",
