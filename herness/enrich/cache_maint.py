@@ -23,6 +23,7 @@ from herness.core import time as clock
 from herness.core.errors import ConfigError, SchemaViolation
 from herness.core.logging import get_logger
 from herness.core.types import QuestionSet
+from herness.enrich._cache_compact import merge_parts
 from herness.enrich.cache import (
     CACHE_SCHEMA,
     io_error,
@@ -35,7 +36,6 @@ from herness.enrich.questions import question_fingerprint
 _PARTITION_GLOB: Final = "decider=*/decider_version=*"
 _PART_GLOB: Final = "part-*.parquet"
 _STALE_TMP_GLOB: Final = ".part-*.parquet.tmp"
-_KEY: Final = ("content_hash", "question", "question_fingerprint")
 _BATCH_ROWS: Final = 1_000_000
 _HASH_RE: Final = re.compile(r"^[0-9a-f]{32}$")
 _SEP: Final = "\x00"  # never part of a question id or fingerprint
@@ -89,19 +89,6 @@ def _read(
     return pa.Table.from_batches(batches, schema=schema)
 
 
-def _dedupe(table: pa.Table) -> pa.Table:
-    """One row per (content_hash, question, question_fingerprint): the latest ``decided_at``."""
-    ordered = table.sort_by([("decided_at", "descending")])
-    seen: set[tuple[object, ...]] = set()
-    keep: list[int] = []
-    columns = [ordered.column(name).to_pylist() for name in _KEY]
-    for index, key in enumerate(zip(*columns, strict=True)):
-        if key not in seen:
-            seen.add(key)
-            keep.append(index)
-    return ordered.take(pa.array(keep, type=pa.int64()))
-
-
 def _read_marker(marker: Path) -> int:
     with _os_errors(marker.name):
         text = marker.read_text(encoding="utf-8")
@@ -146,11 +133,11 @@ def migrate(paths: EnrichPaths, old_qsv: str, new_qs: QuestionSet) -> int:
         decider = _decider(partition)
         version = unquote(partition.name.removeprefix("decider_version="))
         target = paths.cache_partition(new_qs.version, decider, version)
-        parts = [_read(part, old_qsv, keep=_unchanged) for part in _parts(partition)]
-        rows = _dedupe(pa.concat_tables(parts)) if parts else CACHE_SCHEMA.empty_table()
-        if rows.num_rows:
-            write_part(target, rows, decider=decider)
-            total += rows.num_rows
+
+        def _old(part: Path, cols: list[str]) -> pa.Table:
+            return _read(part, old_qsv, columns=cols, keep=_unchanged)
+
+        total += merge_parts(_parts(partition), target, _old, decider=decider)
     record = json.dumps({"rows": total, "finished_at": clock.format_utc(clock.now())})
     replace_atomic(
         marker, lambda tmp: tmp.write_text(record, encoding="utf-8"), kind="migration marker"
@@ -175,8 +162,7 @@ def compact(paths: EnrichPaths, qsv: str, *, small_bytes: int = 64 * 2**20) -> i
             small = [p for p in _parts(partition) if p.stat().st_size < small_bytes]
         if len(small) < 2:  # noqa: PLR2004 - merging needs two parts
             continue
-        merged = _dedupe(pa.concat_tables([_read(part, qsv) for part in small]))
-        write_part(partition, merged, decider=decider)
+        merge_parts(small, partition, lambda p, cols: _read(p, qsv, columns=cols), decider=decider)
         with _os_errors(partition.name, decider):
             for part in small:
                 part.unlink()
