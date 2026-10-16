@@ -25,7 +25,7 @@ This spec implements package `herness/enrich/` and the five shared types owned b
 | 2 (4) | Classify with persistent cache reuse | 3.7, 3.10, 3.12, 3.13 | U03-36–U03-41, U03-70–U03-89 | T03-08, T03-09, T03-17–T03-22 | IT03-04, IT03-05 |
 | 2 (5) | Own shared types and `Decider` implementations | 3.1, 3.9 | U03-01–U03-08, U03-48–U03-69 | T03-01, T03-11–T03-16 | UT03-01–UT03-07, UT03-45–UT03-67 |
 | 2 (6) | Distillation loop and question gating | 3.19–3.23, 5 F03-13/F03-14 | U03-115–U03-140 | T03-14, T03-29–T03-33 | UT03-111–UT03-131, IT03-15, FT03-05 |
-| 2 (7) | Write links and `review_item` rows | 3.11a, 3.12, 3.17, 3.18, 3.20 | U03-81, U03-83, U03-89, U03-107–U03-114, U03-125, U03-147–U03-149 | T03-20, T03-26, T03-27, T03-29, T03-37 | UT03-77, UT03-102–UT03-110, UT03-136–UT03-138, IT03-13, IT03-14 |
+| 2 (7) | Write links and `review_item` rows | 3.11a, 3.12, 3.17, 3.18, 3.20 | U03-81, U03-83, U03-89, U03-107–U03-114, U03-125, U03-147–U03-149 | T03-20, T03-26, T03-27, T03-29, T03-37, T03-38 | UT03-77, UT03-102–UT03-110, UT03-136–UT03-138, UT03-142, IT03-13, IT03-14 |
 | 2 (8) | `enrich.decision_wide` view | 3.12 | U03-82 | T03-20 | UT03-78, IT03-04 |
 | 2 (module table) | Module layout | 2, 13.1 DD-01 | — | — | — |
 | 3.1 | Entry points and CLI wiring | 3.6, 3.23, 3.24 | U03-31, U03-136, U03-138, U03-139, U03-140, U03-144 | T03-06, T03-28, T03-32, T03-33 | UT03-27, UT03-130, UT03-131, UT03-139, IT03-01, IT03-15 |
@@ -51,7 +51,7 @@ This spec implements package `herness/enrich/` and the five shared types owned b
 | 5.7 | Resolve, primary, gate, escalation, spot-checks, write | 3.10, 3.12, 3.13 | U03-70–U03-74, U03-78–U03-87 | T03-17, T03-19–T03-21 | UT03-68–UT03-71, UT03-76–UT03-82, PT03-08, PT03-10, IT03-04, IT03-06 |
 | 5.8 | Distillation steps 1–7; fallback teacher D7 | 3.19–3.23, 5 F03-13 | U03-115–U03-140 | T03-29–T03-33 | UT03-111–UT03-131, IT03-15, FT03-05 |
 | 5.9 | Self-consistency, ensemble voting, active learning | 3.9, 3.13, 3.20, 5 F03-08/F03-14 | U03-65–U03-67, U03-88, U03-89, U03-123, U03-128, U03-136 | T03-16, T03-22, T03-29, T03-32 | UT03-63–UT03-65, UT03-83, UT03-84, UT03-118, UT03-124, IT03-07 |
-| 5.10 | Incident↔change linking | 3.17 | U03-27, U03-107–U03-110 | T03-26 | UT03-102–UT03-105, PT03-13, IT03-09, IT03-13 |
+| 5.10 | Incident↔change linking | 3.17 | U03-27, U03-107–U03-110 | T03-26, T03-38 | UT03-102–UT03-105, UT03-142, PT03-13, IT03-09, IT03-13 |
 | 5.11 | Mapping suggestions | 3.18 | U03-111–U03-114 | T03-27 | UT03-106–UT03-110, PT03-14, IT03-14, ST03-12 |
 | 6 | Errors, resumability, degraded modes | 6, 5 | U03-21, U03-22, U03-152, U03-53, U03-85–U03-87, U03-144 | T03-04, T03-12, T03-21, T03-28 | UT03-140, FT03-01–FT03-06 |
 | 7 | Configuration (`deciders` in `models.yaml`, R-76) | 9 | U03-09–U03-13, U03-150, U03-151 | T03-02, T03-03 | UT03-08–UT03-11 |
@@ -2252,13 +2252,13 @@ All functions take `device: Literal["cuda","cpu"]` and a `seed: int`; with the s
 | Preconditions | `core.incident`, `core.change`. |
 | Postconditions | Source-field rows: `caused_by_change_id` equal to a `core.change.record_id` → `method = 'source_field'`, `score = 1.0`. Window rows: `t_c = coalesce(actual_end, actual_start, planned_end)`; `opened_at BETWEEN t_c − before_h AND t_c + after_h` or `actual_start ≤ opened_at ≤ actual_end`; match on `ci_id` (non-NULL, equal) or `service_id` (non-NULL, equal); `Δh = greatest(0, epoch(opened_at − t_c)/3600)`; score as U03-107; keep `score ≥ min_score`; top `top_n` per incident by score desc, change_id asc. A window row for a pair that also has a source-field row is dropped. |
 | Invariants | ≤ `top_n` window rows per incident. |
-| Algorithm | Two range joins (by `ci_id`, by `service_id`) with a day-bucket equality predicate on `date_trunc('day', …)` over the bucket range, unioned, max score per pair, `QUALIFY row_number()`. |
+| Algorithm | Two range joins (by `ci_id`, by `service_id`) with a 3-hour bucket equality predicate (`floor(epoch_us / 3 h)`) over the bucket range of each change's window, unioned, max score per pair, `QUALIFY row_number()`. Pruning (T03-38): the score falls with `d = opened_at − t_c` and the boosts are at most 1.25 × 1.1, so a match with `d > reach(m) = tau_h · ln(m · 1.375 / min_score) + 1 min` (float slack; `before_h` caps it; no pruning when `min_score ≤ 0` or `m ≤ 0`) cannot reach `min_score` and is dropped before scoring, as is every match scored below `min_score`; the bucket range of a change covers only its pruned window per key. Hit rows carry the scoring columns (no re-join of incidents and changes) and are keyed by `dense_rank` of the ids (the change rank orders like `change_id`, so the tie-break is unchanged); ids are joined back for the output. The link set and scores are identical to the unpruned query (UT03-142; T03-38 report: full-scale identity hashes). |
 | Side effects | temp table |
 | Errors | `SchemaViolation` |
 | Concurrency | build connection |
-| Complexity and limits | O(Σ services incidents × changes in window) |
+| Complexity and limits | O(Σ keys incidents × changes in the pruned window). Full lake 5.15M × 0.50M (T03-38): the unpruned query carried 115M hit rows of which 17.7M pairs reach `min_score` 0.30 (225.7 s); the pruned query scores only matches within ~18.3 h (CI) / ~12.1 h (service) of `t_c`. BT03-09 after T03-38: confirmation run <T03-38 confirmation> s; ×3: <pending, sub-controller>. |
 | Security notes | Parameters bound (ENG §3.5). |
-| Tests | UT03-103, IT03-13 |
+| Tests | UT03-103, UT03-142, IT03-13 |
 
 #### U03-109 herness.enrich.link_changes.pair_inputs
 
@@ -3731,6 +3731,7 @@ Locations: unit `tests/unit/enrich/`, integration `tests/integration/enrich/`, f
 | UT03-101 | U03-106 | members with root_cause answers tie | finalize | majority label ascending; `CURRENT` updated last | unit |
 | UT03-102 | U03-107 | table: window edges, CI vs service, outcome boost, emergency, cap at 1 | score | expected values | unit |
 | UT03-103 | U03-108 | tiny incidents/changes covering each rule | SQL | rows equal U03-107 on each pair; top 3; source-field override | unit |
+| UT03-142 | U03-108 | max-boost and plain CI/service changes 0.01 h inside and past the reach edge (`min_score` 0.30, 0.55); 4 seeded random sets of 60 incidents × 40 changes (NULL keys and times, running and reversed changes, source-field pairs) under 4 `change_link` configs | SQL | inside kept, past dropped; `link_cand` equals a brute-force U03-108 reference on `heuristic_link_score` (same pairs and methods, scores rel 1e-12) | unit |
 | UT03-104 | U03-109 | band pairs > cap | pair_inputs | capped, ordered, index written | unit |
 | UT03-105 | U03-110 | cached pair answers | link stage | `score = 0.5·h + 0.5·p'`, method `decider`; ≤ 3 per incident | unit |
 | UT03-106 | U03-111 | `"PMT-Auth Svc"` | norm | `payment authentication svc` | unit |
@@ -4387,6 +4388,21 @@ Placed here in dependency order; the ID follows the highest existing card.
 | Acceptance checks | all BT thresholds of §10 met on the dev box; ET03-01 passes for each accepted question; escalation share ≤ 10 %; nightly < 20 min per 10k |
 | Blocked by | V-09, V-12, D17 |
 | Size | S |
+
+### T03-38 Change-linking performance at 5M × 0.5M
+
+| Field | Content |
+|-------|---------|
+| Goal | BT03-09 under 3 min at full scale with identical link output (found by T03-36: 247.2–267.0 s). |
+| Depends on | T03-26, T03-36 |
+| Units | U03-108 (implementation only; semantics and public API unchanged) |
+| Files | `herness/enrich/sql/link_candidates.sql`, `tests/unit/enrich/test_link_candidates_reach.py`, `tests/bench/enrich/test_enrich_link_bench.py` (strict xfail plant removed) |
+| Tests | UT03-142, UT03-103, IT03-13, BT03-09 |
+| Threats | none new |
+| Acceptance checks | BT03-09 < 180 s full scale ×3; `link_cand` and `enrich.incident_change_link` identity hashes equal before/after at small and full scale |
+| Size | M |
+
+Note (T03-38). Profile of the T03-26 query at full scale (5,148,028 × 500,080, production connection settings): `link_candidates` 225.7 s, `run_link_stage` 13.3 s. The two bucketed range joins cost 14 CPU-s; the time went into the 115M hit rows of the 73 h window (+ 24 h day buckets) carried through a string-keyed `UNION` dedupe, two re-joins to the incident and change rows, scoring, a string-keyed max per pair (84.6M pairs) and the window, while only 17.7M pairs reach `min_score`. The query now prunes matches that cannot reach `min_score` (U03-108 Algorithm), buckets by 3 hours over the pruned window, scores the hit rows directly and keys them by dense ranks; `run_link_stage` is unchanged. BT03-09 confirmation run (builder): <T03-38 confirmation> s; ×3: <pending, sub-controller>.
 
 ---
 
