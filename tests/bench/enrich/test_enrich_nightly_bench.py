@@ -4,9 +4,9 @@ Run (idle host only): `HERNESS_BENCH_FULL=1 HERNESS_SYNTH_FULL_ROOT=<seed 42 ful
 pytest -m "integration and slow" tests/bench/enrich/test_enrich_nightly_bench.py`. Needs about
 80 GB of free disk next to the lake (two build copies, the vector store, the decision cache).
 
-Status at full scale on the w50 idle host: both rows are strict expected failures (xfail,
-raises ArrowInvalid): the night-1 priming crashed after 4:29:46 in `cache_maint.compact`
-(owner T03-39), so night 2 was never measured. Small scale runs and asserts normally.
+Status at full scale on the w50 idle host: the night-1 priming crashed after 4:29:46 in
+`cache_maint.compact` (pyarrow ArrowInvalid offset overflow); T03-39 fixed it, so both rows
+run and assert normally at every scale. The full-scale night 2 figures are still owed (w50-s11).
 
 One module fixture (`_nightly_env.run_two_nights`) primes night 1 (the whole build minus
 5,000 records, enriched from nothing, which at the spec scale takes hours: text, 5.5M fake
@@ -36,7 +36,6 @@ from __future__ import annotations
 import shutil
 from collections.abc import Iterator
 
-import pyarrow as pa
 import pytest
 import yaml
 from tests.bench.enrich._common import (
@@ -44,7 +43,6 @@ from tests.bench.enrich._common import (
     BT10_LIMIT_S,
     NIGHTLY_RECORDS,
     TIMEOUT_S,
-    plant_full_scale_xfail,
     record,
     record_info,
 )
@@ -54,12 +52,6 @@ from tests.support.bench import BenchRecorder
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
-_PRIMING_CRASH = (
-    "night-1 priming at full scale (5.7M texts) crashes in herness/enrich/cache_maint.compact: "
-    "pyarrow ArrowInvalid offset overflow while concatenating arrays (after 4:29:46 on the w50 "
-    "idle host); owner T03-39 (new card: cache compaction offset overflow at 5M-record priming)"
-)
-
 
 def _escalation_cap(lake: LakeBuild) -> int:
     """`escalation.max_rows_per_night` of the config tree the rows run with."""
@@ -68,33 +60,15 @@ def _escalation_cap(lake: LakeBuild) -> int:
 
 
 @pytest.fixture(scope="module")
-def night(
-    lake: LakeBuild, tmp_path_factory: pytest.TempPathFactory
-) -> Iterator[Night | pa.lib.ArrowInvalid]:
-    """Night 1 (priming) and night 2 (measured) on copies of the lake build. At full scale
-    only, the known priming crash (`ArrowInvalid`, T03-39) is returned instead of raised, so
-    the rows can mark themselves as strict expected failures; anything else propagates."""
+def night(lake: LakeBuild, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Night]:
+    """Night 1 (priming) and night 2 (measured) on copies of the lake build."""
     work = tmp_path_factory.mktemp("bt03-night")
     gen = run_two_nights(lake, work)
     try:
-        try:
-            first: Night | pa.lib.ArrowInvalid = next(gen)
-        except pa.lib.ArrowInvalid as exc:
-            if lake.scale != "full":
-                raise
-            first = exc
-        yield first
+        yield next(gen)
         next(gen, None)  # resume the scenario to its cleanup
     finally:
         shutil.rmtree(work, ignore_errors=True)
-
-
-def _ready(night: Night | pa.lib.ArrowInvalid, scale: str, request: pytest.FixtureRequest) -> Night:
-    """The nights, or (full scale, priming crashed) plant the strict xfail and re-raise."""
-    if isinstance(night, pa.lib.ArrowInvalid):
-        plant_full_scale_xfail(request, scale, _PRIMING_CRASH, raises=pa.lib.ArrowInvalid)
-        raise night
-    return night
 
 
 def _failed(night: Night) -> list[str]:
@@ -104,13 +78,11 @@ def _failed(night: Night) -> list[str]:
 @pytest.mark.timeout(TIMEOUT_S)
 def test_bt03_10_nightly_enrichment_total_10k_no_recluster(
     lake: LakeBuild,
-    night: Night | pa.lib.ArrowInvalid,
+    night: Night,
     bench_recorder: BenchRecorder,
-    request: pytest.FixtureRequest,
 ) -> None:
     """BT03-10 nightly enrichment of 10k new or changed records (no recluster, no backlog)
     takes under 20 min; model stages on fakes, the real-model figure is owed on the target PC."""
-    night = _ready(night, lake.scale, request)
     report, report1 = night.report2, night.report1
     assert not _failed(night)
     assert report.cluster_run == "incremental", "the night reclustered"
@@ -146,13 +118,11 @@ def test_bt03_10_nightly_enrichment_total_10k_no_recluster(
 @pytest.mark.timeout(TIMEOUT_S)
 def test_bt03_06_escalation_share_after_acceptance(
     lake: LakeBuild,
-    night: Night | pa.lib.ArrowInvalid,
+    night: Night,
     bench_recorder: BenchRecorder,
-    request: pytest.FixtureRequest,
 ) -> None:
     """BT03-06 with an accepted (fake) student the share of decided pairs escalated to the
     teacher in a nightly run is at most 10 %."""
-    night = _ready(night, lake.scale, request)
     stages = night.report2.stages
     laya_records = stages["decide-primary"].decided
     escalated_records = stages["decide-escalate"].escalated
