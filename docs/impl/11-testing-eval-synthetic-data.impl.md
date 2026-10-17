@@ -2442,6 +2442,7 @@ Memory (impl 07 §10 cases 1–7 in `tests/integration/memory/`, plus IT11-23, I
 | Acceptance checks | `tools/phase_gate.py --phase 5 --dry-run` lists G5.1 and G5.2 with resolvable selectors |
 | Blocked by | none |
 | Size | S |
+| w50-s11 carry-over | The first real `--phase 5` run killed G5.1 after 315.6 s: pytest-timeout's ini `timeout = 300` fired in the module-scoped `built` fixture of `tests/bench/test_app_pages_bench.py` (full build scoring), before the gate's own 7,200 s bound applied. Fix: `command_for` passes `--timeout=<check.timeout_s>` after `-q` for `pytest` and `bench` checks (markers still override; `cli` unchanged); UT11-112 asserts it, G5.1 carries `--timeout=7200` |
 
 ### Phase 7
 

@@ -3,8 +3,9 @@
 `uv run python tools/phase_gate.py --phase <N> [--dry-run] [--out-dir DIR]` runs each check of
 phase N as a subprocess with its timeout and writes `<out dir>/data/reports/gates/
 phase<N>-<YYYYMMDD-HHMMSS>.json` (exit code, duration, log path and problems per check; logs in
-the folder of the same name). `pytest`: `uv run pytest --select-test-ids=<ids> -q` plus the
-selector's non-ID entries; `bench`: the same with `HERNESS_BENCH_GATE=1`, `HERNESS_BENCH_FULL=1`
+the folder of the same name). `pytest`: `uv run pytest --select-test-ids=<ids> -q
+--timeout=<check timeout_s>` (replaces the ini `timeout = 300`; markers still override) plus
+the selector's non-ID entries; `bench`: the same with `HERNESS_BENCH_GATE=1`, `HERNESS_BENCH_FULL=1`
 and `HERNESS_BENCH_DIR=<out dir>/data/bench` (U11-51); `cli`: the selector as argument list
 (`herness eval` with `--inline`, R-45). `{out}` stands for the out dir; `$VAR` is expanded from
 the environment (`PHASE_GATE_COMPARE_*`: no `HERNESS_` prefix, which impl 10 reads as config).
@@ -81,7 +82,7 @@ def command_for(check: GateCheck, out_dir: Path) -> tuple[list[str], dict[str, s
     if check.kind == "cli":
         return args, {}
     ids = [arg for arg in args if _TEST_ID.fullmatch(arg)]
-    argv = [*PYTEST, f"--select-test-ids={','.join(ids)}", "-q"]
+    argv = [*PYTEST, f"--select-test-ids={','.join(ids)}", "-q", f"--timeout={check.timeout_s}"]
     argv += [arg for arg in args if not _TEST_ID.fullmatch(arg)]
     bench_dir = {"HERNESS_BENCH_DIR": (out_dir / "data" / "bench").as_posix()}
     return argv, {**_BENCH_ENV, **bench_dir} if check.kind == "bench" else {}
