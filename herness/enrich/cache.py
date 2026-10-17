@@ -122,6 +122,15 @@ class DecisionCache:
             return []
         return sorted(self._dir.glob(_PART_GLOB))
 
+    @property
+    def directory(self) -> Path:
+        """The question set version's cache folder (state files of the stages live here)."""
+        return self._dir
+
+    def part_files(self) -> list[Path]:
+        """Every visible ``part-*.parquet`` file, sorted (the cache's current content)."""
+        return self._part_files()
+
     def dataset(self) -> ds.Dataset | None:
         """Dataset over every visible part, or None when there is none.
 
