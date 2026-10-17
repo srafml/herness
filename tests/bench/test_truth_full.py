@@ -54,6 +54,10 @@ FULL_ENV: Final = "HERNESS_BENCH_FULL"
 # `ensure_build` is typed tiny|small (T11-34) but passes the scale on to `generate` unchanged.
 FULL_SCALE: Final = cast("Scale", "full")
 FUNDING_WINDOW_DAYS: Final = 1095  # SN-1: the E2 links are outside the shipped 365 days
+# Harness value (w50-s11 controller ruling): the production 75 % (94 GB on the 125.7 GB bench
+# host) leaves the host under 10 % free during the full-scale `funding` step; 60 % keeps it
+# usable. The row measures ranks and ratios, so the limit cannot change a verdict.
+HARNESS_MEMORY_LIMIT: Final = "60%"
 LINK_SCORE: Final = 0.5
 MIN_PURITY: Final = 0.5  # small-scale guard only: the spec row checks the rank
 _TOP: Final = 5.5  # "outside the top 5" is rank >= 6; "in the top 10" is rank < 10.5
@@ -187,7 +191,7 @@ def _open_copy(copy: Path, spill: Path) -> duckdb.DuckDBPyConnection:
     production `build.memory_limit` (75 % of the RAM) and all threads, a spill folder under
     `work`, extensions off and `preserve_insertion_order` off. A bare `duckdb.connect` ran
     the full-scale `funding` step out of temp space (65.7 GiB at 5.7M incidents)."""
-    cfg = db_settings(BuildSettings())
+    cfg = db_settings(BuildSettings(memory_limit=HARNESS_MEMORY_LIMIT))
     spill.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(
         str(copy),
