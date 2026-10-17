@@ -21,7 +21,11 @@ SELECT {{ candidate }} AS candidate_id, {{ record }} AS record_id, {{ kind }} AS
         record is a candidate descendant of P;
     (d) share = w / sum(w) per record, pain = share * usd (DOUBLE). The per-record total
         is list_sum over the record's weights sorted by value, so it adds in a fixed order
-        (T04-23b); an ordered window aggregate over the whole partition costs O(n) per row. -#}
+        (T04-23b).
+    Every per-record step is a GROUP BY plus a join on (record_kind, record_id), never a window
+    aggregate: `list(...) OVER (PARTITION BY record)` rebuilds the list per row and cost
+    hundreds of CPU seconds per 2M paths, and a cluster-wide candidate (tier 2) yields one path
+    per incident of the cluster (T04-22 carry-over, w50-s11). -#}
 {%- macro allocate(names) -%}
 (WITH al_y AS (
     SELECT x.record_kind, x.record_id, x.candidate_id,
@@ -66,6 +70,37 @@ SELECT b.candidate_id, b.record_id, b.record_kind, b.tier, b.weight,
 FROM al_b b
 JOIN al_q q ON q.record_kind = b.record_kind AND q.record_id = b.record_id
 JOIN rec_cost r ON r.record_kind = b.record_kind AND r.record_id = b.record_id)
+{%- endmacro -%}
+{#- Cluster-wide candidates (tier 2, `cc`) reach every incident of the cluster, so a cluster of n
+    incidents with k candidates is n*k paths; one mega-cluster of millions of incidents made the
+    generic allocation spill past 59 GiB of temp space (T04-22 carry-over, w50-s11). An incident
+    whose only paths are those cluster-wide ones (not in the `sp` set of records carrying any
+    other path) is allocated per cluster instead of per path: its candidates are the cluster's
+    leaf-most candidates `cc_leaf` (rule (c) over the cluster's candidate set, which is every
+    peer of such a record), all at tier 2 with the same w, so its total is the fixed-order
+    list_sum of `cc_n` equal weights and each row is w / total * usd, the same operations as the
+    generic path. Records in `sp` still take the generic allocation over all their paths. -#}
+{%- macro allocate_all(others, t2c, sp) -%}
+(SELECT g.* FROM {{ allocate(others + [t2c]) }} g
+ UNION ALL
+ SELECT cl.candidate_id, b.record_id, 'incident' AS record_kind, CAST(2 AS INTEGER) AS tier,
+        b.weight, b.weight / b.total AS share, b.weight / b.total * b.usd AS pain, b.quality
+ FROM (
+    SELECT z.record_id, z.cluster_id, z.weight, z.quality, z.usd,
+           list_sum(list_sort(list_transform(range(k.n), x -> z.weight))) AS total
+    FROM (
+        SELECT i.record_id, i.cluster_id,
+               CAST({{ p('s_cluster_weight') }} * i.membership_prob AS DOUBLE) AS weight,
+               CAST(i.membership_prob AS DOUBLE) AS quality,
+               CAST(i.total_usd AS DOUBLE) AS usd
+        FROM inc i
+        WHERE NOT EXISTS (
+            SELECT 1 FROM {{ sp }} s WHERE s.record_kind = 'incident' AND s.record_id = i.record_id)
+    ) z
+    JOIN cc_n k ON k.cluster_id = z.cluster_id
+    WHERE z.weight > 0
+ ) b
+ JOIN cc_leaf cl ON cl.cluster_id = b.cluster_id)
 {%- endmacro -%}
 WITH cand AS (
     SELECT w.record_id AS candidate_id, w.key, w.project, w.components, w.service_id
@@ -147,12 +182,23 @@ t1_counts AS (
     WHERE i.cluster_id IS NOT NULL
     GROUP BY t.candidate_id, i.cluster_id
 ),
-t2c AS (
-    {{ path('tc.candidate_id', 'i.record_id', "'incident'", 2,
-            p('s_cluster_weight') ~ ' * i.membership_prob', 'i.membership_prob') }}
+cc AS (
+    SELECT tc.candidate_id, tc.cluster_id
     FROM t1_counts tc
-    JOIN inc i ON i.cluster_id = tc.cluster_id
     WHERE tc.n >= {{ p('s_min_direct_links') }}
+),
+cc_leaf AS (
+    SELECT c.candidate_id, c.cluster_id
+    FROM cc c
+    WHERE NOT EXISTS (
+        SELECT 1 FROM cand_desc d
+        JOIN cc q ON q.cluster_id = c.cluster_id AND q.candidate_id = d.child_id
+        WHERE d.parent_id = c.candidate_id)
+),
+cc_n AS (
+    SELECT l.cluster_id, count(*) AS n
+    FROM cc_leaf l
+    GROUP BY l.cluster_id
 ),
 rc_dec AS (
     SELECT d.record_id, d.answer AS category, d.probability
@@ -184,7 +230,19 @@ t3 AS (
     FROM rec_cost r
     JOIN cand_services cs ON cs.service_id = r.service_id
 ),
-pass1 AS {{ allocate(['t1', 't2c', 't2r', 't3']) }},
+sp1 AS (
+    SELECT record_kind, record_id FROM t1
+    UNION SELECT record_kind, record_id FROM t2r
+    UNION SELECT record_kind, record_id FROM t3
+),
+t2c1 AS (
+    {{ path('c.candidate_id', 'i.record_id', "'incident'", 2,
+            p('s_cluster_weight') ~ ' * i.membership_prob', 'i.membership_prob') }}
+    FROM cc c
+    JOIN inc i ON i.cluster_id = c.cluster_id
+    JOIN sp1 s ON s.record_kind = 'incident' AND s.record_id = i.record_id
+),
+pass1 AS {{ allocate_all(['t1', 't2r', 't3'], 't2c1', 'sp1') }},
 cf_linked AS (
     SELECT i.cluster_id, {{ dsum('a.pain') }} AS linked
     FROM pass1 a
@@ -213,7 +271,18 @@ t2f AS (
     FROM inc i
     JOIN cf_qualified q ON q.cluster_id = i.cluster_id
 ),
-pass2 AS {{ allocate(['t1', 't2c', 't2r', 't2f', 't3']) }}
+sp2 AS (
+    SELECT record_kind, record_id FROM sp1
+    UNION SELECT record_kind, record_id FROM t2f
+),
+t2c2 AS (
+    {{ path('c.candidate_id', 'i.record_id', "'incident'", 2,
+            p('s_cluster_weight') ~ ' * i.membership_prob', 'i.membership_prob') }}
+    FROM cc c
+    JOIN inc i ON i.cluster_id = c.cluster_id
+    JOIN sp2 s ON s.record_kind = 'incident' AND s.record_id = i.record_id
+),
+pass2 AS {{ allocate_all(['t1', 't2r', 't2f', 't3'], 't2c2', 'sp2') }}
 SELECT a.candidate_id, a.record_id, a.record_kind, a.tier, a.weight, a.share,
        CAST(a.pain AS DECIMAL(18, 2)) AS pain_usd, a.quality
 FROM pass2 a
