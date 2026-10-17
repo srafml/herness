@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import os
 import shutil
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
@@ -44,6 +45,8 @@ from tests.support.metrics_truth import Truth, read_truth
 
 from herness.metrics.compute import compute_metric
 from herness.metrics.scoring import run_scoring
+from herness.model._build_support import db_settings
+from herness.model.settings import BuildSettings
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -179,13 +182,36 @@ def measure_truths(handle: BuildHandle, con: duckdb.DuckDBPyConnection) -> list[
     ]
 
 
+def _open_copy(copy: Path, spill: Path) -> duckdb.DuckDBPyConnection:
+    """Open the copy with the settings `open_for_build` gives the pipeline's own connection:
+    production `build.memory_limit` (75 % of the RAM) and all threads, a spill folder under
+    `work`, extensions off and `preserve_insertion_order` off. A bare `duckdb.connect` ran
+    the full-scale `funding` step out of temp space (65.7 GiB at 5.7M incidents)."""
+    cfg = db_settings(BuildSettings())
+    spill.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(
+        str(copy),
+        read_only=False,
+        config={
+            "autoinstall_known_extensions": False,
+            "autoload_known_extensions": False,
+            "threads": cfg.threads if cfg.threads is not None else (os.cpu_count() or 1),
+            "memory_limit": cfg.memory_limit,
+            "temp_directory": str(spill),
+            "preserve_insertion_order": False,
+        },
+    )
+    con.execute("SET GLOBAL TimeZone = 'UTC'")
+    return con
+
+
 @contextlib.contextmanager
 def scored_copy(handle: BuildHandle, work: Path) -> Iterator[duckdb.DuckDBPyConnection]:
     """A scored copy of the build file: real `run_scoring` on a copy set back to `building`."""
     copy = work / "scored.duckdb"
     shutil.copyfile(handle.warehouse, copy)
     SynthEnv.create(handle.root, work, funding_window_days=FUNDING_WINDOW_DAYS).activate()
-    con = duckdb.connect(str(copy))
+    con = _open_copy(copy, work / "spill")
     try:
         con.execute("UPDATE meta.build SET status='building' WHERE build_id = ?", [handle.build_id])
         run_scoring(handle.build_id, con=con)
