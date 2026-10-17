@@ -23,34 +23,49 @@ SELECT {{ candidate }} AS candidate_id, {{ record }} AS record_id, {{ kind }} AS
         is list_sum over the record's weights sorted by value, so it adds in a fixed order
         (T04-23b); an ordered window aggregate over the whole partition costs O(n) per row. -#}
 {%- macro allocate(names) -%}
-(SELECT c.candidate_id, c.record_id, c.record_kind, c.tier, c.weight,
-        c.weight / c.total AS share, c.weight / c.total * r.usd AS pain, c.quality
- FROM (
-  SELECT q.*, list_sum(list_sort(list(q.weight) OVER (PARTITION BY q.record_kind, q.record_id)))
-         AS total
-  FROM (
-    SELECT b.*
-    FROM (
-        SELECT a.*, list(a.candidate_id) OVER (PARTITION BY a.record_kind, a.record_id) AS peers
-        FROM (
-            SELECT y.*
-            FROM (
-                SELECT x.*
-                FROM ({% for n in names %}{% if not loop.first %} UNION ALL {% endif %}SELECT * FROM {{ n }}{% endfor %}) x
-                WHERE x.weight > 0
-                QUALIFY row_number() OVER (
-                    PARTITION BY x.record_kind, x.record_id, x.candidate_id
-                    ORDER BY x.tier, x.weight DESC, x.quality DESC, x.candidate_id) = 1
-            ) y
-            QUALIFY y.tier = min(y.tier) OVER (PARTITION BY y.record_kind, y.record_id)
-        ) a
-    ) b
+(WITH al_y AS (
+    SELECT x.record_kind, x.record_id, x.candidate_id,
+           arg_min(struct_pack(tier := x.tier, weight := x.weight, quality := x.quality),
+                   struct_pack(t := x.tier, w := -x.weight, q := -x.quality)) AS best
+    FROM ({% for n in names %}{% if not loop.first %} UNION ALL {% endif %}SELECT * FROM {{ n }}{% endfor %}) x
+    WHERE x.weight > 0
+    GROUP BY x.record_kind, x.record_id, x.candidate_id
+),
+al_t AS (
+    SELECT y.record_kind, y.record_id, min(y.best.tier) AS min_tier
+    FROM al_y y
+    GROUP BY y.record_kind, y.record_id
+),
+al_a AS (
+    SELECT y.record_kind, y.record_id, y.candidate_id, y.best.tier AS tier,
+           y.best.weight AS weight, y.best.quality AS quality
+    FROM al_y y
+    JOIN al_t t ON t.record_kind = y.record_kind AND t.record_id = y.record_id
+    WHERE y.best.tier = t.min_tier
+),
+al_p AS (
+    SELECT a.record_kind, a.record_id, list(a.candidate_id) AS peers
+    FROM al_a a
+    GROUP BY a.record_kind, a.record_id
+),
+al_b AS (
+    SELECT a.record_kind, a.record_id, a.candidate_id, a.tier, a.weight, a.quality
+    FROM al_a a
+    JOIN al_p p ON p.record_kind = a.record_kind AND p.record_id = a.record_id
     WHERE NOT EXISTS (
         SELECT 1 FROM cand_desc d
-        WHERE d.parent_id = b.candidate_id AND list_contains(b.peers, d.child_id))
-  ) q
- ) c
- JOIN rec_cost r ON r.record_kind = c.record_kind AND r.record_id = c.record_id)
+        WHERE d.parent_id = a.candidate_id AND list_contains(p.peers, d.child_id))
+),
+al_q AS (
+    SELECT b.record_kind, b.record_id, list_sum(list_sort(list(b.weight))) AS total
+    FROM al_b b
+    GROUP BY b.record_kind, b.record_id
+)
+SELECT b.candidate_id, b.record_id, b.record_kind, b.tier, b.weight,
+       b.weight / q.total AS share, b.weight / q.total * r.usd AS pain, b.quality
+FROM al_b b
+JOIN al_q q ON q.record_kind = b.record_kind AND q.record_id = b.record_id
+JOIN rec_cost r ON r.record_kind = b.record_kind AND r.record_id = b.record_id)
 {%- endmacro -%}
 WITH cand AS (
     SELECT w.record_id AS candidate_id, w.key, w.project, w.components, w.service_id
