@@ -2547,6 +2547,14 @@ All cards are Phase 2. Acceptance for every card also includes: `ruff check`, `r
 | Blocked by | none |
 | Size | S |
 
+#### T04-22 carry-over (w50-s11): funding attribution at mega-cluster scale
+
+| Field | Content |
+|-------|---------|
+| Finding | On the seed 42 `full` build with real (not planted) enrichment the `funding` step died after 26 min with "failed to offload data block ... 59.5 GiB/59.5 GiB used" (`max_temp_directory_size`). The HashEncoder stand-in puts about 95 % of 5.14M incidents in two clusters, 32 `(candidate, cluster)` pairs have a direct link there, so tier-2 cluster paths (`t2c`) were 146,956,382 rows, run through `allocate` twice with `list(...) OVER (PARTITION BY record)` windows (hundreds of CPU seconds per 2M paths). Planted builds have few clusters and links, which is why IT04-08, BT02 and BT04-06 never saw it. |
+| Fix | `funding_attribution.sql.j2` only, same semantics (design 04 §5.4-§5.5, U04-64 step 12). (1) `allocate` uses GROUP BY (`arg_min` for the per-candidate pick, `min` tier, `list` peers, `list_sum(list_sort(list(w)))` total) plus joins on `(record_kind, record_id)` instead of window lists. (2) An incident whose only paths are cluster-wide tier-2 paths (not in the `sp` set of records with any other path) is allocated per cluster: candidates are the cluster's leaf-most candidates, equal w, total = `list_sum` of equal weights, row = `w / total * usd`; records in `sp` take the generic allocation. Identity: score.funding_attribution / funding / org / action_lever / portfolio hashes equal before and after on seed 42 `small`; old, group-by and per-cluster SQL give 2,797,490 identical rows (same row hash) on a `full` copy thinned to 1/48 of the unlinked incidents. |
+| Tests | the fast metrics suites; the full-scale run is BT11-05 (`HERNESS_BENCH_FULL=1`) |
+
 ## 13. Design deltas and open items
 
 ### 13.1 Design deltas (contract changes requested)
