@@ -406,3 +406,88 @@ def test_ut04_86_step_uses_build_and_bind_values(
     rows = attribution(con, weights)
     assert [(r["record_id"], r["pain_usd"]) for r in rows] == [("E1", Decimal("10.00"))]
     assert step_context(weights).build_id == BUILD_ID
+
+
+# --- UT04-125 per-cluster allocation of cluster-only incidents ----------------------------------
+
+
+def test_ut04_125_cluster_only_incidents_take_per_cluster_allocation(
+    closing: list[duckdb.DuckDBPyConnection],
+) -> None:
+    """UT04-125 `allocate_all`: cluster-only incidents split over the leaf-most cluster candidates.
+
+    C1 has candidates A (parent), B (child of A) and D, each with a direct link, so its
+    cluster-wide candidates are A, B, D and the leaf-most ones are B and D (rule (c) drops A).
+    Cluster-only incidents (no t1/t2r/t3 path) take the per-cluster branch: B and D at tier 2,
+    w = 0.8 x membership, share 1/2, usd split equally; A gets no row. I9 is on S1 (a t3 path),
+    so it is in `sp` and takes the generic allocation with the same result. A zero-membership
+    incident gets nothing. C2 (one candidate F) is allocated on its own.
+    """
+    con = warehouse(
+        {
+            "core.incident": [
+                incident("I1"),
+                incident("I2"),
+                incident("I3"),
+                incident("I4", service="S9"),
+                incident("I5", service="S9", minutes=30),
+                incident("I6", service="S9"),
+                incident("I7"),
+                incident("I8", service="S9"),
+                incident("I9"),
+            ],
+            "core.work_item": [
+                item("A", "PAY-1", kind="initiative"),
+                item("B", "PAY-2", parent="PAY-1"),
+                item("D", "PAY-3"),
+                item("F", "PAY-5", kind="feature", parent="PAY-2"),
+                item("C", "PAY-4", service="S1"),
+            ],
+            "core.work_item_link": [
+                mention("PAY-1", "I1"),
+                mention("PAY-2", "I2"),
+                mention("PAY-3", "I3"),
+                mention("PAY-5", "I7"),
+            ],
+            "enrich.cluster_member": [
+                member("I1", "C1"),
+                member("I2", "C1"),
+                member("I3", "C1"),
+                member("I4", "C1", 0.6),
+                member("I5", "C1", 0.5),
+                member("I6", "C1", 0.0),
+                member("I9", "C1", 0.7),
+                member("I7", "C2"),
+                member("I8", "C2", 0.9),
+            ],
+        }
+    )
+    closing.append(con)
+    rows = attribution(con)
+
+    def split(record_id: str) -> list[tuple[Any, ...]]:
+        return [
+            (r["candidate_id"], r["tier"], r["share"], r["pain_usd"])
+            for r in _rows_for(rows, record_id)
+        ]
+
+    # Cluster-only incidents: leaf-most B and D, equal shares, usd split in two.
+    assert split("I4") == [("B", 2, 0.5, Decimal("5000.00")), ("D", 2, 0.5, Decimal("5000.00"))]
+    assert split("I5") == [("B", 2, 0.5, Decimal("2500.00")), ("D", 2, 0.5, Decimal("2500.00"))]
+    assert [r["weight"] for r in _rows_for(rows, "I4")] == [pytest.approx(0.8 * 0.6)] * 2
+    assert [r["quality"] for r in _rows_for(rows, "I4")] == [pytest.approx(0.6)] * 2
+    assert [r["weight"] for r in _rows_for(rows, "I5")] == [pytest.approx(0.8 * 0.5)] * 2
+    # Zero membership: weight 0, no path, no row.
+    assert _rows_for(rows, "I6") == []
+    # The second cluster is allocated on its own: its only candidate F takes all of I8.
+    assert split("I8") == [("F", 2, 1.0, Decimal("10000.00"))]
+    # In `sp` through the service path: the generic allocation gives the same split.
+    assert split("I9") == [("B", 2, 0.5, Decimal("5000.00")), ("D", 2, 0.5, Decimal("5000.00"))]
+    # Directly linked incidents keep tier 1 and never see the cluster-wide candidates.
+    assert split("I1") == [("A", 1, 1.0, Decimal("10000.00"))]
+    assert split("I2") == [("B", 1, 1.0, Decimal("10000.00"))]
+    assert split("I3") == [("D", 1, 1.0, Decimal("10000.00"))]
+    assert split("I7") == [("F", 1, 1.0, Decimal("10000.00"))]
+    # The parent A is never a candidate of a cluster-only incident.
+    assert all(r["candidate_id"] != "A" for r in rows if r["tier"] == 2)
+    _assert_shares_sum_to_one(con)
