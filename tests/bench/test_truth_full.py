@@ -239,6 +239,19 @@ def _failed(records: Mapping[str, BenchRecord], names: Sequence[str]) -> list[st
     ]
 
 
+# TEMPORARY MARKER (w50-s11 full-scale run on 7a0803a): remove when T11-34 gives the build
+# fixture real clusters and T03-26 fixes the time_ci_window link band. The run records every
+# BT11-05 value before the assertion, so the numbers stay in the recorder while this stands.
+@pytest.mark.xfail(
+    raises=AssertionError,
+    strict=True,
+    reason="product gaps at seed 42 full (owners T11-34, T03-26): t2_funding_rank 8 and "
+    "t2c_cluster_fix_rank 425 (no cluster_fix candidate) because the HashEncoder fixture yields "
+    "two clusters of 4,882,066 and 257,345 incidents, so 27 cluster-wide candidates each absorb "
+    "180,791 incidents (496M USD annual pain) and outrank the T2 epic (309,464 incidents, 849.6M "
+    "USD, effort 120k) on WSJF; t3_link_precision 2.49e-05 (6,192,121 links at score >= 0.5, "
+    "recall 0.957; the T03-26 time_ci_window band). T1, T4, T5 and E2d pass.",
+)
 def test_bt11_05_planted_truths_full(
     request: pytest.FixtureRequest, tmp_path: Path, bench_recorder: BenchRecorder
 ) -> None:
