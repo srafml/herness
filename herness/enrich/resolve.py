@@ -165,10 +165,16 @@ def _pending_items_table(qsv: str) -> pa.Table:
     return pa.Table.from_pylist(rows, schema=_PENDING_SCHEMA)
 
 
-def _run_resolve_sql(wh: duckdb.DuckDBPyConnection, *, bootstrap_since: datetime) -> None:
-    """Execute ``resolve_decisions.sql`` over the already registered views (U03-78)."""
+def _run_resolve_sql(
+    wh: duckdb.DuckDBPyConnection, *, bootstrap_since: datetime, scoped: bool = False
+) -> None:
+    """Execute ``resolve_decisions.sql`` over the already registered views (U03-78).
+
+    ``enrich_scope`` is every text row unless a delta night (`scoped`) built it already."""
     sql = resources.files("herness.enrich").joinpath(_SQL_FILE).read_text("utf-8")
     try:
+        if not scoped:
+            wh.execute(FULL_SCOPE_SQL)
         wh.execute(sql, {"bootstrap_since": bootstrap_since})
     except duckdb.Error as exc:
         raise _duck_error(exc, where="resolve_decisions") from exc
@@ -208,19 +214,17 @@ def resolve_frame(  # noqa: PLR0913 - U03-79's signature is binding (plus `decid
     }
     registered: list[str] = []
     try:
-        scoped = None if delta is None else delta.begin(wh, cache, relations, qs.version)
-        if scoped is None:
-            if delta is None:
-                wh.execute(FULL_SCOPE_SQL)
+        rows = None if delta is None else delta.begin(wh, cache, relations, qs.version)
+        if rows is None:
             cache.register(wh, "cache_rows")
         else:
-            wh.register("cache_rows", scoped)
+            wh.register("cache_rows", rows)
         registered.append("cache_rows")
         for name, table in relations.items():
             wh.register(name, table)
             registered.append(name)
         since = now - timedelta(days=cfg.escalation.bootstrap_window_days)
-        _run_resolve_sql(wh, bootstrap_since=since)
+        _run_resolve_sql(wh, bootstrap_since=since, scoped=bool(delta and delta.active))
     finally:
         for name in registered:
             wh.unregister(name)
@@ -298,14 +302,6 @@ def _create_spot_checks(
                   purpose="spot_check")  # fmt: skip
 
 
-def resolve_stats(
-    wh: duckdb.DuckDBPyConnection, delta: ResolveDelta | None = None
-) -> list[tuple[str, int, int, int]]:
-    """Per entity ``(entity, final, escalated, in scope)`` of the last frame (carried rows too)."""
-    stats: list[tuple[str, int, int, int]] = wh.execute(_STATS_SQL).fetchall()
-    return stats if delta is None else delta.merge_stats(stats)
-
-
 def _report_resolve(stats: list[tuple[str, int, int, int]], report: _Report) -> None:
     """U03-83 step 6: counters, coverage and escalation-share gauges, completion log."""
     decided = sum(row[1] for row in stats)
@@ -358,7 +354,9 @@ def run_resolve(  # noqa: PLR0913 - U03-83: stage arguments plus resolve_frame's
         if delta is not None:
             delta.carry(wh, qs.version)
         wh.execute(wide)
-        stats = resolve_stats(wh, delta)
+        stats: list[tuple[str, int, int, int]] = wh.execute(_STATS_SQL).fetchall()
+        if delta is not None:
+            stats = delta.merge_stats(stats)
     except duckdb.Error as exc:
         raise _duck_error(exc, where="run_resolve") from exc
     _create_spot_checks(wh, qs=qs, cfg=cfg, build_id=build_id, since=run_started_at)

@@ -131,8 +131,8 @@ class DecisionCache:
         """Every visible ``part-*.parquet`` file, sorted (the cache's current content)."""
         return self._part_files()
 
-    def dataset(self) -> ds.Dataset | None:
-        """Dataset over every visible part, or None when there is none.
+    def dataset(self, files: Sequence[Path] | None = None) -> ds.Dataset | None:
+        """Dataset over every visible part (or over ``files``, a subset), None when none.
 
         The explicit file list holds only ``part-*.parquet`` files under the Hive partition
         directories (the glob in ``_part_files``), so ``.tmp``, dot- or underscore-prefixed
@@ -140,7 +140,7 @@ class DecisionCache:
         Partition values are URL-decoded by pyarrow (``segment_encoding="uri"``).
         Raises SchemaViolation when any part's schema differs from ``CACHE_SCHEMA``.
         """
-        files = self._part_files()
+        files = self._part_files() if files is None else list(files)
         if not files:
             return None
         partitioning = ds.HivePartitioning(_PARTITION_SCHEMA, segment_encoding="uri")

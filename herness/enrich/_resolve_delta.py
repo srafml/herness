@@ -46,6 +46,10 @@ STATE_NAME: Final = "_resolve_state.json"
 DELTA_STAGES: Final = frozenset(
     {"text", "decide-primary", "decide-escalate", "reasoning", "ensemble"}
 )
+_CACHE_COLUMNS: Final = [  # the columns resolve_decisions.sql reads from `cache_rows`
+    "content_hash", "question", "question_fingerprint", "answer", "distribution",
+    "backend_confidence", "decided_at", "decider", "decider_version",
+]  # fmt: skip
 _LABEL_VIEWS: Final = ("human_latest", "pending_items")
 _VERSION: Final = 1
 _PREV: Final = "enrich_prev_res"
@@ -57,7 +61,7 @@ FULL_SCOPE_SQL: Final = """CREATE OR REPLACE TEMP TABLE enrich_scope AS
     SELECT record_id, entity, content_hash FROM enrich.text_redacted"""
 _PREV_OK_SQL: Final = f"""CREATE OR REPLACE TEMP TABLE enrich_prev_ok AS
 SELECT t.record_id, t.entity, t.content_hash FROM enrich.text_redacted AS t
-JOIN (SELECT record_id, content_hash, count(DISTINCT question) AS n
+JOIN (SELECT record_id, content_hash, count(*) AS n
       FROM {_PREV}.enrich.decision
       WHERE question_set_version = $qsv AND review_status = 'none'
       GROUP BY record_id, content_hash) AS d
@@ -103,6 +107,20 @@ def _digest(qsv: str, relations: Mapping[str, pa.Table]) -> str:
     return h.hexdigest()
 
 
+def _scan(cache: DecisionCache, files: list[Path], hashes: pa.Array | None) -> pa.Table | None:
+    """The resolve columns of the cache rows of `files` (of `hashes` when given)."""
+    dataset = cache.dataset(files)
+    if dataset is None:
+        return None
+    keep = None if hashes is None else ds.field("content_hash").isin(hashes)
+    return dataset.to_table(columns=_CACHE_COLUMNS, filter=keep)
+
+
+def _concat(tables: list[pa.Table | None]) -> pa.Table | None:
+    held = [t for t in tables if t is not None]
+    return pa.concat_tables(held) if held else None
+
+
 def _read_state(cache: DecisionCache) -> dict[str, Any] | None:
     try:
         doc = json.loads((cache.directory / STATE_NAME).read_text(encoding="utf-8"))
@@ -127,6 +145,8 @@ class ResolveDelta:
         self.reason = "not_eligible"
         self._first: str | None = None
         self._old_parts: set[str] = set()
+        self._old_rows: pa.Table | None = None
+        self._have: pa.Array | None = None
         self._carried: list[tuple[str, int, int]] = []
 
     @classmethod
@@ -155,7 +175,6 @@ class ResolveDelta:
             self.active, self.reason = False, "inputs_changed"
             _log.info("enrich.resolve.delta", active=False, reason=self.reason)
         if not self.active:
-            wh.execute(FULL_SCOPE_SQL)
             return None
         wh.register("enrich_touched", self._touched(cache, relations))
         try:
@@ -164,11 +183,24 @@ class ResolveDelta:
         finally:
             wh.unregister("enrich_touched")
         hashes = wh.execute("SELECT DISTINCT content_hash FROM enrich_scope").to_arrow_table()
-        dataset = cache.dataset()
-        if dataset is None:
-            return None
-        keep = ds.field("content_hash").isin(hashes.column(0).combine_chunks())
-        return dataset.to_table(filter=keep)
+        return self._cache_rows(cache, hashes.column(0).combine_chunks())
+
+    def _cache_rows(self, cache: DecisionCache, hashes: pa.Array) -> pa.Table | None:
+        """Cache rows of `hashes`: the old parts are scanned once per run (the scope only grows,
+        so a later frame scans them again only for hashes it adds); the parts written tonight
+        are read whole."""
+        parts = cache.part_files()
+        old = [p for p in parts if p.relative_to(cache.directory).as_posix() in self._old_parts]
+        new = [p for p in parts if p not in old]
+        if self._have is None:
+            self._old_rows, self._have = _scan(cache, old, hashes), hashes
+        else:
+            missing = hashes.filter(pc.invert(pc.is_in(hashes, value_set=self._have)))
+            if len(missing):
+                extra = _scan(cache, old, missing)
+                self._old_rows = _concat([self._old_rows, extra])
+                self._have = pa.concat_arrays([self._have, missing])
+        return _concat([self._old_rows, _scan(cache, new, None)])
 
     def _fail(self, reason: str) -> bool:
         self.reason = reason
@@ -279,6 +311,14 @@ class ResolveDelta:
         for entity, n, esc in self._carried:
             f, x, s = merged.get(entity, (0, 0, 0))
             merged[entity] = (f + n, x + esc, s + n)
+        return [(e, *merged[e]) for e in sorted(merged)]
+
+    def merge_coverage(self, rows: list[tuple[Any, ...]]) -> list[tuple[str, int, int]]:
+        """Add the carried rows to `(entity, final, in scope)` rows."""
+        merged = {str(e): (f, s) for e, f, s in rows}
+        for entity, n, _ in self._carried:
+            f, s = merged.get(entity, (0, 0))
+            merged[entity] = (f + n, s + n)
         return [(e, *merged[e]) for e in sorted(merged)]
 
     def commit(self, wh: duckdb.DuckDBPyConnection, cache: DecisionCache, build_id: str) -> None:

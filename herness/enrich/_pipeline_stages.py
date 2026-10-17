@@ -55,13 +55,7 @@ from herness.enrich.questions import (
     load_question_set,
     resolve_dynamic_options,
 )
-from herness.enrich.resolve import (
-    QueueItem,
-    escalation_queue,
-    resolve_frame,
-    resolve_stats,
-    run_resolve,
-)
+from herness.enrich.resolve import QueueItem, escalation_queue, resolve_frame, run_resolve
 from herness.enrich.settings import check_decider_refs
 from herness.enrich.text import build_text_redacted
 
@@ -74,6 +68,8 @@ _PREV: Final = "enrich_prev_qsv"
 _WIDE: Final = 20  # choice questions with more options need Laya's `embed_fn` (U03-58)
 _WINDOW_SQL: Final = """SELECT count(*) FROM core.incident AS i JOIN enrich.text_redacted AS t
     ON t.record_id = i.record_id AND t.entity = 'incident' WHERE i.opened_at >= ?"""
+_COVERAGE_SQL: Final = """SELECT entity, count(*) FILTER (WHERE status = 'final'),
+    count(*) FILTER (WHERE status <> 'out_of_scope') FROM enrich_resolved GROUP BY entity"""
 
 _log = get_logger("enrich.pipeline")
 
@@ -381,8 +377,8 @@ def resolve(run: Run, report: StageReport) -> None:
     _sql(run.wh, "DELETE FROM enrich.decision")
     run_resolve(run.wh, qs=run.qs, build_id=run.build_id, run_started_at=run.started_at,
                 report=report, cache=run.cache, **_resolve_args(run).kwargs())  # fmt: skip
-    stats = resolve_stats(run.wh, run.delta)
-    run.coverage = {e: final / scope for e, final, _, scope in stats if scope}
+    stats = run.delta.merge_coverage(_sql(run.wh, _COVERAGE_SQL))
+    run.coverage = {e: final / scope for e, final, scope in stats if scope}
     run.escalation_share = report.escalated / report.decided if report.decided else None
     if run.cluster is not None:
         finalize_clusters(run.wh, result=run.cluster, names=run.names, qs=run.qs, paths=run.paths)
