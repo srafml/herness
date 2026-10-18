@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import ctypes
 import functools
 import inspect
 import os
@@ -40,6 +39,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any, Final
 
 import pytest
+from tests.bench._swarm_bench_clock import Steps, thread_cpu
 from tests.support import _f06_swarm as f6
 
 from herness.core.types import LLMRequest, LLMResponse
@@ -122,80 +122,9 @@ def use_slow_clients(registry: Any, scripts: f6.TaskScripts, mp: pytest.MonkeyPa
     mp.setattr(registry, "client", client)
 
 
-def _thread_cpu() -> float:
-    """CPU seconds of the calling thread; Windows `thread_time` ticks at 15.6 ms, so there the
-    cycle counter is read and scaled by the cycles-per-second measured once on a busy spin."""
-    return _cycles() / _CYCLES_PER_S if _CYCLES_PER_S else time.thread_time()
-
-
-def _cycle_counter() -> Callable[[], int]:
-    if sys.platform != "win32":
-        return lambda: 0
-    kernel32: Any = ctypes.windll.kernel32  # type: ignore[attr-defined,unused-ignore]
-    thread = kernel32.GetCurrentThread
-    thread.restype = ctypes.c_void_p
-    query = kernel32.QueryThreadCycleTime
-    query.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulonglong)]
-    handle = thread()  # the pseudo handle of the calling thread, valid on every thread
-
-    def cycles() -> int:
-        count = ctypes.c_ulonglong()
-        query(handle, ctypes.byref(count))
-        return int(count.value)
-
-    return cycles
-
-
-_cycles = _cycle_counter()
-
-
-def _calibrate() -> float:
-    if sys.platform != "win32":
-        return 0.0
-    c0, t0 = _cycles(), time.perf_counter()
-    while time.perf_counter() - t0 < 0.2:
-        pass
-    return (_cycles() - c0) / (time.perf_counter() - t0)
-
-
-_CYCLES_PER_S: float = _calibrate()
-
 _AGENT: contextvars.ContextVar[list[tuple[float, float]] | None] = contextvars.ContextVar(
     "bt06_01_agent", default=None
 )
-
-
-class _Steps:
-    """Awaitable over `coro` that times each event-loop step as one frame of `rec` (T06-30)."""
-
-    def __init__(self, coro: Any, rec: Overhead, tag: str, name: str) -> None:
-        self._coro, self._rec, self._tag, self._name = coro, rec, tag, name
-        rec.count(name)
-
-    def __await__(self) -> _Steps:
-        return self
-
-    def __iter__(self) -> _Steps:
-        return self
-
-    def __next__(self) -> Any:
-        return self.send(None)
-
-    def send(self, value: Any) -> Any:
-        return self._run(self._coro.send, value)
-
-    def throw(self, *exc: Any) -> Any:
-        return self._run(self._coro.throw, *exc)
-
-    def close(self) -> None:
-        self._coro.close()
-
-    def _run(self, call: Callable[..., Any], *args: Any) -> Any:
-        frame = self._rec.enter(self._tag, self._name)
-        try:
-            return call(*args)
-        finally:
-            self._rec.leave(frame, calls=0)
 
 
 class Overhead:
@@ -224,12 +153,12 @@ class Overhead:
 
     def enter(self, tag: str, name: str) -> list[Any]:
         stack: list[list[Any]] = self._tls.__dict__.setdefault("stack", [])
-        frame = [tag, name, time.perf_counter(), _thread_cpu(), 0.0, 0.0]
+        frame = [tag, name, time.perf_counter(), thread_cpu(), 0.0, 0.0]
         stack.append(frame)
         return frame
 
     def leave(self, frame: list[Any], calls: int = 1) -> None:
-        wall, cpu = time.perf_counter() - frame[2], _thread_cpu() - frame[3]
+        wall, cpu = time.perf_counter() - frame[2], thread_cpu() - frame[3]
         stack: list[list[Any]] = self._tls.stack
         stack.pop()
         if stack:  # the parent's exclusive time excludes this frame, counted or not
@@ -255,10 +184,10 @@ class Overhead:
     def frame_cost_s(self) -> float:
         """Thread-CPU seconds one empty frame costs the recorder itself (calibration)."""
         probe = self._frame(lambda: None, "probe", "probe")
-        c0 = _thread_cpu()
+        c0 = thread_cpu()
         for _ in range(2000):
             probe()
-        cost = (_thread_cpu() - c0) / 2000
+        cost = (thread_cpu() - c0) / 2000
         self.wall.pop("probe", None), self.cpu.pop("probe", None), self.names.pop("probe", None)
         return cost
 
@@ -284,7 +213,7 @@ class Overhead:
     def _steps(self, fn: Callable[..., Any], tag: str) -> Callable[..., Any]:
         @functools.wraps(fn)
         async def run(*args: Any, **kwargs: Any) -> Any:
-            return await _Steps(fn(*args, **kwargs), self, tag, fn.__qualname__)
+            return await Steps(fn(*args, **kwargs), self, tag, fn.__qualname__)
 
         return run
 
@@ -420,7 +349,7 @@ class Overhead:
 
         async def run_on_writer(bb: Blackboard, fn: Callable[[], Any]) -> Any:
             inner = on_writer(bb, self._on_writer(fn))
-            return await _Steps(inner, self, "blackboard", "run_on_writer")
+            return await Steps(inner, self, "blackboard", "run_on_writer")
 
         mp.setattr(Blackboard, "_sync", sync_frames)
         mp.setattr(Blackboard, "run_on_writer", self._timed(run_on_writer, "blackboard"))

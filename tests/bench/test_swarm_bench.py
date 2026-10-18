@@ -91,7 +91,8 @@ CHAT_TURNS: Final = 20
 @pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
-    reason="BT06-01 (T06-30 exclusive thread-CPU measure) dev run 2.02 % [2.02, 1.87, 2.03]"
+    reason="BT06-01 (T06-30 exclusive thread-CPU measure) dev medians 2.02 % and 1.99 %"
+    " (repeats 1.87-2.03)"
     " vs < 2 % of wall (exclusive wall incl. GIL/IO wait 6.2 %, old union 6.9 %; the old"
     " union measure read 5.4-7.4 % on the same code); owner T06-08 (Blackboard post) /"
     " T06-14 (scheduler pass)",
