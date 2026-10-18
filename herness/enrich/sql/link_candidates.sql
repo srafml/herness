@@ -78,7 +78,7 @@ hits AS (
 ),
 scored AS (  -- max score per pair over its CI and service matches that reach min_score
     SELECT ik, ck, max(score) AS score, max(raw) AS raw  -- raw breaks ties among capped scores
-    FROM (SELECT ik, ck, raw, least(raw, CASE WHEN corro THEN 1.0 ELSE $window_only_cap END) AS score
+    FROM (SELECT ik, ck, raw, least(raw, 1.0) AS score
         FROM (SELECT *, least(1.0, m * exp(-greatest(0.0, d_us / 3600000000.0) / $tau_h) * b1 * b2)
             AS raw FROM hits))
     WHERE score >= $min_score
