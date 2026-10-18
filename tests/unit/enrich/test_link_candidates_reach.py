@@ -3,7 +3,8 @@
 ``link_candidates`` prunes window matches whose ``opened_at - t_c`` is past the delta at which
 the score can still reach ``min_score`` (max boost 1.25 * 1.1) and buckets the range joins by
 3 hours. These tests pin the reach boundary and compare the SQL against a brute-force Python
-reference of U03-108 built on ``heuristic_link_score`` (U03-107).
+reference of U03-108 built on ``heuristic_link_score`` (U03-107) and, since T03-41,
+``capped_link_score`` (window links of incidents without a change marker stay <= the cap).
 """
 
 from __future__ import annotations
@@ -14,9 +15,17 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from tests.unit.enrich.test_link_changes import T0, Chg, Inc, cand, cfg_with, make_warehouse
+from tests.unit.enrich.test_link_changes import (
+    INC_TEXT,
+    T0,
+    Chg,
+    Inc,
+    cand,
+    cfg_with,
+    make_warehouse,
+)
 
-from herness.enrich.link_changes import heuristic_link_score, link_candidates
+from herness.enrich.link_changes import capped_link_score, heuristic_link_score, link_candidates
 
 pytestmark = pytest.mark.unit
 
@@ -41,7 +50,7 @@ def _reference(
         if i.opened_at is None:
             continue
         o = _us(i.opened_at)
-        scored: list[tuple[float, str]] = []
+        scored: list[tuple[float, float, str]] = []
         for c in changes:
             t_c = c.actual_end or c.actual_start or c.planned_end
             if t_c is None or (i.record_id, c.record_id) in src:
@@ -60,9 +69,13 @@ def _reference(
                                      outcome=c.outcome, change_type=c.type, **weights)
                 for ci, svc in flags
             )  # fmt: skip
+            raw, score = score, capped_link_score(score, corroborated=i.text == INC_TEXT,
+                                                  window_only_cap=p["window_only_cap"])  # fmt: skip
             if score >= p["min_score"]:
-                scored.append((score, c.record_id))
-        for score, change in sorted(scored, key=lambda sc: (-sc[0], sc[1]))[: p["top_n"]]:
+                scored.append((score, raw, c.record_id))
+        for score, _, change in sorted(scored, key=lambda sc: (-sc[0], -sc[1], sc[2]))[
+            : p["top_n"]
+        ]:
             out[i.record_id, change] = ("time_ci_window", score)
     return out
 
@@ -102,9 +115,12 @@ def test_ut03_142_reach_boundary_keeps_every_link_that_reaches_min_score(min_sco
                 changes.append(Chg(f"c_{kind}_{boosted}_{tag}", actual_end=end, **key, **extra))
     incidents = [Inc("i1", ci_id="ci1", service_id="svc1")]
     p = {"before_h": 72.0, "after_h": 1.0, "tau_h": 12.0, "ci_weight": 1.0,
-         "service_weight": 0.6, "min_score": min_score, "top_n": 20}  # fmt: skip
+         "service_weight": 0.6, "min_score": min_score, "top_n": 20,
+         "window_only_cap": max(0.45, min_score)}  # fmt: skip
     wh = make_warehouse(incidents, changes)
-    link_candidates(wh, cfg=cfg_with(min_score=min_score, top_n=20))
+    link_candidates(
+        wh, cfg=cfg_with(min_score=min_score, top_n=20, window_only_cap=max(0.45, min_score))
+    )
     got = cand(wh)
     kept = {c.record_id for c in changes if c.record_id.endswith("_in")}
     assert len(kept) == 8
@@ -127,9 +143,12 @@ def test_ut03_142_window_edges_exact_under_each_prune_regime(min_score: float) -
             changes.append(Chg(f"c_{kind}_{tag}", actual_end=end, **key))
     incidents = [Inc("i1", ci_id="ci1", service_id="svc1")]
     p = {"before_h": 72.0, "after_h": 1.0, "tau_h": 12.0, "ci_weight": 1.0,
-         "service_weight": 0.6, "min_score": min_score, "top_n": 20}  # fmt: skip
+         "service_weight": 0.6, "min_score": min_score, "top_n": 20,
+         "window_only_cap": max(0.45, min_score)}  # fmt: skip
     wh = make_warehouse(incidents, changes)
-    link_candidates(wh, cfg=cfg_with(min_score=min_score, top_n=20))
+    link_candidates(
+        wh, cfg=cfg_with(min_score=min_score, top_n=20, window_only_cap=max(0.45, min_score))
+    )
     got = cand(wh)
     edges = {c.record_id for c in changes if c.record_id.endswith("_edge")}
     # at min_score 0.9 only the CI match at d = -1 h (score 1.0) reaches it
@@ -141,10 +160,12 @@ _CONFIGS = (
     {},
     {"min_score": 0.0, "top_n": 20},
     {"before_h": 5.0, "after_h": 3.0, "tau_h": 2.0, "ci_weight": 0.0, "service_weight": 1.0,
-     "min_score": 0.9, "top_n": 1},
+     "min_score": 0.9, "top_n": 1, "window_only_cap": 0.9},
     {"before_h": 200.0, "after_h": 0.5, "tau_h": 48.0, "ci_weight": 0.2, "service_weight": 0.1,
      "min_score": 0.15, "top_n": 5},
-    {"min_score": 0.9},  # service reach < 0: 0.6 * 1.375 < 0.9, so no service match survives
+    {"min_score": 0.9, "window_only_cap": 0.9},  # service reach < 0: 0.6 * 1.375 < 0.9
+    {"min_score": 0.45, "window_only_cap": 0.45},  # T03-41: cap = min_score, 0.45 vs 0.30
+    {"window_only_cap": 0.30, "top_n": 20},
 )  # fmt: skip
 
 
@@ -165,7 +186,8 @@ def _random_case(seed: int) -> tuple[list[Inc], list[Chg]]:
                            outcome=rng.choice(_OUTCOMES), type=rng.choice(_TYPES)))  # fmt: skip
     incidents = [
         Inc(f"i{n:02d}", opened_at=at(), ci_id=rng.choice(keys), service_id=rng.choice(keys),
-            caused_by=rng.choice(["c03", "c07", "nope"]) if rng.random() < 0.1 else None)
+            caused_by=rng.choice(["c03", "c07", "nope"]) if rng.random() < 0.1 else None,
+            text=INC_TEXT if rng.random() < 0.5 else "incident text")  # half have no marker
         for n in range(60)
     ]  # fmt: skip
     return incidents, changes
@@ -181,3 +203,22 @@ def test_ut03_142_candidates_equal_brute_force_reference(seed: int, overrides: d
     link_candidates(wh, cfg=cfg)
     p = cfg.change_link.model_dump()
     _assert_same(cand(wh), _reference(incidents, changes, p))
+
+
+@pytest.mark.parametrize("cap", [0.30, 0.45])
+def test_ut03_160_reach_bound_sound_with_the_cap(cap: float) -> None:
+    """UT03-160 (T03-41) an incident without a marker keeps exactly the pruned link set of a
+    marked one (cap >= min_score), every score at most the cap."""
+    changes = [
+        Chg(f"c{h:02d}", actual_end=T0 - timedelta(hours=h), ci_id="ci1") for h in range(0, 40, 3)
+    ]
+    plain, marked = Inc("plain", ci_id="ci1", text="incident text"), Inc("marked", ci_id="ci1")
+    wh = make_warehouse([plain, marked], changes)
+    link_candidates(wh, cfg=cfg_with(min_score=0.30, top_n=20, window_only_cap=cap))
+    got = cand(wh)
+    plain_rows = {c: s for (i, c), (_, s) in got.items() if i == "plain"}
+    marked_rows = {c: s for (i, c), (_, s) in got.items() if i == "marked"}
+    assert plain_rows
+    assert set(plain_rows) == set(marked_rows)
+    assert all(plain_rows[c] == pytest.approx(min(marked_rows[c], cap)) for c in plain_rows)
+    assert max(plain_rows.values()) == pytest.approx(cap)

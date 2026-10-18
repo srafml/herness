@@ -1,14 +1,12 @@
 -- Candidate incident<->change links (impl 03 U03-108; design 03 §5.10 steps 1, 2 and 4).
--- Parameters (bound, never formatted in): $before_h, $after_h, $tau_h, $ci_weight,
--- $service_weight, $min_score, $top_n. Output: temp table link_cand
--- (incident_id, change_id, method, score).
---
+-- Parameters (bound): $before_h, $after_h, $tau_h, $ci_weight, $service_weight, $min_score,
+-- $top_n, $window_only_cap. Needs link_corro (link_corroboration.sql). Output: link_cand.
 -- Window: the change time t_c = coalesce(actual_end, actual_start, planned_end) lies in
 -- [opened_at - before_h, opened_at + after_h] (design 03 §5.10 step 2), or the incident opened
 -- while the change ran (actual_start <= opened_at <= actual_end). Times are compared in
 -- integer microseconds so the window edges are exact. Each match is scored as
--- heuristic_link_score (U03-107); max score per pair over its CI and service matches.
---
+-- heuristic_link_score (U03-107), capped at $window_only_cap (>= $min_score, so the reach below
+-- stays exact) unless the incident is in link_corro (T03-41); max score per pair over its matches.
 -- Speed (T03-38): the score falls with d = opened_at - t_c and the boosts are at most 1.375,
 -- so a match with d beyond reach = tau_h * ln(m * 1.375 / min_score) + 1 min (float slack)
 -- cannot reach min_score and is pruned, as is every match scored below min_score. Each change
@@ -31,6 +29,7 @@ inc AS (
         ci_id,
         service_id,
         epoch_us(opened_at) AS opened_us,
+        record_id IN (SELECT incident_id FROM link_corro) AS corro,
         CAST(floor(epoch_us(opened_at) / 10800000000.0) AS BIGINT) AS bucket
     FROM core.incident
     WHERE record_id IS NOT NULL AND opened_at IS NOT NULL
@@ -63,14 +62,14 @@ chg_b AS (  -- one row per (change, key, 3-hour bucket of its pruned window)
     WHERE key IS NOT NULL
 ),
 hits AS (
-    SELECT i.ik, c.ck, c.m, i.opened_us - c.t_us AS d_us, c.b1, c.b2
+    SELECT i.ik, c.ck, c.m, i.opened_us - c.t_us AS d_us, c.b1, c.b2, i.corro
     FROM inc AS i
     JOIN chg_b AS c ON c.by_ci AND c.key = i.ci_id AND c.bucket = i.bucket
     WHERE i.opened_us - c.t_us <= c.reach
         AND ((i.opened_us - c.t_us BETWEEN c.lo_us AND c.before_us)
             OR (i.opened_us BETWEEN c.start_us AND c.end_us))
     UNION ALL
-    SELECT i.ik, c.ck, c.m, i.opened_us - c.t_us AS d_us, c.b1, c.b2
+    SELECT i.ik, c.ck, c.m, i.opened_us - c.t_us AS d_us, c.b1, c.b2, i.corro
     FROM inc AS i
     JOIN chg_b AS c ON NOT c.by_ci AND c.key = i.service_id AND c.bucket = i.bucket
     WHERE i.opened_us - c.t_us <= c.reach
@@ -78,10 +77,10 @@ hits AS (
             OR (i.opened_us BETWEEN c.start_us AND c.end_us))
 ),
 scored AS (  -- max score per pair over its CI and service matches that reach min_score
-    SELECT ik, ck, max(score) AS score
-    FROM (SELECT ik, ck, least(
-        1.0, m * exp(-greatest(0.0, d_us / 3600000000.0) / $tau_h) * b1 * b2
-    ) AS score FROM hits)
+    SELECT ik, ck, max(score) AS score, max(raw) AS raw  -- raw breaks ties among capped scores
+    FROM (SELECT ik, ck, raw, least(raw, CASE WHEN corro THEN 1.0 ELSE $window_only_cap END) AS score
+        FROM (SELECT *, least(1.0, m * exp(-greatest(0.0, d_us / 3600000000.0) / $tau_h) * b1 * b2)
+            AS raw FROM hits))
     WHERE score >= $min_score
     GROUP BY ik, ck
 ),
@@ -101,7 +100,7 @@ win AS (
     SELECT s.ik, s.ck, s.score
     FROM scored AS s
     ANTI JOIN src_k ON src_k.ik = s.ik AND src_k.ck = s.ck
-    QUALIFY row_number() OVER (PARTITION BY s.ik ORDER BY s.score DESC, s.ck) <= $top_n
+    QUALIFY row_number() OVER (PARTITION BY s.ik ORDER BY s.score DESC, s.raw DESC, s.ck) <= $top_n
 )
 SELECT
     incident_id,

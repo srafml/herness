@@ -36,7 +36,8 @@ from herness.enrich.text import content_hash, pair_text
 if TYPE_CHECKING:
     from herness.enrich.pipeline import StageReport as _Report
 
-__all__ = ["heuristic_link_score", "link_candidates", "pair_inputs", "run_link_stage"]
+__all__ = ["capped_link_score", "heuristic_link_score", "link_candidates", "pair_inputs",
+           "run_link_stage"]  # fmt: skip
 
 PAIR_QUESTION: Final = "change_caused_pair"
 METHODS: Final = ("source_field", "time_ci_window", "decider")
@@ -49,7 +50,7 @@ _INDEX_SCHEMA: Final = pa.schema(
     [("incident_id", pa.string()), ("change_id", pa.string()), ("content_hash", pa.string())]
 )
 _SQL_PARAMS: Final = ("before_h", "after_h", "tau_h", "ci_weight", "service_weight", "min_score",
-                      "top_n")  # fmt: skip
+                      "top_n", "window_only_cap")  # fmt: skip
 _DECIDED_VIEW: Final = "_link_decided"
 _DECIDED_SCHEMA: Final = pa.schema(
     [("incident_id", pa.string()), ("change_id", pa.string()), ("score", pa.float64())]
@@ -88,6 +89,11 @@ def heuristic_link_score(  # noqa: PLR0913 - U03-107's keyword-only signature is
     return min(1.0, m * math.exp(-max(delta_h, 0.0) / tau_h) * b)
 
 
+def capped_link_score(raw: float, *, corroborated: bool, window_only_cap: float) -> float:
+    """Window score under T03-41's cap: uncorroborated links stay <= ``window_only_cap``."""
+    return raw if corroborated else min(raw, window_only_cap)
+
+
 # --- U03-108 -----------------------------------------------------------------------------------
 
 
@@ -99,10 +105,14 @@ def _duck_error(exc: duckdb.Error, *, stage: str) -> SchemaViolation:
 
 
 def link_candidates(wh: duckdb.DuckDBPyConnection, *, cfg: DecisionsConfig) -> None:
-    """Run ``sql/link_candidates.sql`` into the temp table ``link_cand`` (U03-108)."""
-    sql = resources.files("herness.enrich").joinpath("sql/link_candidates.sql").read_text("utf-8")
+    """Run ``link_corroboration.sql`` then ``link_candidates.sql`` into ``link_cand`` (U03-108)."""
+    root = resources.files("herness.enrich")
+    corro = root.joinpath("sql/link_corroboration.sql").read_text("utf-8")
+    sql = root.joinpath("sql/link_candidates.sql").read_text("utf-8")
     params = cfg.change_link.model_dump(include=set(_SQL_PARAMS))
+    markers = "|".join(f"(?:{m})" for m in cfg.change_link.corroboration_markers)
     try:
+        wh.execute(corro, {"markers": markers or r"[^\s\S]"})
         wh.execute(sql, params)
     except duckdb.Error as exc:
         raise _duck_error(exc, stage="candidates") from exc

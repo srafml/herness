@@ -8,6 +8,7 @@ only (R-72); inputs are hidden in errors (TH03-14); messages name keys, never va
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from typing import Annotated, Final, Literal, Self
 from urllib.parse import urlsplit
@@ -40,11 +41,26 @@ _SECRET_REF_RE: Final = r"^secret:[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$"  # noqa: S10
 _LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "localhost"})
 _PAIR_QUESTION: Final = "change_caused_pair"
 _WEIGHT_TOL: Final = 1e-6
+# T03-41: temporal cue + change noun (the change_caused question's own definition), EN and ES
+_CHANGE_NOUN: Final = r"(release|deployment|deploy|rollout|patch|hotfix|upgrade|change|version)"
+_CAMBIO_NOUN: Final = r"(despliegue|cambio|parche|actualizaci[oó]n|versi[oó]n)"
+DEFAULT_CORROBORATION_MARKERS: Final = (
+    rf"(?i)\b(after|following|since|post-)\s*(the\s+|a\s+|this\s+)?{_CHANGE_NOUN}\b",
+    rf"(?i)\b(tras|despu[eé]s\s+(de|del)|desde)\s+(el\s+|la\s+)?{_CAMBIO_NOUN}\b",
+)
 
 
 def _require(ok: bool, msg: str) -> None:
     if not ok:
         raise ValueError(msg)
+
+
+def _valid_regex(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+    except re.error:
+        return False
+    return True
 
 
 def _as_tuple(value: object) -> object:
@@ -233,10 +249,14 @@ class ChangeLinkSettings(_Model):
     use_decider: bool = True
     decider_band: Annotated[tuple[_Fraction, _Fraction], _Tuple] = (0.30, 0.70)
     decider_max_pairs: int = Field(default=30_000, ge=0, le=1_000_000)
+    window_only_cap: float = Field(default=0.45, ge=0, lt=1)  # T03-41
+    corroboration_markers: Annotated[tuple[str, ...], _Tuple] = DEFAULT_CORROBORATION_MARKERS
 
     def _rules(self) -> Rules:
         ascending = self.decider_band[0] < self.decider_band[1]
         yield ascending, "change_link.decider_band must be ascending"
+        yield self.min_score <= self.window_only_cap, "change_link.window_only_cap < min_score"
+        yield all(_valid_regex(p) for p in self.corroboration_markers), "change_link.markers: regex"
 
 
 class MappingWeights(_Model):

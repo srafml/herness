@@ -135,7 +135,10 @@ def _synthetic(seed: int) -> _Synthetic:
 def test_it03_13_link_precision_and_recall_on_synthetic_truth(seed: int, tmp_path: Path) -> None:
     """IT03-13 synthetic causal truth: precision >= 0.80, recall >= 0.70 at score >= 0.5."""
     data = _synthetic(seed)
-    wh = _warehouse(data.incidents, data.changes)
+    caused = {i for i, _ in data.truth}  # T03-41: change-caused texts state the change
+    texts = [(i[0], "incident", "slow after the release" if i[0] in caused else "ticket: slow")
+             for i in data.incidents]  # fmt: skip
+    wh = _warehouse(data.incidents, data.changes, texts)
     cfg = _cfg(use_decider=False)
     paths = EnrichPaths(data_root=tmp_path, embedding_path="data/e", laya_current_file="data/c")
     link_candidates(wh, cfg=cfg)
