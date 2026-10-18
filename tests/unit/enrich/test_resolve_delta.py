@@ -1,4 +1,5 @@
-"""Nightly delta scoping of the resolve stage (UT03-143 ... UT03-148, T03-36 carry-over w50-s11).
+"""Nightly delta scoping of the resolve stage (UT03-143 ... UT03-154, T03-36 carry-over w50-s11,
+T03-42).
 
 Each test runs real `run_resolve` calls on file-backed warehouses (`wh-<build>.duckdb`) over a
 real decision cache, label store and ops store. The reference of every delta night is the same
@@ -17,6 +18,7 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 import pytest
+import structlog.testing
 from tests.support.ops_store import OpsStoreHandle
 
 from herness.core.types import Question, QuestionSet
@@ -47,13 +49,17 @@ _QC = Question.model_validate(
      "options": {"a": "option a", "b": "option b"},
      "instructions": "Pick the best option for this ticket."}
 )  # fmt: skip
+_QX = Question.model_validate(
+    {"id": "q_extra", "type": "bool", "threshold": 0.7, "applies_to": ("change",),
+     "instructions": "Classify the change request with care, please."}
+)  # fmt: skip
 _QS = QuestionSet(version=_QSV, questions=(_QB, _QC))
-_FP = {q.id: question_fingerprint(q) for q in _QS.questions}
+_FP = {q.id: question_fingerprint(q) for q in (_QB, _QC, _QX)}
 _CFG = DecisionsConfig.model_validate(
     {"question_set_version": _QSV, "questions": (), "change_link": {"use_decider": False},
      "spot_check": {"nightly_rate": 0.0}}
 )  # fmt: skip
-_PRIMARIES = {"q_bool": "laya", "q_choice": "laya"}
+_PRIMARIES = {"q_bool": "laya", "q_choice": "laya", "q_extra": "laya"}
 _VERSIONS = {"laya": _LAYA_V, "openjev": "v1", "llm": "v1"}
 _DECISION_SQL = "SELECT * FROM enrich.decision ORDER BY record_id, question"
 
@@ -80,6 +86,7 @@ class _World:
     labels: LabelStore
     calibration: CalibrationStore
     versions: dict[str, str] = field(default_factory=lambda: dict(_VERSIONS))
+    qs: QuestionSet = field(default_factory=lambda: _QS)
     records: dict[str, list[tuple[str, str, str]]] = field(default_factory=dict)
     open_builds: dict[str, duckdb.DuckDBPyConnection] = field(default_factory=dict)
 
@@ -117,10 +124,11 @@ class _World:
             None if prev is None else self.tmp / f"wh-{prev}.duckdb",
             "standard", DELTA_STAGES, fresh=True)  # fmt: skip
         report = StageReport()
-        if prev in self.open_builds:  # the previous build file is closed by the time of a night
+        keep = kw.pop("keep_prev", False)
+        if prev in self.open_builds and not keep:  # closed by the time of a night
             self.open_builds.pop(prev).close()
         resolve.run_resolve(
-            wh, qs=_QS, cfg=_CFG, build_id=build_id, run_started_at=_NOW - timedelta(hours=2),
+            wh, qs=self.qs, cfg=_CFG, build_id=build_id, run_started_at=_NOW - timedelta(hours=2),
             report=report, deciders=DecidersSettings(), cache=self.cache, labels=self.labels,
             calibration=self.calibration, primaries=_PRIMARIES, versions=self.versions,
             now=_NOW, delta=delta, **kw)  # fmt: skip
@@ -133,7 +141,7 @@ class _World:
         wh = self.build(f"{build_id}-full", self.records[build_id])
         report = StageReport()
         resolve.run_resolve(
-            wh, qs=_QS, cfg=_CFG, build_id=build_id, run_started_at=_NOW - timedelta(hours=2),
+            wh, qs=self.qs, cfg=_CFG, build_id=build_id, run_started_at=_NOW - timedelta(hours=2),
             report=report, deciders=DecidersSettings(), cache=self.cache, labels=self.labels,
             calibration=self.calibration, primaries=_PRIMARIES, versions=self.versions,
             now=_NOW)  # fmt: skip
@@ -309,3 +317,159 @@ def test_ut03_148_removed_records_and_the_chain_of_nights(world: _World) -> None
     n4 = world.resolve(world.build("n4", _NIGHT1), "n4", "n3")
     assert n4.scope == {"i2"}
     _same(n4, world.full_reference(n4, "n4"))
+
+
+def _qs(*questions: Question) -> QuestionSet:
+    return QuestionSet(version=_QSV, questions=questions)
+
+
+def _carried_ok(w: _World, qs: QuestionSet) -> set[str]:
+    """Record ids of `enrich_prev_ok` for `qs` (night 1 is the previous warehouse), whatever
+    the state digest says: the predicate alone."""
+    if "n1" in w.open_builds:
+        w.open_builds.pop("n1").close()
+    wh = w.build(f"probe{len(w.open_builds)}", _NIGHT1)
+    qmeta = resolve._qmeta_table(qs, cfg=_CFG, deciders=DecidersSettings(), primaries=_PRIMARIES)
+    delta = ResolveDelta(w.tmp / "wh-n1.duckdb", eligible=True)
+    assert delta._build_prev_ok(wh, {"qmeta": qmeta}, _QSV, rows=6) is True
+    return {r[0] for r in wh.execute("SELECT record_id FROM enrich_prev_ok").fetchall()}
+
+
+def test_ut03_149_entity_change_with_same_hash_and_count_is_not_carried(world: _World) -> None:
+    """UT03-149 (T03-42 m1) a record that changes its entity but keeps its content hash, to an
+    entity that asks the same NUMBER of questions (other ones), keeps no row of the old
+    entity's questions: the record is resolved again and the result equals the full resolve."""
+    world.qs = _qs(_QB, _QC, _QX)  # incident: bool, choice; change: bool, extra
+    _prime(world)
+    records = [("i1", "change", "h1"), ("i2", "incident", "h2"), ("i3", "incident", "h3"),
+               ("c1", "change", "h4")]  # fmt: skip
+    night = world.resolve(world.build("n2", records), "n2", "n1")
+    assert night.delta.active is True, night.delta.reason
+    assert "i1" in night.scope  # i1 asks other questions tonight
+    assert ("i1", "q_choice") not in {(r[0], r[1]) for r in night.rows}
+    _same(night, world.full_reference(night, "n2"))
+
+
+@pytest.mark.parametrize("change", ["added", "removed", "moved"])
+def test_ut03_150_question_set_change_resolves_in_full(world: _World, change: str) -> None:
+    """UT03-150 (T03-42 m3) a question added to or removed from an entity's applicable set, or
+    an `applies_to` change, under the same question set version changes the digest of the
+    resolve inputs: every row is resolved again (`inputs_changed`) and equals the full resolve."""
+    _prime(world)
+    moved = _QC.model_copy(update={"applies_to": ("incident", "change")})
+    world.qs = {"added": _qs(_QB, _QC, _QX), "removed": _qs(_QB), "moved": _qs(_QB, moved)}[change]
+    night = world.resolve(world.build("n2", _NIGHT1), "n2", "n1")
+    assert night.delta.active is False
+    assert night.delta.reason == "inputs_changed"
+    assert night.scope == {"i1", "i2", "i3", "c1"}
+    _same(night, world.full_reference(night, "n2"))
+
+
+def test_ut03_151_predicate_requires_the_applicable_questions(world: _World) -> None:
+    """UT03-151 (T03-42 m3 mutant) the carry predicate alone, with a `qmeta` that no state
+    digest guards: the entity's applicable set is checked by question, not by count. With the
+    `enrich_applicable` join removed from `_PREV_OK_SQL` (count only) the swapped set below
+    still matches the incident rows and this test fails."""
+    _prime(world)
+    assert _carried_ok(world, _QS) == {"i1", "i3", "c1"}  # i2 is queued: one row of two
+    swapped_x = _QX.model_copy(update={"applies_to": ("incident",)})  # incident: bool, extra
+    assert _carried_ok(world, _qs(_QB, swapped_x)) == {"c1"}  # still two incident questions
+    # incident asks one question only: its q_choice row is not counted, q_bool settles it
+    assert _carried_ok(world, _qs(_QB)) == {"i1", "i3", "c1"}
+
+
+def test_ut03_152_attach_failure_leaves_nothing_registered(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """UT03-152 (T03-42 m2) when attaching the previous warehouse raises, the relation the
+    predicate registered is gone and the alias is not attached: the night resolves in full."""
+    _prime(world)
+
+    def broken(self: ResolveDelta, wh: duckdb.DuckDBPyConnection) -> None:
+        msg = "cannot attach"
+        raise duckdb.IOException(msg)
+
+    monkeypatch.setattr(ResolveDelta, "_attach", broken)
+    night = world.resolve(world.build("n2", _NIGHT1), "n2", "n1")
+    assert night.delta.active is False
+    assert night.delta.reason == "prev_unreadable"
+    for name in ("enrich_expected", "enrich_applicable_src"):
+        with pytest.raises(duckdb.CatalogException):
+            night.wh.execute(f"SELECT * FROM {name}")  # noqa: S608
+    attached = {
+        r[0] for r in night.wh.execute("SELECT database_name FROM duckdb_databases()").fetchall()
+    }
+    assert "enrich_prev_res" not in attached
+    _same(night, world.full_reference(night, "n2"))
+
+
+def _write_state(w: _World, kind: str) -> None:
+    path = w.cache.directory / STATE_NAME
+    doc = json.loads(path.read_text("utf-8"))
+    if kind == "missing":
+        path.unlink()
+    elif kind == "invalid_json":
+        path.write_text("{not json", encoding="utf-8")
+    elif kind == "wrong_version":
+        path.write_text(json.dumps({**doc, "version": 99}), encoding="utf-8")
+    else:
+        path.write_text(json.dumps({**doc, "build_id": "other"}), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("kind", "reason"),
+    [("missing", "no_state"), ("invalid_json", "no_state"), ("wrong_version", "no_state"),
+     ("wrong_build", "prev_mismatch")],
+)  # fmt: skip
+def test_ut03_153_unusable_state_resolves_in_full_and_logs_the_reason(
+    world: _World, kind: str, reason: str
+) -> None:
+    """UT03-153 (T03-42 m3) a missing, unparsable, other-version or other-build state file
+    makes the night a full resolve; the reason is logged as `enrich.resolve.delta`."""
+    _prime(world)
+    _write_state(world, kind)
+    with structlog.testing.capture_logs() as logs:
+        night = world.resolve(world.build("n2", _NIGHT1), "n2", "n1")
+    assert night.delta.active is False
+    assert night.delta.reason == reason
+    assert night.scope == {"i1", "i2", "i3", "c1"}
+    events = [e for e in logs if e["event"] == "enrich.resolve.delta"]
+    assert [(e["active"], e["reason"]) for e in events] == [(False, reason)]
+    _same(night, world.full_reference(night, "n2"))
+    assert json.loads((world.cache.directory / STATE_NAME).read_text("utf-8"))["build_id"] == "n2"
+
+
+def test_ut03_154_previous_warehouse_equal_to_the_current_one_resolves_in_full(
+    world: _World,
+) -> None:
+    """UT03-154 (T03-42 m3) a previous warehouse that is the current build file (the state
+    names the build being written) cannot be attached again: the night resolves in full and
+    the reason is logged."""
+    _prime(world)
+    state = world.cache.directory / STATE_NAME
+    state.write_text(json.dumps({**json.loads(state.read_text("utf-8")), "build_id": "n2"}))
+    wh = world.build("n2", _NIGHT1)
+    with structlog.testing.capture_logs() as logs:
+        night = world.resolve(wh, "n2", "n2", keep_prev=True)
+    assert night.delta.active is False
+    assert night.delta.reason == "prev_unreadable"
+    assert night.scope == {"i1", "i2", "i3", "c1"}
+    events = [e for e in logs if e["event"] == "enrich.resolve.delta"]
+    assert [(e["active"], e["reason"]) for e in events] == [(False, "prev_unreadable")]
+    _same(night, world.full_reference(night, "n2"))
+
+
+def test_ut03_155_carry_inserts_only_the_applicable_questions(world: _World) -> None:
+    """UT03-155 (T03-42 m1/m3 mutant) a settled text row carries the previous rows of the
+    questions its entity asks tonight and no other: with a question set that dropped `q_choice`
+    the incident rows are settled by `q_bool` alone and their `q_choice` rows stay behind."""
+    _prime(world)
+    _carried_ok(world, _qs(_QB))  # enrich_prev_ok of the probe build, attached to night 1
+    wh = world.open_builds["probe0"]
+    wh.execute("CREATE OR REPLACE TEMP TABLE enrich_settled AS SELECT * FROM enrich_prev_ok")
+    delta = ResolveDelta(world.tmp / "wh-n1.duckdb", eligible=True)
+    delta.active = True
+    assert delta.carry(wh, _QSV) == 3
+    got = wh.execute("SELECT record_id, question FROM enrich.decision ORDER BY 1, 2").fetchall()
+    assert got == [("c1", "q_bool"), ("i1", "q_bool"), ("i3", "q_bool")]
+    assert delta.merge_stats([]) == [("change", 1, 0, 1), ("incident", 2, 0, 2)]
