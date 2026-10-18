@@ -2296,7 +2296,7 @@ Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `
 | IT06-26 | U06-88 | deep best-of-3 with judge | judge choice used; proposals persisted; resume after judge reuses choice |
 | IT06-27 | U06-103 | embedding stub raising | `query_set` fallback logged |
 | IT06-28 | U06-108, U06-109 | standard `{reject: 3}` | reject triggers two extra samples; majority recorded in `votes` |
-| IT06-29 | U06-113, U06-114 | verifier batches of 20 with cross-checks | transitions and records per finding |
+| IT06-29 | U06-113, U06-114 | verifier batches of 20 with cross-checks | transitions and records per finding; batch execution order under concurrent slots is unspecified (U06-92): the recorder is asserted order-insensitively (T06-32) |
 | IT06-30 | U06-115 | first draft failing, fix pass passing; resume between passes | fix pass used; pass file loaded on resume |
 | IT06-31 | U06-122 | record twice | same `rec_id`s; no duplicates |
 | IT06-32 | U06-78–U06-82 | full standard run | status sequence of design 06 §5.1 in `harness.run.status_changed` events |
