@@ -206,9 +206,10 @@ _LABEL_RE: Final = re.compile(_ALTERNATION, re.IGNORECASE)
 # the service name: the tail of the first line, after the last " in " (EN `Symptom in X`) or
 # after "Incidencia en " (ES `Incidencia en X: topic`)
 _COMPONENT_RE: Final = re.compile(r"^(?:.* in |incidencia en )([^:\n]+)", re.IGNORECASE)
+COMPONENT_GROUPS: Final = 2  # service groups: a component belongs to one, by its name hash
 _WEIGHTS: Final = {
     "family": 0.8, "repeat": 0.8, "repeatvar": 0.35, "pattern": 0.25, "impact": 0.25,
-    "lang": 0.15, "component": 0.15, "host": 0.1, "symptom": 0.15, "text": 0.1,
+    "lang": 0.15, "component": 0.15, "host": 0.1, "group": 0.45, "symptom": 0.15, "text": 0.1,
 }  # fmt: skip
 
 
@@ -219,16 +220,21 @@ class TopicEncoder(Encoder):
     Labels are read back with one regex over the generator's vocabulary (`tools.synth.text_vocab`):
     family (the EN and ES topic phrase of a `FAMILY_ROWS` entry share one key, so language does
     not split a cluster), component (the tail of the first line after the last " in " or after
-    "Incidencia en "), host (`HOSTS` prefix + two digits), symptom, repeat marker, impact level and
-    language, plus a small per-text Gaussian so no two rows coincide (the vector index needs
-    diverse rows; the old per-word sum put 95 % of incidents in two clusters). With `_WEIGHTS`
-    the cosine is ~0.96 for one family, component and host, ~0.93 for one family only and ~0.25
-    for other families. The weights were tuned offline against the product numerics (PCA 64,
-    k-means k = 1000, HDBSCAN on the prototypes) on the seed 42 `small` texts: the family leads
-    (30 clusters of about 3,400), a repeat marker splits a family's repeat-flavored incidents off
-    it (a tight blob needs at least 5 k-means prototypes, so its variants are spread by
-    `repeatvar`, smaller than the repeat shift), and the planted T2 and T2c groups come out as
-    their own, nearly pure clusters."""
+    "Incidencia en "; plus the service group `COMPONENT_GROUPS` of its name hash), host (`HOSTS`
+    prefix + two digits), symptom, template pattern (the longest literal of each pattern), repeat
+    marker (any, and which phrase), impact level and language, plus a small per-text Gaussian so
+    no two rows coincide (the vector index needs diverse rows; the old per-word sum put 95 % of
+    incidents in two clusters). With `_WEIGHTS` the cosine is ~0.97 for one family, component and
+    host, ~0.94 for one family only and ~0.35 for other families.
+
+    The weights were tuned offline against the product numerics (PCA 64, k-means k = 1000,
+    HDBSCAN on the prototypes) on the seed 42 `small` texts, not to mimic bge-m3 closely: the
+    family leads (30 families of about 3,400 incidents), the service group halves each family
+    (about 65 clusters, none above 1,900 incidents, so no cluster's pain swamps the planted
+    T2c), and the repeat marker lifts a family's repeat-flavored incidents into their own region
+    (a tight blob needs at least 5 k-means prototypes, so its two phrase variants are spread by
+    `repeatvar`, kept below the repeat shift). The planted T2 and T2c groups come out as their
+    own, nearly pure clusters."""
 
     def __init__(self) -> None:
         super().__init__(Path("topic-encoder"), model_name="test/topic")
@@ -255,7 +261,9 @@ class TopicEncoder(Encoder):
         total = _WEIGHTS["text"] * _gauss(text)
         first = text.split("\n", 1)[0]
         if match := _COMPONENT_RE.match(first):
-            total = total + self._label("component", match[1].strip().lower())
+            name = match[1].strip().lower()
+            group = hashlib.sha256(name.encode("utf-8")).digest()[0] % COMPONENT_GROUPS
+            total = total + self._label("component", name) + self._label("group", str(group))
         labels = {label for found in _LABEL_RE.finditer(text) for label in self._kinds(found[0])}
         for kind, key in sorted(labels):
             total = total + self._label(kind, key)
@@ -263,7 +271,8 @@ class TopicEncoder(Encoder):
 
     @staticmethod
     def _kinds(phrase: str) -> tuple[tuple[str, str], ...]:
-        return _PHRASES.get(phrase.lower(), (("host", phrase.lower()),))
+        labels = _PHRASES.get(phrase.lower())
+        return labels or (("host", phrase.lower()),)
 
 
 def _gauss(key: str) -> np.ndarray:

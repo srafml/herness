@@ -75,7 +75,7 @@ def test_ut11_123_topic_separation_follows_family_component_host() -> None:
     near, mid, far = _cos(v[0], v[1]), _cos(v[0], v[2]), _cos(v[0], v[3])
     assert near > 0.95
     assert 0.85 < mid < near - 0.02
-    assert far < mid - 0.5
+    assert far < mid - 0.4
     assert _cos(v[0], _encode(_en(topic, "Rapid Bridge", "db07"))[0]) > mid  # a shared component
 
 
