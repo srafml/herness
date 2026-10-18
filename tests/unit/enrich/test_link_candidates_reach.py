@@ -74,17 +74,31 @@ def _assert_same(got: dict[tuple[str, str], tuple[str, float]], want: dict[Any, 
         assert got[pair][1] == pytest.approx(score, rel=1e-12)
 
 
+# (tag, offset in hours from the analytic reach edge); tags ending "_in" must be kept. The
+# 1-minute slack of the SQL prune predicate is 1/60 h: "slack_in" sits at its far end, the
+# "past" 36 s offset inside it (dropped by the score filter), "gone" 2 min and "far" 1 h
+# beyond the edge (dropped by the prune predicate; a reach tightened by 1 h drops "slack_in").
+_REACH_OFFSETS = (
+    ("in", -0.01),
+    ("slack_in", -1.0 / 60),
+    ("past", 0.01),
+    ("gone", 2.0 / 60),
+    ("far", 1.0),
+)
+
+
 @pytest.mark.parametrize("min_score", [0.30, 0.55])
 def test_ut03_142_reach_boundary_keeps_every_link_that_reaches_min_score(min_score: float) -> None:
-    """UT03-142 max-boost and plain matches just inside the reach are kept, just past dropped."""
+    """UT03-142 matches inside the reach (0.01 h and 1 min) are kept, past it (36 s inside the
+    slack, 2 min and 1 h beyond) dropped."""
     changes = []
     for kind, m, key in (("ci", 1.0, {"ci_id": "ci1"}), ("svc", 0.6, {"service_id": "svc1"})):
         for boosted in (True, False):
             b = _MAX_BOOST if boosted else 1.0
             edge_h = 12.0 * math.log(m * b / min_score)
             extra = {"outcome": "backed_out", "type": "emergency"} if boosted else {}
-            for tag, dh in (("in", edge_h - 0.01), ("out", edge_h + 0.01)):
-                end = T0 - timedelta(hours=dh)
+            for tag, dh in _REACH_OFFSETS:
+                end = T0 - timedelta(hours=edge_h + dh)
                 changes.append(Chg(f"c_{kind}_{boosted}_{tag}", actual_end=end, **key, **extra))
     incidents = [Inc("i1", ci_id="ci1", service_id="svc1")]
     p = {"before_h": 72.0, "after_h": 1.0, "tau_h": 12.0, "ci_weight": 1.0,
@@ -92,7 +106,34 @@ def test_ut03_142_reach_boundary_keeps_every_link_that_reaches_min_score(min_sco
     wh = make_warehouse(incidents, changes)
     link_candidates(wh, cfg=cfg_with(min_score=min_score, top_n=20))
     got = cand(wh)
-    assert {c for _, c in got} == {c.record_id for c in changes if c.record_id.endswith("_in")}
+    kept = {c.record_id for c in changes if c.record_id.endswith("_in")}
+    assert len(kept) == 8
+    assert {c for _, c in got} == kept
+    _assert_same(got, _reference(incidents, changes, p))
+
+
+@pytest.mark.parametrize("min_score", [0.0, 1e-9, 0.9])
+def test_ut03_142_window_edges_exact_under_each_prune_regime(min_score: float) -> None:
+    """UT03-142 d = -after_h and d = before_h are kept, one second beyond dropped (no pruning,
+    reach capped by before_h, negative service reach)."""
+    changes = []
+    for kind, key in (("ci", {"ci_id": "ci1"}), ("svc", {"service_id": "svc1"})):
+        for tag, end in (
+            ("after_edge", T0 + timedelta(hours=1)),
+            ("after_past", T0 + timedelta(hours=1, seconds=1)),
+            ("before_edge", T0 - timedelta(hours=72)),
+            ("before_past", T0 - timedelta(hours=72, seconds=1)),
+        ):
+            changes.append(Chg(f"c_{kind}_{tag}", actual_end=end, **key))
+    incidents = [Inc("i1", ci_id="ci1", service_id="svc1")]
+    p = {"before_h": 72.0, "after_h": 1.0, "tau_h": 12.0, "ci_weight": 1.0,
+         "service_weight": 0.6, "min_score": min_score, "top_n": 20}  # fmt: skip
+    wh = make_warehouse(incidents, changes)
+    link_candidates(wh, cfg=cfg_with(min_score=min_score, top_n=20))
+    got = cand(wh)
+    edges = {c.record_id for c in changes if c.record_id.endswith("_edge")}
+    # at min_score 0.9 only the CI match at d = -1 h (score 1.0) reaches it
+    assert {c for _, c in got} == ({"c_ci_after_edge"} if min_score == 0.9 else edges)
     _assert_same(got, _reference(incidents, changes, p))
 
 
@@ -103,6 +144,7 @@ _CONFIGS = (
      "min_score": 0.9, "top_n": 1},
     {"before_h": 200.0, "after_h": 0.5, "tau_h": 48.0, "ci_weight": 0.2, "service_weight": 0.1,
      "min_score": 0.15, "top_n": 5},
+    {"min_score": 0.9},  # service reach < 0: 0.6 * 1.375 < 0.9, so no service match survives
 )  # fmt: skip
 
 
