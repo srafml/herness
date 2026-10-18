@@ -152,7 +152,11 @@ def top_terms_ctfidf(docs: Mapping[str, Sequence[str]]) -> dict[str, list[str]]:
     ids = sorted(docs)
     if not ids:
         return {}
-    corpus = ["\n".join(_PLACEHOLDER_RE.sub(" ", text) for text in docs[cid]) for cid in ids]
+    # sorted: the sample order follows the random cluster id and a bigram spans the "\n"
+    # between two texts, so an unsorted join would let that order change the terms
+    corpus = [
+        "\n".join(sorted(_PLACEHOLDER_RE.sub(" ", text) for text in docs[cid])) for cid in ids
+    ]
     vectorizer = TfidfVectorizer(
         ngram_range=(1, 2),
         min_df=2 if len(ids) >= 2 else 1,  # noqa: PLR2004 - the spec's document bound

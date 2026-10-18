@@ -156,6 +156,18 @@ def test_ut03_93_single_document_and_tie_order() -> None:
     assert len(terms["cl_1"]) == 5
 
 
+def test_ut03_163_terms_do_not_depend_on_text_order() -> None:
+    """UT03-163 the texts of a cluster in any order give the same terms: a bigram spans the
+    line break between two joined texts, so the join order must not matter."""
+    texts = ["users lost", "shopping carts", "carts lost", "arctic jaguar", "gw19 shopping"]
+    other = ["cache miss storm", "carts users"]
+    want = top_terms_ctfidf({"a": texts, "b": other})
+    for shift in range(1, len(texts)):
+        rotated = texts[shift:] + texts[:shift]
+        assert top_terms_ctfidf({"b": other[::-1], "a": rotated}) == want
+    assert top_terms_ctfidf({"a": texts[::-1], "b": other}) == want
+
+
 def test_ut03_93_empty_inputs() -> None:
     """UT03-93 no clusters gives {}; a vocabulary emptied by stop words gives empty lists."""
     assert top_terms_ctfidf({}) == {}

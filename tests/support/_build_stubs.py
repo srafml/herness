@@ -14,6 +14,8 @@ import contextlib
 import dataclasses
 import hashlib
 import json
+import re
+import string
 import subprocess
 import sys
 import types
@@ -39,6 +41,17 @@ from herness.enrich import _pipeline_stages, decide_stage, embed
 from herness.enrich.embed import Device, Encoder
 from herness.harness.llm.registry import LLMRegistry
 from herness.store.vectors import EMBEDDING_DIM
+from tools.synth.text_vocab import (
+    CHANGE_EN,
+    CHANGE_ES,
+    FAMILY_ROWS,
+    HOSTS,
+    IMPACT,
+    PATTERNS_EN,
+    PATTERNS_ES,
+    REPEAT,
+    SYMPTOMS,
+)
 
 __all__ = ["BUILD_SCRIPTS", "STUBS", "STUB_SECRETS", "LlmFactory", "StubSet", "StubUrls",
            "install_laya", "running_stubs", "stub_overrides", "wire_enrichment"]  # fmt: skip
@@ -148,14 +161,84 @@ class LlmFactory:
                 closer()
 
 
-class HashEncoder(Encoder):
-    """Deterministic CPU stand-in for bge-m3 (no model files): unit-norm sum of a seeded
-    Gaussian per word plus a small one per text. Texts sharing words are close, yet none
-    coincide (the vector index needs diverse rows; tiny-st collapsed `small` to 67 groups)."""
+def _pattern_keys() -> dict[str, tuple[tuple[str, str], ...]]:
+    """Each generator template, keyed by its longest literal segment (`" observed on "`)."""
+    out: dict[str, tuple[tuple[str, str], ...]] = {}
+    for tag, patterns in (
+        ("en", PATTERNS_EN),
+        ("en", CHANGE_EN),
+        ("es", PATTERNS_ES),
+        ("es", CHANGE_ES),
+    ):
+        for pattern in patterns:
+            literals = [
+                lit for lit, *_ in string.Formatter().parse(pattern) if lit.strip(" .,:;()")
+            ]
+            out[max(literals, key=len).strip(" .,:;()").lower()] = (
+                ("pattern", f"{tag}{len(out)}"),
+            )
+    return out
+
+
+def _phrase_table() -> dict[str, tuple[tuple[str, str], ...]]:
+    """Every vocabulary phrase (lower case, no final period) -> the labels it carries."""
+    table: dict[str, tuple[tuple[str, str], ...]] = _pattern_keys()
+    for name, en, es, _ in FAMILY_ROWS:
+        table[en.lower()] = table[es.lower()] = (("family", name),)
+    table.update((symptom.lower(), (("symptom", symptom.lower()),)) for symptom in SYMPTOMS)
+    for lang, phrases in IMPACT.items():
+        for level, phrase in enumerate(phrases):
+            table[phrase.lower().rstrip(".")] = (("impact", str(level)), ("lang", lang))
+    for lang, phrases in REPEAT.items():
+        for phrase in phrases:
+            table[phrase.lower().rstrip(".")] = (
+                ("repeat", "any"),
+                ("repeatvar", phrase.lower()),
+                ("lang", lang),
+            )
+    return table
+
+
+_PHRASES: Final = _phrase_table()
+_HOST_RE: Final = r"\b(?:" + "|".join(HOSTS) + r")\d\d\b"
+_ALTERNATION: Final = "|".join([*map(re.escape, sorted(_PHRASES, key=len, reverse=True)), _HOST_RE])
+_LABEL_RE: Final = re.compile(_ALTERNATION, re.IGNORECASE)
+# the service name: the tail of the first line, after the last " in " (EN `Symptom in X`) or
+# after "Incidencia en " (ES `Incidencia en X: topic`)
+_COMPONENT_RE: Final = re.compile(r"^(?:.* in |incidencia en )([^:\n]+)", re.IGNORECASE)
+COMPONENT_GROUPS: Final = 2  # service groups: a component belongs to one, by its name hash
+_WEIGHTS: Final = {
+    "family": 0.8, "repeat": 0.8, "repeatvar": 0.35, "pattern": 0.25, "impact": 0.25,
+    "lang": 0.15, "component": 0.15, "host": 0.1, "group": 0.45, "symptom": 0.15, "text": 0.1,
+}  # fmt: skip
+
+
+class TopicEncoder(Encoder):
+    """Deterministic CPU stand-in for bge-m3 (no model files, no pickle): a unit-norm weighted
+    sum of seeded Gaussians, one per label the synthetic generator wrote into the text (T11-41).
+
+    Labels are read back with one regex over the generator's vocabulary (`tools.synth.text_vocab`):
+    family (the EN and ES topic phrase of a `FAMILY_ROWS` entry share one key, so language does
+    not split a cluster), component (the tail of the first line after the last " in " or after
+    "Incidencia en "; plus the service group `COMPONENT_GROUPS` of its name hash), host (`HOSTS`
+    prefix + two digits), symptom, template pattern (the longest literal of each pattern), repeat
+    marker (any, and which phrase), impact level and language, plus a small per-text Gaussian so
+    no two rows coincide (the vector index needs diverse rows; the old per-word sum put 95 % of
+    incidents in two clusters). With `_WEIGHTS` the cosine is ~0.97 for one family, component and
+    host, ~0.94 for one family only and ~0.35 for other families.
+
+    The weights were tuned offline against the product numerics (PCA 64, k-means k = 1000,
+    HDBSCAN on the prototypes) on the seed 42 `small` texts, not to mimic bge-m3 closely: the
+    family leads (30 families of about 3,400 incidents), the service group halves each family
+    (about 65 clusters, none above 1,900 incidents, so no cluster's pain swamps the planted
+    T2c), and the repeat marker lifts a family's repeat-flavored incidents into their own region
+    (a tight blob needs at least 5 k-means prototypes, so its two phrase variants are spread by
+    `repeatvar`, kept below the repeat shift). The planted T2 and T2c groups come out as their
+    own, nearly pure clusters."""
 
     def __init__(self) -> None:
-        super().__init__(Path("hash-encoder"), model_name="test/hash")
-        self._words: dict[str, np.ndarray] = {}
+        super().__init__(Path("topic-encoder"), model_name="test/topic")
+        self._gauss: dict[str, np.ndarray] = {}
 
     def load(self, device: Device) -> None:
         self._device = device
@@ -168,13 +251,28 @@ class HashEncoder(Encoder):
         )
         return rows.astype(np.float32)
 
+    def _label(self, kind: str, key: str) -> np.ndarray:
+        name = f"{kind}:{key}"
+        if name not in self._gauss:
+            self._gauss[name] = _WEIGHTS[kind] * _gauss(name)
+        return self._gauss[name]
+
     def _vector(self, text: str) -> np.ndarray:
-        total = 0.3 * _gauss(text)
-        for word in text.lower().split():
-            if word not in self._words:
-                self._words[word] = _gauss(word)
-            total = total + self._words[word]
+        total = _WEIGHTS["text"] * _gauss(text)
+        first = text.split("\n", 1)[0]
+        if match := _COMPONENT_RE.match(first):
+            name = match[1].strip().lower()
+            group = hashlib.sha256(name.encode("utf-8")).digest()[0] % COMPONENT_GROUPS
+            total = total + self._label("component", name) + self._label("group", str(group))
+        labels = {label for found in _LABEL_RE.finditer(text) for label in self._kinds(found[0])}
+        for kind, key in sorted(labels):
+            total = total + self._label(kind, key)
         return total / max(float(np.linalg.norm(total)), 1e-12)
+
+    @staticmethod
+    def _kinds(phrase: str) -> tuple[tuple[str, str], ...]:
+        labels = _PHRASES.get(phrase.lower())
+        return labels or (("host", phrase.lower()),)
 
 
 def _gauss(key: str) -> np.ndarray:
@@ -223,7 +321,7 @@ class _StubGpuState:
 
 def wire_enrichment(patch: pytest.MonkeyPatch, urls: StubUrls) -> None:
     """Real enrichment with nothing real behind it: `FakeGpu` compose over the stubs, the
-    `HashEncoder`, no CUDA."""
+    `TopicEncoder`, no CUDA."""
     fake = FakeGpu(gpu=_gpu_for(urls), stubs={})
     namespace = types.SimpleNamespace(run=fake.run, TimeoutExpired=subprocess.TimeoutExpired,
                                       SubprocessError=subprocess.SubprocessError)  # fmt: skip
@@ -231,7 +329,7 @@ def wire_enrichment(patch: pytest.MonkeyPatch, urls: StubUrls) -> None:
     patch.setattr(gpu_services, "_gpu", lambda: fake.gpu)
     state = _StubGpuState(fake)
     patch.setattr(decide_stage, "gpu_state", lambda: state)
-    encoder = HashEncoder()
+    encoder = TopicEncoder()
     patch.setattr(_pipeline_stages, "get_encoder", lambda: encoder)
     patch.setattr(_pipeline_stages, "device", lambda: "cpu")
     patch.setattr(embed, "release_cuda", lambda: None)

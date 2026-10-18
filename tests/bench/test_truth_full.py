@@ -5,7 +5,7 @@
 and by the `small` tests (seed 42 `small`, the build fixture of T11-34, run in every slow
 session). Thresholds are the ones of the BT11-05 row, unchanged at both scales.
 
-Fixture builds run enrichment for real (stub decider, stub LLM, `HashEncoder`) but keep the
+Fixture builds run enrichment for real (stub decider, stub LLM, `TopicEncoder`) but keep the
 T02-22 fake scoring hook (T11-34 carry-over), so `score.*` is empty in them. Both variants
 therefore score a copy of the build file with the real `run_scoring` (the copy is set back to
 `building`, which scoring requires), with `scoring.funding.window_days` 1095 and `as_of` the
@@ -243,19 +243,6 @@ def _failed(records: Mapping[str, BenchRecord], names: Sequence[str]) -> list[st
     ]
 
 
-# TEMPORARY MARKER (w50-s11 full-scale run on 7a0803a): remove when T11-34 gives the build
-# fixture real clusters. The run records every
-# BT11-05 value before the assertion, so the numbers stay in the recorder while this stands.
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=True,
-    reason="TEMPORARY, owner T11-34: t2_funding_rank 8 and t2c_cluster_fix_rank 425 (no "
-    "cluster_fix candidate) at seed 42 full because the HashEncoder fixture yields two clusters "
-    "of 4,882,066 and 257,345 incidents, so 27 cluster-wide candidates each absorb 180,791 "
-    "incidents (496M USD annual pain) and outrank the T2 epic (309,464 incidents, 849.6M USD, "
-    "effort 120k) on WSJF. T03-41 measured t3_link_precision 0.828 and recall 0.957 at full "
-    "(pass) on 71a6d31. T1, T3, T4, T5 and E2d pass.",
-)
 def test_bt11_05_planted_truths_full(
     request: pytest.FixtureRequest, tmp_path: Path, bench_recorder: BenchRecorder
 ) -> None:
@@ -309,12 +296,6 @@ def test_bt11_05_small_t2_epic_funding_rank_1(small_records: Mapping[str, BenchR
     assert not _failed(small_records, ["t2_funding_rank"])
 
 
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=True,
-    reason="product gap T11-34 fixture: the cluster that holds the T2c members is one of the "
-    "two HashEncoder mega-clusters (purity ~0.00), so its cluster_fix rank 1 is not the plant",
-)
 def test_bt11_05_small_t2c_cluster_fix_is_the_plant(
     small_records: Mapping[str, BenchRecord],
 ) -> None:

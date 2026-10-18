@@ -45,8 +45,9 @@ from tools.synth.params import SOURCES, load_params, params_hash
 
 FINGERPRINT: Final = ".fixture_build.json"
 # Bump when `builds` changes how a build is made (4: pinned clock; 5: T10-11b redaction
-# detectors change the redacted text of cached builds; 6: T03-41 cap and pair oracle).
-FIXTURE_REV: Final = 6
+# detectors change the redacted text of cached builds; 6: T03-41 cap and pair oracle;
+# 7: T11-41 topic-aware stand-in encoder).
+FIXTURE_REV: Final = 7
 LOCK_WAIT_S: Final = 30 * 60.0
 LOCK_POLL_S: Final = 1.0
 EMPTY_LOCK_STALE_S: Final = 60.0
