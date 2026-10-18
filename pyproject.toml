@@ -102,7 +102,6 @@ default = 400
 "herness/store/ops/_shims.py" = { limit = 80, reason = "interim resilience shims (T02-04)" }
 # Mirrors the impl 02 §2 row (raised from 260 in T02-04 fix round 1, controller ruling).
 "herness/store/ops/core.py" = { limit = 280, reason = "impl 02 §2 module map (T02-04 fix round 1)" }
-"herness/enrich/settings.py" = { limit = 420, reason = "impl 03 module map; T03-41 window_only_cap and corroboration_markers settings" }
 
 [tool.herness.licences]
 allowed = ["MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "PSF-2.0", "Python-2.0", "ISC", "MPL-2.0"]
@@ -417,6 +416,8 @@ source_modules = [
     "herness.eval.settings",
     "herness.harness.llm.settings",
     "herness.enrich.settings",
+    "herness.enrich.settings_base",
+    "herness.enrich.settings_link",
     "herness.reports.settings",
     "herness.harness.memory.settings",
     "herness.harness.pipelines.settings",
@@ -467,7 +468,7 @@ name = "enrich-settings-light"
 type = "forbidden"
 # impl 03 §2: herness.enrich.settings imports only stdlib, pydantic, herness.core.types and
 # herness.core.errors (R-03); the third-party part is checked by tools.check_type_ownership.
-source_modules = ["herness.enrich.settings"]
+source_modules = ["herness.enrich.settings", "herness.enrich.settings_base", "herness.enrich.settings_link"]
 forbidden_modules = [
     "herness.core.logging",
     "herness.core._log_pipeline",
