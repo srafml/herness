@@ -225,7 +225,7 @@ class ClusteringSettings(_Model):
 class ChangeLinkSettings(_Model):
     before_h: _Positive = 72.0
     after_h: _Positive = 1.0
-    tau_h: _Positive = 12.0
+    tau_h: float = Field(default=12.0, gt=0, le=8760)  # 1 year; keeps SQL slack float-safe (T03-40)
     ci_weight: _Fraction = 1.0
     service_weight: _Fraction = 0.6
     min_score: _Fraction = 0.30
