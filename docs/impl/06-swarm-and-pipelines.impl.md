@@ -2124,6 +2124,8 @@ Constants in code: `PACK_HEADROOM_TOKENS = 8000` (U06-123); `WALL_CLOCK_GRACE_S 
 | ID | Target (design 06 §8) | Dataset and hardware | Pass threshold | Marker |
 |----|----------------------|----------------------|----------------|--------|
 | BT06-01 | Orchestrator overhead | `small_build`, fake LLM with 12 s latency per call scaled ×0.01, standard funding run | scheduler + blackboard time < 2 % of wall time | `slow` |
+
+*T06-30 ruling (BT06-01).* "Scheduler + blackboard time" is the exclusive thread-CPU time of the event-loop steps of the scheduler/Blackboard coroutines plus the on-thread execution of their SQL work on the writer and tool threads (nested frames counted once), excluding time suspended awaiting the loop, a thread, the writer queue or the agent, and GIL wait; the row is met only under this reading, as exclusive wall still reads 6-7 % on this host because worker threads wait for the GIL while the in-process x0.01-scaled agent loops run (a contention the unscaled 12 s latency would not produce), and the union and exclusive-wall shares are printed as info upper bounds.
 | BT06-02 | Blackboard write latency | 1,000 posts from 6 concurrent tasks, tmp SQLite WAL, dev box NVMe | p95 < 50 ms | `slow` |
 | BT06-03 | Resume after crash | FT06-01 setup | scheduling resumes ≤ 60 s after job restart; zero `done` tasks re-executed | `fault`, `slow` |
 | BT06-04 | Chat answer local | real `local-30b`, synthetic 5M build | p50 ≤ 30 s, p95 ≤ 90 s; `verify_answer` ≤ 5 s | `gpu`, `slow` |

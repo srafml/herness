@@ -329,7 +329,7 @@ def _resume_from(checkpoint: Mapping[str, object] | None) -> LoopCheckpoint | No
 
 
 def _child_ids(row: TaskRow) -> list[str]:
-    return [t.task_id for t in select_tasks(row.run_id) if t.parent_task_id == row.task_id]
+    return [t.task_id for t in select_tasks(row.run_id, parent_task_id=row.task_id)]
 
 
 def _add_usage(env: RunEnv, role: str, res: AgentResult) -> None:

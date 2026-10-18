@@ -1,10 +1,9 @@
 """Ops area ``runs`` (impl 06 U06-32 … U06-40, R-08): ``run`` rows, ``task`` inserts and reads.
 
-Write functions take ``conn`` first and run inside a write transaction (the ``run_write``
-callback, or a spec 08 ``writes`` callback); read functions use ``read_one`` / ``read_all`` on
-the thread's connection (R-10). JSON columns are written with ``dump_json``, timestamps with
-``clock.format_utc``. The only dynamic SQL is the ``IN (...)`` placeholder list, built from the
-count of values (ENG §3.5). Later task status changes belong to the spec 08 helpers.
+Write functions take ``conn`` first and run in a write transaction (the ``run_write`` or a
+spec 08 ``writes`` callback); reads use ``read_one`` / ``read_all`` on the thread's connection
+(R-10). JSON columns go through ``dump_json``, timestamps through ``clock.format_utc``. The only
+dynamic SQL is the ``IN (...)`` list (ENG §3.5); later task status changes are spec 08's.
 """
 
 from __future__ import annotations
@@ -331,9 +330,10 @@ def select_tasks(
     *,
     roles: Collection[str] | None = None,
     statuses: Collection[str] | None = None,
+    parent_task_id: str | None = None,
 ) -> list[TaskRow]:
     """Tasks of ``run_id`` matching the filters, ordered by ``created_at, task_id`` (U06-38)."""
-    where, params = _task_filter(run_id, roles, statuses)
+    where, params = _task_filter(run_id, roles, statuses, parent_task_id)
     rows = core.read_all(f"{_SELECT_TASK}{where} ORDER BY created_at, task_id", params)
     return [_task_from_row(r) for r in rows]
 

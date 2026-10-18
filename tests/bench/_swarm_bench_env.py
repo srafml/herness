@@ -7,7 +7,16 @@ bookkeeping (`PhaseRunner._pass`, the `count_open` re-check of `run_phase`, and
 ops functions `insert_finding`, `query_findings`, `transition_finding` wherever a
 `herness` module bound them). Each call is one wall-clock interval; `union_s` is the length
 of their union (time during which any scheduler or Blackboard work was in progress, nested
-and concurrent calls counted once) and `sum_s` the plain sum (an upper bound).
+and concurrent calls counted once) and `sum_s` the plain sum (an upper bound); both are info
+lines only (T06-30): an awaited span stays open while other tasks' agent loops run.
+
+The GATE statistic of BT06-01 is the EXCLUSIVE busy time (`busy_s`, T06-30): per frame (an
+event-loop step of a wrapped coroutine, or one on-thread call of the sync work of the
+Blackboard and the scheduler, the writer-side functions included) the wall time not spent in
+nested frames, summed over the tags `TAGS`. The frames tagged `agent` (the `run_agent` calls)
+and `queue` (the blocking wait for the writer in `Blackboard._sync`) are not counted, and
+neither is time suspended awaiting a thread, the writer or the agent. `cpu_s` is the same
+sum on `time.thread_time` (no GIL or I/O wait), a cross-check.
 
 `SlowTaskClient` is the T06-26 `TaskClient` (a `FakeLLMClient` on per-task scripts) that
 awaits `LATENCY_S` before every answer: the 12 s per call of the BT06-01 row scaled x0.01.
@@ -30,6 +39,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any, Final
 
 import pytest
+from tests.bench._swarm_bench_clock import Steps, thread_cpu
 from tests.support import _f06_swarm as f6
 
 from herness.core.types import LLMRequest, LLMResponse
@@ -58,8 +68,23 @@ GPU_ENV: Final = "HERNESS_BENCH_GPU"  # "1": one 24 GB GPU serving the local mod
 PREMIUM_ENV: Final = "HERNESS_BENCH_PREMIUM"  # "1": premium approved, API key in the keyring
 SYNTH_ENV: Final = "HERNESS_SYNTH_FULL_ROOT"  # seed 42 full (5M) synthetic build root
 _FLAG_ENVS: Final = frozenset({FULL_ENV, GPU_ENV, PREMIUM_ENV})
+_PARTS: Final = (  # Blackboard.post / _commit steps timed by name (a finer split of "blackboard")
+    "evidence_build_id",
+    "get_task",
+    "list_task_findings",
+    "save_checkpoint",
+    "get_run",
+    "validate_markers",
+    "find_uncited",
+)
 _OPS_FUNCS: Final = ("insert_finding", "query_findings", "transition_finding")
-_BB_SKIP: Final = frozenset({"close"})
+_BB_SKIP: Final = frozenset({"close", "run_on_writer"})  # run_on_writer: wrapped by hand
+_WRITER_TAGS: Final = {  # writer-side functions by tag; any other writer function: "blackboard"
+    "claim_task": "pass",
+    "complete_task": "execute_task",
+    "fail_task": "execute_task",
+    "release_task": "execute_task",
+}
 TAGS: Final = ("pass", "execute_task", "blackboard")  # scheduler pass, task bookkeeping, board
 
 
@@ -103,15 +128,99 @@ _AGENT: contextvars.ContextVar[list[tuple[float, float]] | None] = contextvars.C
 
 
 class Overhead:
-    """Interval recorder for the scheduler and Blackboard time of one run (see module doc)."""
+    """Recorder for the scheduler and Blackboard time of one run (see module doc)."""
 
     def __init__(self) -> None:
         self.intervals: list[tuple[float, float, str]] = []
+        self.wall: dict[str, float] = {}  # exclusive wall seconds by tag
+        self.cpu: dict[str, float] = {}  # exclusive thread-CPU seconds by tag
+        self.names: dict[str, list[float]] = {}  # name -> [calls, exclusive wall, exclusive cpu]
         self._lock = threading.Lock()
+        self._tls = threading.local()
 
     def reset(self) -> None:
         with self._lock:
             self.intervals.clear()
+            self.wall.clear()
+            self.cpu.clear()
+            self.names.clear()
+
+    # --- exclusive frames ----------------------------------------------------------------------
+
+    def count(self, name: str) -> None:
+        with self._lock:
+            self.names.setdefault(name, [0.0, 0.0, 0.0])[0] += 1
+
+    def enter(self, tag: str, name: str) -> list[Any]:
+        stack: list[list[Any]] = self._tls.__dict__.setdefault("stack", [])
+        frame = [tag, name, time.perf_counter(), thread_cpu(), 0.0, 0.0]
+        stack.append(frame)
+        return frame
+
+    def leave(self, frame: list[Any], calls: int = 1) -> None:
+        wall, cpu = time.perf_counter() - frame[2], thread_cpu() - frame[3]
+        stack: list[list[Any]] = self._tls.stack
+        assert stack.pop() is frame, "mis-nested frame"
+        if stack:  # the parent's exclusive time excludes this frame, counted or not
+            stack[-1][4] += wall
+            stack[-1][5] += cpu
+        tag, name = frame[0], frame[1]
+        with self._lock:
+            self.wall[tag] = self.wall.get(tag, 0.0) + wall - frame[4]
+            self.cpu[tag] = self.cpu.get(tag, 0.0) + cpu - frame[5]
+            row = self.names.setdefault(name, [0.0, 0.0, 0.0])
+            row[0] += calls
+            row[1] += wall - frame[4]
+            row[2] += cpu - frame[5]
+
+    def busy_s(self, tag: str | None = None) -> float:
+        """Exclusive busy wall seconds of `tag`, or of the gated `TAGS`."""
+        return sum(self.wall.get(t, 0.0) for t in ((tag,) if tag else TAGS))
+
+    def cpu_s(self, tag: str | None = None) -> float:
+        """Exclusive thread-CPU seconds of `tag`, or of the gated `TAGS`."""
+        return sum(self.cpu.get(t, 0.0) for t in ((tag,) if tag else TAGS))
+
+    def frame_cost_s(self) -> float:
+        """Thread-CPU seconds one empty frame costs the recorder itself (calibration)."""
+        probe = self._frame(lambda: None, "probe", "probe")
+        c0 = thread_cpu()
+        for _ in range(2000):
+            probe()
+        cost = (thread_cpu() - c0) / 2000
+        self.wall.pop("probe", None), self.cpu.pop("probe", None), self.names.pop("probe", None)
+        return cost
+
+    def frames(self) -> int:
+        """Frames recorded since `reset` (calls of the named wrappers plus coroutine steps)."""
+        return int(sum(row[0] for row in self.names.values()))
+
+    def _frame(
+        self, fn: Callable[..., Any], tag: str, name: str | None = None
+    ) -> Callable[..., Any]:
+        label: str = name or str(getattr(fn, "__qualname__", "fn"))
+
+        @functools.wraps(fn)
+        def run(*args: Any, **kwargs: Any) -> Any:
+            frame = self.enter(tag, label)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                self.leave(frame)
+
+        return run
+
+    def _steps(self, fn: Callable[..., Any], tag: str) -> Callable[..., Any]:
+        @functools.wraps(fn)
+        async def run(*args: Any, **kwargs: Any) -> Any:
+            return await Steps(fn(*args, **kwargs), self, tag, fn.__qualname__)
+
+        return run
+
+    def _on_writer(self, fn: Callable[[], Any]) -> Callable[[], Any]:
+        """`fn` as a frame on the writer thread, tagged by the function it runs."""
+        name = getattr(getattr(fn, "func", fn), "__name__", "fn")
+        return self._frame(fn, _WRITER_TAGS.get(name, "blackboard"), f"writer:{name}")
 
     def add(self, start: float, end: float, tag: str) -> None:
         if end > start:
@@ -196,20 +305,51 @@ class Overhead:
 
     def install(self, mp: pytest.MonkeyPatch) -> None:
         """Wrap the scheduler, the agent calls and the Blackboard (after `use_real_agents`)."""
-        mp.setattr(scheduler.PhaseRunner, "_pass", self._timed(scheduler.PhaseRunner._pass, "pass"))
-        mp.setattr(scheduler, "count_open", self._timed(scheduler.count_open, "pass"))
-        mp.setattr(scheduler, "execute_task", self._execute(scheduler.execute_task))
+        pass_ = self._steps(scheduler.PhaseRunner._pass, "pass")
+        mp.setattr(scheduler.PhaseRunner, "_pass", self._timed(pass_, "pass"))
+        for fname in ("count_open", "ready_tasks"):
+            fn = self._frame(getattr(scheduler, fname), "pass")
+            mp.setattr(scheduler, fname, self._timed(fn, "pass"))
+        mp.setattr(scheduler, "_child_ids", self._frame(scheduler._child_ids, "execute_task"))
+        task = self._steps(scheduler.execute_task, "execute_task")
+        mp.setattr(scheduler, "execute_task", self._execute(task))
         for module in (planner, scheduler, challenge, writer):
-            mp.setattr(module, "run_agent", self._agent(module.run_agent))
+            mp.setattr(module, "run_agent", self._agent(self._steps(module.run_agent, "agent")))
         for name, member in vars(Blackboard).items():
             if name.startswith("_") or name in _BB_SKIP or isinstance(member, staticmethod):
                 continue
             if callable(member):
-                mp.setattr(Blackboard, name, self._timed(member, "blackboard"))
+                wrap = self._steps if inspect.iscoroutinefunction(member) else self._frame
+                mp.setattr(Blackboard, name, self._timed(wrap(member, "blackboard"), "blackboard"))
+        self._install_writer(mp)
+        self._install_ops(mp)
+
+    def _install_ops(self, mp: pytest.MonkeyPatch) -> None:
+        """Named frames of the post steps (a finer split of `blackboard`) and the ops writes."""
+        bb_mod = sys.modules[Blackboard.__module__]
+        for fname in _PARTS:
+            mp.setattr(bb_mod, fname, self._frame(getattr(bb_mod, fname), "blackboard"))
+        for mname in ("_build", "_validate", "_unknown_queries", "_commit"):
+            mp.setattr(Blackboard, mname, self._frame(getattr(Blackboard, mname), "blackboard"))
         for fname in _OPS_FUNCS:
             original = getattr(ops_findings, fname)
-            timed = self._timed(original, "blackboard")
+            timed = self._timed(self._frame(original, "blackboard"), "blackboard")
             for module in list(sys.modules.values()):
                 name = getattr(module, "__name__", "")
                 if name.startswith("herness") and getattr(module, fname, None) is original:
                     mp.setattr(module, fname, timed)
+
+    def _install_writer(self, mp: pytest.MonkeyPatch) -> None:
+        """Frames for the work submitted to the writer; the blocking wait is a `queue` frame."""
+        sync, on_writer = Blackboard._sync, Blackboard.run_on_writer
+        waiting = self._frame(sync, "queue", "queue_wait")
+
+        def sync_frames(bb: Blackboard, fn: Callable[[], Any], timeout_s: float, busy: str) -> Any:
+            return waiting(bb, self._on_writer(fn), timeout_s, busy)
+
+        async def run_on_writer(bb: Blackboard, fn: Callable[[], Any]) -> Any:
+            inner = on_writer(bb, self._on_writer(fn))
+            return await Steps(inner, self, "blackboard", "run_on_writer")
+
+        mp.setattr(Blackboard, "_sync", sync_frames)
+        mp.setattr(Blackboard, "run_on_writer", self._timed(run_on_writer, "blackboard"))

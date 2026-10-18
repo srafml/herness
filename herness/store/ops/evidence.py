@@ -86,24 +86,42 @@ def record_evidence_use(query_id: str, run_id: str, task_id: str | None, used_at
     return core.run_write(_insert, op="record_evidence_use")
 
 
-def get_evidence(query_id: str) -> Evidence | None:
-    """Return the row as `Evidence`, or None when absent or tampered (TH05-12).
+def _trusted_row(
+    query_id: str, columns: str = "*"
+) -> tuple[sqlite3.Row, dict[str, JsonValue]] | None:
+    """The row and its parsed `params`, or None when absent or tampered (TH05-12).
 
     A tampered row (the stored `query_id` does not recompute from `sql`, `params` and
     `build_id`) logs a WARNING `harness.evidence.tampered` and is never raised.
     """
-    row = core.read_one("SELECT * FROM evidence WHERE query_id = ?", (query_id,))
+    row = core.read_one(f"SELECT {columns} FROM evidence WHERE query_id = ?", (query_id,))  # noqa: S608 - constants
     if row is None:
         return None
     params = cast(dict[str, JsonValue], core.load_json(row["params"], field="evidence.params"))
-    sql_text, build_id = str(row["sql"]), str(row["build_id"])
     try:
-        expected = compute_query_id(sql_text, params, build_id)
+        expected = compute_query_id(str(row["sql"]), params, str(row["build_id"]))
     except SchemaViolation:
         expected = None
     if expected != row["query_id"]:
         _log.warning("harness.evidence.tampered", query_id=str(row["query_id"]))
         return None
+    return row, params
+
+
+def evidence_build_id(query_id: str) -> str | None:
+    """`build_id` of a present, untampered evidence row, else None (T06-30: the Blackboard
+    citation check needs no sample; the TH05-12 check is the one `get_evidence` applies)."""
+    found = _trusted_row(query_id, "query_id, sql, params, build_id")
+    return None if found is None else str(found[0]["build_id"])
+
+
+def get_evidence(query_id: str) -> Evidence | None:
+    """Return the row as `Evidence`, or None when absent or tampered (TH05-12)."""
+    found = _trusted_row(query_id)
+    if found is None:
+        return None
+    row, params = found
+    sql_text, build_id = str(row["sql"]), str(row["build_id"])
     sample = cast(
         list[dict[str, JsonValue]],
         core.load_json(row["result_sample"], field="evidence.result_sample"),
