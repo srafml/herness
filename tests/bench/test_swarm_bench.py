@@ -87,23 +87,13 @@ CHAT_TURNS: Final = 20
 # --- BT06-01 -----------------------------------------------------------------------------------
 
 
-# T06-30: remove when quiet-host x3 < 2 %
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="BT06-01 (T06-30 exclusive thread-CPU measure) dev medians 2.02 % and 1.99 %"
-    " (repeats 1.87-2.03)"
-    " vs < 2 % of wall (exclusive wall incl. GIL/IO wait 6.2 %, old union 6.9 %; the old"
-    " union measure read 5.4-7.4 % on the same code); owner T06-08 (Blackboard post) /"
-    " T06-14 (scheduler pass)",
-)
 @pytest.mark.timeout(600)
 def test_bt06_01_scheduler_and_blackboard_under_2_percent_of_wall(
     drv: Drv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """BT06-01 standard funding run, fake LLM 12 s x0.01 per call: scheduler + blackboard
-    time (exclusive busy time of their code, `Overhead.busy_s`; T06-30) < 2 % of the run's
-    wall time (median of REPEATS)."""
+    time (exclusive thread-CPU time of their code, `Overhead.cpu_s`; T06-30 ruling, §10) < 2 %
+    of the run's wall time (median of REPEATS). Quiet-host x3 2026-10-18: 1.77 / 1.82 / 1.88 %."""
     scripts = f6.use_real_agents(drv, monkeypatch)
     sb.use_slow_clients(drv.llms, scripts, monkeypatch)
     drv.set_pipeline(t1=BT06_01_T1, t2=BT06_01_T2)
