@@ -66,6 +66,7 @@ from .ingest import (
 # isort: split
 # 05 evidence
 from .evidence import (
+    evidence_build_id,
     finding_statuses,
     get_evidence,
     record_evidence,
@@ -267,7 +268,7 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     "get_file_ingest", "record_file_ingest",
     # 05 evidence
     "record_evidence", "record_evidence_use", "get_evidence", "finding_statuses",
-    "scrub_record_from_evidence",
+    "evidence_build_id", "scrub_record_from_evidence",
     # 06 runs
     "RunRow", "TaskRow", "insert_run", "get_run", "find_run_by_job", "find_run_by_escalation",
     "select_runs", "set_run_status", "update_run_fields", "insert_tasks", "get_task",

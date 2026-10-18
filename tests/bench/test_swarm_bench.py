@@ -108,7 +108,7 @@ def test_bt06_01_scheduler_and_blackboard_under_2_percent_of_wall(
     drv.set_pipeline(t1=BT06_01_T1, t2=BT06_01_T2)
     over = sb.Overhead()
     over.install(monkeypatch)
-    share, cpu, union, upper, walls = [], [], [], [], []
+    share, busy, union, upper, walls = [], [], [], [], []
     for i in range(REPEATS + 1):  # run 0 is the warm-up
         over.reset()
         start = time.perf_counter()
@@ -117,8 +117,8 @@ def test_bt06_01_scheduler_and_blackboard_under_2_percent_of_wall(
         assert res.status == "done", res
         assert len(select_tasks(res.run_id, roles={"analyst"})) >= BT06_01_T1 + BT06_01_T2
         if i:
-            share.append(100 * over.busy_s() / wall)
-            cpu.append(100 * over.cpu_s() / wall)
+            share.append(100 * over.cpu_s() / wall)
+            busy.append(100 * over.busy_s() / wall)
             union.append(100 * over.union_s() / wall)
             upper.append(100 * over.sum_s() / wall)
             walls.append(wall)
@@ -131,7 +131,9 @@ def test_bt06_01_scheduler_and_blackboard_under_2_percent_of_wall(
     report("BT06-01", "wall", walls, "s", "info")
     report("BT06-01", "sum_share", upper, "%", "info (upper bound)")
     report("BT06-01", "union_share", union, "%", "info (old measure, upper bound)")
-    report("BT06-01", "cpu_share", cpu, "%", "info (thread CPU cross-check)")
+    report("BT06-01", "excl_wall_share", busy, "%", "info (exclusive wall, GIL/IO wait incl.)")
+    cost = over.frame_cost_s()
+    sys.stderr.write(f"BT06-01 recorder cost {1e6 * cost:.1f} us per frame x {over.frames()}\n")
     median = report("BT06-01", "share", share, "%", f"< {BT06_01_MAX_PCT:g} %")
     assert median < BT06_01_MAX_PCT, f"scheduler + blackboard {median:.3f} % of wall"
 

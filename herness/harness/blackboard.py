@@ -42,7 +42,7 @@ from herness.core.types import (
 from herness.harness.findings import EntityCatalog, validate_markers
 from herness.harness.tracing import Tracer
 from herness.store.ops import (
-    get_evidence,
+    evidence_build_id,
     get_run,
     get_task,
     insert_finding,
@@ -202,7 +202,7 @@ class Blackboard:
 
     def _unknown_queries(self, ctx: ToolContext, ids: Sequence[str]) -> list[str]:
         """Step 4: ids neither in ops evidence of this build nor in ``meta.evidence``."""
-        rest = [q for q in ids if (e := get_evidence(q)) is None or e.build_id != self.build_id]
+        rest = [q for q in ids if evidence_build_id(q) != self.build_id]
         if rest:
             cursor: Any = ctx.warehouse.cursor()
             found = {str(row[0]) for row in cursor.execute(_META_SQL, [rest]).fetchall()}

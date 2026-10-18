@@ -69,7 +69,7 @@ PREMIUM_ENV: Final = "HERNESS_BENCH_PREMIUM"  # "1": premium approved, API key i
 SYNTH_ENV: Final = "HERNESS_SYNTH_FULL_ROOT"  # seed 42 full (5M) synthetic build root
 _FLAG_ENVS: Final = frozenset({FULL_ENV, GPU_ENV, PREMIUM_ENV})
 _PARTS: Final = (  # Blackboard.post / _commit steps timed by name (a finer split of "blackboard")
-    "get_evidence",
+    "evidence_build_id",
     "get_task",
     "list_task_findings",
     "save_checkpoint",
@@ -128,13 +128,25 @@ def _thread_cpu() -> float:
     return _cycles() / _CYCLES_PER_S if _CYCLES_PER_S else time.thread_time()
 
 
-def _cycles() -> int:
-    count = ctypes.c_ulonglong()
-    ctypes.windll.kernel32.QueryThreadCycleTime(  # type: ignore[attr-defined,unused-ignore]
-        ctypes.windll.kernel32.GetCurrentThread(),  # type: ignore[attr-defined,unused-ignore]
-        ctypes.byref(count),
-    )
-    return count.value
+def _cycle_counter() -> Callable[[], int]:
+    if sys.platform != "win32":
+        return lambda: 0
+    kernel32: Any = ctypes.windll.kernel32  # type: ignore[attr-defined,unused-ignore]
+    thread = kernel32.GetCurrentThread
+    thread.restype = ctypes.c_void_p
+    query = kernel32.QueryThreadCycleTime
+    query.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulonglong)]
+    handle = thread()  # the pseudo handle of the calling thread, valid on every thread
+
+    def cycles() -> int:
+        count = ctypes.c_ulonglong()
+        query(handle, ctypes.byref(count))
+        return int(count.value)
+
+    return cycles
+
+
+_cycles = _cycle_counter()
 
 
 def _calibrate() -> float:
@@ -183,7 +195,7 @@ class _Steps:
         try:
             return call(*args)
         finally:
-            self._rec.leave(frame)
+            self._rec.leave(frame, calls=0)
 
 
 class Overhead:
@@ -216,7 +228,7 @@ class Overhead:
         stack.append(frame)
         return frame
 
-    def leave(self, frame: list[Any]) -> None:
+    def leave(self, frame: list[Any], calls: int = 1) -> None:
         wall, cpu = time.perf_counter() - frame[2], _thread_cpu() - frame[3]
         stack: list[list[Any]] = self._tls.stack
         stack.pop()
@@ -228,6 +240,7 @@ class Overhead:
             self.wall[tag] = self.wall.get(tag, 0.0) + wall - frame[4]
             self.cpu[tag] = self.cpu.get(tag, 0.0) + cpu - frame[5]
             row = self.names.setdefault(name, [0.0, 0.0, 0.0])
+            row[0] += calls
             row[1] += wall - frame[4]
             row[2] += cpu - frame[5]
 
@@ -239,6 +252,20 @@ class Overhead:
         """Exclusive thread-CPU seconds of `tag`, or of the gated `TAGS`."""
         return sum(self.cpu.get(t, 0.0) for t in ((tag,) if tag else TAGS))
 
+    def frame_cost_s(self) -> float:
+        """Thread-CPU seconds one empty frame costs the recorder itself (calibration)."""
+        probe = self._frame(lambda: None, "probe", "probe")
+        c0 = _thread_cpu()
+        for _ in range(2000):
+            probe()
+        cost = (_thread_cpu() - c0) / 2000
+        self.wall.pop("probe", None), self.cpu.pop("probe", None), self.names.pop("probe", None)
+        return cost
+
+    def frames(self) -> int:
+        """Frames recorded since `reset` (calls of the named wrappers plus coroutine steps)."""
+        return int(sum(row[0] for row in self.names.values()))
+
     def _frame(
         self, fn: Callable[..., Any], tag: str, name: str | None = None
     ) -> Callable[..., Any]:
@@ -246,7 +273,6 @@ class Overhead:
 
         @functools.wraps(fn)
         def run(*args: Any, **kwargs: Any) -> Any:
-            self.count(label)
             frame = self.enter(tag, label)
             try:
                 return fn(*args, **kwargs)
