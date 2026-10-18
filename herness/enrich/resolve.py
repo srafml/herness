@@ -32,6 +32,7 @@ from herness.core.errors import ConfigError, SchemaViolation
 from herness.core.logging import get_logger
 from herness.core.resilience.metrics import record_gauge
 from herness.core.types import Question, QuestionSet
+from herness.enrich._resolve_delta import FULL_SCOPE_SQL, ResolveDelta
 from herness.enrich._spot_checks import select_spot_checks
 from herness.enrich.cache import DecisionCache
 from herness.enrich.calibrate import CalibrationStore
@@ -164,10 +165,16 @@ def _pending_items_table(qsv: str) -> pa.Table:
     return pa.Table.from_pylist(rows, schema=_PENDING_SCHEMA)
 
 
-def _run_resolve_sql(wh: duckdb.DuckDBPyConnection, *, bootstrap_since: datetime) -> None:
-    """Execute ``resolve_decisions.sql`` over the already registered views (U03-78)."""
+def _run_resolve_sql(
+    wh: duckdb.DuckDBPyConnection, *, bootstrap_since: datetime, scoped: bool = False
+) -> None:
+    """Execute ``resolve_decisions.sql`` over the already registered views (U03-78).
+
+    ``enrich_scope`` is every text row unless a delta night (`scoped`) built it already."""
     sql = resources.files("herness.enrich").joinpath(_SQL_FILE).read_text("utf-8")
     try:
+        if not scoped:
+            wh.execute(FULL_SCOPE_SQL)
         wh.execute(sql, {"bootstrap_since": bootstrap_since})
     except duckdb.Error as exc:
         raise _duck_error(exc, where="resolve_decisions") from exc
@@ -185,10 +192,13 @@ def resolve_frame(  # noqa: PLR0913 - U03-79's signature is binding (plus `decid
     primaries: Mapping[str, str],
     versions: Mapping[str, str],
     now: datetime,
+    delta: ResolveDelta | None = None,
 ) -> None:
     """Register the inputs and run ``resolve_decisions.sql`` into ``enrich_resolved`` (U03-79).
 
     ``versions`` maps each decider (and ``ensemble`` when deep) to its current version.
+    ``delta`` (T03-36 carry-over w50-s11) scopes a nightly frame to the text rows that the
+    previous warehouse cannot supply (``_resolve_delta``); None resolves every text row.
     Raises SchemaViolation from the SQL; ops ``StoreBusy`` propagates.
     """
     pending = _pending_items_table(qs.version)  # ops read first: nothing registered on failure
@@ -204,13 +214,17 @@ def resolve_frame(  # noqa: PLR0913 - U03-79's signature is binding (plus `decid
     }
     registered: list[str] = []
     try:
-        cache.register(wh, "cache_rows")
+        rows = None if delta is None else delta.begin(wh, cache, relations, qs.version)
+        if rows is None:
+            cache.register(wh, "cache_rows")
+        else:
+            wh.register("cache_rows", rows)
         registered.append("cache_rows")
         for name, table in relations.items():
             wh.register(name, table)
             registered.append(name)
         since = now - timedelta(days=cfg.escalation.bootstrap_window_days)
-        _run_resolve_sql(wh, bootstrap_since=since)
+        _run_resolve_sql(wh, bootstrap_since=since, scoped=bool(delta and delta.active))
     finally:
         for name in registered:
             wh.unregister(name)
@@ -320,22 +334,29 @@ def run_resolve(  # noqa: PLR0913 - U03-83: stage arguments plus resolve_frame's
     primaries: Mapping[str, str],
     versions: Mapping[str, str],
     now: datetime,
+    delta: ResolveDelta | None = None,
 ) -> None:
     """Stage ``resolve``: ``enrich.decision``, ``decision_wide`` and spot-checks (U03-83).
 
-    Spot-checks sample rows decided at or after ``run_started_at``. Raises ConfigError for a
-    bad question id or set, SchemaViolation on a DuckDB error; ops errors propagate.
+    Spot-checks sample rows decided at or after ``run_started_at``. On an active ``delta``
+    the settled decision rows of the previous warehouse are carried over and only the rest is
+    resolved (same ``enrich.decision``). Raises ConfigError for a bad question id or set,
+    SchemaViolation on a DuckDB error; ops errors propagate.
     """
     wide = decision_wide_sql(qs)  # checked before any write
     sync_label_checks(labels, qs=qs)
     resolve_frame(
         wh, qs=qs, cfg=cfg, deciders=deciders, cache=cache, labels=labels,
-        calibration=calibration, primaries=primaries, versions=versions, now=now,
+        calibration=calibration, primaries=primaries, versions=versions, now=now, delta=delta,
     )  # fmt: skip
     try:
         wh.execute(_INSERT_SQL, {"qsv": qs.version})
+        if delta is not None:
+            delta.carry(wh, qs.version)
         wh.execute(wide)
         stats: list[tuple[str, int, int, int]] = wh.execute(_STATS_SQL).fetchall()
+        if delta is not None:
+            stats = delta.merge_stats(stats)
     except duckdb.Error as exc:
         raise _duck_error(exc, where="run_resolve") from exc
     _create_spot_checks(wh, qs=qs, cfg=cfg, build_id=build_id, since=run_started_at)

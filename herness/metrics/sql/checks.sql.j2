@@ -4,7 +4,7 @@
     `threshold` column. Runtime values are step binds (p()); the `has_<schema>_<table>`
     context flags name the optional tables present (U04-59 missing inputs). Segment bodies
     hold no SQL comments (run_recorded rejects them), so prose lives in this header only:
-    score_pain_total recomputes each record's usd as U04-64 `rec_cost` does (unrounded
+    score_share_sum and score_pain_total sum each record's rows with list_sum(list_sort(list(x))) (the order-independent per-group form, T04-23; a per-group ordered sum aggregate over 5M groups did not finish in 30 min at full scale), score_pain_total then orders the per-record sums; it recomputes each record's usd as U04-64 `rec_cost` does (unrounded
     DOUBLE) and compares the annualized attributed sum with the annualized window total. -#}
 -- @check score_fact_duration_negative
 SELECT CAST(c.n AS DOUBLE) AS value, CAST(c.n AS BIGINT) AS n_bad
@@ -37,7 +37,7 @@ FROM (
   SELECT record_kind, record_id
   FROM score.funding_attribution
   GROUP BY record_kind, record_id
-  HAVING {{ dsum('share') }} > 1 + 1e-9
+  HAVING list_sum(list_sort(list(share))) > 1 + 1e-9
 ) r
 -- @check score_share_range
 SELECT CAST(count(*) AS DOUBLE) AS value, CAST(count(*) AS BIGINT) AS n_bad
@@ -68,9 +68,11 @@ WITH rec_cost AS (
 ),
 annual AS (
   SELECT
-    CAST(coalesce((SELECT {{ dsum('a.share * r.usd') }}
-                   FROM score.funding_attribution a
-                   JOIN rec_cost r ON r.record_kind = a.record_kind AND r.record_id = a.record_id),
+    CAST(coalesce((SELECT {{ dsum('pr.s') }}
+                   FROM (SELECT list_sum(list_sort(list(a.share * r.usd))) AS s
+                         FROM score.funding_attribution a
+                         JOIN rec_cost r ON r.record_kind = a.record_kind AND r.record_id = a.record_id
+                         GROUP BY a.record_kind, a.record_id) pr),
                   0) * 365 / {{ observed_days() }} AS DOUBLE) AS attributed,
     CAST(coalesce((SELECT {{ dsum('usd') }} FROM rec_cost), 0) * 365 / {{ observed_days() }} AS DOUBLE)
       AS total

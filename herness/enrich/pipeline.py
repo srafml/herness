@@ -32,6 +32,7 @@ from herness.core.logging import get_logger
 from herness.core.resilience.metrics import record_counter, record_histogram
 from herness.core.types import Depth, Entity, QuestionSet
 from herness.enrich import _pipeline_stages as steps
+from herness.enrich._resolve_delta import ResolveDelta
 from herness.enrich.cluster_describe import name_clusters
 from herness.enrich.decide_stage import run_llm_escalation
 from herness.enrich.deciders.llm import LlmDecider
@@ -151,6 +152,7 @@ class Run:
     cluster: ClusterStageResult | None = None
     names: dict[str, NameResult] = dataclasses.field(default_factory=dict)
     linked: bool = False  # temp table `link_cand` built on `wh`
+    delta: ResolveDelta = dataclasses.field(default_factory=ResolveDelta)
     coverage: dict[str, float] = dataclasses.field(default_factory=dict)
     escalation_share: float | None = None
 
@@ -367,6 +369,7 @@ def run_enrichment(  # noqa: PLR0913 - U03-144's signature is binding
     done, first_start = _resumed(base, build_id)
     run = Run(wh, build_id, depth, ctx, prev_warehouse, llm_factory,
                     force_full_recluster, first_start or started_at)  # fmt: skip
+    run.delta = ResolveDelta.for_call(prev_warehouse, depth, selected, fresh=not done)
     steps.prepare(run)
     drv = _Driver(run, selected, done, base)
     drv.stage("text", steps.text)

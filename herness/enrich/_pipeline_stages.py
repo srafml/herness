@@ -213,15 +213,13 @@ def _teacher_name(run: Run) -> str | None:
 def _resolve_args(run: Run) -> ResolveArgs:
     return ResolveArgs(cfg=run.cfg.decisions, deciders=run.cfg.models.deciders,
                        labels=run.labels, calibration=run.calibration, primaries=run.primaries,
-                       versions=dict(run.versions), now=run.started_at)  # fmt: skip
+                       versions=dict(run.versions), now=run.started_at,
+                       delta=run.delta)  # fmt: skip
 
 
 def frame(run: Run) -> None:
     """`resolve_frame` (U03-79) into the temp table `enrich_resolved` of `run.wh`."""
-    a = _resolve_args(run)
-    resolve_frame(run.wh, qs=run.qs, cfg=a.cfg, deciders=a.deciders, cache=run.cache,
-                  labels=a.labels, calibration=a.calibration, primaries=a.primaries,
-                  versions=a.versions, now=a.now)  # fmt: skip
+    resolve_frame(run.wh, qs=run.qs, cache=run.cache, **_resolve_args(run).kwargs())
 
 
 # --- steps 3-8: text, embed, decide-primary, link candidates, decide-escalate, cluster --------
@@ -377,14 +375,12 @@ def suggest(run: Run, report: StageReport) -> None:
 def resolve(run: Run, report: StageReport) -> None:
     """Step 13: `enrich.decision` (rebuilt on a rerun), cluster names and snapshot, compaction."""
     _sql(run.wh, "DELETE FROM enrich.decision")
-    a = _resolve_args(run)
-    run_resolve(run.wh, qs=run.qs, cfg=a.cfg, build_id=run.build_id,
-        run_started_at=run.started_at, report=report, deciders=a.deciders, cache=run.cache,
-        labels=a.labels, calibration=a.calibration, primaries=a.primaries,
-        versions=a.versions, now=a.now)  # fmt: skip
-    stats = _sql(run.wh, _COVERAGE_SQL)
-    run.coverage = {str(e): final / scope for e, final, scope in stats if scope}
+    run_resolve(run.wh, qs=run.qs, build_id=run.build_id, run_started_at=run.started_at,
+                report=report, cache=run.cache, **_resolve_args(run).kwargs())  # fmt: skip
+    stats = run.delta.merge_coverage(_sql(run.wh, _COVERAGE_SQL))
+    run.coverage = {e: final / scope for e, final, scope in stats if scope}
     run.escalation_share = report.escalated / report.decided if report.decided else None
     if run.cluster is not None:
         finalize_clusters(run.wh, result=run.cluster, names=run.names, qs=run.qs, paths=run.paths)
     cache_maint.compact(run.paths, run.qs.version)
+    run.delta.commit(run.wh, run.cache, run.build_id)

@@ -2,6 +2,8 @@
 -- in-scope (record, applicable non-pair question) pair (design 03 §5.7 step 1, §5.9, §4.1).
 -- Inputs are registered relations (cache_rows, human_latest, calib, qmeta, versions,
 -- pending_items) and the bound parameter $bootstrap_since; no value is formatted into SQL.
+-- The temp table enrich_scope (record_id, entity, content_hash) is the set of text rows to resolve:
+-- all of them, or on a delta night those not carried over from the previous warehouse.
 -- Outputs: temp tables enrich_cand (current calibrated candidate rows), enrich_laya_cal
 -- (U03-88) and enrich_resolved.
 
@@ -45,7 +47,7 @@ FROM cal;
 
 CREATE OR REPLACE TEMP TABLE enrich_laya_cal AS
 SELECT t.record_id, c.question, c.answer, c.p_cal
-FROM enrich.text_redacted AS t
+FROM enrich_scope AS t
 JOIN enrich_cand AS c ON c.content_hash = t.content_hash AND c.decider = 'laya';
 
 -- Steps 1, 4, 5.
@@ -62,7 +64,7 @@ pairs AS (
         t.record_id, t.entity, t.content_hash, o.opened_at, q.question, q.fingerprint,
         q.scoring_use, q.threshold, q."primary", q.chain,
         coalesce(q."primary" = 'laya' OR o.opened_at >= $bootstrap_since, false) AS in_scope
-    FROM enrich.text_redacted AS t
+    FROM enrich_scope AS t
     LEFT JOIN opened AS o ON o.entity = t.entity AND o.record_id = t.record_id
     JOIN qmeta AS q ON list_contains(q.applies_to, t.entity)
 ),

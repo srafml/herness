@@ -106,7 +106,14 @@ def test_ut11_112_command_for_each_kind(tmp_path: Path, monkeypatch: pytest.Monk
     add the gate env and the bench dir; cli checks expand `$VAR` and `{out}`."""
     check = GateCheck("G9.1", 9, "x", "pytest", ("UT11-38", "-m", "not slow", "IT11-30"), 5)
     argv, env = phase_gate.command_for(check, tmp_path)
-    expected = [*phase_gate.PYTEST, "--select-test-ids=UT11-38,IT11-30", "-q", "-m", "not slow"]
+    expected = [
+        *phase_gate.PYTEST,
+        "--select-test-ids=UT11-38,IT11-30",
+        "-q",
+        "--timeout=5",
+        "-m",
+        "not slow",
+    ]
     assert argv == expected
     assert env == {}
     bench = GateCheck("G9.2", 9, "x", "bench", ("BT11-03",), 5)
@@ -115,9 +122,13 @@ def test_ut11_112_command_for_each_kind(tmp_path: Path, monkeypatch: pytest.Monk
         "HERNESS_BENCH_FULL": "1",
         "HERNESS_BENCH_DIR": (tmp_path / "data" / "bench").as_posix(),
     }
+    assert "--timeout=5" in phase_gate.command_for(bench, tmp_path)[0]
+    g51 = next(c for c in phase_gate.GATES[5] if c.check_id == "G5.1" and c.kind == "bench")
+    assert "--timeout=7200" in phase_gate.command_for(g51, tmp_path)[0]
     monkeypatch.setenv("PHASE_GATE_COMPARE_RUNS", "a,b")
     cli = GateCheck("G9.3", 9, "x", "cli", ("h", "$PHASE_GATE_COMPARE_RUNS", "{out}/c"), 5)
     assert phase_gate.command_for(cli, tmp_path)[0] == ["h", "a,b", f"{tmp_path.as_posix()}/c"]
+    assert not any(a.startswith("--timeout") for a in phase_gate.command_for(cli, tmp_path)[0])
 
 
 def test_ut11_112_unknown_test_ids_fail_the_check_without_running(

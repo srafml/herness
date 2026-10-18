@@ -13,9 +13,9 @@ Spec note (T03-21): the teacher is sent only queued questions it has no current 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import duckdb
 import pyarrow as pa
@@ -50,6 +50,7 @@ from herness.enrich.resolve import QueueItem, escalation_queue, resolve_frame
 from herness.enrich.settings import DecidersSettings, DecisionsConfig
 
 if TYPE_CHECKING:
+    from herness.enrich._resolve_delta import ResolveDelta
     from herness.enrich.pipeline import StageReport as _Report
     from herness.enrich.pipeline import StageStatus
 
@@ -99,6 +100,11 @@ class ResolveArgs:
     primaries: Mapping[str, str]
     versions: Mapping[str, str]
     now: datetime
+    delta: ResolveDelta | None = None
+
+    def kwargs(self) -> dict[str, Any]:
+        """The fields as keyword arguments of `resolve_frame` and `run_resolve`."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
 
 
 def _mark(report: _Report, status: StageStatus, note: str) -> None:
@@ -319,9 +325,7 @@ def run_decide_escalate(  # noqa: PLR0913 - U03-86's keyword-only signature is b
     `escalation.max_rows_per_night` records and `change_link.decider_max_pairs` pairs. `gpu`
     defaults to `gpu_state()`. Only `FatalError` (and the yield) propagate."""
     a = resolve_args
-    resolve_frame(wh, qs=qs, cfg=a.cfg, deciders=a.deciders, cache=cache, labels=a.labels,
-                  calibration=a.calibration, primaries=a.primaries, versions=a.versions,
-                  now=a.now)  # fmt: skip
+    resolve_frame(wh, qs=qs, cache=cache, **a.kwargs())
     cap = cfg.escalation.max_rows_per_night
     queue = escalation_queue(wh, max_records=cap)
     if queue and len(queue) >= cap:

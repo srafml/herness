@@ -2425,6 +2425,7 @@ Memory (impl 07 §10 cases 1–7 in `tests/integration/memory/`, plus IT11-23, I
 | Acceptance checks | FT11-03 and FT11-04 pass on CPU; BT11-05 passes on the reference PC |
 | Blocked by | DD11-04 |
 | Size | S |
+| w50-s11 full-scale run (2026-10-17, idle host, seed 42 `full`, real stub-driven enrichment) | `scored_copy` opens the copy with the production build settings (a bare `duckdb.connect` ran the `funding` step out of 65.7 GiB of temp space); `run_scoring` then needed the T04-22 carry-over fixes (funding attribution and check step at mega-cluster scale, impl 04) to finish (~33 min). Measured: T1 org rank 1, T4 rank 1 / 1.0, T5 rank 66, E2d unranked, T3 recall 0.957 pass; T2 funding rank 8, T2c `cluster_fix` not a candidate, T3 precision 2.49e-05 fail — the HashEncoder fixture yields two clusters (4,882,066 and 257,345 incidents) whose 27 cluster-wide candidates each absorb 180,791 incidents and outrank the T2 epic on WSJF, and the T03-26 `time_ci_window` band links 6,192,121 pairs at score ≥ 0.5. Temporary strict xfail on `test_bt11_05_planted_truths_full` naming T11-34 and T03-26; the small `t1_org_rank` row carries a temporary T11-34 xfail too (rank 2 since the T10-11b redaction merge moved mega-cluster memberships). |
 
 ### Phase 5
 
@@ -2441,6 +2442,7 @@ Memory (impl 07 §10 cases 1–7 in `tests/integration/memory/`, plus IT11-23, I
 | Acceptance checks | `tools/phase_gate.py --phase 5 --dry-run` lists G5.1 and G5.2 with resolvable selectors |
 | Blocked by | none |
 | Size | S |
+| w50-s11 carry-over | The first real `--phase 5` run killed G5.1 after 315.6 s: pytest-timeout's ini `timeout = 300` fired in the module-scoped `built` fixture of `tests/bench/test_app_pages_bench.py` (full build scoring), before the gate's own 7,200 s bound applied. Fix: `command_for` passes `--timeout=<check.timeout_s>` after `-q` for `pytest` and `bench` checks (markers still override; `cli` unchanged); UT11-112 asserts it, G5.1 carries `--timeout=7200` |
 
 ### Phase 7
 
