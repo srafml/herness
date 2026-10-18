@@ -87,14 +87,14 @@ CHAT_TURNS: Final = 20
 # --- BT06-01 -----------------------------------------------------------------------------------
 
 
+# T06-30: remove when quiet-host x3 < 2 %
 @pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
-    reason="BT06-01 measured 5.91 %, 5.43 % and 5.53 % (quiet-host medians x3, 2026-10-16;"
-    " 6.68 % / 8.02 % loaded) vs < 2 % of wall;"
-    " owner T06-08 (Blackboard post) / T06-14 (scheduler pass); the union-of-intervals"
-    " measure leans high (an awaited async span stays open while other tasks' agent-loop"
-    " CPU runs)",
+    reason="BT06-01 (T06-30 exclusive thread-CPU measure) dev run 2.02 % [2.02, 1.87, 2.03]"
+    " vs < 2 % of wall (exclusive wall incl. GIL/IO wait 6.2 %, old union 6.9 %; the old"
+    " union measure read 5.4-7.4 % on the same code); owner T06-08 (Blackboard post) /"
+    " T06-14 (scheduler pass)",
 )
 @pytest.mark.timeout(600)
 def test_bt06_01_scheduler_and_blackboard_under_2_percent_of_wall(

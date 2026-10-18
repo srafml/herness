@@ -22,6 +22,7 @@ from herness.core.ids import query_id as compute_query_id
 from herness.core.types.harness.evidence import Evidence
 from herness.store.ops import core
 from herness.store.ops.evidence import (
+    evidence_build_id,
     finding_statuses,
     get_evidence,
     record_evidence,
@@ -144,6 +145,8 @@ def test_ut05_48_get_evidence_none_for_missing_and_tampered(migrated: Path) -> N
     good = _evidence()
     assert record_evidence(good) is True
     assert get_evidence(good.query_id) == good
+    assert evidence_build_id(good.query_id) == good.build_id  # T06-30: the sample-free read
+    assert evidence_build_id("q_" + "0" * 16) is None
 
     # A row inserted directly with a mismatching query_id/sql pair (simulated tamper).
     core.run_write(
@@ -157,8 +160,9 @@ def test_ut05_48_get_evidence_none_for_missing_and_tampered(migrated: Path) -> N
     )
     with capture_logs() as logs:
         assert get_evidence("q_2222222222222222") is None
+        assert evidence_build_id("q_2222222222222222") is None  # the same TH05-12 check
     tampered_events = [e for e in logs if e["event"] == "harness.evidence.tampered"]
-    assert len(tampered_events) == 1
+    assert len(tampered_events) == 2
     assert tampered_events[0]["query_id"] == "q_2222222222222222"
     assert tampered_events[0]["log_level"] == "warning"
 
