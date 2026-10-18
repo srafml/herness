@@ -160,7 +160,7 @@ class Overhead:
     def leave(self, frame: list[Any], calls: int = 1) -> None:
         wall, cpu = time.perf_counter() - frame[2], thread_cpu() - frame[3]
         stack: list[list[Any]] = self._tls.stack
-        stack.pop()
+        assert stack.pop() is frame, "mis-nested frame"
         if stack:  # the parent's exclusive time excludes this frame, counted or not
             stack[-1][4] += wall
             stack[-1][5] += cpu

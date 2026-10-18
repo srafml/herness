@@ -29,7 +29,9 @@ def _cycle_counter() -> Callable[[], int]:
 
     def cycles() -> int:
         count = ctypes.c_ulonglong()
-        query(handle, ctypes.byref(count))
+        if not query(handle, ctypes.byref(count)):
+            msg = "QueryThreadCycleTime failed"
+            raise OSError(msg)
         return int(count.value)
 
     return cycles
