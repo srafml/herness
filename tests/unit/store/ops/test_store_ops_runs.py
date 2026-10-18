@@ -20,8 +20,9 @@ from herness.core import time as clock
 from herness.core.errors import FatalError, NotFound, SchemaViolation
 from herness.core.types import TaskSpec
 from herness.store import ops
-from herness.store.ops import core, runs
+from herness.store.ops import core, ready, runs
 from herness.store.ops.migrate import migrate
+from herness.store.ops.ready import ready_tasks, select_task_ids
 from herness.store.ops.runs import RunRow, TaskRow
 
 pytestmark = pytest.mark.unit
@@ -94,6 +95,7 @@ def _sql(sql: str, *params: object) -> None:
 def store(ops_store: Path) -> Path:
     """A migrated tmp ops store."""
     migrate()
+    ready._parsed.cache_clear()
     return ops_store
 
 
@@ -335,12 +337,12 @@ def test_ut06_25_ready_tasks_order(store: Path) -> None:
     _insert_tasks([_spec(6, role="writer", priority=1_000.0)])
     _insert_tasks([_spec(7)])
     _sql("UPDATE task SET status = 'running' WHERE task_id = ?", _task_id(7))
-    got = runs.ready_tasks(_run_id(1), {"analyst", "skeptic"}, now=_T0, aging_per_min=0.01)
+    got = ready_tasks(_run_id(1), {"analyst", "skeptic"}, now=_T0, aging_per_min=0.01)
     assert [t.task_id for t in got] == [_task_id(n) for n in (2, 1, 3, 4, 5)]
-    assert runs.ready_tasks(_run_id(1), (), now=_T0, aging_per_min=0.01) == []
+    assert ready_tasks(_run_id(1), (), now=_T0, aging_per_min=0.01) == []
     for bad in (float("nan"), float("inf"), float("-inf")):
         with pytest.raises(ValueError, match="aging_per_min must be finite"):
-            runs.ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=bad)
+            ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=bad)
 
 
 # PT06-08 ---------------------------------------------------------------------------------
@@ -373,8 +375,8 @@ def test_pt06_08_ready_order_total_and_stable(
     rng.shuffle(order)
     for i in order:
         _insert_tasks([specs[i]], now=_T0 - timedelta(minutes=waits[specs[i].task_id]))
-    first = runs.ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01)
-    assert runs.ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01) == first
+    first = ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01)
+    assert ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01) == first
     assert sorted(t.task_id for t in first) == sorted(waits)
 
     def key(t: TaskRow) -> tuple[int, int, float, str]:
@@ -384,6 +386,83 @@ def test_pt06_08_ready_order_total_and_stable(
     keys = [key(t) for t in first]
     assert keys == sorted(keys)
     assert len({k[3] for k in keys}) == len(keys)  # task_id makes every key unique: total
+
+
+# UT06-101 --------------------------------------------------------------------------------
+
+
+def test_ut06_101_parse_cache_hits_and_no_stale_read(store: Path) -> None:
+    """UT06-101 (i) an unchanged pending row is parsed once; (ii) a write is never served stale."""
+    _insert_runs(_run())
+    _insert_tasks([_spec(n) for n in range(1, 4)])
+    kw = {"now": _T0, "aging_per_min": 0.01}
+    first = ready_tasks(_run_id(1), {"analyst"}, **kw)
+    info = ready._parsed.cache_info()
+    assert (info.misses, info.hits) == (3, 0)
+    assert ready_tasks(_run_id(1), {"analyst"}, **kw) == first
+    info = ready._parsed.cache_info()
+    assert (info.misses, info.hits) == (3, 3)
+    _sql(
+        "UPDATE task SET attempts = attempts + 1, updated_at = ? WHERE task_id = ?",
+        clock.format_utc(_T0 + timedelta(seconds=1)),
+        _task_id(2),
+    )
+    again = {t.task_id: t for t in ready_tasks(_run_id(1), {"analyst"}, **kw)}
+    assert again[_task_id(2)].attempts == 1
+    assert again[_task_id(1)].attempts == again[_task_id(3)].attempts == 0
+    assert ready._parsed.cache_info().misses == 4
+    with pytest.raises(ValueError, match="aging_per_min must be finite"):
+        ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=float("nan"))
+
+
+@settings(
+    max_examples=200, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(
+    priority=st.floats(allow_nan=False, allow_infinity=False, width=64)
+    | st.sampled_from([0.0, -0.0, 1e-300, 1e300])
+)
+def test_ut06_101_priority_key_equals_parsed(store: Path, priority: float) -> None:
+    """UT06-101 (ii) the priority key column (``->`` text, float()) equals the pydantic float."""
+    spec = _spec(1, priority=priority)
+    text = core.dump_json(spec.model_dump(mode="json"), field="task.spec")
+    parsed = TaskSpec.model_validate_json(text).priority
+    sql = "SELECT COALESCE(? -> '$.priority', '0.0') AS p"
+    assert float(core.connection().execute(sql, (text,)).fetchone()["p"]) == parsed
+
+
+def test_ut06_101_missing_keys_sort_as_defaults(store: Path) -> None:
+    """UT06-101 (iii) a stored spec without round, depth, priority sorts as 0, 0, 0.0."""
+    _insert_runs(_run())
+    _insert_tasks([_spec(1, priority=0.5), _spec(2), _spec(3, depth=1, priority=9.0)])
+    text = core.load_json(
+        core.read_one("SELECT spec FROM task WHERE task_id = ?", (_task_id(2),))["spec"], field="s"
+    )
+    assert isinstance(text, dict)
+    for key in ("round", "depth", "priority"):
+        del text[key]
+    _sql(
+        "UPDATE task SET spec = ? WHERE task_id = ?",
+        core.dump_json(text, field="task.spec"),
+        _task_id(2),
+    )
+    got = [t.task_id for t in ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01)]
+    assert got == [_task_id(1), _task_id(2), _task_id(3)]  # (0,0,-0.5) < (0,0,-0.0) < (0,1,..)
+
+
+def test_ut06_101_select_task_ids_matches_select_tasks(store: Path) -> None:
+    """UT06-101 (iv) select_task_ids is the id column of select_tasks: same set, same order."""
+    _insert_runs(_run())
+    _insert_tasks([_spec(1), _spec(2, parent_task_id=_task_id(1)), _spec(3, role="writer")])
+    _insert_tasks([_spec(4, parent_task_id=_task_id(1))], now=_T0 - timedelta(minutes=5))
+    for kwargs in ({}, {"parent_task_id": _task_id(1)}, {"roles": {"writer"}}, {"roles": ()}):
+        assert select_task_ids(_run_id(1), **kwargs) == [  # type: ignore[arg-type]
+            t.task_id
+            for t in runs.select_tasks(_run_id(1), **kwargs)  # type: ignore[arg-type]
+        ]
+    assert select_task_ids(_run_id(1), parent_task_id=_task_id(1)) == [_task_id(4), _task_id(2)]
+    assert ops.ready_tasks is ready_tasks
+    assert ops.select_task_ids is select_task_ids
 
 
 # UT06-26 ---------------------------------------------------------------------------------

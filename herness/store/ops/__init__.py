@@ -88,12 +88,15 @@ from .runs import (
     get_task_by_dedup,
     insert_run,
     insert_tasks,
-    ready_tasks,
     select_runs,
     select_tasks,
     set_run_status,
     update_run_fields,
 )
+
+# isort: split
+# 06 ready
+from .ready import ready_tasks, select_task_ids
 
 # isort: split
 # 06 findings
@@ -272,7 +275,9 @@ __all__ = [  # noqa: RUF022 - block order of impl 02 U02-62, not sorted
     # 06 runs
     "RunRow", "TaskRow", "insert_run", "get_run", "find_run_by_job", "find_run_by_escalation",
     "select_runs", "set_run_status", "update_run_fields", "insert_tasks", "get_task",
-    "get_task_by_dedup", "select_tasks", "ready_tasks", "count_open", "count_tasks",
+    "get_task_by_dedup", "select_tasks", "count_open", "count_tasks",
+    # 06 ready
+    "ready_tasks", "select_task_ids",
     # 06 findings
     "insert_finding", "transition_finding", "query_findings", "get_findings", "list_task_findings",
     "query_verified_findings_recent", "scrub_record_from_findings",

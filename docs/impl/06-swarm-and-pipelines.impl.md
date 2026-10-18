@@ -78,6 +78,7 @@ Line budgets follow ENG §2.4 (400 lines per module). The design layout (spec 00
 | `herness/harness/budget.py` | Run-wide token and cost ledger | `RunBudget`, `new_phase_budgets` | L4 | none | 170 |
 | `herness/harness/gates.py` | Per-client call gates and task slots | `CallGate`, `build_gates`, `TaskSlots` | L4 | none | 170 |
 | `herness/store/ops/runs.py` | Ops area `runs` (owner 06, R-08): `run` rows and `task` inserts and reads | U06-32–U06-40 symbols | L1 | none | 380 |
+| `herness/store/ops/ready.py` | Ops area `runs`, scheduler reads (T06-31): cached-parse `ready_tasks` and id-only `select_task_ids`; imports the row helpers of `runs`, not the reverse (import-linter `ops-areas-acyclic`) | `ready_tasks` (U06-39), `select_task_ids` (U06-38) | L1 | none | 120 |
 | `herness/store/ops/findings.py` | Ops area `findings` (owner 06, R-08): `finding` rows, including the privacy scrub (R-77). Evidence reads belong to area `evidence` (05) and chat rows to area `chat` (09) (R-09) | U06-41–U06-44, U06-144 symbols | L1 | none | 300 |
 | `herness/store/ops/__init__.py` (06 block) | Re-export block for the two areas above (impl 02 owns the file) | U06-32–U06-44, U06-144 symbols | L1 | none | 60 (06 block) |
 | `herness/harness/findings.py` | Pure finding rules and entity lookups | `extract_markers`, `validate_markers`, `impact_usd`, `normalize_objective`, `compute_dedup_key`, `EntityCatalog` | L4 | none | 260 |
@@ -572,18 +573,18 @@ These are the ops areas `runs` and `findings`, owned by 06 (R-08). Every functio
 | Side effects | Writes `task` (status `pending` only; all later status changes belong to spec 08 helpers). |
 | Tests | UT06-24 |
 
-#### U06-38 herness.store.ops.runs.get_task, get_task_by_dedup, select_tasks
+#### U06-38 herness.store.ops.runs.get_task, get_task_by_dedup, select_tasks, select_task_ids
 
 | Field | Content |
 |-------|---------|
 | Kind | function |
 | Purpose | Task reads. |
-| Signature | `get_task(task_id: str) -> TaskRow \| None`; `get_task_by_dedup(run_id: str, dedup_key: str) -> TaskRow \| None`; `select_tasks(run_id: str, *, roles: Collection[str] \| None = None, statuses: Collection[str] \| None = None) -> list[TaskRow]` |
-| Algorithm | Parameterised selects through `read_one` / `read_all`; `select_tasks` orders by `created_at, task_id`. |
+| Signature | `get_task(task_id: str) -> TaskRow \| None`; `get_task_by_dedup(run_id: str, dedup_key: str) -> TaskRow \| None`; `select_tasks(run_id: str, *, roles: Collection[str] \| None = None, statuses: Collection[str] \| None = None) -> list[TaskRow]`; `select_task_ids(run_id: str, *, parent_task_id: str \| None = None, roles: Collection[str] \| None = None, statuses: Collection[str] \| None = None) -> list[str]` (in `ready.py`, exported by the `06 ready` block of `herness.store.ops`) |
+| Algorithm | Parameterised selects through `read_one` / `read_all`; `select_tasks` orders by `created_at, task_id`. T06-31: `select_task_ids` is the id-only read for the scheduler (`SELECT task_id`, same filter and order as `select_tasks`, no spec parse). |
 | Errors | Invalid stored spec → `SchemaViolation` (U06-32). |
 | Tests | UT06-24 |
 
-#### U06-39 herness.store.ops.runs.ready_tasks
+#### U06-39 herness.store.ops.ready.ready_tasks
 
 | Field | Content |
 |-------|---------|
@@ -591,9 +592,11 @@ These are the ops areas `runs` and `findings`, owned by 06 (R-08). Every functio
 | Purpose | Pending tasks in scheduling order (design 06 §5.4). |
 | Signature | `run_id: str`; `roles: Collection[str]`; `now: datetime`, `aging_per_min: float` (keyword-only) → `list[TaskRow]` |
 | Postconditions | All `pending` tasks of the roles, sorted by the key `(spec.round, spec.depth, −(spec.priority + aging_per_min × minutes_waiting), task_id)`, where `minutes_waiting = (now − created_at).total_seconds() / 60`. |
-| Algorithm | 1. `SELECT ... WHERE run_id = ? AND status = 'pending' AND role IN (...)`. 2. Sort in Python with the key above (the set is ≤ `max_tasks_per_run`, at most 600 rows in deep). Per-parent and per-entity caps are applied by U06-95, not here. |
-| Complexity and limits | O(n log n), n ≤ 1,000. |
-| Tests | UT06-25, PT06-08 |
+| Algorithm | 1. One `SELECT` of the `task` columns plus three key columns (`COALESCE(json_extract(spec, '$.round'), 0)`, `COALESCE(json_extract(spec, '$.depth'), 0)`, `COALESCE(spec -> '$.priority', '0.0')`; the defaults are the `TaskSpec` defaults) `WHERE run_id = ? AND status = 'pending' AND role IN (...)`. 2. Python key `(k_round, k_depth, −(float(k_priority) + aging_per_min × minutes_waiting), task_id)` per row, aging arithmetic in Python so ties are bit-exact. 3. Sort the raw rows. 4. Parse each row through a bounded (1,024) pure cache keyed by the 12 raw task columns: a pending row is re-read every pass but re-parsed only when a column changed. Per-parent and per-entity caps are applied by U06-95, not here. |
+| Errors | `ValueError` for a non-finite `aging_per_min`; `SchemaViolation` for an invalid stored spec (errors are not cached). |
+| Complexity and limits | O(n log n) on the key, n ≤ 1,000; spec parses only for rows new or changed since the last call. |
+| T06-31 note | A scheduler pass walks about 10 pending rows and the caps reject most, so the parse, not the select, was the cost. The cache is sound because its key is all 12 `task` columns and `_task_from_row` is a pure function of exactly those columns, so an equal key means an equal row (independent of `updated_at`; every writer in `ops/tasks.py` sets it anyway). The same frozen `TaskRow` object can be returned on consecutive calls for an unchanged row (no in-place mutation of `TaskRow`/`TaskSpec` collections exists in `herness/`); a claimed row changes `status`, `attempts` and `updated_at`, so it is never served again. The priority key is read as JSON text (`->`) and parsed by `float()`: SQLite's `json_extract` REAL is not correctly rounded for every double (found 4.90541873407465e-231) (UT06-101). |
+| Tests | UT06-25, UT06-101, PT06-08 |
 
 #### U06-40 herness.store.ops.runs.count_open, count_tasks
 
@@ -2246,6 +2249,7 @@ Fixtures: spec 11 `FakeLLMClient` (in-process) and `FakeLLMServer` (HTTP) from `
 | UT06-98 | U06-115 step 8 (T06-29) | `AnsweredClients` over a `RecordingTracer` with `llm_call` clients (claude-opus then local-30b; claude-opus only; none) and a `tool_call` | `emit`; `fell_back_local` for the off-network Writer route and a local route | every event forwarded unchanged; only `llm_call` clients kept; true only for the off-network route answered by a local client |
 | UT06-99 | U06-99, U06-100 (T06-29) | a task on a real `Tracer`; a task on the `RecordingTracer` fake | build context and hooks; emit through each | both tracers bound to the task (`task_id`); events in the run's JSONL carry the task id and role; the run tracer stays unbound; the fake's view shares the run's events |
 | UT06-100 | U06-98 (T06-29) | hybrid registry; a final Skeptic (`skeptic_final`), a non-final Skeptic; the final Skeptic on the local registry | `route_task`, then `build_tool_context` | final: claude-opus off-network, `role_spec.model_role = skeptic_final`, role purpose = context purpose = `reasoning_final`; non-final: `skeptic` on local-30b; local final: `skeptic_final` on local-30b, no egress purpose |
+| UT06-101 | U06-38, U06-39 (T06-31) | 3 pending tasks; priorities from generated doubles; a stored spec without `round`, `depth`, `priority`; a parent with children | `ready_tasks` twice, then after an `UPDATE` of `attempts`; read the priority key column; `select_task_ids` vs `select_tasks` | second call parses nothing (3 hits) and the updated row is re-parsed with the new `attempts`; key float equals the pydantic float; missing keys sort as 0, 0, 0.0; ids equal in set and order |
 
 ### 11.2 Property tests (`unit`, hypothesis)
 

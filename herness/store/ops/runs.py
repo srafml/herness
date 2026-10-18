@@ -8,13 +8,12 @@ dynamic SQL is the ``IN (...)`` list (ENG §3.5); later task status changes are 
 
 from __future__ import annotations
 
-import math
 import sqlite3
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Final
+from typing import Any, Final
 
 from pydantic import ValidationError
 
@@ -119,7 +118,7 @@ def _last_error(text: str | None) -> dict[str, object] | None:
     return {"message": value if isinstance(value, str) else text}
 
 
-def _task_from_row(row: sqlite3.Row) -> TaskRow:
+def _task_from_row(row: sqlite3.Row | Mapping[str, Any]) -> TaskRow:
     task_id: str = row["task_id"]
     try:
         spec = TaskSpec.model_validate_json(row["spec"])
@@ -336,24 +335,6 @@ def select_tasks(
     where, params = _task_filter(run_id, roles, statuses, parent_task_id)
     rows = core.read_all(f"{_SELECT_TASK}{where} ORDER BY created_at, task_id", params)
     return [_task_from_row(r) for r in rows]
-
-
-def ready_tasks(
-    run_id: str, roles: Collection[str], *, now: datetime, aging_per_min: float
-) -> list[TaskRow]:
-    """Pending ``roles`` tasks in design 06 §5.4 order (U06-39): round, depth, aged priority
-    descending, task_id. ``aging_per_min`` must be finite (ValueError)."""
-    if not math.isfinite(aging_per_min):
-        msg = "aging_per_min must be finite"
-        raise ValueError(msg)
-    tasks = select_tasks(run_id, roles=roles, statuses=("pending",))
-
-    def key(task: TaskRow) -> tuple[int, int, float, str]:
-        waited = (now - task.created_at).total_seconds() / 60
-        aged = task.spec.priority + aging_per_min * waited
-        return (task.spec.round, task.spec.depth, -aged, task.task_id)
-
-    return sorted(tasks, key=key)
 
 
 def _count(where: str, params: Sequence[object]) -> int:

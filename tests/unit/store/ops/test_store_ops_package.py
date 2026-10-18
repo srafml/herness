@@ -28,6 +28,7 @@ AREAS = (
     "ingest",
     "evidence",
     "runs",
+    "ready",
     "findings",
     "memory",
     "closed_loop",
