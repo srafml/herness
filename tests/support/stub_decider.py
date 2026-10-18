@@ -6,6 +6,13 @@
 names it in the stub service file for ``kill_service:openjev`` (FT11-03). Answers are pure
 functions of ``(content_hash, question)``, so the same state gets byte-identical responses
 from any instance. ``probabilities`` is a label-keyed object until spec 03 Q1 is frozen.
+
+Pair questions (``PAIR_QUESTIONS``: ``change_caused_pair``, T03-41): the truth writer labels
+incidents, never (incident, change) pairs, and plants no pair as caused beyond the labelled
+follow-ups, so a faithful oracle answers ``false`` at ``1 - noise`` for a pair state it has no
+label for (hash noise would lift about 40 % of the capped window links across 0.5 and no
+decider answer can be informative there). Every other unlabelled question keeps the hash
+fallback.
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from herness.enrich.deciders.jev_wire import MAX_BODY_BYTES
 __all__ = [
     "MODELS_PATH",
     "MODEL_ID",
+    "PAIR_QUESTIONS",
     "SYSTEMONE_PATH",
     "StubDeciderServer",
     "StubFault",
@@ -40,6 +48,7 @@ MODEL_ID: Final = "openjev-latest"
 MODELS_PATH: Final = "/v1/models"
 SYSTEMONE_PATH: Final = "/v1/systemone"
 _MODES: Final = frozenset({"oracle", "hash"})
+PAIR_QUESTIONS: Final = frozenset({"change_caused_pair"})
 _BOOL_LABELS: Final = ("true", "false")
 _SCORE_LABELS: Final = ("0", "1", "2", "3")
 _MALFORMED_BODY: Final = b'{"answers": '
@@ -231,8 +240,10 @@ class StubDeciderServer(StubHTTPServer):
         return {"model": MODEL_ID, "answers": answers, "usage": usage}
 
     def _pick(self, chash: str, qid: str, labels: Sequence[str]) -> tuple[int, float]:
-        """Oracle: the truth label at ``1 - noise``; hash mode (and oracle fallback) else."""
+        """Oracle: the truth label at ``1 - noise``; unlabelled pair: false; else the hash."""
         truth = self._labels.get((chash, qid)) if self.mode == "oracle" else None
         if truth is not None and truth in labels:
             return labels.index(truth), 1.0 - self.noise
+        if self.mode == "oracle" and qid in PAIR_QUESTIONS and "false" in labels:
+            return labels.index("false"), 1.0 - self.noise  # unlabelled pair: not caused
         return _hash_pick(chash, qid, len(labels))

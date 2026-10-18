@@ -339,12 +339,6 @@ def test_bt11_05_small_t2c_cluster_fix_is_the_plant(
     assert purity >= MIN_PURITY, f"T2c cluster purity {purity:.4f} < {MIN_PURITY} (mega-cluster)"
 
 
-@pytest.mark.xfail(
-    raises=AssertionError,
-    strict=True,
-    reason="product gap T03-26 (link_changes): on the seed 42 small build 4,985 of 5,289 links "
-    "at score >= 0.5 come from the time_ci_window band, precision measures ~0.03 (< 0.80)",
-)
 def test_bt11_05_small_t3_link_precision(small_records: Mapping[str, BenchRecord]) -> None:
     """BT11-05 small scale: T3 link precision >= 0.80 at score >= 0.5."""
     assert not _failed(small_records, ["t3_link_precision"])
