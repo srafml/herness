@@ -95,6 +95,7 @@ def _sql(sql: str, *params: object) -> None:
 def store(ops_store: Path) -> Path:
     """A migrated tmp ops store."""
     migrate()
+    ready._parsed.cache_clear()
     return ops_store
 
 
@@ -336,9 +337,9 @@ def test_ut06_25_ready_tasks_order(store: Path) -> None:
     _insert_tasks([_spec(6, role="writer", priority=1_000.0)])
     _insert_tasks([_spec(7)])
     _sql("UPDATE task SET status = 'running' WHERE task_id = ?", _task_id(7))
-    got = list(ready_tasks(_run_id(1), {"analyst", "skeptic"}, now=_T0, aging_per_min=0.01))
+    got = ready_tasks(_run_id(1), {"analyst", "skeptic"}, now=_T0, aging_per_min=0.01)
     assert [t.task_id for t in got] == [_task_id(n) for n in (2, 1, 3, 4, 5)]
-    assert list(ready_tasks(_run_id(1), (), now=_T0, aging_per_min=0.01)) == []
+    assert ready_tasks(_run_id(1), (), now=_T0, aging_per_min=0.01) == []
     for bad in (float("nan"), float("inf"), float("-inf")):
         with pytest.raises(ValueError, match="aging_per_min must be finite"):
             ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=bad)
@@ -374,8 +375,8 @@ def test_pt06_08_ready_order_total_and_stable(
     rng.shuffle(order)
     for i in order:
         _insert_tasks([specs[i]], now=_T0 - timedelta(minutes=waits[specs[i].task_id]))
-    first = list(ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01))
-    assert list(ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01)) == first
+    first = ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01)
+    assert ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01) == first
     assert sorted(t.task_id for t in first) == sorted(waits)
 
     def key(t: TaskRow) -> tuple[int, int, float, str]:
@@ -390,22 +391,26 @@ def test_pt06_08_ready_order_total_and_stable(
 # UT06-101 --------------------------------------------------------------------------------
 
 
-def test_ut06_101_ready_tasks_is_lazy(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """UT06-101 (i) taking 2 of 8 ready rows parses exactly 2 specs; the error is at call time."""
+def test_ut06_101_parse_cache_hits_and_no_stale_read(store: Path) -> None:
+    """UT06-101 (i) an unchanged pending row is parsed once; (ii) a write is never served stale."""
     _insert_runs(_run())
-    _insert_tasks([_spec(n) for n in range(1, 9)])
-    parsed: list[str] = []
-    real = runs._task_from_row
-
-    def counting(row: sqlite3.Row) -> TaskRow:
-        parsed.append(row["task_id"])
-        return real(row)
-
-    monkeypatch.setattr(ready, "_task_from_row", counting)
-    it = ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=0.01)
-    assert parsed == []
-    first_two = [next(it), next(it)]
-    assert parsed == [t.task_id for t in first_two] == [_task_id(1), _task_id(2)]
+    _insert_tasks([_spec(n) for n in range(1, 4)])
+    kw = {"now": _T0, "aging_per_min": 0.01}
+    first = ready_tasks(_run_id(1), {"analyst"}, **kw)
+    info = ready._parsed.cache_info()
+    assert (info.misses, info.hits) == (3, 0)
+    assert ready_tasks(_run_id(1), {"analyst"}, **kw) == first
+    info = ready._parsed.cache_info()
+    assert (info.misses, info.hits) == (3, 3)
+    _sql(
+        "UPDATE task SET attempts = attempts + 1, updated_at = ? WHERE task_id = ?",
+        clock.format_utc(_T0 + timedelta(seconds=1)),
+        _task_id(2),
+    )
+    again = {t.task_id: t for t in ready_tasks(_run_id(1), {"analyst"}, **kw)}
+    assert again[_task_id(2)].attempts == 1
+    assert again[_task_id(1)].attempts == again[_task_id(3)].attempts == 0
+    assert ready._parsed.cache_info().misses == 4
     with pytest.raises(ValueError, match="aging_per_min must be finite"):
         ready_tasks(_run_id(1), {"analyst"}, now=_T0, aging_per_min=float("nan"))
 

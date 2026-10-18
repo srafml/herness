@@ -13,7 +13,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Final
+from typing import Any, Final
 
 from pydantic import ValidationError
 
@@ -118,7 +118,7 @@ def _last_error(text: str | None) -> dict[str, object] | None:
     return {"message": value if isinstance(value, str) else text}
 
 
-def _task_from_row(row: sqlite3.Row) -> TaskRow:
+def _task_from_row(row: sqlite3.Row | Mapping[str, Any]) -> TaskRow:
     task_id: str = row["task_id"]
     try:
         spec = TaskSpec.model_validate_json(row["spec"])
