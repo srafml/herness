@@ -15,6 +15,7 @@ import contextlib
 import dataclasses
 import json
 import re
+import threading
 from collections.abc import Callable, Iterator
 from decimal import Decimal
 from types import SimpleNamespace
@@ -110,10 +111,12 @@ class _Verifier:
     def __init__(self, failing: Callable[[Finding], bool] = lambda f: False) -> None:
         self.failing = failing
         self.batches: list[list[str]] = []
+        self._lock = threading.Lock()
 
     def verify_findings(self, findings: list[Finding], build_id: str) -> list[VerificationResult]:
         assert build_id == BUILD_ID
-        self.batches.append([f.finding_id for f in findings])
+        with self._lock:
+            self.batches.append([f.finding_id for f in findings])
         return [_vresult(not self.failing(f)) for f in findings]
 
 
@@ -538,13 +541,15 @@ def _insert_findings(s: Sched, n: int) -> list[str]:
 
 def test_it06_29_batches_of_20_with_transitions_and_records(sched: Sched) -> None:
     """IT06-29 25 proposed findings → verifier tasks of 20 and 5; each finding verified or
-    rejected (`verifier_fail`) with a gate 1 record; a re-run inserts no new batch."""
+    rejected (`verifier_fail`) with a gate 1 record; a re-run inserts no new batch. Batch
+    execution order is unspecified under concurrent slots (U06-92), so the recorder is
+    compared order-insensitively."""
     ids = _insert_findings(sched, 25)
     failing = set(ids[3:5])
     v = setup(sched, verifier=_Verifier(lambda f: f.finding_id in failing))
     out = run(sched, challenge.run_gate1)
     assert out == PhaseOutcome(frozenset(), False)
-    assert v.batches == [ids[:20], ids[20:]]
+    assert sorted(v.batches) == [ids[:20], ids[20:]]
     tasks = select_tasks(sched.bb.run_id, roles={"verifier"})
     assert [(t.spec.inputs.finding_ids, t.status) for t in tasks] == [
         (ids[:20], "done"), (ids[20:], "done"),
