@@ -37,7 +37,7 @@ from herness.harness.swarm.routing import (
     route_task,
 )
 from herness.harness.swarm.tools import build_task_tools
-from herness.store.ops import count_open, list_task_findings, ready_tasks, select_tasks
+from herness.store.ops import count_open, list_task_findings, ready_tasks, select_task_ids
 
 if TYPE_CHECKING:
     from herness.core.types import AgentResult
@@ -329,7 +329,7 @@ def _resume_from(checkpoint: Mapping[str, object] | None) -> LoopCheckpoint | No
 
 
 def _child_ids(row: TaskRow) -> list[str]:
-    return [t.task_id for t in select_tasks(row.run_id, parent_task_id=row.task_id)]
+    return select_task_ids(row.run_id, parent_task_id=row.task_id)
 
 
 def _add_usage(env: RunEnv, role: str, res: AgentResult) -> None:
