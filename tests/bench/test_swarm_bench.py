@@ -101,13 +101,14 @@ def test_bt06_01_scheduler_and_blackboard_under_2_percent_of_wall(
     drv: Drv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """BT06-01 standard funding run, fake LLM 12 s x0.01 per call: scheduler + blackboard
-    time (union of the timed intervals) < 2 % of the run's wall time (median of REPEATS)."""
+    time (exclusive busy time of their code, `Overhead.busy_s`; T06-30) < 2 % of the run's
+    wall time (median of REPEATS)."""
     scripts = f6.use_real_agents(drv, monkeypatch)
     sb.use_slow_clients(drv.llms, scripts, monkeypatch)
     drv.set_pipeline(t1=BT06_01_T1, t2=BT06_01_T2)
     over = sb.Overhead()
     over.install(monkeypatch)
-    share, upper, walls = [], [], []
+    share, cpu, union, upper, walls = [], [], [], [], []
     for i in range(REPEATS + 1):  # run 0 is the warm-up
         over.reset()
         start = time.perf_counter()
@@ -116,13 +117,21 @@ def test_bt06_01_scheduler_and_blackboard_under_2_percent_of_wall(
         assert res.status == "done", res
         assert len(select_tasks(res.run_id, roles={"analyst"})) >= BT06_01_T1 + BT06_01_T2
         if i:
-            share.append(100 * over.union_s() / wall)
+            share.append(100 * over.busy_s() / wall)
+            cpu.append(100 * over.cpu_s() / wall)
+            union.append(100 * over.union_s() / wall)
             upper.append(100 * over.sum_s() / wall)
             walls.append(wall)
-            parts = {t: f"{100 * over.union_s(t) / wall:.2f}" for t in sb.TAGS}
-            sys.stderr.write(f"BT06-01 repeat {i} share by part (%): {parts}\n")
+            parts = {t: f"{100 * over.busy_s(t) / wall:.2f}" for t in (*sb.TAGS, "queue", "agent")}
+            sys.stderr.write(f"BT06-01 repeat {i} exclusive share by part (%): {parts}\n")
+            for name, (calls, w, c) in sorted(over.names.items(), key=lambda kv: -kv[1][1])[:24]:
+                sys.stderr.write(
+                    f"  {name}: {calls:.0f} calls, {1e3 * w:.1f} ms, cpu {1e3 * c:.1f}\n"
+                )
     report("BT06-01", "wall", walls, "s", "info")
     report("BT06-01", "sum_share", upper, "%", "info (upper bound)")
+    report("BT06-01", "union_share", union, "%", "info (old measure, upper bound)")
+    report("BT06-01", "cpu_share", cpu, "%", "info (thread CPU cross-check)")
     median = report("BT06-01", "share", share, "%", f"< {BT06_01_MAX_PCT:g} %")
     assert median < BT06_01_MAX_PCT, f"scheduler + blackboard {median:.3f} % of wall"
 
