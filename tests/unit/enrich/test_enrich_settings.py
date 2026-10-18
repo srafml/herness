@@ -240,6 +240,8 @@ def test_ut03_09_decider_refs_check_every_position() -> None:
             {"mapping_suggest__weights": {"fuzzy": 0.35, "semantic": 0.35, "cooccurrence": 0.2}},
             "weights",
         ),
+        ({"change_link__tau_h": 8760.5}, "tau_h"),
+        ({"change_link__tau_h": 0}, "tau_h"),
         ({"change_link__decider_band": [0.7, 0.3]}, "decider_band"),
         ({"change_link__decider_band": [0.3, 1.2]}, "decider_band"),
         ({"acceptance__choice": {}}, "criterion"),
@@ -261,6 +263,12 @@ def test_ut03_09_decisions_rules_reject(changes: dict[str, Any], needle: str) ->
     """UT03-09 each broken DecisionsConfig rule is a validation error naming the key."""
     with pytest.raises(ValidationError, match=needle):
         s.DecisionsConfig.model_validate(_decisions(**changes))
+
+
+def test_ut03_09_tau_h_bound_boundary_accepted() -> None:
+    """UT03-09 change_link.tau_h <= 8760 h (T03-40): the bound itself is accepted."""
+    ok = s.DecisionsConfig.model_validate(_decisions(change_link__tau_h=8760.0))
+    assert ok.change_link.tau_h == 8760.0
 
 
 def test_ut03_09_question_list_rules_reject() -> None:

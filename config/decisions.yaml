@@ -98,7 +98,8 @@ clustering:
   drift_share: 0.10
   naming: {role: cluster_namer, max_llm_calls: 500, examples: 20, example_chars: 600}
 change_link: {before_h: 72, after_h: 1, tau_h: 12, ci_weight: 1.0, service_weight: 0.6, min_score: 0.30,
-              top_n: 3, use_decider: true, decider_band: [0.30, 0.70], decider_max_pairs: 30000}
+              top_n: 3, use_decider: true, decider_band: [0.30, 0.70], decider_max_pairs: 30000,
+              window_only_cap: 0.45}
 mapping_suggest:
   min_score: 0.60
   top_n: 3

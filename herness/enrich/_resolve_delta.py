@@ -6,8 +6,10 @@ warehouse, so `enrich.decision` ends up identical to a full resolve (U03-83 post
 cost of the night's delta. A text row (record, entity, content hash) is settled, and carried,
 when ALL of the following hold:
 
-* the previous warehouse holds a decision row for each of its applicable questions, for the same
-  record and hash, none of them with a review status (human labels and pending reviews re-resolve);
+* the previous warehouse holds a decision row for each question applicable to ITS ENTITY (the
+  temp table `enrich_applicable`, from `qmeta`), for the same record and hash, none of them with
+  a review status (human labels and pending reviews re-resolve); only those questions' rows are
+  carried, so a changed entity or question set never carries a row it no longer asks;
 * its hash has no cache row in a part written since the previous night's resolve (the state file
   `_resolve_state.json` in the cache folder lists the parts that existed then, with size and
   mtime; any of them missing or changed makes the whole night a full resolve) and is not a hash
@@ -61,12 +63,13 @@ FULL_SCOPE_SQL: Final = """CREATE OR REPLACE TEMP TABLE enrich_scope AS
     SELECT record_id, entity, content_hash FROM enrich.text_redacted"""
 _PREV_OK_SQL: Final = f"""CREATE OR REPLACE TEMP TABLE enrich_prev_ok AS
 SELECT t.record_id, t.entity, t.content_hash FROM enrich.text_redacted AS t
-JOIN (SELECT record_id, content_hash, count(*) AS n
-      FROM {_PREV}.enrich.decision
-      WHERE question_set_version = $qsv AND review_status = 'none'
-      GROUP BY record_id, content_hash) AS d
-    ON d.record_id = t.record_id AND d.content_hash = t.content_hash
-JOIN enrich_expected AS e ON e.entity = t.entity AND e.n = d.n"""  # noqa: S608 - fixed alias
+JOIN (SELECT a.entity, d.record_id, d.content_hash, count(DISTINCT d.question) AS n
+      FROM {_PREV}.enrich.decision AS d JOIN enrich_applicable AS a ON a.question = d.question
+      WHERE d.question_set_version = $qsv AND d.review_status = 'none'
+      GROUP BY a.entity, d.record_id, d.content_hash) AS d
+    ON d.record_id = t.record_id AND d.content_hash = t.content_hash AND d.entity = t.entity
+JOIN (SELECT entity, count(*) AS n FROM enrich_applicable GROUP BY entity) AS e
+    ON e.entity = t.entity AND e.n = d.n"""  # noqa: S608 - fixed alias
 _SETTLED_SQL: Final = """CREATE OR REPLACE TEMP TABLE enrich_settled AS
 SELECT p.* FROM enrich_prev_ok AS p
 WHERE NOT EXISTS (SELECT 1 FROM enrich_touched AS x WHERE x.content_hash = p.content_hash)"""
@@ -76,7 +79,8 @@ WHERE NOT EXISTS (SELECT 1 FROM enrich_settled AS s WHERE s.record_id = t.record
     AND s.entity = t.entity AND s.content_hash = t.content_hash)"""
 _CARRY_FROM: Final = f"""FROM {_PREV}.enrich.decision AS d
 JOIN enrich_settled AS s ON s.record_id = d.record_id AND s.content_hash = d.content_hash
-WHERE d.question_set_version = $qsv"""
+JOIN enrich_applicable AS a ON a.entity = s.entity AND a.question = d.question
+WHERE d.question_set_version = $qsv AND d.review_status = 'none'"""
 _D_COLUMNS: Final = ", ".join(f"d.{c.strip()}" for c in _COLUMNS.split(","))
 _CARRY_SQL: Final = f"INSERT INTO enrich.decision ({_COLUMNS}) SELECT {_D_COLUMNS} {_CARRY_FROM}"
 _CARRY_STATS_SQL: Final = f"""SELECT s.entity, count(*), count(*) FILTER (WHERE d.escalated)
@@ -240,13 +244,16 @@ class ResolveDelta:
         self, wh: duckdb.DuckDBPyConnection, relations: Mapping[str, pa.Table], qsv: str,
         *, rows: object,
     ) -> bool:  # fmt: skip
-        expected: dict[str, int] = {}
-        for meta in relations["qmeta"].to_pylist():
-            for entity in meta["applies_to"]:
-                expected[entity] = expected.get(entity, 0) + 1
-        wh.register(
-            "enrich_expected", pa.table({"entity": list(expected), "n": list(expected.values())})
-        )
+        pairs = [
+            (e, m["question"]) for m in relations["qmeta"].to_pylist() for e in m["applies_to"]
+        ]
+        src = pa.table({"entity": [e for e, _ in pairs], "question": [q for _, q in pairs]})
+        wh.register("enrich_applicable_src", src)
+        try:
+            wh.execute("CREATE OR REPLACE TEMP TABLE enrich_applicable AS"
+                       " SELECT * FROM enrich_applicable_src")  # fmt: skip
+        finally:
+            wh.unregister("enrich_applicable_src")
         self._attach(wh)
         try:
             row = wh.execute(
@@ -258,7 +265,6 @@ class ResolveDelta:
             wh.execute(_PREV_OK_SQL, {"qsv": qsv})
         finally:
             wh.execute(f"DETACH {_PREV}")
-            wh.unregister("enrich_expected")
         self.reason = "delta"
         return True
 

@@ -8,21 +8,14 @@ only (R-72); inputs are hidden in errors (TH03-14); messages name keys, never va
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from typing import Annotated, Final, Literal, Self
+from typing import Annotated, Final, Literal
 from urllib.parse import urlsplit
 
-from pydantic import (
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    StringConstraints,
-    ValidationError,
-    model_validator,
-)
+from pydantic import Field, StringConstraints, ValidationError
 
 from herness.core.types import Entity, Question, QuestionSet, QuestionType
+from herness.enrich.settings_base import Rules, _Fraction, _Model, _require, _Tuple
+from herness.enrich.settings_link import DEFAULT_CORROBORATION_MARKERS, ChangeLinkSettings
 
 # T10-12: the composition root registers owner validator ``enrich.deciders`` with
 # herness.core.config_validate.register_owner_validator as
@@ -30,50 +23,18 @@ from herness.core.types import Entity, Question, QuestionSet, QuestionType
 
 DeciderName = Literal["laya", "openjev", "jev", "llm"]
 EscalationName = Literal["openjev", "jev", "llm"]
-Rules = Iterator[tuple[bool, str]]
 
-_MODEL_CONFIG: Final = ConfigDict(
-    extra="forbid", strict=True, frozen=True, allow_inf_nan=False, hide_input_in_errors=True
-)
 # `SecretRefStr` pattern text of impl 10, declared locally (settings never import secrets, R-72)
 _SECRET_REF_RE: Final = r"^secret:[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$"  # noqa: S105 - a pattern
 _LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "localhost"})
 _PAIR_QUESTION: Final = "change_caused_pair"
 _WEIGHT_TOL: Final = 1e-6
 
-
-def _require(ok: bool, msg: str) -> None:
-    if not ok:
-        raise ValueError(msg)
-
-
-def _as_tuple(value: object) -> object:
-    """YAML sequences arrive as lists; strict tuple fields accept them as tuples."""
-    return tuple(value) if isinstance(value, list) else value
-
-
-_Tuple = BeforeValidator(_as_tuple)
-_Fraction = Annotated[float, Field(ge=0, le=1)]
-_Positive = Annotated[float, Field(gt=0)]
 _Name = Annotated[str, StringConstraints(min_length=1, max_length=200)]
 _Role = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 _SecretRef = Annotated[str, StringConstraints(pattern=_SECRET_REF_RE)]
 _Abbreviation = Annotated[str, StringConstraints(pattern=r"^[a-z0-9]{1,16}$")]
 _Samples = Annotated[int, Field(ge=1, le=32)] | None
-
-
-class _Model(BaseModel):
-    model_config = _MODEL_CONFIG
-
-    def _rules(self) -> Rules:
-        """Cross-field rules as ``(holds, message)`` pairs; the first broken one is raised."""
-        return iter(())
-
-    @model_validator(mode="after")
-    def _check_rules(self) -> Self:
-        for holds, msg in self._rules():
-            _require(holds, msg)
-        return self
 
 
 class AcceptanceCriteria(_Model):
@@ -220,23 +181,6 @@ class ClusteringSettings(_Model):
         yield self.k_min <= self.k_max, "clustering.k_min must be <= clustering.k_max"
         ordered = self.assign_min_sim < self.full_sim
         yield ordered, "clustering.assign_min_sim must be < clustering.full_sim"
-
-
-class ChangeLinkSettings(_Model):
-    before_h: _Positive = 72.0
-    after_h: _Positive = 1.0
-    tau_h: _Positive = 12.0
-    ci_weight: _Fraction = 1.0
-    service_weight: _Fraction = 0.6
-    min_score: _Fraction = 0.30
-    top_n: int = Field(default=3, ge=1, le=20)
-    use_decider: bool = True
-    decider_band: Annotated[tuple[_Fraction, _Fraction], _Tuple] = (0.30, 0.70)
-    decider_max_pairs: int = Field(default=30_000, ge=0, le=1_000_000)
-
-    def _rules(self) -> Rules:
-        ascending = self.decider_band[0] < self.decider_band[1]
-        yield ascending, "change_link.decider_band must be ascending"
 
 
 class MappingWeights(_Model):
@@ -397,3 +341,9 @@ def check_decider_refs(
         for path, name in positions
         if name in disabled
     ]
+
+
+__all__ = [
+    "DEFAULT_CORROBORATION_MARKERS",
+    "ChangeLinkSettings",
+]

@@ -60,6 +60,7 @@ _SOURCE_PIN = {
     3: "2myfarsiyywn76y55s7yn3rbudet7hsfjkiadns2opaigbjaedcq",  # pragma: allowlist secret
     4: "raejvqwgm6zt47qndd4qz7n77vjtegpco5rgbs6b2vu4di7kfnlq",  # pragma: allowlist secret
     5: "hn3tjtyim6sy2owb3x4fmxrfen7dluroutwtydrortkmu4daabtq",  # pragma: allowlist secret
+    6: "gmm2l5mtmcvtl2fdvkyckfgn24vmpbbntef2th77qc6ef5bcxsha",  # pragma: allowlist secret
 }
 
 

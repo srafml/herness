@@ -26,6 +26,7 @@ from herness.enrich.cache import DecisionCache
 from herness.enrich.calibrate import CalibrationResult, CalibrationStore
 from herness.enrich.layout import EnrichPaths
 from herness.enrich.link_changes import (
+    capped_link_score,
     heuristic_link_score,
     link_candidates,
     pair_inputs,
@@ -49,6 +50,7 @@ PAIR_Q = {
     "threshold": 0.70,
     "scoring_use": False,
 }
+INC_TEXT = "incident text after the release"  # a change marker: window links keep the raw score
 DEFAULTS = {"tau_h": 12.0, "ci_weight": 1.0, "service_weight": 0.6}
 
 
@@ -65,7 +67,7 @@ class Inc:
     ci_id: str | None = None
     service_id: str | None = None
     caused_by: str | None = None
-    text: str | None = "incident text"
+    text: str | None = INC_TEXT
 
 
 @dataclass(frozen=True)
@@ -416,7 +418,7 @@ def test_ut03_104_pair_inputs_capped_ordered_index_written(paths: EnrichPaths) -
         assert item.question_ids == ("change_caused_pair",)
         assert item.content_hash == content_hash(item.text)
         assert len(item.text) <= 12_000
-    assert inputs[2].text == pair_text("incident text", "change text")
+    assert inputs[2].text == pair_text(INC_TEXT, "change text")
     assert inputs[1].text.startswith("INCIDENT:\n" + "x" * 10)
     index = pq.read_table(paths.pairs_dir() / "part-b-1.parquet")
     assert index.column_names == ["incident_id", "change_id", "content_hash"]
@@ -614,3 +616,142 @@ def test_ut03_105_without_link_cand_is_schema_violation(paths: EnrichPaths) -> N
         )
     with pytest.raises(duckdb.CatalogException):
         wh.execute("SELECT * FROM _link_decided")
+
+
+# --- T03-41: window-only cap and text corroboration (UT03-156 ... UT03-162) ----------------------
+
+PLAIN = "ticket: the page is slow"
+_MARKED = [
+    "After the release the page is slow",
+    "FOLLOWING THE CHANGE logins fail",
+    "errors since this deployment",
+    "slow, post-patch behaviour",
+    "tras el despliegue falla el login",
+    "Después del cambio no carga",
+    "DESPUÉS DEL CAMBIO no carga",
+    "desde la actualización hay errores",
+]
+_UNMARKED = [
+    PLAIN,
+    "the change request was approved yesterday",  # a noun without a temporal cue
+    "release notes are missing",
+    "the exchange rate widget is blank",
+    "after lunch the queue grew",
+]
+
+
+def _one(text: str, **link: Any) -> float:
+    """Window score of an incident with `text` opened 0.5 h after a same-CI change."""
+    change = Chg("c1", ci_id="ci1", actual_end=T0 - timedelta(hours=0.5))
+    wh = make_warehouse([Inc("i1", ci_id="ci1", text=text)], [change])
+    link_candidates(wh, cfg=cfg_with(**link))
+    return cand(wh)["i1", "c1"][1]
+
+
+def test_ut03_156_window_only_score_is_capped_below_half() -> None:
+    """UT03-156 an unmarked same-CI match scores the cap (0.45 by default), never 0.5."""
+    assert capped_link_score(0.98, corroborated=False, window_only_cap=0.45) == 0.45
+    assert capped_link_score(0.30, corroborated=False, window_only_cap=0.45) == 0.30
+    assert capped_link_score(0.98, corroborated=True, window_only_cap=0.45) == 0.98
+    assert _one(PLAIN) == 0.45
+    assert _one(PLAIN, window_only_cap=0.35) == 0.35
+    assert _one(PLAIN, window_only_cap=0.35, min_score=0.35) == 0.35
+
+
+@pytest.mark.parametrize("text", _MARKED)
+def test_ut03_157_marker_keeps_the_raw_score(text: str) -> None:
+    """UT03-157 EN and ES change phrases (case, accent) keep the U03-107 score."""
+    assert _one(text) == pytest.approx(h(0.5, ci=True), rel=1e-12)
+
+
+@pytest.mark.parametrize("text", _UNMARKED)
+def test_ut03_157_text_without_a_cue_and_a_change_noun_is_capped(text: str) -> None:
+    """UT03-157 a noun without a temporal cue, or a cue without a noun, does not corroborate."""
+    assert _one(text) == 0.45
+
+
+def test_ut03_157_no_markers_configured_and_missing_text_are_unmarked() -> None:
+    """UT03-157 an empty marker list corroborates nothing; an incident without text is capped."""
+    assert _one(_MARKED[0], corroboration_markers=()) == 0.45
+    wh = make_warehouse(
+        [Inc("i1", ci_id="ci1", text=None)], [Chg("c1", ci_id="ci1", actual_end=T0)]
+    )
+    link_candidates(wh, cfg=cfg_with())
+    assert cand(wh)["i1", "c1"] == ("time_ci_window", 0.45)
+
+
+def test_ut03_158_source_field_is_unaffected_and_overrides() -> None:
+    """UT03-158 source_field keeps 1.0 for an unmarked incident and overrides its window row."""
+    wh = make_warehouse(
+        [Inc("i1", ci_id="ci1", caused_by="c1", text=PLAIN)],
+        [Chg("c1", ci_id="ci1", actual_end=T0), Chg("c2", ci_id="ci1", actual_end=T0)],
+    )
+    link_candidates(wh, cfg=cfg_with())
+    assert cand(wh) == {
+        ("i1", "c1"): ("source_field", 1.0),
+        ("i1", "c2"): ("time_ci_window", 0.45),
+    }
+
+
+def test_ut03_159_settings_defaults_and_validation() -> None:
+    """UT03-159 defaults 0.45 and a two-pattern tuple; cap in [min_score, 1); bad regex rejected."""
+    link = cfg_with().change_link
+    assert link.window_only_cap == 0.45
+    assert len(link.corroboration_markers) == 2
+    custom = cfg_with(corroboration_markers=["(?i)abc"]).change_link
+    assert custom.corroboration_markers == ("(?i)abc",)
+    for bad in (
+        {"window_only_cap": 0.29},
+        {"window_only_cap": 1.0},
+        {"window_only_cap": -0.1},
+        {"min_score": 0.5},  # default cap 0.45 < min_score
+        {"corroboration_markers": ["("]},
+        {"corroboration_markers": [1]},
+    ):
+        with pytest.raises(ValueError):  # noqa: PT011 - pydantic ValidationError, message varies
+            cfg_with(**bad)
+    assert cfg_with(min_score=0.5, window_only_cap=0.5).change_link.window_only_cap == 0.5
+
+
+def test_ut03_161_capped_ties_keep_the_highest_raw_pairs_before_top_n() -> None:
+    """UT03-161 capped scores tie at the cap; top_n keeps the highest raw, not the first ids."""
+    changes = [
+        Chg(f"c{n}", ci_id="ci1", actual_end=T0 - timedelta(hours=n)) for n in (5, 4, 3, 2, 1)
+    ]
+    wh = make_warehouse([Inc("i1", ci_id="ci1", text=PLAIN)], changes)
+    link_candidates(wh, cfg=cfg_with(top_n=2))
+    assert cand(wh) == {
+        ("i1", "c1"): ("time_ci_window", 0.45),
+        ("i1", "c2"): ("time_ci_window", 0.45),
+    }
+
+
+def test_ut03_162_mini_lake_precision_recall_through_run_link_stage(paths: EnrichPaths) -> None:
+    """UT03-162 marked follow-ups link at >= 0.5; coincident unmarked incidents stay linked below
+    0.5 (visible to the decider band): precision 1.0, recall 1.0 at 0.5."""
+    changes, incidents, truth = [], [], set()
+    for n in range(10):
+        end, ci = T0 + timedelta(days=n), f"ci{n % 3}"
+        changes.append(Chg(f"c{n}", ci_id=ci, actual_end=end, type="emergency"))
+        for k in range(3):
+            text = "Tras el despliegue falla" if k else "After the release it fails"
+            opened = end + timedelta(minutes=20 * (k + 1))
+            incidents.append(Inc(f"f{n}_{k}", ci_id=ci, opened_at=opened, text=text))
+            truth.add((f"f{n}_{k}", f"c{n}"))
+        for k in range(4):  # coincident background on the same CI in the same hours
+            opened = end + timedelta(minutes=7 * (k + 1))
+            incidents.append(Inc(f"b{n}_{k}", ci_id=ci, opened_at=opened, text=PLAIN))
+    wh = make_warehouse(incidents, changes)
+    cfg = cfg_with(use_decider=False)
+    link_candidates(wh, cfg=cfg)
+    qs, cache = load_question_set(cfg), DecisionCache(paths, QSV)
+    run_link_stage(wh, cfg=cfg, qs=qs, cache=cache, calibration=CalibrationStore(paths),
+                   pair_decider=None, report=Report())  # fmt: skip
+    rows = links(wh)
+    found = {(i, c) for i, c, _, s in rows if s >= 0.5}
+    hits = len(found & truth)
+    assert hits / len(found) == 1.0
+    assert hits / len(truth) >= 0.70
+    low = [s for i, _, _, s in rows if i.startswith("b")]
+    assert low
+    assert all(0.3 <= s < 0.5 for s in low)

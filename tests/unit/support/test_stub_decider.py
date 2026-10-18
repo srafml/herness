@@ -171,6 +171,31 @@ def test_ut11_75_oracle_without_label_falls_back_to_hash(labels: Path) -> None:
     assert from_oracle == from_hash
 
 
+@pytest.mark.parametrize("noise", [0.0, 0.2])
+def test_ut11_120_oracle_unlabelled_pair_question_answers_false(labels: Path, noise: float) -> None:
+    """UT11-120 (T03-41) oracle: a pair question with no label answers false at 1 - noise (not
+    hash noise); a labelled pair and every other unlabelled question are unchanged; hash mode
+    keeps the hash answer."""
+    pair = Question(id="change_caused_pair", type="bool", instructions=_INSTR, threshold=0.7)
+    states = [f"INCIDENT:\nslow {n}\n\nCHANGE:\nrelease {n}" for n in range(40)]
+    with StubDeciderServer("oracle", truth_labels=labels, noise=noise) as oracle:
+        answers = [_parsed(_post(oracle, _request(s, (pair,))), (pair,)) for s in states]
+        other = _post(oracle, _request("an unlabelled ticket", (BOOL,))).content
+    assert all(a["change_caused_pair"].answer == "false" for a in answers)
+    assert all(a["change_caused_pair"].distribution["false"] == pytest.approx(1 - noise)
+               for a in answers)  # fmt: skip
+    with StubDeciderServer("hash") as hash_stub:
+        assert other == _post(hash_stub, _request("an unlabelled ticket", (BOOL,))).content
+        hashed = [_parsed(_post(hash_stub, _request(s, (pair,))), (pair,)) for s in states]
+        hashed_pairs = {a["change_caused_pair"].answer for a in hashed}
+    assert hashed_pairs == {"true", "false"}  # hash mode is unchanged noise
+    chash = content_hash_of(states[0])
+    got = _write_labels(labels.parent / "pairs.parquet", [(chash, "change_caused_pair", "true")])
+    with StubDeciderServer("oracle", truth_labels=got) as labelled:
+        out = _parsed(_post(labelled, _request(states[0], (pair,))), (pair,))
+    assert out["change_caused_pair"].answer == "true"
+
+
 def test_ut11_75_openjev_decider_end_to_end(jev_env: ProcessState, labels: Path) -> None:
     """UT11-75 the registered OpenJevDecider (T03-11 Protocol) gets the truth from the stub."""
     del jev_env
